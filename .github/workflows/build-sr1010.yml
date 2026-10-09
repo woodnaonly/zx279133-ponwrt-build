@@ -1,0 +1,176 @@
+name: ZX279133 SR1010 Build
+
+# Phase 1: prove the pipeline on the upstream SR1010 profile (same SoC as the
+# SK-D840N: Sanechips/ZTE ZX279133). Nothing is compiled locally.
+# Structure follows woodnaonly/n60pro-autobuild; the source trees are
+# cnjn/ImmortalWrt + cnjn/linux-mainline-zte-zxslc-sr1010.
+
+on:
+  workflow_dispatch:
+    inputs:
+      clean_cache:
+        description: '忽略缓存全新编译'
+        required: false
+        default: 'false'
+        type: boolean
+      immortalwrt_ref:
+        description: 'cnjn/ImmortalWrt 分支'
+        required: false
+        default: 'sr1010-zx279133'
+        type: string
+      kernel_ref:
+        description: 'cnjn/linux-mainline-zte-zxslc-sr1010 分支（build 内含 linux-6.18.38 submodule）'
+        required: false
+        default: 'build'
+        type: string
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/build-sr1010.yml
+      - configs/**
+      - scripts/**
+
+env:
+  IW_URL: https://github.com/cnjn/ImmortalWrt
+  IW_BRANCH: sr1010-zx279133
+  KERNEL_URL: https://github.com/cnjn/linux-mainline-zte-zxslc-sr1010
+  KERNEL_BRANCH: build
+
+permissions: write-all
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 360
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          sudo docker image prune --force || true
+          sudo -E apt-get -qq autoremove --purge || true
+          sudo -E apt-get -qq clean || true
+          df -hT
+
+      - name: Init build environment
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo -E apt-get -qq update
+          sudo -E apt-get -qq install ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential \
+            bzip2 ccache clang cmake cpio curl device-tree-compiler ecj fastjar flex gawk gettext gcc-multilib \
+            g++-multilib git gnutls-dev gperf haveged help2man intltool lib32gcc-s1 libc6-dev-i386 libelf-dev \
+            libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev libncurses-dev libncursesw5-dev \
+            libpython3-dev libreadline-dev libssl-dev libtool libyaml-dev libz-dev lld llvm lrzsz mkisofs msmtp \
+            nano ninja-build p7zip p7zip-full patch pkgconf python3 python3-pip python3-ply python3-docutils \
+            python3-pyelftools bc dwarves qemu-utils re2c rsync scons squashfs-tools subversion swig texinfo \
+            uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev zstd
+          sudo -E timedatectl set-timezone "Asia/Shanghai"
+
+      - name: Clone ImmortalWrt (cnjn SR1010 fork)
+        run: |
+          IW_REF="${{ inputs.immortalwrt_ref }}"
+          [ -n "$IW_REF" ] || IW_REF="$IW_BRANCH"
+          echo "cloning $IW_URL @ $IW_REF"
+          git clone --depth 1 -b "$IW_REF" "$IW_URL" openwrt
+          cd openwrt && git log -1 --format='== ImmortalWrt head: %h %s (%cd)' --date=short
+
+      - name: Clone mainline kernel tree (linux-6.18.38 submodule)
+        run: |
+          # Sibling layout on purpose: scripts/configure-sr1010-initramfs.sh defaults
+          # KERNEL_TREE to ../linux-mainline-zte-zxslc-sr1010/linux-6.18.38.
+          K_REF="${{ inputs.kernel_ref }}"
+          [ -n "$K_REF" ] || K_REF="$KERNEL_BRANCH"
+          echo "cloning $KERNEL_URL @ $K_REF"
+          git clone --branch "$K_REF" --recurse-submodules --shallow-submodules "$KERNEL_URL" linux-mainline-zte-zxslc-sr1010
+          test -f linux-mainline-zte-zxslc-sr1010/linux-6.18.38/Makefile
+          test -f linux-mainline-zte-zxslc-sr1010/linux-6.18.38/arch/arm64/boot/dts/zte/zx279133-sr1010.dts
+          make -C linux-mainline-zte-zxslc-sr1010/linux-6.18.38 kernelversion
+
+      - name: Cache dl/
+        if: ${{ inputs.clean_cache != 'true' }}
+        uses: actions/cache@v4
+        with:
+          path: openwrt/dl
+          key: sr1010-dl-${{ hashFiles('configs/*.config') }}
+          restore-keys: sr1010-dl-
+
+      - name: Apply overlays and feeds
+        working-directory: openwrt
+        run: |
+          chmod +x "$GITHUB_WORKSPACE"/scripts/diy-*.sh
+          "$GITHUB_WORKSPACE/scripts/diy-part1.sh"
+          if [ -d "$GITHUB_WORKSPACE/files" ]; then cp -a "$GITHUB_WORKSPACE/files/." .; fi
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+          "$GITHUB_WORKSPACE/scripts/diy-part2.sh"
+
+      - name: Configure SR1010 initramfs
+        working-directory: openwrt
+        run: |
+          ./scripts/configure-sr1010-initramfs.sh
+          if grep -qvE '^\s*(#|$)' "$GITHUB_WORKSPACE/configs/sr1010-extra.config"; then
+            grep -vE '^\s*(#|$)' "$GITHUB_WORKSPACE/configs/sr1010-extra.config" >> .config
+            make defconfig
+          fi
+          echo "=== selected target ==="
+          grep -E 'CONFIG_TARGET_zte|CONFIG_EXTERNAL_KERNEL_TREE|CONFIG_TARGET_ROOTFS_INITRAMFS|CONFIG_ExternalKernelTree' .config | head -20
+
+      - name: Download packages
+        working-directory: openwrt
+        run: |
+          make download -j8
+          find dl -size -1024c -exec ls -la {} \;
+          find dl -size -1024c -exec rm -f {} \;
+
+      - name: Compile firmware
+        id: compile
+        working-directory: openwrt
+        run: |
+          make -j"$(nproc)" || make -j1 V=s
+          echo "status=success" >> "$GITHUB_OUTPUT"
+
+      - name: Collect images
+        run: |
+          mkdir -p out
+          cp -a openwrt/bin/targets/zte/zx279133/. out/
+          ls -l out
+          {
+            echo "## Images"
+            echo '```'
+            ls -l out
+            sha256sum out/*.itb 2>/dev/null
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload build logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs
+          path: |
+            openwrt/logs
+            openwrt/.config
+          if-no-files-found: ignore
+
+      - name: Upload images artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: immortalwrt-zte-zx279133
+          path: out/**
+
+      - name: Publish release
+        if: success()
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: sr1010_${{ github.run_number }}_${{ github.run_id }}
+          body: |
+            ## ZX279133 SR1010 initramfs（Phase 1 流水线验证）
+            - ImmortalWrt: cnjn/ImmortalWrt `${{ inputs.immortalwrt_ref }}`
+            - 内核: cnjn/linux-mainline-zte-zxslc-sr1010 `${{ inputs.kernel_ref }}`（mainline 6.18.38）
+            - 产物是 RAM 用 FIT initramfs，需串口在 U-Boot 里 tftpboot + bootm
+            - SK-D840N 板级 DTS / device profile 属于 Phase 2
+          files: out/*
