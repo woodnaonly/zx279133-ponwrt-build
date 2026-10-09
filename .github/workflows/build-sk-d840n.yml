@@ -235,7 +235,7 @@ jobs:
           # kexec for the system that is running now: it has no kexec binary and no
           # WAN to install one from, so the build has to hand it out. Take the
           # install image (same bytes that would land in /usr/bin) and carry every
-          # NEEDED library with it - a missing .so is an silent exec failure.
+          # NEEDED library with it - a missing .so is a silent exec failure.
           KX=$(find openwrt/staging_dir/target-*/pkgdir -type f -name kexec 2>/dev/null | head -1)
           [ -n "$KX" ] || KX=$(find openwrt/build_dir/target-* -maxdepth 3 -type f -name kexec 2>/dev/null | head -1)
           if [ -n "$KX" ]; then
@@ -266,6 +266,15 @@ jobs:
             cp templates/trial-kexec.sh templates/flash-sk-d840n.sh trial/
             ls -lR trial
             ( cd trial && sha256sum trial-kx.tgz kexec trial-Image.gz trial-dtb.bin *.sh > sha256sums-trial 2>/dev/null || true )
+            # one download for the whole trial. Not a hard failure if kexec is
+            # missing - the .itb is still worth having, and the warning says why
+            # trial-kexec.sh cannot be used.
+            if [ -f trial/trial-kx.tgz ]; then
+              tar czf trial-set.tgz -C trial trial-kx.tgz trial-Image.gz trial-dtb.bin trial-kexec.sh sha256sums-trial
+              ls -l trial-set.tgz
+            else
+              echo "::warning::no trial-kx.tgz - kexec-tools was not built, so the kexec trial has no loader"
+            fi
           fi
 
       - name: Checksums and summary
@@ -299,6 +308,7 @@ jobs:
             flash-set.tgz
             sk-d840n-initramfs.itb
             sha256sums
+            trial-set.tgz
             trial
 
       - name: Publish release
@@ -321,6 +331,7 @@ jobs:
             sk-d840n-initramfs.itb
             sha256sums
             flash-set.tgz
+            trial-set.tgz
             trial/*
             trial/lib/*
           ignore_missing_files: true

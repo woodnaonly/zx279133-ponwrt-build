@@ -29,7 +29,18 @@ fetch() { # name
 	say "got $1 ($(wc -c < "$D/$1") bytes)"
 }
 
+try_fetch() { # name - optional file
+	rm -f "$D/$1"
+	busybox tftp -g -r "$1" -l "$D/$1" -b 1468 "$PC" "$PORT" 2>/dev/null || return 1
+	[ -s "$D/$1" ] || return 1
+	say "got $1 ($(wc -c < "$D/$1") bytes)"
+}
+
 mkdir -p "$D"; cd "$D" || exit 1
+
+# The release ships either trial-set.tgz (everything in one file) or the loose
+# trial/ directory. Take whichever is being served.
+if try_fetch trial-set.tgz; then tar xzf trial-set.tgz; fi
 
 # kexec plus the shared objects it was linked against, as one tarball: the box has
 # no WAN, so a missing .so cannot be fixed after the fact.
@@ -39,8 +50,12 @@ KX=$D/kexec
 [ -x "$KX" ] || chmod +x "$KX"
 export LD_LIBRARY_PATH=$D/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
 
-fetch trial-dtb.bin
-fetch trial-Image.gz
+need() { # name - fetch only if the tarball did not already provide it
+	[ -s "$D/$1" ] || fetch "$1"
+}
+
+need trial-dtb.bin
+need trial-Image.gz
 gunzip -c trial-Image.gz > Image || die "gunzip failed"
 
 say "kexec version: $("$KX" --version 2>&1 | head -1)"

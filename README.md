@@ -47,6 +47,7 @@ Workflow `ZX279133 SK-D840N Build`, matrix mode `initramfs` and `flash`
 | artifact | what it is |
 | --- | --- |
 | `sk-d840n-initramfs.itb` | RAM-only FIT, same shape as SR1010's |
+| `trial-set.tgz` | the four files below in one download |
 | `trial/trial-Image.gz`, `trial/trial-dtb.bin` | the same kernel with the initramfs embedded, unpacked for `kexec` |
 | `trial/trial-kx.tgz` | `kexec` plus the `.so` files it needs, because the box has no WAN |
 | `flash-uImage` / `flash-dtb.bin` / `flash-rootfs.jffs2` | the triple the installed U-Boot bootcmd reads (`mtd read kernel`/`mtd read dtb`, `bootm`, `root=/dev/mtdblock5`) |
