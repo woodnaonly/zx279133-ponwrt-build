@@ -27,8 +27,14 @@ CONFIG_TARGET_zte_zx279133_DEVICE_skyworth_sk-d840n=y
 EOF
 
 if [ "$MODE" = flash ]; then
+	# Only jffs2 matters here: the root partition is written as a raw jffs2 image.
+	# Leaving squashfs/targz on would emit extra -rootfs.jffs2 artifacts whose
+	# payload is not jffs2 at all (Device/Build/image builds one per fs type).
 	cat >>.config <<'EOF'
 # CONFIG_TARGET_ROOTFS_INITRAMFS is not set
+# CONFIG_TARGET_ROOTFS_SQUASHFS is not set
+# CONFIG_TARGET_ROOTFS_TARGZ is not set
+# CONFIG_TARGET_IMAGES_GZIP is not set
 CONFIG_TARGET_ROOTFS_JFFS2=y
 EOF
 elif [ "$MODE" != initramfs ]; then

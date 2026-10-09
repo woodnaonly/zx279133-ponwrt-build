@@ -44,7 +44,10 @@ define Device/skyworth_sk-d840n
   KERNEL_SUFFIX := .uImage
   BLOCKSIZE := 128k
   PAGESIZE := 2048
-  IMAGE/rootfs.jffs2 := jffs2-rootfs | pad-rootfs
+  # include/image.mk names the artifact $(DEVICE_IMG_PREFIX)-$(fstype)-$(imagename),
+  # i.e. ...-skyworth_sk-d840n-jffs2-128k-rootfs.jffs2. `Image/mkfs/jffs2/sub`
+  # already appends the EOF mark, so the rootfs only needs to be concatenated.
+  IMAGE/rootfs.jffs2 := append-rootfs
   IMAGES := rootfs.jffs2
 endef
 TARGET_DEVICES += skyworth_sk-d840n

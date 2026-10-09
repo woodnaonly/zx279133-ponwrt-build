@@ -104,13 +104,48 @@ jobs:
           test -f "$KT/arch/arm64/boot/dts/zte/zx279133-sk-d840n.dts"
           grep -q 'zx279133-sk-d840n.dtb' "$KT/arch/arm64/boot/dts/zte/Makefile"
           grep -q 'Device/skyworth_sk-d840n' openwrt/target/linux/zte/image/Makefile
-          # quick syntax gate: dtc the board file before spending an hour on it
-          dtc -W no-unit_address_vs_reg -I dts -O dtb -o /tmp/sk-d840n.dtb \
-            -i "$KT/arch/arm64/boot/dts/zte" \
-            -i "$KT/scripts/dtc/include-prefixes" \
-            "$KT/arch/arm64/boot/dts/zte/zx279133-sk-d840n.dts"
-          ls -l /tmp/sk-d840n.dtb
-          dtc -I dtb -O dts /tmp/sk-d840n.dtb | grep -A2 'label = "root"'
+          # syntax gate, run before spending an hour on it.  A bare `dtc` call is
+          # *not* what the kernel does: scripts/Makefile.lib preprocesses DTS with
+          # cpp first.  Try both, and use cnjn's own (known-good) board file as the
+          # control so a broken harness cannot be mistaken for a broken DTS.
+          set -uo pipefail
+          DTS=$KT/arch/arm64/boot/dts/zte
+          PFX=$KT/scripts/dtc/include-prefixes
+          echo "=== dtc / include paths ==="
+          dtc --version
+          ls -l "$PFX" || echo "MISSING include-prefixes"
+          ls -l "$PFX/dt-bindings/gpio/gpio.h" || echo "MISSING dt-bindings/gpio/gpio.h"
+          gate() {
+            f=$1
+            echo "::group::DTS gate: $(basename "$f")"
+            if dtc -q -I dts -O dtb -o "/tmp/$(basename "$f").dtb" \
+                 -i "$DTS" -i "$PFX" -i "$KT/include" "$f"; then
+              echo "PASS (dtc native preprocessor)"; echo "::endgroup::"; return 0
+            fi
+            cpp -nostdinc -x assembler-with-cpp -D__DTS__ -fdirectives-only \
+                -I "$DTS" -I "$PFX" -I "$KT/include" "$f" -o /tmp/pp.dts 2>/tmp/cpp.log
+            rc=$?
+            if [ $rc -eq 0 ] && dtc -q -I dts -O dtb -o "/tmp/$(basename "$f").dtb" \
+                 -i "$PFX" -i "$KT/include" /tmp/pp.dts; then
+              echo "PASS (cpp + dtc, the kernel way)"; echo "::endgroup::"; return 0
+            fi
+            echo "cpp rc=$rc log:"; cat /tmp/cpp.log
+            echo "::endgroup::"; return 1
+          }
+          ours=0; ctl=0
+          gate "$DTS/zx279133-sk-d840n.dts" || ours=1
+          gate "$DTS/zx279133-sr1010.dts"   || ctl=1
+          if [ $ours -ne 0 ]; then
+            if [ $ctl -ne 0 ]; then
+              echo "::warning::dtc gate harness cannot compile any board file - skipping gate"
+            else
+              echo "::error::zx279133-sk-d840n.dts does not compile while sr1010.dts does"
+              exit 1
+            fi
+          fi
+          for d in /tmp/zx279133-sk-d840n.dts.dtb; do
+            [ -f "$d" ] && { ls -l "$d"; dtc -I dtb -O dts "$d" | grep -B1 -A2 'label = "root"'; }
+          done
 
       - name: Cache dl/
         if: steps.pick.outputs.run == 'true' && inputs.clean_cache != 'true'
@@ -157,21 +192,34 @@ jobs:
           [ -n "$MKIMAGE" ] || { sudo apt-get -qq update && sudo apt-get -qq install u-boot-tools; MKIMAGE=mkimage; }
           IMG="$KT/arch/arm64/boot/Image.gz"
           [ -f "$IMG" ] || { gzip -9nc "$KT/arch/arm64/boot/Image" > "$KT/arch/arm64/boot/Image.gz"; }
-          DTB="$KT/arch/arm64/boot/dts/zte/zx279133-sk-d840n.dtb"
-          [ -f "$DTB" ] || DTB=$(find openwrt/build_dir -name 'image-zx279133-sk-d840n.dtb' | head -1)
-          test -f "$DTB"
+          test -f "$IMG"
+          # the dtb is where the kernel build left it; OpenWrt also stages a copy
+          # named image-<dts>.dtb next to the kernel
+          DTB=$(find "$KT/arch/arm64/boot/dts/zte" openwrt/build_dir -name '*sk-d840n*.dtb' 2>/dev/null | head -1)
+          test -n "$DTB" || { echo "no sk-d840n dtb produced" >&2; ls -l "$KT/arch/arm64/boot/dts/zte"; exit 1; }
+          echo "DTB: $DTB"
+          # include/image.mk emits $(prefix)-$(fstype)-rootfs.jffs2; the SPI-NAND
+          # erase block on this board is 128 KiB, so take the 128k variant.
+          RS=$(find openwrt/bin/targets/zte/zx279133 -name '*jffs2-128k-rootfs.jffs2' | head -1)
+          [ -n "$RS" ] || RS=$(find openwrt/bin/targets/zte/zx279133 -name '*rootfs.jffs2' | head -1)
+          test -n "$RS" || { echo "no rootfs.jffs2 produced" >&2; ls -l openwrt/bin/targets/zte/zx279133; exit 1; }
+          echo "rootfs: $RS"
           # bootargs from the board's env load a legacy uImage at the FIT load address
           "$MKIMAGE" -A arm64 -O linux -T kernel -C gzip -a 0x80200000 -e 0x80200000 \
             -n 'OpenWrt mainline 6.18.38 sk-d840n' -d "$IMG" flash-uImage
           cp "$DTB" flash-dtb.bin
-          cp "$(ls openwrt/bin/targets/zte/zx279133/*rootfs.jffs2)" flash-rootfs.jffs2
+          cp "$RS" flash-rootfs.jffs2
           cp templates/flash-sk-d840n.sh flash-sk-d840n.sh
           ls -l flash-uImage flash-dtb.bin flash-rootfs.jffs2
 
       - name: Package initramfs image
         if: steps.pick.outputs.run == 'true' && matrix.mode == 'initramfs'
         run: |
-          cp openwrt/bin/targets/zte/zx279133/*sk-d840n*initramfs.itb sk-d840n-initramfs.itb
+          set -e
+          ITB=$(find openwrt/bin/targets/zte/zx279133 -maxdepth 1 -name '*sk-d840n*initramfs*' | head -1)
+          test -n "$ITB" || { echo "no initramfs image produced" >&2; ls -l openwrt/bin/targets/zte/zx279133; exit 1; }
+          echo "initramfs: $ITB"
+          cp "$ITB" sk-d840n-initramfs.itb
           ls -l sk-d840n-initramfs.itb
 
       - name: Checksums and summary

@@ -8,7 +8,9 @@
 //       boot 2048k@0x0 kernel 8192k@0x200000 dtb 1024k@0xa00000
 //       "parameter tags" 4096k@0xb00000 root 246784k@0xf00000
 //     fixed-partitions registration order below therefore yields
-//     mtd0=boot mtd1=kernel mtd2=dtb mtd3="parameter tags" mtd4=root.
+//     mtd0=boot mtd1=kernel mtd2=dtb mtd3="parameter tags" mtd4=spare mtd5=root.
+//     (`root` must stay index 5 - that is what the installed U-Boot bootargs
+//      hard-code as root=/dev/mtdblock5, see the block comment above the partitions)
 //   - console is the PL011-compatible zte,zx279133-uart at 0x10d0d000, 115200n8
 //   - memory is 512 MiB at 0x80000000 (stock DTB: reg = <0x0 0x80000000 0x0 0x20000000>)
 //
@@ -103,8 +105,13 @@
 	memory-region = <&bmu_reserved>, <&se_hash_reserved>, <&idm_reserved>;
 	memory-region-names = "bmu", "se-hash", "idm";
 	phy-handle = <&zx279051>;
-	/* D0:45:8D:84:08:FC = ethaddr from the stock "others" partition */
-	local-mac-address = [00 00 00 00 00 00];
+	/* No MAC source yet: SR1010 reads it from an nvmem-layout over its own
+	 * "tags" partition, whose zte,sr1010-tags parser does not describe this
+	 * unit's "parameter tags" layout. With neither nvmem-cells nor a literal
+	 * local-mac-address the driver falls back to a generated random MAC, which
+	 * is usable for the trial - hardcoding D0:45:8D:84:08:FC would only be
+	 * right for this one board.
+	 */
 	status = "okay";
 };
 
