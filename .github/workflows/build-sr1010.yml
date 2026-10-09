@@ -28,8 +28,8 @@ on:
       - main
     paths:
       - .github/workflows/build-sr1010.yml
-      - configs/**
-      - scripts/**
+      - overlays/target/linux/zte/image/Makefile
+      - configs/sr1010-extra.config
 
 env:
   IW_URL: https://github.com/cnjn/ImmortalWrt
