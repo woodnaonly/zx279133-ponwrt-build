@@ -1,0 +1,224 @@
+name: ZX279133 SK-D840N Build
+
+# Phase 2: Skyworth SK-D840N (same ZX279133 SoC as SR1010) built from
+#   base   = cnjn/ImmortalWrt target zte/zx279133  (+ our image profile)
+#   kernel = cnjn/linux-mainline-zte-zxslc-sr1010 6.18.38 (+ our board DTS)
+#   format = the flash layout proven by huxiangjs/SK-D840N-OpenWRT, so the
+#            U-Boot that is already in this board boots it with no serial cable.
+#
+# mode=initramfs -> RAM FIT .itb (trial via kexec from the running system)
+# mode=flash     -> uImage + dtb.bin + rootfs.jffs2 for the kernel/dtb/root partitions
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: '构建模式'
+        required: false
+        default: 'both'
+        type: choice
+        options: ['both', 'initramfs', 'flash']
+      clean_cache:
+        description: '忽略 dl/ 缓存'
+        required: false
+        default: 'false'
+        type: boolean
+  push:
+    paths:
+      - .github/workflows/build-sk-d840n.yml
+      - kernel-overlays/**
+      - overlays/**
+      - configs/sk-d840n*
+      - scripts/configure-sk-d840n.sh
+      - templates/**
+
+env:
+  IW_URL: https://github.com/cnjn/ImmortalWrt
+  IW_BRANCH: sr1010-zx279133
+  KERNEL_URL: https://github.com/cnjn/linux-mainline-zte-zxslc-sr1010
+  KERNEL_BRANCH: build
+
+permissions: write-all
+
+jobs:
+  build:
+    name: ${{ matrix.mode }}
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [initramfs, flash]
+    runs-on: ubuntu-22.04
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Skip by input mode
+        id: pick
+        run: |
+          want="${{ inputs.mode }}"
+          [ -z "$want" ] && want=both
+          if [ "$want" = both ] || [ "$want" = "${{ matrix.mode }}" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Free disk space
+        if: steps.pick.outputs.run == 'true'
+        run: |
+          sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          sudo docker image prune --force || true
+          sudo -E apt-get -qq autoremove --purge || true
+          df -hT
+
+      - name: Init build environment
+        if: steps.pick.outputs.run == 'true'
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo -E apt-get -qq update
+          sudo -E apt-get -qq install ack antlr3 asciidoc autoconf automake autopoint binutils bison \
+            build-essential bzip2 ccache clang cmake cpio curl device-tree-compiler ecj fastjar flex gawk gettext gcc-multilib \
+            g++-multilib git gnutls-dev gperf haveged help2man intltool lib32gcc-s1 libc6-dev-i386 libelf-dev \
+            libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev libncurses-dev libncursesw5-dev \
+            libpython3-dev libreadline-dev libssl-dev libtool libyaml-dev libz-dev lld llvm lrzsz mkisofs msmtp \
+            nano ninja-build p7zip p7zip-full patch pkgconf python3 python3-pip python3-ply python3-docutils \
+            python3-pyelftools bc dwarves qemu-utils re2c rsync scons squashfs-tools subversion swig texinfo \
+            uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev zstd
+          sudo -E timedatectl set-timezone "Asia/Shanghai"
+
+      - name: Clone sources
+        if: steps.pick.outputs.run == 'true'
+        run: |
+          git clone --depth 1 -b "$IW_BRANCH" "$IW_URL" openwrt
+          git clone --branch "$KERNEL_BRANCH" --recurse-submodules --shallow-submodules "$KERNEL_URL" linux-mainline-zte-zxslc-sr1010
+          test -f linux-mainline-zte-zxslc-sr1010/linux-6.18.38/arch/arm64/boot/dts/zte/zx279133.dtsi
+
+      - name: Apply SK-D840N overlays
+        if: steps.pick.outputs.run == 'true'
+        run: |
+          KT=linux-mainline-zte-zxslc-sr1010/linux-6.18.38
+          cp -a kernel-overlays/. "$KT"/
+          cp -a overlays/. openwrt/
+          # board dts must be reachable and the SoC dtsi unmodified
+          test -f "$KT/arch/arm64/boot/dts/zte/zx279133-sk-d840n.dts"
+          grep -q 'zx279133-sk-d840n.dtb' "$KT/arch/arm64/boot/dts/zte/Makefile"
+          grep -q 'Device/skyworth_sk-d840n' openwrt/target/linux/zte/image/Makefile
+          # quick syntax gate: dtc the board file before spending an hour on it
+          dtc -W no-unit_address_vs_reg -I dts -O dtb -o /tmp/sk-d840n.dtb \
+            -i "$KT/arch/arm64/boot/dts/zte" \
+            -i "$KT/scripts/dtc/include-prefixes" \
+            "$KT/arch/arm64/boot/dts/zte/zx279133-sk-d840n.dts"
+          ls -l /tmp/sk-d840n.dtb
+          dtc -I dtb -O dts /tmp/sk-d840n.dtb | grep -A2 'label = "root"'
+
+      - name: Cache dl/
+        if: steps.pick.outputs.run == 'true' && inputs.clean_cache != 'true'
+        uses: actions/cache@v4
+        with:
+          path: openwrt/dl
+          key: skd840n-dl-${{ matrix.mode }}-${{ hashFiles('configs/*.config', 'overlays/**') }}
+          restore-keys: skd840n-dl-
+
+      - name: Install feeds
+        if: steps.pick.outputs.run == 'true'
+        working-directory: openwrt
+        run: |
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      - name: Configure
+        if: steps.pick.outputs.run == 'true'
+        run: |
+          sh scripts/configure-sk-d840n.sh \
+            "$GITHUB_WORKSPACE/openwrt" \
+            "$GITHUB_WORKSPACE/linux-mainline-zte-zxslc-sr1010/linux-6.18.38" \
+            "${{ matrix.mode }}"
+
+      - name: Download packages
+        if: steps.pick.outputs.run == 'true'
+        working-directory: openwrt
+        run: |
+          make download -j8
+          find dl -size -1024c -exec rm -f {} \;
+
+      - name: Compile
+        id: compile
+        if: steps.pick.outputs.run == 'true'
+        working-directory: openwrt
+        run: make -j"$(nproc)" || make -j1 V=s
+
+      - name: Package flash images
+        if: steps.pick.outputs.run == 'true' && matrix.mode == 'flash'
+        run: |
+          set -e
+          KT=$(ls -d openwrt/build_dir/target-*/linux-zte_zx279133/linux-*)
+          MKIMAGE=$(ls openwrt/staging_dir/host/bin/mkimage 2>/dev/null || command -v mkimage)
+          [ -n "$MKIMAGE" ] || { sudo apt-get -qq update && sudo apt-get -qq install u-boot-tools; MKIMAGE=mkimage; }
+          IMG="$KT/arch/arm64/boot/Image.gz"
+          [ -f "$IMG" ] || { gzip -9nc "$KT/arch/arm64/boot/Image" > "$KT/arch/arm64/boot/Image.gz"; }
+          DTB="$KT/arch/arm64/boot/dts/zte/zx279133-sk-d840n.dtb"
+          [ -f "$DTB" ] || DTB=$(find openwrt/build_dir -name 'image-zx279133-sk-d840n.dtb' | head -1)
+          test -f "$DTB"
+          # bootargs from the board's env load a legacy uImage at the FIT load address
+          "$MKIMAGE" -A arm64 -O linux -T kernel -C gzip -a 0x80200000 -e 0x80200000 \
+            -n 'OpenWrt mainline 6.18.38 sk-d840n' -d "$IMG" flash-uImage
+          cp "$DTB" flash-dtb.bin
+          cp "$(ls openwrt/bin/targets/zte/zx279133/*rootfs.jffs2)" flash-rootfs.jffs2
+          cp templates/flash-sk-d840n.sh flash-sk-d840n.sh
+          ls -l flash-uImage flash-dtb.bin flash-rootfs.jffs2
+
+      - name: Package initramfs image
+        if: steps.pick.outputs.run == 'true' && matrix.mode == 'initramfs'
+        run: |
+          cp openwrt/bin/targets/zte/zx279133/*sk-d840n*initramfs.itb sk-d840n-initramfs.itb
+          ls -l sk-d840n-initramfs.itb
+
+      - name: Checksums and summary
+        if: steps.pick.outputs.run == 'true' && success()
+        run: |
+          sha256sum flash-uImage flash-dtb.bin flash-rootfs.jffs2 sk-d840n-initramfs.itb 2>/dev/null | tee sha256sums
+          {
+            echo "## ${{ matrix.mode }} output"
+            echo '```'; ls -l flash-* sk-d840n-*.itb sha256sums 2>/dev/null; cat sha256sums 2>/dev/null; echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-${{ matrix.mode }}
+          path: |
+            openwrt/logs
+            openwrt/.config
+          if-no-files-found: ignore
+
+      - name: Upload outputs
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sk-d840n-${{ matrix.mode }}
+          path: |
+            flash-uImage
+            flash-dtb.bin
+            flash-rootfs.jffs2
+            sk-d840n-initramfs.itb
+            sha256sums
+
+      - name: Publish release
+        if: success()
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: skd840n_${{ matrix.mode }}_${{ github.run_number }}_${{ github.run_id }}
+          body: |
+            ## SK-D840N（ZX279133，mainline 6.18.38）— ${{ matrix.mode }}
+            - ImmortalWrt `cnjn/ImmortalWrt@sr1010-zx279133` + `cnjn/linux-mainline-zte-zxslc-sr1010@build`
+            - 板级文件：`zx279133-sk-d840n.dts`（LAN 内置 9132 交换无主线驱动，先用 SR1010 的 XMAC/PHY 路径）
+            - flash 模式对齐板子上现有 U-Boot 的 `bootcmd`（kernel/dtb/root 分区，`root=/dev/mtdblock5`）
+            - **未在本机验证**：刷机前需要串口或 kexec 试驾，见 README
+          files: |
+            flash-uImage
+            flash-dtb.bin
+            flash-rootfs.jffs2
+            sk-d840n-initramfs.itb
+            sha256sums
