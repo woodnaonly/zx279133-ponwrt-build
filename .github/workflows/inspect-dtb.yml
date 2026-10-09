@@ -1,0 +1,53 @@
+name: Decompile board DTBs
+
+# Evidence step for Phase 2: turn the SK-D840N device trees (extracted from the
+# stock kernel image and from the community 4.19 board.dtb) into readable DTS,
+# then commit them back so the mainline board file can be written from them.
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - dtb/**
+      - .github/workflows/inspect-dtb.yml
+
+permissions:
+  contents: write
+
+jobs:
+  decompile:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dtc
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends device-tree-compiler
+          dtc --version
+
+      - name: Decompile each DTB
+        run: |
+          mkdir -p decompiled
+          for f in dtb/*.dtb; do
+            b=$(basename "$f" .dtb)
+            echo "=== $f"
+            dtc -f -I dtb -O dts -o "decompiled/$b.dts" "$f" 2>&1 | sed 's/^/    /' || true
+            fdtdump "$f" > "decompiled/$b.fdtdump.txt" 2>&1 || true
+            # Vendor trees sometimes carry a node named like the unit address only
+            grep -m1 -E 'compatible = ' "decompiled/$b.dts" 2>/dev/null || true
+          done
+          ls -l decompiled
+          wc -l decompiled/*.dts 2>/dev/null || true
+
+      - name: Commit results back to main
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -f decompiled
+          if git diff --cached --quiet; then echo "no changes"; exit 0; fi
+          git commit -m "decompiled board device trees (dtc $$(dtc --version | head -1))"
+          git pull --rebase origin main || true
+          git push origin HEAD:main
