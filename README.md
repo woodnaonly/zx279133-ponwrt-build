@@ -57,14 +57,25 @@ Order of operations, reversible up to step 4 because nothing is written before i
 1. `sh templates/trial-kexec.sh` on the running system (needs `PC=<tftp-ip>`) - it
    fetches `trial-kx.tgz`, `trial-dtb.bin`, `trial-Image.gz`, then
    `kexec --load` / `--exec` into the mainline RAM image.
-2. If the new system is reachable: `/proc/mtd` must show `root` as **mtd5**, the
-   index hard-coded in the U-Boot env. If it does not, fix the partition list (or
-   the env) before writing anything.
-3. Power-cycle to get the current system back - flash is untouched.
-4. From the RAM system, `tar xzf flash-set.tgz && sh flash-sk-d840n.sh --write`:
+2. Observe it from the PC: an ICMP/ARP answer from 192.168.1.1 on the wired
+   segment already proves kernel + NPPT + PHY + TCP/IP. The image is then reached
+   the same way as the running one (`ssh root@192.168.1.1`, blank password - that
+   is base-files' own default, no key or password is baked into these artifacts).
+   If the new system ever ships a locked root, rebuild with a root password rather
+   than with an authorized key: a released image must not carry anyone's key.
+3. In that shell `/proc/mtd` must show `root` as **mtd5**, the index hard-coded in
+   the U-Boot env. If it does not, fix the partition list (or the env) before
+   writing anything.
+4. Power-cycle to get the current system back - flash is untouched.
+5. From the RAM system, `tar xzf flash-set.tgz && sh flash-sk-d840n.sh --write`:
    `root` first, then `dtb`, then `kernel` last, each erase+write+verify through
    `/sbin/mtd` by partition label (there is no `mtd_debug` or `nandwrite` in this
    image, so the flasher does not assume them).
+
+There is deliberately no "write the boot log into a spare partition" channel: a
+partial flash write needs the MEMERASE ioctl and this image has no tool that can
+erase a sub-partition range - `/sbin/mtd` always erases the whole partition, which
+would take the fallback uImage with it.
 
 Gaps this cannot close: mainline has no GPON driver, and the four GE LAN ports sit
 behind the SoC-internal "9132" switch, which the vendor drives without phylib or

@@ -8,9 +8,12 @@
 //       boot 2048k@0x0 kernel 8192k@0x200000 dtb 1024k@0xa00000
 //       "parameter tags" 4096k@0xb00000 root 246784k@0xf00000
 //     fixed-partitions registration order below therefore yields
-//     mtd0=boot mtd1=kernel mtd2=dtb mtd3="parameter tags" mtd4=spare mtd5=root.
+//     mtd0=boot mtd1=kernel mtd2=dtb mtd3="parameter tags" mtd4=scratch mtd5=root.
 //     (`root` must stay index 5 - that is what the installed U-Boot bootargs
-//      hard-code as root=/dev/mtdblock5, see the block comment above the partitions)
+//      hard-code as root=/dev/mtdblock5, so exactly five partitions precede it.
+//      The U-Boot env still calls the 241 MiB region at 0xf00000 `root`, but its
+//      bootcmd only ever reads `kernel` and `dtb`, so moving root to 0x1000000
+//      costs nothing and leaves the first erase blocks of the old jffs2 intact.)
 //   - console is the PL011-compatible zte,zx279133-uart at 0x10d0d000, 115200n8
 //   - memory is 512 MiB at 0x80000000 (stock DTB: reg = <0x0 0x80000000 0x0 0x20000000>)
 //
@@ -160,12 +163,15 @@
 };
 
 /* No env edit is needed to boot this image: U-Boot's bootargs say
- * `root=/dev/mtdblock5`, so the fixed-partitions list below is ordered to put
- * `root` at index 5 while keeping every partition non-overlapping.
- * `spare` (the erased tail of the community `root` region) exists only to hold
- * the index; it stays read-only. Offsets/labels mirror the community U-Boot env
+ * `root=/dev/mtdblock5`, so exactly five partitions must precede `root`.
+ * `scratch` is the cheapest way to spend one of those indices: 1 MiB at
+ * 0xf00000, which is where the community `root` partition begins, so the first
+ * erase blocks of the 4.19 jffs2 stay untouched and a rollback keeps its oldest
+ * nodes. `root` then starts one MiB later and gets the rest of the chip
+ * (240 MiB) instead of being squeezed to make the tail fit.
+ * Offsets/labels otherwise mirror the community U-Boot env
  * (boot 2048k@0x0, kernel 8192k@0x200000, dtb 1024k@0xa00000,
- *  "parameter tags" 4096k@0xb00000, root 246784k@0xf00000).
+ *  "parameter tags" 4096k@0xb00000).
  */
 &spifc {
 	spi-max-frequency = <25000000>;
@@ -203,19 +209,19 @@
 				read-only;
 			};
 
-			/* Exists only to keep `root` at index 5 (see the comment above).
-			 * Writable on purpose: the serial-free kexec trial dumps its
-			 * console here when the LAN never comes up, and the write also
-			 * exercises mainline SPI-NAND program/erase.
+			/* Holds the index so `root` lands on mtdblock5. Not a usable
+			 * log/scratch area in practice: a partial write needs the
+			 * MEMERASE ioctl and this image has no tool that can erase a
+			 * sub-partition range (/sbin/mtd erases whole partitions).
 			 */
-			partition@3000000 {
-				label = "spare";
-				reg = <0x3000000 0xd000000>;
+			partition@f00000 {
+				label = "scratch";
+				reg = <0xf00000 0x100000>;
 			};
 
-			partition@f00000 {
+			partition@1000000 {
 				label = "root";
-				reg = <0xf00000 0x1f10000>;
+				reg = <0x1000000 0xf000000>;
 			};
 		};
 	};
