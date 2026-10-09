@@ -1,104 +1,102 @@
 #!/bin/sh
-# Write the mainline SK-D840N triple from the system that is running now.
-# Target map (the community U-Boot that is already flashed on this board):
-#   mtd1 boot / mtd2 kernel / mtd3 dtb / mtd4 "parameter tags" / mtd5 root
-# mtd1 is never touched, so the bootloader and its env stay intact.
+# Program the mainline SK-D840N triple (uImage + dtb + jffs2 rootfs) into the
+# partition map the installed community U-Boot expects:
+#   boot / kernel / dtb / "parameter tags" / root
+# `boot` is never touched, so the bootloader and its env stay intact.
 #
-# Order: root, dtb, then kernel LAST - until the kernel partition is replaced the
-# box still boots what it is booting now, so every earlier mistake is recoverable
-# from the live shell.
+# Tooling: this uses /sbin/mtd (OpenWrt base), which takes a partition *label* and
+# does erase/write/verify through the mtd char device. mtd_debug and mtd-utils are
+# not in the image on this board, so they are not assumed here.
 #
-#   sh flash-sk-d840n.sh            # dry run: geometry + payload sizes only
-#   sh flash-sk-d840n.sh --write    # erase + program + verify
+# Run it from the kexec'd RAM system (templates/trial-kexec.sh), NOT from the
+# mounted OpenWrt root: `root` is the jffs2 your own / is mounted from, and
+# erasing the flash under a mounted jffs2 oopses the kernel.
+#
+#   sh flash-sk-d840n.sh            # dry run: geometry, payload sizes, boot contract
+#   sh flash-sk-d840n.sh --write    # erase + program + verify, kernel LAST
 set -eu
 
 D=${0%/*}
 [ "$D" = "$0" ] && D=.
-UIMAGE=$D/flash-uImage
-DTB=$D/flash-dtb.bin
-ROOTFS=$D/flash-rootfs.jffs2
-PAGE=2048
-MODE=$1
-TMP=/tmp/skd840n
+KERNEL_IMG=$D/flash-uImage
+DTB_IMG=$D/flash-dtb.bin
+ROOT_IMG=$D/flash-rootfs.jffs2
+MODE=${1:-}
 
 say() { echo "flasher: $*"; }
 die() { echo "flasher: $*" >&2; exit 1; }
 
-for f in "$UIMAGE" "$DTB" "$ROOTFS"; do
-	[ -f "$f" ] || die "missing $f (run this script from the directory holding the images)"
-done
-command -v mtd_debug >/dev/null 2>&1 || die "mtd_debug not found on the device"
-for p in kernel dtb root; do
-	grep -q "\"$p\"\|	$p\|^ *[0-9]*:.*\"$p\"" /proc/mtd || die "partition $p missing in /proc/mtd"
+command -v mtd >/dev/null 2>&1 || die "/sbin/mtd not found - run this from the OpenWrt image"
+for f in "$KERNEL_IMG" "$DTB_IMG" "$ROOT_IMG"; do
+	[ -f "$f" ] || die "missing $f (run from the directory holding the images)"
 done
 
-part_of() { # label -> mtd index (/proc/mtd line 1 is the header, line 2 is mtd0)
-	line=$(grep -n "\"$1\"" /proc/mtd | head -1 | cut -d: -f1)
-	[ -n "$line" ] || return 1
-	echo $((line - 2))
+mtd_of() { # label -> index, from the quoted name in /proc/mtd
+	awk -F'"' -v n="$1" '$2==n { s=$1; sub(/^mtd/,"",s); sub(/:.*/,"",s); print s }' \
+		/proc/mtd | head -1
 }
 
-pad_to_page() { # src dst : append 0xFF up to a page boundary like nand write does
-	src=$1
-	dst=$2
-	len=$(wc -c < "$src")
-	rem=$((len % PAGE))
-	cp "$src" "$dst"
-	if [ "$rem" != 0 ]; then
-		dd if=/dev/zero bs=1 count=$((PAGE - rem)) 2>/dev/null | tr '\0' '\377' >> "$dst"
-	fi
-}
-
-show_geometry() {
+geometry() {
 	i=0
 	while [ -e "/sys/class/mtd/mtd$i" ]; do
-		printf 'mtd%d %-16s offset=%-9s size=%-11s erase=%s\n' "$i" \
-			"$(cat /sys/class/mtd/mtd$i/name)" "$(cat /sys/class/mtd/mtd$i/offset)" \
-			"$(cat /sys/class/mtd/mtd$i/size)" "$(cat /sys/class/mtd/mtd$i/erasesize)"
+		printf 'mtd%s %-16s size=%-11s erase=%s\n' "$i" \
+			"$(cat "/sys/class/mtd/mtd$i/name")" \
+			"$(cat "/sys/class/mtd/mtd$i/size")" \
+			"$(cat "/sys/class/mtd/mtd$i/erasesize")"
 		i=$((i + 1))
 	done
-	for f in "$UIMAGE" "$DTB" "$ROOTFS"; do
-		printf '%10d  %s\n' "$(wc -c < "$f")" "$f"
+	for f in "$KERNEL_IMG" "$DTB_IMG" "$ROOT_IMG"; do
+		printf '%11d  %s\n' "$(wc -c < "$f")" "$f"
 	done
 }
 
-show_geometry
+geometry
 
-[ "$MODE" = "--write" ] || { say "dry run only; pass --write to program flash"; exit 0; }
+# The installed U-Boot boots with `root=/dev/mtdblock5`, which is a hard-coded
+# index, not a label. If this kernel numbers the partitions differently the box
+# will panic on mount with no serial console to see it, so check first.
+ROOTIDX=$(mtd_of root)
+[ -n "$ROOTIDX" ] || die "no 'root' partition in /proc/mtd"
+if [ "$ROOTIDX" != 5 ]; then
+	say "MISMATCH: root is mtd$ROOTIDX, but bootargs say root=/dev/mtdblock5"
+	say "Fix the partition list in the board dts (or the env bootargs) before flashing."
+	[ "${FORCE:-}" = 1 ] || exit 1
+	say "FORCE=1 set, continuing anyway"
+fi
 
-mkdir -p "$TMP"
-for mnt in /overlay /www; do
-	mountpoint -q "$mnt" 2>/dev/null && say "warning: $mnt is mounted (jffs2 in active use)"
+# Do not saw off the root we are sitting on.
+for m in / /overlay; do
+	dev=$(awk -v m="$m" '$2==m {print $1}' /proc/mounts)
+	case "$dev" in
+	/dev/mtdblock*|/dev/root) die "$m is mounted from $dev - boot the RAM image first" ;;
+	esac
 done
 
-pad_to_page "$ROOTFS" "$TMP/rootfs.jffs2"
-pad_to_page "$DTB"    "$TMP/dtb.bin"
-pad_to_page "$UIMAGE" "$TMP/uImage"
+[ "$MODE" = "--write" ] || { say "dry run only; pass --write to program flash"; exit 0; }
+say "writing. Order is root, dtb, then kernel - until kernel is replaced the box"
+say "still boots what it boots now, so any earlier mistake is recoverable."
 
-write_one() { # label file
+program() { # label file
 	label=$1
 	src=$2
-	dev=$(part_of "$label") || die "cannot resolve mtd index for $label"
-	base=$(cat "/sys/class/mtd/mtd$dev/offset")
-	size=$(cat "/sys/class/mtd/mtd$dev/size")
+	idx=$(mtd_of "$label")
+	[ -n "$idx" ] || die "no partition labelled $label"
+	size=$(cat "/sys/class/mtd/mtd$idx/size")
 	len=$(wc -c < "$src")
 	[ "$len" -le "$size" ] || die "$label: $len bytes does not fit in $size"
-	[ $((len % PAGE)) -eq 0 ] || die "$label: payload not page aligned"
-	[ $((base % PAGE)) -eq 0 ] || die "$label: partition offset not page aligned"
-	say "erase mtd$dev ($label) @0x$(printf %x "$base") len=$len ; write $src"
-	mtd_debug erase "/dev/mtd$dev" "$base" "$len"
-	mtd_debug write "/dev/mtd$dev" "$base" "$len" "$src"
-	sync
-	cp "$src" "$TMP/head.bin"
-	mtd_debug read "/dev/mtd$dev" "$base" "$PAGE" "$TMP/rb_$dev.bin"
-	cmp -n "$PAGE" "$TMP/head.bin" "$TMP/rb_$dev.bin" \
-		|| die "$label: readback of the first page differs"
-	say "$label verified (first page)"
+	say "erase mtd$idx ($label)"
+	mtd erase "$label"
+	say "write $src -> $label"
+	mtd write "$src" "$label"
+	say "verify $label"
+	mtd verify "$src" "$label" || die "$label: readback differs"
+	say "$label ok"
 }
 
-write_one root   "$TMP/rootfs.jffs2"
-write_one dtb    "$TMP/dtb.bin"
-write_one kernel "$TMP/uImage"
+program root   "$ROOT_IMG"
+program dtb    "$DTB_IMG"
+program kernel "$KERNEL_IMG"
 
-say "done. Do NOT reboot blindly: this kernel has not run on this board yet."
-say "Trial it first (initramfs .itb over kexec/serial) and keep restore_set/ for rollback."
+sync
+say "done. Reboot into it (or power-cycle). If it does not come back on the LAN,"
+say "restore_set/ in this repo holds the verified stock set for a full rollback."

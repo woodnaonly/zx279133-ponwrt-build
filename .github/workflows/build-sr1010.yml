@@ -26,9 +26,12 @@ on:
   push:
     branches:
       - main
+    # Phase 1 is green and its .itb is downloaded, so this only re-runs when its
+    # own inputs change. The shared target/linux/zte/image/Makefile is excluded on
+    # purpose: the SK-D840N profile edits it often, and a change there is additive
+    # for sr1010. Dispatch this workflow by hand to re-validate against it.
     paths:
       - .github/workflows/build-sr1010.yml
-      - overlays/target/linux/zte/image/Makefile
       - configs/sr1010-extra.config
 
 env:

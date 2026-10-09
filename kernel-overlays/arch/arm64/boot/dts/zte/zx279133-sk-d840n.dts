@@ -16,15 +16,16 @@
 //
 // OPEN ITEMS (deliberately copied from the validated SR1010 board file, to be
 // re-probed on this unit before the image is ever flashed):
-//   * SK-D840N's four LAN ports are behind the SoC-internal "9132" UNI switch
-//     (vendor np_133.ko / switch.ko; stock DTB lists uni-phy = <0x0a 0x0b 0x0c
-//     0x0d 0x05 0x1c 0x02> on mdio0/mdio1). There is no mainline driver for it,
-//     so the RTL8372N DSA node of SR1010 is dropped here.
-//   * the 2.5G PHY part on this board is not confirmed (vendor module is
-//     rlt8226b.ko, cnjn's tree drives ZX279051); kept as zx279051 for now.
+//   * Only the RTL8226 port below is reachable in mainline. The four GE LAN ports
+//     sit behind the SoC-internal "9132" UNI switch, which the vendor drives
+//     without phylib or DSA at all - the running system shows it:
+//     /dev/ethdriver + "ethdrv_dev_ioctl brdev_set.port_id 1, name eth1" for
+//     eth0..eth3, and /sys/bus/mdio_bus/devices is empty. There is no mainline
+//     equivalent, so SR1010's RTL8372N DSA node is dropped and the LAN-side
+//     zte,zx279133-lan-conduit child is left out too (it is the CPU port of an
+//     external switch this board does not have).
 //   * MAC address: the ZTE "parameter tags" nvmem layout of SR1010 does not
-//     apply, so the stock ePHY MAC is written literally. Replace with an
-//     nvmem cell once the tags parser for this SKU is known.
+//     apply, so no MAC source is given; see the comment on &nppt.
 
 /dts-v1/;
 
@@ -122,10 +123,27 @@
 &mdio1 {
 	status = "okay";
 
-	zx279051: ethernet-phy@1 {
-		compatible = "ethernet-phy-id0000.84b9";
-		reg = <1>;
+	/* The one external PHY on this board. Evidence from the running unit:
+	 *  - dmesg: 14f01000.mdio "mdio not set pins" (internal-only bus, it carries
+	 *    the four 9132 UNI PHYs at 0x0a..0x0d), 14f02000.mdio has pinctrl -> the
+	 *    bus with external PHYs.
+	 *  - stock bdinfo: outerphy_desc_name = "phy_RTL8226",
+	 *    outerphy_desc_mode = <0x00 0x05 0x00>, and mdio1's uni-phy list contains
+	 *    0x05 -> address 5, where SR1010 has its PHY at address 1.
+	 * The id-compatible is tried first, genphy-ieee802.3-c22 is the fallback so a
+	 * different PHY id still yields an attached (1G) PHY instead of nothing.
+	 */
+	zx279051: ethernet-phy@5 {
+		compatible = "ethernet-phy-id0000.84b9", "ethernet-phy-ieee802.3-c22";
+		reg = <5>;
 		max-speed = <2500>;
+		/* stock bdinfo: phy-reset = <0x28> = global GPIO 40 = &gpio2 8 (bdinfo
+		 * numbers are global: its slic-reset = <0x06> shows up in the running
+		 * system as gpiochip0/gpio-6 labelled "slic-reset"). gpio-40 itself is
+		 * not held by the vendor kernel, so it pulsed and released it.
+		 */
+		reset-gpios = <&gpio2 8 GPIO_ACTIVE_LOW>;
+		reset-delay-us = <10000>;
 	};
 };
 
@@ -185,10 +203,14 @@
 				read-only;
 			};
 
+			/* Exists only to keep `root` at index 5 (see the comment above).
+			 * Writable on purpose: the serial-free kexec trial dumps its
+			 * console here when the LAN never comes up, and the write also
+			 * exercises mainline SPI-NAND program/erase.
+			 */
 			partition@3000000 {
 				label = "spare";
 				reg = <0x3000000 0xd000000>;
-				read-only;
 			};
 
 			partition@f00000 {

@@ -36,6 +36,38 @@ Workflow `Build SR1010` (`workflow_dispatch`, also runs on the first push).
 Output: `bin/targets/zte/zx279133/immortalwrt-zte-zx279133-zte_zxslc-sr1010-initramfs.itb`.
 
 Booting that image as upstream intends it needs a serial console (U-Boot:
-`tftpboot 0x88000000 <itb>` then `bootm 0x88000000`). The SK-D840N currently has
-no USB-TTL cable, so flashing/booting a mainline kernel on the real unit is a
-phase-2 design problem, tracked in this repo's history.
+`tftpboot 0x88000000 <itb>` then `bootm 0x88000000`). The SK-D840N has no USB-TTL
+cable, so phase 2 replaces that step with `kexec` from the system that is running.
+
+## Phase 2: SK-D840N without a serial console
+
+Workflow `ZX279133 SK-D840N Build`, matrix mode `initramfs` and `flash`
+(`workflow_dispatch` lets you run one of them).
+
+| artifact | what it is |
+| --- | --- |
+| `sk-d840n-initramfs.itb` | RAM-only FIT, same shape as SR1010's |
+| `trial/trial-Image.gz`, `trial/trial-dtb.bin` | the same kernel with the initramfs embedded, unpacked for `kexec` |
+| `trial/trial-kx.tgz` | `kexec` plus the `.so` files it needs, because the box has no WAN |
+| `flash-uImage` / `flash-dtb.bin` / `flash-rootfs.jffs2` | the triple the installed U-Boot bootcmd reads (`mtd read kernel`/`mtd read dtb`, `bootm`, `root=/dev/mtdblock5`) |
+| `flash-set.tgz` | those three plus `flash-sk-d840n.sh` |
+
+Order of operations, reversible up to step 4 because nothing is written before it:
+
+1. `sh templates/trial-kexec.sh` on the running system (needs `PC=<tftp-ip>`) - it
+   fetches `trial-kx.tgz`, `trial-dtb.bin`, `trial-Image.gz`, then
+   `kexec --load` / `--exec` into the mainline RAM image.
+2. If the new system is reachable: `/proc/mtd` must show `root` as **mtd5**, the
+   index hard-coded in the U-Boot env. If it does not, fix the partition list (or
+   the env) before writing anything.
+3. Power-cycle to get the current system back - flash is untouched.
+4. From the RAM system, `tar xzf flash-set.tgz && sh flash-sk-d840n.sh --write`:
+   `root` first, then `dtb`, then `kernel` last, each erase+write+verify through
+   `/sbin/mtd` by partition label (there is no `mtd_debug` or `nandwrite` in this
+   image, so the flasher does not assume them).
+
+Gaps this cannot close: mainline has no GPON driver, and the four GE LAN ports sit
+behind the SoC-internal "9132" switch, which the vendor drives without phylib or
+DSA (`/dev/ethdriver` + `ethdrv_dev_ioctl brdev_set.port_id`). Only the external
+RTL8226 port is describable in mainline, so the trial is planned around one RJ45.
+`restore_set/` in the parent project keeps the md5-verified stock set for rollback.

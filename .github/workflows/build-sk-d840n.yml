@@ -211,6 +211,11 @@ jobs:
           cp "$RS" flash-rootfs.jffs2
           cp templates/flash-sk-d840n.sh flash-sk-d840n.sh
           ls -l flash-uImage flash-dtb.bin flash-rootfs.jffs2
+          # one tarball so the RAM trial only has to tftp a single file
+          mkdir -p flash-set
+          cp flash-uImage flash-dtb.bin flash-rootfs.jffs2 flash-sk-d840n.sh flash-set/
+          tar czf flash-set.tgz -C flash-set .
+          ls -l flash-set.tgz
 
       - name: Package initramfs image
         if: steps.pick.outputs.run == 'true' && matrix.mode == 'initramfs'
@@ -221,6 +226,47 @@ jobs:
           echo "initramfs: $ITB"
           cp "$ITB" sk-d840n-initramfs.itb
           ls -l sk-d840n-initramfs.itb
+
+      - name: Stage serial-free trial inputs
+        if: steps.pick.outputs.run == 'true'
+        run: |
+          set -u
+          mkdir -p trial
+          # kexec for the system that is running now: it has no kexec binary and no
+          # WAN to install one from, so the build has to hand it out. Take the
+          # install image (same bytes that would land in /usr/bin) and carry every
+          # NEEDED library with it - a missing .so is an silent exec failure.
+          KX=$(find openwrt/staging_dir/target-*/pkgdir -type f -name kexec 2>/dev/null | head -1)
+          [ -n "$KX" ] || KX=$(find openwrt/build_dir/target-* -maxdepth 3 -type f -name kexec 2>/dev/null | head -1)
+          if [ -n "$KX" ]; then
+            echo "kexec: $KX"
+            cp "$KX" trial/kexec
+            for n in $(readelf -d "$KX" | sed -n 's/.*NEEDED.*\[\(.*\)\]/\1/p'); do
+              L=$(find openwrt/staging_dir/target-*/usr/lib openwrt/staging_dir/target-*/lib -name "$n" 2>/dev/null | head -1)
+              if [ -n "$L" ]; then mkdir -p trial/lib; cp -L "$L" trial/lib/; echo "  lib $n <- $L"; else echo "  MISSING LIB $n" >&2; fi
+            done
+          else
+            echo "no kexec binary in the build (kexec-tools not selected?)" >&2
+          fi
+          # one tarball because the box cannot resolve a dependency list over tftp
+          if [ -f trial/kexec ]; then
+            if [ -d trial/lib ]; then tar czf trial/trial-kx.tgz -C trial kexec lib; else tar czf trial/trial-kx.tgz -C trial kexec; fi
+            ls -l trial/trial-kx.tgz
+          fi
+          if [ "${{ matrix.mode }}" = initramfs ]; then
+            KT=$(ls -d openwrt/build_dir/target-*/linux-zte_zx279133/linux-* | head -1)
+            test -n "$KT" || { echo "no kernel build dir" >&2; exit 1; }
+            # OpenWrt builds the initramfs into Image, so this file *is* the RAM payload
+            test -f "$KT/arch/arm64/boot/Image" || { echo "no Image in $KT" >&2; exit 1; }
+            ls -l "$KT/arch/arm64/boot/Image"
+            gzip -9nc "$KT/arch/arm64/boot/Image" > trial/trial-Image.gz
+            DTB=$(find "$KT/arch/arm64/boot/dts/zte" -name '*sk-d840n*.dtb' | head -1)
+            test -n "$DTB" || { echo "no sk-d840n dtb in the kernel tree" >&2; exit 1; }
+            cp "$DTB" trial/trial-dtb.bin
+            cp templates/trial-kexec.sh templates/flash-sk-d840n.sh trial/
+            ls -lR trial
+            ( cd trial && sha256sum trial-kx.tgz kexec trial-Image.gz trial-dtb.bin *.sh > sha256sums-trial 2>/dev/null || true )
+          fi
 
       - name: Checksums and summary
         if: steps.pick.outputs.run == 'true' && success()
@@ -250,8 +296,10 @@ jobs:
             flash-uImage
             flash-dtb.bin
             flash-rootfs.jffs2
+            flash-set.tgz
             sk-d840n-initramfs.itb
             sha256sums
+            trial
 
       - name: Publish release
         if: success()
@@ -261,12 +309,18 @@ jobs:
           body: |
             ## SK-D840N（ZX279133，mainline 6.18.38）— ${{ matrix.mode }}
             - ImmortalWrt `cnjn/ImmortalWrt@sr1010-zx279133` + `cnjn/linux-mainline-zte-zxslc-sr1010@build`
-            - 板级文件：`zx279133-sk-d840n.dts`（LAN 内置 9132 交换无主线驱动，先用 SR1010 的 XMAC/PHY 路径）
-            - flash 模式对齐板子上现有 U-Boot 的 `bootcmd`（kernel/dtb/root 分区，`root=/dev/mtdblock5`）
-            - **未在本机验证**：刷机前需要串口或 kexec 试驾，见 README
+            - 板级文件：`zx279133-sk-d840n.dts`；分区顺序保证 `root` = mtdblock5，与板上现有 U-Boot 的 bootargs 一致
+            - **未在本机验证**。免串口流程：先 `trial-kexec.sh` 用 kexec 起 RAM 镜像（不写 flash，断电即回原系统），
+              确认 SSH 通了且 `/proc/mtd` 里 root 仍是第 5 个，再用 `flash-set.tgz` 里的 `flash-sk-d840n.sh --write`
+              按 root → dtb → kernel 的顺序写入
+            - LAN 口用的还是 SR1010 的 NPPT/ZX279051 路径；内置 9132 交换没有主线驱动，PON 侧主线也没有驱动
           files: |
             flash-uImage
             flash-dtb.bin
             flash-rootfs.jffs2
             sk-d840n-initramfs.itb
             sha256sums
+            flash-set.tgz
+            trial/*
+            trial/lib/*
+          ignore_missing_files: true

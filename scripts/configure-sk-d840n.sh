@@ -24,6 +24,11 @@ printf 'CONFIG_EXTERNAL_KERNEL_TREE="%s"\n' "$(cd "$KERNEL_TREE" && pwd)" >>.con
 cat >>.config <<EOF
 # CONFIG_TARGET_zte_zx279133_DEVICE_zte_zxslc-sr1010 is not set
 CONFIG_TARGET_zte_zx279133_DEVICE_skyworth_sk-d840n=y
+# The board is flashed without a serial console, so the trial boot goes through
+# kexec from the system that is running now - and that system has no kexec
+# binary and no way to install one (no WAN). Shipping kexec in the build lets CI
+# hand it out as a trial artifact.
+CONFIG_PACKAGE_kexec-tools=y
 EOF
 
 if [ "$MODE" = flash ]; then
@@ -47,3 +52,7 @@ echo "== resolved selection =="
 grep -E 'CONFIG_TARGET_zte|CONFIG_EXTERNAL_KERNEL_TREE|CONFIG_TARGET_ROOTFS_(INITRAMFS|JFFS2)=' .config || true
 grep -q 'CONFIG_TARGET_zte_zx279133_DEVICE_skyworth_sk-d840n=y' .config || {
 	echo "SK-D840N device was not selected by defconfig" >&2; exit 1; }
+# not fatal: without kexec the trial has to be driven some other way, but the
+# images themselves are still worth building.
+grep -q 'CONFIG_PACKAGE_kexec-tools=y' .config || {
+	echo "::warning::kexec-tools was not selected - trial-kexec artifact will be missing"; }
