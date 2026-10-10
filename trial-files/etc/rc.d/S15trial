@@ -1,0 +1,49 @@
+#!/bin/sh
+# Trial-only (staged into the RAM image by CI, or via --initrd from
+# tools/mktrialram.py). Nothing here belongs in a released image.
+#
+# Two things must not depend on the image's own first-boot configuration, because a
+# wrong guess would look exactly like a kernel that does not boot:
+#
+#   * which netdev the usable RJ45 is. /etc/board.d/02_network puts the address on
+#     eth0, but the mainline NPPT driver may name this board's port something else,
+#     so every netdev that appears gets the address.
+#   * whether the boot got as far as userspace. There is no serial console, so a
+#     silent board is ambiguous - the canary reboot makes "it booted" observable as
+#     "the flashed system answers again about five minutes after the kexec", with no
+#     further work. PSCI reset is used, so this does not depend on the watchdogs
+#     (which the board DTS deliberately disables).
+
+(
+	addr=192.168.1.1/24
+	i=0
+	while [ $i -lt 8 ]; do
+		i=$((i + 1))
+		for d in /sys/class/net/*; do
+			[ -d "$d" ] || continue
+			n=${d#/sys/class/net/}
+			[ "$n" = lo ] && continue
+			ip link set "$n" up 2>/dev/null
+			ip addr replace $addr dev "$n" 2>/dev/null
+		done
+		pidof dropbear >/dev/null 2>&1 || /usr/sbin/dropbear -s -B -p 22
+		sleep 15
+	done
+
+	n=""
+	for d in /sys/class/net/*; do
+		[ -d "$d" ] || continue
+		n="$n ${d#/sys/class/net/}"
+	done
+	echo "trial: netdevs=$n addr=$addr" >/dev/kmsg
+
+	(
+		sleep 300
+		# touch /tmp/trial-noreboot from ssh to keep the image running
+		[ -e /tmp/trial-noreboot ] && exit 0
+		echo "trial: canary reboot" >/dev/kmsg
+		/sbin/reboot -f
+	) &
+) &
+
+exit 0

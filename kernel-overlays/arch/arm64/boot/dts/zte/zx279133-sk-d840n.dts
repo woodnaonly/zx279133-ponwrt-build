@@ -166,16 +166,25 @@
 	status = "okay";
 };
 
-/* Both watchdogs are switched off here, and that is a measured requirement, not
- * caution: zx279133.dtsi already ships watchdog0 (14f09000) as "okay" with
- * timeout-sec = <10> and zte,restart-watchdog, and nothing in a RAM-only image
- * feeds it - procd only opens /dev/watchdog when
- * system.@system[0].watchdog_timeout is set, which an initramfs never does.
- * kexec into this board's Image on the unit did switch over (the 4.19 system came
- * back 43 s later, which is only possible if the new kernel had run far enough to
- * arm a reset), so a mainline build with the watchdog left enabled reboots itself
- * roughly every 40 s - forever, once it is flashed. Re-enable either node only
- * together with a feeder in the image.
+/* Both watchdogs are switched off for the trials, and the reason is the window
+ * they would cut, not a belief that nothing feeds them: zx279133.dtsi already
+ * ships watchdog0 (14f09000) as "okay" with timeout-sec = <10> and
+ * zte,restart-watchdog, and procd's watchdog_init() opens /dev/watchdog whenever
+ * the node exists (it is not gated on system.@system[0].watchdog_timeout), so an
+ * image that reaches procd does feed it. What has no feeder is everything before
+ * procd - driver probe, first-boot board detection - and a 10 s timeout armed the
+ * moment procd starts is what then bites, with no console to see it from.
+ *
+ * The ~43 s reset measured after kexec-ing this board's Image was *not* this
+ * watchdog: the 4.19 vendor kernel arms three zx_wdt instances at 8 s and feeds
+ * them in-kernel, that feeding stops when the old kernel dies, and the reset
+ * routing is the volatile CRM register 0x10e10208 (writing it to 0x0 keeps the
+ * board up; 0x101 only delays the bite).
+ *
+ * To be settled from a shell on mainline, then re-enabled for the flashed image:
+ * with watchdog0 "okay", a flashed mainline that hangs early at least resets
+ * instead of wedging - which is not recovery (there is no A/B and no serial), but
+ * it is better than a board that has to be power-cycled to notice anything.
  */
 &watchdog0 {
 	status = "disabled";

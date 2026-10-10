@@ -110,6 +110,16 @@ jobs:
           NET=openwrt/target/linux/zte/zx279133/base-files/etc/board.d/02_network
           grep -q 'zte,zx279133-sr1010' "$NET"
           grep -q 'skyworth,sk-d840n' "$NET"
+          # trial-files are RAM-image scaffolding only: a released flashed rootfs
+          # must not carry a script that reboots the board five minutes after boot.
+          # They make the trial readable from one wire - an address on every netdev
+          # the kernel makes, ssh that does not wait for the lan, and a canary reboot
+          # that turns "no answer" into "it booted, this port is not it".
+          if [ "${{ matrix.mode }}" = initramfs ]; then
+            cp -a trial-files/. openwrt/files/
+            chmod 755 openwrt/files/etc/rc.d/* 2>/dev/null || true
+            ls -l openwrt/files/etc/rc.d/
+          fi
           # syntax gate, run before spending an hour on it.  A bare `dtc` call is
           # *not* what the kernel does: scripts/Makefile.lib preprocesses DTS with
           # cpp first.  Try both, and use cnjn's own (known-good) board file as the

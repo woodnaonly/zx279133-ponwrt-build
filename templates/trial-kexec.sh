@@ -99,6 +99,14 @@ fi
 fetch trial-dtb.bin
 fetch trial-Image.gz
 gunzip -c trial-Image.gz > Image || die "gunzip failed"
+# Optional: a patched RAM rootfs (tools/mktrialram.py, or trial-initramfs.cpio.gz
+# from CI). Given to kexec as an initrd, it is unpacked over the one baked into the
+# Image, so the trial files apply without rebuilding 30 MB of kernel.
+INITRD=
+if [ -s trial-initramfs.cpio.gz ]; then
+	INITRD=--initrd=$(pwd)/trial-initramfs.cpio.gz
+	say "using patched initramfs: trial-initramfs.cpio.gz ($(wc -c < trial-initramfs.cpio.gz) bytes)"
+fi
 
 # A half-copied payload boots into a corrupt kernel, and over ssh a copy can end
 # early without anything complaining, so check the shipped hashes when both sides
@@ -112,8 +120,9 @@ say "kexec version: $("$KX" --version 2>&1 | head -1)"
 say "loading Image ($(wc -c < Image) bytes) + dtb ($(wc -c < trial-dtb.bin) bytes)"
 say "command line: $CMDLINE"
 
-# arm64 loads a raw Image; the initramfs is already inside it, so no --initrd.
-"$KX" ${KEXEC_ARGS:---load} Image --dtb=trial-dtb.bin --command-line="$CMDLINE" \
+# arm64 loads a raw Image; the initramfs inside it is the CI one unless the patched
+# trial-initramfs.cpio.gz is present, in which case that is handed over as initrd.
+"$KX" ${KEXEC_ARGS:---load} Image --dtb=trial-dtb.bin $INITRD --command-line="$CMDLINE" \
 	|| die "kexec --load failed (check CONFIG_KEXEC on the running kernel)"
 
 if [ "${KEXEC_ARGS:-}" = "--load" ]; then
