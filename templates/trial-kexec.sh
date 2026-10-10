@@ -7,14 +7,15 @@
 # dtb and rootfs partitions still hold what booted them.  No serial console and no
 # watchdog trick needed.
 #
-# Usage, from the PC (dropbear is the only reliable path on this unit):
-#       scp -i ~/.ssh/id_onu trial/* root@192.168.1.1:/tmp/trial/
+# Usage, from the PC (a copy over ssh is the only reliable path on this unit: the
+# image has no tftp client, and plain `scp` fails because /usr/libexec/sftp-server
+# is not in it - `scp -O` or `cat | ssh "cat > f"` both work, 30 MB in ~1.5 s):
+#       scp -O -i ~/.ssh/id_onu trial/* root@192.168.1.1:/tmp/trial/
 #       ssh  root@192.168.1.1 sh /tmp/trial/trial-kexec.sh
 # Everything the script needs may therefore already be sitting in $D, which is the
-# mode it prefers.  If a file is missing it fetches it: HTTP with uclient-fetch
-# first, then tftp - the running image has no tftp client at all (no `tftp` in
-# PATH, /bin/uclient-fetch is the only fetcher), so over tftp this script would
-# fail even though the released copy still describes it.
+# mode it prefers.  If a file is missing and PC= is set it fetches it over HTTP
+# with uclient-fetch, then tries tftp (kept for images that have it; this one does
+# not, so without PC= pre-staged files are the only way in).
 #
 #       sh trial-kexec.sh                      # files pre-staged in /tmp/trial
 #       PC=<ip> sh trial-kexec.sh              # fetch what is missing over HTTP

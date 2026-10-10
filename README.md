@@ -84,12 +84,17 @@ the second and later changes once the image is proven on this unit.
 Order of operations, reversible up to step 5 because nothing is written before it:
 
 1. Copy the trial files onto the running system and start them there. The image on
-   this unit has **no tftp client** (`/bin/uclient-fetch` and `scp` are the only
-   ways in), so pushing is the normal path:
-   `scp -i ~/.ssh/id_onu trial/* root@192.168.1.1:/tmp/trial/` then
-   `ssh root@192.168.1.1 sh /tmp/trial/trial-kexec.sh`. `PC=<ip>` makes the script
-   fetch whatever is missing itself (HTTP, tftp with `TFTP=1`). It then runs
-   `kexec --load` / `--exec` into the mainline RAM image.
+   this unit has **no tftp client** (`/bin/uclient-fetch` is the only fetcher) and
+   its `scp` cannot serve the default SFTP protocol (`/usr/libexec/sftp-server` is
+   not in the image), so push with `scp -O` or a plain ssh pipe:
+   `scp -O -i ~/.ssh/id_onu trial/* root@192.168.1.1:/tmp/trial/` then
+   `ssh root@192.168.1.1 sh /tmp/trial/trial-kexec.sh` (30 MB lands in ~1.5 s this
+   way). `PC=<ip>` makes the script fetch whatever is missing itself over HTTP,
+   `TFTP=1` over tftp. It then runs `kexec --load` / `--exec` into the mainline RAM
+   image. That load path is not assumed: a mainline 6.18 arm64 Image `--load`ed on
+   this board returned 0 with `/sys/kernel/kexec_loaded` going 0 -> 1 (then
+   `--unload`, nothing executed) - the running 4.19 has both
+   `__arm64_sys_kexec_load` and `__arm64_sys_kexec_file_load` in `/proc/kallsyms`.
 2. Observe it from the PC - **in the uplink RJ45**, not a LAN port. On this board
    `eth0` (NPPT + RTL8226) is the port the vendor image calls `wan`
    (`uci show network`: lan bridge = `eth1 eth2 eth3`, `wan.device = eth0`), and
