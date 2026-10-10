@@ -379,10 +379,10 @@ int main(int argc, char **argv)
 	if (strcmp(what, "status") && strcmp(what, "sn")) {
 		printf("usage:\n"
 		       "  ponctl status                             read ONU state over /dev/gpondrv_dev\n"
-		       "  ponctl sn <12charSN> [loid]                program identity (macro 14)\n"
-		       "  ponctl listen <25|26|27|28> [pid] [group]  the vendor kernel's Monitor netlink\n"
-		       "  ponctl tx <if> <hex frame>                send raw bytes on a PON netdev
-		     ponctl raw <macro> [hex payload]          unsanitized ioctl\n");
+		       "  ponctl sn <12charSN> [loid]               program identity (macro 14)\n"
+		       "  ponctl listen <25|26|27|28> [pid] [group] the vendor kernel's Monitor netlink\n"
+		       "  ponctl tx <if> <hex frame>                send raw bytes on a PON netdev\n"
+		       "  ponctl raw <macro> [hex payload]          unsanitized ioctl\n");
 		return 2;
 	}
 	fd = open_dev();
