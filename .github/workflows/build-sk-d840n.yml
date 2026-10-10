@@ -296,7 +296,11 @@ jobs:
           if-no-files-found: ignore
 
       - name: Upload outputs
-        if: success()
+        # Not `success()`: a 70-minute build that trips over a cosmetic late step
+        # still produced images worth having. Artifacts need a session to
+        # download; the anonymous release below stays gated on success so a broken
+        # build can never be published as if it were good.
+        if: steps.pick.outputs.run == 'true' && !cancelled()
         uses: actions/upload-artifact@v4
         with:
           name: sk-d840n-${{ matrix.mode }}
