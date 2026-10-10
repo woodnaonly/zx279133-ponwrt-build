@@ -202,6 +202,24 @@ jobs:
         working-directory: openwrt
         run: make -j"$(nproc)" || make -j1 V=s
 
+      - name: Assert the kernel really has the PHY driver
+        if: steps.pick.outputs.run == 'true'
+        run: |
+          set -e
+          KC=$(ls -d openwrt/build_dir/target-*/linux-zte_zx279133/linux-*/.config | head -1)
+          [ -n "$KC" ] || { echo "no kernel .config found under build_dir" >&2; ls -d openwrt/build_dir/target-*/linux-* 2>/dev/null; exit 1; }
+          echo "kernel config: $KC"
+          # Appending a symbol to target/linux/.../config-6.18 is the supported way to
+          # reach the kernel build, but only the merged result proves it worked. Without
+          # RTL8226B binding a driver the image boots and stays silent, which from the
+          # board looks exactly like a kernel that does not boot.
+          grep -q '^CONFIG_REALTEK_PHY=y' "$KC" || {
+            echo "CONFIG_REALTEK_PHY is not built in - the RTL8226B on this board would have no driver" >&2
+            grep -i 'realtek\|ZX279051\|MDIO_ZX' "$KC" || true
+            exit 1
+          }
+          grep -i '^CONFIG_ZTE_ZX279133\|^CONFIG_REALTEK\|^CONFIG_MDIO_ZX' "$KC"
+
       - name: Package flash images
         if: steps.pick.outputs.run == 'true' && matrix.mode == 'flash'
         run: |

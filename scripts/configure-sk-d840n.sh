@@ -24,14 +24,24 @@ printf 'CONFIG_EXTERNAL_KERNEL_TREE="%s"\n' "$(cd "$KERNEL_TREE" && pwd)" >>.con
 cat >>.config <<EOF
 # CONFIG_TARGET_zte_zx279133_DEVICE_zte_zxslc-sr1010 is not set
 CONFIG_TARGET_zte_zx279133_DEVICE_skyworth_sk-d840n=y
-# The external PHY on this board is a Realtek RTL8226B (running unit:
-# /lib/modules/4.19.136+/rlt8226b.ko, /sys/module/rlt8226b, and the DT property
-# soc:pon_plat/mdio_8226_id = 1, i.e. the bus at 14f02000). cnjn's
-# target/linux/zte/zx279133/config-6.18 enables ZX279051_PHY and MARVELL_10G_PHY
-# but no Realtek driver at all, so without this line phylib has nothing that can
-# match the chip's read ID and the port cannot come up.
-CONFIG_REALTEK_PHY=y
 EOF
+
+# The external PHY on this board is a Realtek RTL8226B. Evidence on the running unit:
+# /lib/modules/4.19.136+/rlt8226b.ko, /sys/module/rlt8226b, dmesg "Start insmod
+# R8226b_init!", and the DT property soc:pon_plat/mdio_8226_id = <1>, which names
+# 14f02000.mdio (dmesg "MDIO id = 1") - the bus this PHY sits on, at address 5.
+# cnjn's target config enables ZX279051_PHY and MARVELL_10G_PHY but has no Realtek
+# driver at all, so phylib has nothing that can match the chip's read ID and the one
+# port that matters cannot come up.
+#
+# Driver symbols belong in target/linux/<target>/<subtarget>/config-<version>, which is
+# what OpenWrt merges into the kernel build; putting one in the top-level .config is
+# dropped by defconfig in silence. That mistake cost a 7-minute Configure failure here
+# rather than a 70-minute build with a dead port, which is the trade to remember.
+KCFG=$(ls target/linux/zte/zx279133/config-* 2>/dev/null | head -1)
+[ -n "$KCFG" ] || { echo "no target/linux/zte/zx279133/config-* to extend" >&2; exit 1; }
+grep -q '^CONFIG_REALTEK_PHY=' "$KCFG" || printf '\nCONFIG_REALTEK_PHY=y\n' >>"$KCFG"
+grep '^CONFIG_REALTEK_PHY=' "$KCFG" || { echo "CONFIG_REALTEK_PHY not in $KCFG" >&2; exit 1; }
 
 if [ "$MODE" = flash ]; then
 	# Only jffs2 matters here: the root partition is written as a raw jffs2 image.
@@ -61,9 +71,6 @@ if [ "$MODE" = flash ] && ! grep -q '^CONFIG_TARGET_ROOTFS_JFFS2=y' .config; the
 	echo "CONFIG_TARGET_ROOTFS_JFFS2 is not enabled - the zte target needs jffs2 in FEATURES" >&2
 	exit 1
 fi
-# Same rule for the PHY driver: no line, no driver, and the failure only shows up
-# as a port that never links - which looks like a dead kernel from the outside.
-grep -q '^CONFIG_REALTEK_PHY=y' .config || {
-	echo "CONFIG_REALTEK_PHY was dropped by defconfig - RTL8226B cannot bind a driver" >&2
-	exit 1
-}
+# Same rule for the PHY driver, but it cannot be checked here: the top-level .config
+# never carries driver symbols, so the real assertion is against the kernel's own
+# .config under build_dir/ after the compile step.
