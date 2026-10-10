@@ -116,7 +116,7 @@
 &nppt {
 	memory-region = <&bmu_reserved>, <&se_hash_reserved>, <&idm_reserved>;
 	memory-region-names = "bmu", "se-hash", "idm";
-	phy-handle = <&zx279051>;
+	phy-handle = <&rtl8226b>;
 	/* No MAC source yet: SR1010 reads it from an nvmem-layout over its own
 	 * "tags" partition, whose zte,sr1010-tags parser does not describe this
 	 * unit's "parameter tags" layout. With neither nvmem-cells nor a literal
@@ -135,26 +135,34 @@
 	status = "okay";
 
 	/* The one external PHY on this board. Evidence from the running unit:
-	 *  - dmesg: 14f01000.mdio "mdio not set pins" (internal-only bus, it carries
-	 *    the four 9132 UNI PHYs at 0x0a..0x0d), 14f02000.mdio has pinctrl -> the
-	 *    bus with external PHYs.
-	 *  - stock bdinfo: outerphy_desc_name = "phy_RTL8226",
-	 *    outerphy_desc_mode = <0x00 0x05 0x00>, and mdio1's uni-phy list contains
-	 *    0x05 -> address 5, where SR1010 has its PHY at address 1.
-	 * The id-compatible is tried first, genphy-ieee802.3-c22 is the fallback so a
-	 * different PHY id still yields an attached (1G) PHY instead of nothing.
+	 *  - /lib/modules/4.19.136+/rlt8226b.ko + /sys/module/rlt8226b, dmesg
+	 *    "Start insmod R8226b_init!" / "r8226b_phy_probe: 576: rtl8226b Phy
+	 *    Driver Probe Done", and its outerphy table names index 5 phy_RTL8226.
+	 *  - /sys/firmware/devicetree/base/soc/pon_plat/mdio_8226_id = <1>, and
+	 *    dmesg labels 14f02000.mdio "MDIO id = 1" -> this bus, address 5
+	 *    (SR1010 has its PHY at address 1 on the same bus).
+	 *
+	 * Deliberately **no compatible**: SR1010's node says
+	 * "ethernet-phy-id0000.84b9", which is the ZX279051's ID, and a compatible
+	 * on a PHY node overrides ID matching - the first mainline trial therefore
+	 * bound the ZX279051 driver to a Realtek chip and wrote ZX279051 registers
+	 * into it, which is the plainest explanation for a board that otherwise
+	 * clearly ran (its 9132 ports went down, so mainline had re-initialised the
+	 * SoC) while the one cable that matters stayed dead. Without a compatible,
+	 * phylib matches the ID the chip actually reports against CONFIG_REALTEK_PHY
+	 * ("Currently supports RTL821x/RTL822x"), which is enabled for that reason
+	 * in scripts/configure-sk-d840n.sh, and genphy remains the fallback.
+	 *
+	 * Also deliberately **no reset-gpios**: derived from the stock bdinfo
+	 * "phy-reset = <0x28>" (global GPIO 40 = &gpio2 8) it is the one number here
+	 * that was never confirmed, and phylib *asserts* a reset GPIO it is told
+	 * about - wrong pin, and the PHY is held in the wrong state instead of
+	 * simply being configured. The PHY is already out of reset when the kernel
+	 * starts on this unit, because the vendor bootloader configured it.
 	 */
-	zx279051: ethernet-phy@5 {
-		compatible = "ethernet-phy-id0000.84b9", "ethernet-phy-ieee802.3-c22";
+	rtl8226b: ethernet-phy@5 {
 		reg = <5>;
 		max-speed = <2500>;
-		/* stock bdinfo: phy-reset = <0x28> = global GPIO 40 = &gpio2 8 (bdinfo
-		 * numbers are global: its slic-reset = <0x06> shows up in the running
-		 * system as gpiochip0/gpio-6 labelled "slic-reset"). gpio-40 itself is
-		 * not held by the vendor kernel, so it pulsed and released it.
-		 */
-		reset-gpios = <&gpio2 8 GPIO_ACTIVE_LOW>;
-		reset-delay-us = <10000>;
 	};
 };
 

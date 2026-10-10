@@ -24,6 +24,13 @@ printf 'CONFIG_EXTERNAL_KERNEL_TREE="%s"\n' "$(cd "$KERNEL_TREE" && pwd)" >>.con
 cat >>.config <<EOF
 # CONFIG_TARGET_zte_zx279133_DEVICE_zte_zxslc-sr1010 is not set
 CONFIG_TARGET_zte_zx279133_DEVICE_skyworth_sk-d840n=y
+# The external PHY on this board is a Realtek RTL8226B (running unit:
+# /lib/modules/4.19.136+/rlt8226b.ko, /sys/module/rlt8226b, and the DT property
+# soc:pon_plat/mdio_8226_id = 1, i.e. the bus at 14f02000). cnjn's
+# target/linux/zte/zx279133/config-6.18 enables ZX279051_PHY and MARVELL_10G_PHY
+# but no Realtek driver at all, so without this line phylib has nothing that can
+# match the chip's read ID and the port cannot come up.
+CONFIG_REALTEK_PHY=y
 EOF
 
 if [ "$MODE" = flash ]; then
@@ -54,3 +61,9 @@ if [ "$MODE" = flash ] && ! grep -q '^CONFIG_TARGET_ROOTFS_JFFS2=y' .config; the
 	echo "CONFIG_TARGET_ROOTFS_JFFS2 is not enabled - the zte target needs jffs2 in FEATURES" >&2
 	exit 1
 fi
+# Same rule for the PHY driver: no line, no driver, and the failure only shows up
+# as a port that never links - which looks like a dead kernel from the outside.
+grep -q '^CONFIG_REALTEK_PHY=y' .config || {
+	echo "CONFIG_REALTEK_PHY was dropped by defconfig - RTL8226B cannot bind a driver" >&2
+	exit 1
+}
