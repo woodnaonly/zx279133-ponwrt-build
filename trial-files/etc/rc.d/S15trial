@@ -41,6 +41,32 @@
 		sleep 300
 		# touch /tmp/trial-noreboot from ssh to keep the image running
 		[ -e /tmp/trial-noreboot ] && exit 0
+		# A reboot is not observable from the port under test: resetting the SoC
+		# does not reset the RTL8226, so the PC keeps seeing link Up across it.
+		# Flapping the links first is what makes "the kernel booted and drives this
+		# port" a *seen* event. netifd has to be stopped for it, or it re-brings the
+		# interface up within a second and the flap is invisible at the 7 s sampling
+		# the watcher can do over ssh-less probes.
+		echo "trial: beacon before reboot" >/dev/kmsg
+		/etc/init.d/network stop 2>/dev/null
+		i=0
+		while [ $i -lt 3 ]; do
+			i=$((i + 1))
+			for d in /sys/class/net/*; do
+				[ -d "$d" ] || continue
+				n=${d#/sys/class/net/}
+				[ "$n" = lo ] && continue
+				ip link set "$n" down 2>/dev/null
+			done
+			sleep 12
+			for d in /sys/class/net/*; do
+				[ -d "$d" ] || continue
+				n=${d#/sys/class/net/}
+				[ "$n" = lo ] && continue
+				ip link set "$n" up 2>/dev/null
+			done
+			sleep 12
+		done
 		echo "trial: canary reboot" >/dev/kmsg
 		/sbin/reboot -f
 	) &
