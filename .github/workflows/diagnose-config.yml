@@ -1,0 +1,93 @@
+name: ZX279133 Diagnose Config
+
+# Fast, build-free answers to the two things that broke the flash packaging job:
+#   1. which CONFIG_TARGET_ROOTFS_* symbols actually survive `make defconfig`,
+#      and what pins them (cnjn's target.mk vs the seed config);
+#   2. whether any feed here provides a kexec binary for the serial-free trial.
+# Runs in minutes because it never compiles OpenWrt.
+
+on:
+  workflow_dispatch:
+  # pushing this file runs it once, so a diagnosis does not need an interactive
+  # dispatch click
+  push:
+    paths:
+      - .github/workflows/diagnose-config.yml
+
+env:
+  IW_URL: https://github.com/cnjn/ImmortalWrt
+  IW_BRANCH: sr1010-zx279133
+  KERNEL_URL: https://github.com/cnjn/linux-mainline-zte-zxslc-sr1010
+  KERNEL_BRANCH: build
+
+jobs:
+  probe:
+    name: config
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build essentials only
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo -E apt-get -qq update
+          sudo -E apt-get -qq install -y --no-install-recommends \
+            build-essential libncurses-dev libssl-dev zlib1g-dev bzip2 unzip \
+            subversion git curl rsync time file cpio libelf-dev
+
+      - name: Clone sources
+        run: |
+          git clone --depth 1 -b "$IW_BRANCH" "$IW_URL" openwrt
+          git clone --branch "$KERNEL_BRANCH" --recurse-submodules --shallow-submodules "$KERNEL_URL" linux-mainline-zte-zxslc-sr1010
+
+      - name: Apply overlays
+        run: |
+          cp -a kernel-overlays/. linux-mainline-zte-zxslc-sr1010/linux-6.18.38/
+          cp -a overlays/. openwrt/
+
+      - name: What pins the rootfs symbols
+        working-directory: openwrt
+        run: |
+          echo "### who declares TARGET_ROOTFS_*"
+          grep -rn --include=Config.in --include=Config.in.* -E 'config TARGET_ROOTFS_(JFFS2|SQUASHFS|INITRAMFS|TARGZ)' . || echo none
+          echo "### zte target files"
+          ls target/linux/zte target/linux/zte/zx279133 2>/dev/null
+          echo "### target.mk"
+          cat target/linux/zte/zx279133/target.mk 2>/dev/null || true
+          echo "### any rootfs/FEATURES forcing"
+          grep -rn -E 'ROOTFS|FEATURES|JFFS2' target/linux/zte/ | grep -v image/Makefile || true
+          echo "### seed config rootfs lines"
+          grep -nE 'ROOTFS|JFFS2|SQUASHFS' configs/zte_zx279133_sr1010_initramfs.config || echo "seed has none"
+
+      - name: Is there a kexec package anywhere
+        run: |
+          cd openwrt
+          ./scripts/feeds update -a >/dev/null
+          ./scripts/feeds install -a >/dev/null
+          echo "### feed dirs holding kexec"
+          find feeds -maxdepth 4 -iname 'kexec*' -not -path '*/.git/*' || true
+          echo "### feeds search"
+          ./scripts/feeds search kexec 2>/dev/null | head -20 || true
+          echo "### any PROVIDER lines"
+          grep -rn 'Package/kexec' feeds/*/admin feeds/*/utils 2>/dev/null | head -10 || true
+
+      - name: defconfig in flash mode
+        run: |
+          sh scripts/configure-sk-d840n.sh \
+            "$GITHUB_WORKSPACE/openwrt" \
+            "$GITHUB_WORKSPACE/linux-mainline-zte-zxslc-sr1010/linux-6.18.38" flash
+          cd openwrt
+          echo "### resolved rootfs symbols (flash)"
+          grep -nE 'CONFIG_TARGET_ROOTFS|CONFIG_TARGET_IMAGES|JFFS2' .config || echo "NO rootfs symbols at all"
+
+      - name: defconfig in initramfs mode
+        run: |
+          sh scripts/configure-sk-d840n.sh \
+            "$GITHUB_WORKSPACE/openwrt" \
+            "$GITHUB_WORKSPACE/linux-mainline-zte-zxslc-sr1010/linux-6.18.38" initramfs
+          cd openwrt
+          echo "### resolved rootfs symbols (initramfs)"
+          grep -nE 'CONFIG_TARGET_ROOTFS|CONFIG_TARGET_IMAGES|JFFS2' .config || echo "NO rootfs symbols at all"
+          echo "### filesystem list the image build will use"
+          grep -rn 'fs-types-' include/image.mk | head
