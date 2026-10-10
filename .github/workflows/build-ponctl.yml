@@ -47,7 +47,11 @@ jobs:
       - name: Smoke test under qemu
         run: |
           set -e
-          out=$(qemu-aarch64 ./ponctl || true)
+          # ubuntu-22.04 installs the user-mode emulators as *-static; the plain name
+          # only exists on newer releases, and guessing wrong costs a debug run.
+          QEMU=$(command -v qemu-aarch64 || command -v qemu-aarch64-static || true)
+          [ -n "$QEMU" ] || { echo "no qemu-aarch64 in the runner" >&2; exit 1; }
+          out=$("$QEMU" ./ponctl || true)
           echo "$out"
           # Exit 2 with no arguments is the usage path; anything else means the binary
           # does not even reach main().
