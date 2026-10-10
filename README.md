@@ -137,6 +137,23 @@ Order of operations, reversible up to step 5 because nothing is written before i
    the U-Boot env. If it does not, fix the partition list (or the env) before
    writing anything.
 4. Power-cycle to get the current system back - flash is untouched.
+
+**A silent round is still a result, and `trial-files/` is what makes it one.** The
+initramfs mode job also stages `trial-files/` into `openwrt/files/` (never into a
+flash build): `etc/rc.d/S15trial` puts 192.168.1.1 on every netdev the kernel
+registers and starts ssh unbound, so an answer does not depend on guessing which
+name the NPPT driver picks or on the `lan` interface existing; and 300 s after
+userspace it runs `/sbin/reboot -f`, which on arm64 goes through PSCI and so does
+not depend on the watchdogs this board DTS deliberately disables. Read it as a
+probe: link flap + the flashed system answering again = **mainline booted**, so the
+remaining problem is the port description in the DTS, not the kernel; nothing ever
+comes back = the boot itself is what to debug. `touch /tmp/trial-noreboot` from the
+ssh shell cancels it. Without those files (or before CI has published a kit that
+contains them) the same round tells you only "no answer", which is why
+`python tools/mktrialram.py` exists: it applies `trial-files/` to the released
+Image's initramfs and writes `trial-initramfs.cpio.gz`, which
+`templates/trial-kexec.sh` passes to kexec as `--initrd` - a patched RAM rootfs
+with no kernel rebuild.
 5. From the RAM system, `tar xzf flash-set.tgz && sh flash-sk-d840n.sh --write`:
    `root` first, then `dtb`, then `kernel` last, each erase+write+verify through
    `/sbin/mtd` by partition label (there is no `mtd_debug` or `nandwrite` in this
