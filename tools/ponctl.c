@@ -278,13 +278,15 @@ static int parse_hex(const char *s, unsigned char *out, int max)
 }
 
 /*
- * Is the `omci` netdev a working transmit path, or only a registered interface? RX is
- * already traced (netdriver.ko's omci_recv forwards to the Monitor netlink), but TX is
- * ambiguous in the binaries: zte_xgpon's fi_Configure_Ponmac_Send_Omci_Msg is a
- * `return 0` stub, so the netdev is the remaining candidate. This sends raw bytes on the
- * interface named in argv so the question can be answered by observation instead of by
- * more disassembly. With no fibre the frame goes nowhere on the wire; the counters are
- * the point.
+ * ponctl tx <if> <hex>: AF_PACKET/SOCK_RAW send, used to answer "is the `omci` netdev a
+ * working transmit path?".  It is not, and this is how that was measured rather than
+ * assumed: RX is traced (netdriver.ko's omci_recv forwards to the Monitor netlink) but TX
+ * is absent everywhere - zte_xgpon's fi_Configure_Ponmac_Send_Omci_Msg is a `return 0`
+ * stub, no gpondrv_dev macro sends a PDU, and swport_dev_xmit_fin drops every frame
+ * because the netdev_priv + 0x8c8 back-pointer it needs is written by nothing in the
+ * image.  With no fibre the frame cannot reach an OLT either way, so the evidence is
+ * /proc/net/dev tx_errors (+1 per frame) and the stack's own send_omci_cnt (always 0).
+ * Bytes must be space or colon separated. pon/INVENTORY.md 4h has the full result.
  */
 static int cmd_tx(const char *ifname, const char *hex)
 {
