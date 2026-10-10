@@ -95,12 +95,38 @@ Order of operations, reversible up to step 5 because nothing is written before i
    this board returned 0 with `/sys/kernel/kexec_loaded` going 0 -> 1 (then
    `--unload`, nothing executed) - the running 4.19 has both
    `__arm64_sys_kexec_load` and `__arm64_sys_kexec_file_load` in `/proc/kallsyms`.
-2. Observe it from the PC - **in the uplink RJ45**, not a LAN port. On this board
-   `eth0` (NPPT + RTL8226) is the port the vendor image calls `wan`
-   (`uci show network`: lan bridge = `eth1 eth2 eth3`, `wan.device = eth0`), and
-   `eth1..eth3` are the "9132" ports mainline cannot drive, so a cable left in a
-   LAN port sees nothing even when the boot worked. `overlays/.../board.d/02_network`
-   therefore puts `eth0` alone in `lan`, which gives it 192.168.1.1 (base-files'
+
+   **Mask the watchdog's reset path before `--exec`.** The running 4.19 arms three
+   `zx_wdt` instances at boot - `zxwdt[0]: heartbeat 8 sec, clock 2048` - and feeds
+   them in-kernel, so any kernel that takes over has no feeder and the board is
+   rebooted ~15-20 s later. `zx_wdt` is built in (nothing to unload) and
+   `/proc/watchdog/ctrl` ignores every write syntax tried, but the reset routing
+   lives in a single CRM register:
+
+       devmem2 0x10e10208 w 0x0          # a normal vendor system reads 0x1F1 here
+
+   Measured on this unit: `0x101` (only the per-WDT bits 4-7, the ones the DTB calls
+   `rst-mask`, cleared) postponed the reboot to ~44 s but did not prevent it, while
+   `0x0` let mainline run indefinitely - bits 0 and 8 are the actual chip-reset path.
+   `nowatchdog` on the kernel command line changes nothing, because this is the
+   *vendor* kernel's timer. The register is volatile: every boot sets it back to
+   `0x1F1`, so it has to be written again per attempt, and once it is masked a hang
+   no longer recovers itself - step 4 (power cycle) is the way back.
+
+   Ordering that follows from all this: `--exec` has to be armed over ssh *before*
+   the cable moves to the `eth0` jack, because the moment mainline takes over the
+   LAN ports die - e.g. `setsid sh -c 'sleep 240; devmem2 0x10e10208 w 0x0;
+   cd /tmp/trial && LD_LIBRARY_PATH=lib ./kexec --exec' &`. Every reset also wipes
+   `/tmp/trial`, so each attempt needs the kit re-pushed.
+2. Observe it from the PC, from the one jack `eth0` is wired to. This unit has **no
+   WAN/uplink RJ45** - the front panel is 4x LAN plus the fibre PON - and the running
+   image calls `eth0` `wan` only because its config came from a router default
+   (`lan bridge = eth1 eth2 eth3`, `wan.device = eth0`). So `eth0` (NPPT + RTL8226)
+   is one of those four LAN jacks, while `eth1..eth3` are "9132" ports mainline
+   cannot drive. The vendor driver prints the port number with the netdev, which is
+   how to find the jack: `dmesg` shows `[eth0] port 4 link down` / `[eth1] port 1
+   link up:1000M`, so move a cable and watch. `overlays/.../board.d/02_network`
+   puts `eth0` alone in `lan`, which gives it 192.168.1.1 (base-files'
    default address). An ICMP/ARP answer from there already proves kernel + NPPT +
    PHY + TCP/IP. The image is then reached the same way as the running one
    (`ssh root@192.168.1.1`, blank password - that is base-files' own default, no key

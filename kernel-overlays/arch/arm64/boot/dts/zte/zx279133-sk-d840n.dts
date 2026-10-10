@@ -26,10 +26,15 @@
 //     eth0..eth3, and /sys/bus/mdio_bus/devices is empty. There is no mainline
 //     equivalent, so SR1010's RTL8372N DSA node is dropped and the LAN-side
 //     zte,zx279133-lan-conduit child is left out too (it is the CPU port of an
-//     external switch this board does not have). On the running unit that one
-//     usable port is the RJ45 the vendor image labels `wan`: its uci network has
-//     wan.device = eth0 while the lan bridge holds only eth1 eth2 eth3 - so a
-//     cable in a LAN port cannot show anything even when this tree boots well.
+//     external switch this board does not have).
+//     This unit has **no WAN/uplink jack at all** - the front panel is 4x LAN plus
+//     the fibre PON - so eth0 (NPPT + RTL8226) is one of those four LAN jacks, and
+//     the running image only calls it `wan` because the community config came from
+//     a router default (lan bridge = eth1 eth2 eth3, wan.device = eth0). Which jack
+//     it is can be read straight off the vendor driver, which logs the port number
+//     per netdev: `[eth0] port 4 link up` / `[eth1] port 1 link up:1000M`, i.e.
+//     move a cable and watch dmesg. Anyone testing over the wire has to be in
+//     *that* jack, because no LAN port driven by the 9132 exists in mainline.
 //   * MAC address: the ZTE "parameter tags" nvmem layout of SR1010 does not
 //     apply, so no MAC source is given; see the comment on &nppt.
 
@@ -161,8 +166,23 @@
 	status = "okay";
 };
 
+/* Both watchdogs are switched off here, and that is a measured requirement, not
+ * caution: zx279133.dtsi already ships watchdog0 (14f09000) as "okay" with
+ * timeout-sec = <10> and zte,restart-watchdog, and nothing in a RAM-only image
+ * feeds it - procd only opens /dev/watchdog when
+ * system.@system[0].watchdog_timeout is set, which an initramfs never does.
+ * kexec into this board's Image on the unit did switch over (the 4.19 system came
+ * back 43 s later, which is only possible if the new kernel had run far enough to
+ * arm a reset), so a mainline build with the watchdog left enabled reboots itself
+ * roughly every 40 s - forever, once it is flashed. Re-enable either node only
+ * together with a feeder in the image.
+ */
+&watchdog0 {
+	status = "disabled";
+};
+
 &watchdog1 {
-	status = "okay";
+	status = "disabled";
 };
 
 /* No env edit is needed to boot this image: U-Boot's bootargs say
