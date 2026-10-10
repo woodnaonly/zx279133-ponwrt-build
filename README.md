@@ -58,8 +58,8 @@ aarch64 (verified against the 24.10 `aarch64_generic` base manifest and a full
 `feeds install`). Build it on the PC with `sh tools/getkexec.sh` (parent project),
 which takes Alpine's musl `kexec-tools` plus the `libz`/`liblzma` its binary needs -
 `kexec --version` returning `kexec-tools 2.0.31` was confirmed on this board - and
-writes `staging/trial/trial-kx.tgz`. Serve that directory and both artifacts
-together.
+writes `staging/trial/trial-kx.tgz`. Copy it next to the trial artifacts (it is not
+in the release, so `trial-kexec.sh` takes it as a local file or fetches it).
 
 ## Upgrading from inside the system (`flash-sysupgrade.bin`)
 
@@ -83,15 +83,25 @@ the second and later changes once the image is proven on this unit.
 
 Order of operations, reversible up to step 5 because nothing is written before it:
 
-1. `sh templates/trial-kexec.sh` on the running system (needs `PC=<tftp-ip>`) - it
-   fetches `trial-kx.tgz`, `trial-dtb.bin`, `trial-Image.gz`, then
+1. Copy the trial files onto the running system and start them there. The image on
+   this unit has **no tftp client** (`/bin/uclient-fetch` and `scp` are the only
+   ways in), so pushing is the normal path:
+   `scp -i ~/.ssh/id_onu trial/* root@192.168.1.1:/tmp/trial/` then
+   `ssh root@192.168.1.1 sh /tmp/trial/trial-kexec.sh`. `PC=<ip>` makes the script
+   fetch whatever is missing itself (HTTP, tftp with `TFTP=1`). It then runs
    `kexec --load` / `--exec` into the mainline RAM image.
-2. Observe it from the PC: an ICMP/ARP answer from 192.168.1.1 on the wired
-   segment already proves kernel + NPPT + PHY + TCP/IP. The image is then reached
-   the same way as the running one (`ssh root@192.168.1.1`, blank password - that
-   is base-files' own default, no key or password is baked into these artifacts).
-   If the new system ever ships a locked root, rebuild with a root password rather
-   than with an authorized key: a released image must not carry anyone's key.
+2. Observe it from the PC - **in the uplink RJ45**, not a LAN port. On this board
+   `eth0` (NPPT + RTL8226) is the port the vendor image calls `wan`
+   (`uci show network`: lan bridge = `eth1 eth2 eth3`, `wan.device = eth0`), and
+   `eth1..eth3` are the "9132" ports mainline cannot drive, so a cable left in a
+   LAN port sees nothing even when the boot worked. `overlays/.../board.d/02_network`
+   therefore puts `eth0` alone in `lan`, which gives it 192.168.1.1 (base-files'
+   default address). An ICMP/ARP answer from there already proves kernel + NPPT +
+   PHY + TCP/IP. The image is then reached the same way as the running one
+   (`ssh root@192.168.1.1`, blank password - that is base-files' own default, no key
+   or password is baked into these artifacts). If the new system ever ships a
+   locked root, rebuild with a root password rather than with an authorized key: a
+   released image must not carry anyone's key.
 3. In that shell `/proc/mtd` must show `root` as **mtd5**, the index hard-coded in
    the U-Boot env. If it does not, fix the partition list (or the env) before
    writing anything.

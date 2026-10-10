@@ -104,6 +104,12 @@ jobs:
           test -f "$KT/arch/arm64/boot/dts/zte/zx279133-sk-d840n.dts"
           grep -q 'zx279133-sk-d840n.dtb' "$KT/arch/arm64/boot/dts/zte/Makefile"
           grep -q 'Device/skyworth_sk-d840n' openwrt/target/linux/zte/image/Makefile
+          # board.d/02_network replaces cnjn's file, so the sr1010 case has to be
+          # in the replacement too - and this board needs its own, because without
+          # it the image boots with no interface configured for it at all.
+          NET=openwrt/target/linux/zte/zx279133/base-files/etc/board.d/02_network
+          grep -q 'zte,zx279133-sr1010' "$NET"
+          grep -q 'skyworth,sk-d840n' "$NET"
           # syntax gate, run before spending an hour on it.  A bare `dtc` call is
           # *not* what the kernel does: scripts/Makefile.lib preprocesses DTS with
           # cpp first.  Try both, and use cnjn's own (known-good) board file as the

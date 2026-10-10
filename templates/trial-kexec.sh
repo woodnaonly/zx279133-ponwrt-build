@@ -7,74 +7,127 @@
 # dtb and rootfs partitions still hold what booted them.  No serial console and no
 # watchdog trick needed.
 #
-# On the PC, serve the release's trial/ directory over TFTP (same helper used for
-# the plan-A flash: it listens on 6969 and survives client resets).
-# On the device:
-#       PC=<tftp-server-ip> sh trial-kexec.sh
-#       PC=<ip> KEXEC_ARGS='--load' sh trial-kexec.sh   # load only, then run
+# Usage, from the PC (dropbear is the only reliable path on this unit):
+#       scp -i ~/.ssh/id_onu trial/* root@192.168.1.1:/tmp/trial/
+#       ssh  root@192.168.1.1 sh /tmp/trial/trial-kexec.sh
+# Everything the script needs may therefore already be sitting in $D, which is the
+# mode it prefers.  If a file is missing it fetches it: HTTP with uclient-fetch
+# first, then tftp - the running image has no tftp client at all (no `tftp` in
+# PATH, /bin/uclient-fetch is the only fetcher), so over tftp this script would
+# fail even though the released copy still describes it.
+#
+#       sh trial-kexec.sh                      # files pre-staged in /tmp/trial
+#       PC=<ip> sh trial-kexec.sh              # fetch what is missing over HTTP
+#       PC=<ip> TFTP=1 sh trial-kexec.sh       # fetch over tftp instead
+#       KEXEC_ARGS=--load sh trial-kexec.sh    # load only, then run --exec by hand
 # set -eu
 
-D=/tmp/trial
-PC=${PC:?set PC to the tftp server address}
-PORT=${PORT:-6969}
+D=${D:-/tmp/trial}
+PC=${PC:-}
+PORT=${PORT:-8080}
+TPORT=${TPORT:-6969}
+TFTP=${TFTP:-0}
+KX=${KX:-}
 CMDLINE=${CMDLINE:-'root=/dev/ram0 rw console=ttyAMA0,115200'}
 
 say() { echo "trial: $*"; }
 die() { echo "trial: $*" >&2; exit 1; }
 
-fetch() { # name
-	rm -f "$D/$1"
-	busybox tftp -g -r "$1" -l "$D/$1" -b 1468 "$PC" "$PORT" || die "tftp get $1 failed"
-	[ -s "$D/$1" ] || die "tftp got an empty $1"
-	say "got $1 ($(wc -c < "$D/$1") bytes)"
-}
-
-try_fetch() { # name - optional file
-	rm -f "$D/$1"
-	busybox tftp -g -r "$1" -l "$D/$1" -b 1468 "$PC" "$PORT" 2>/dev/null || return 1
-	[ -s "$D/$1" ] || return 1
-	say "got $1 ($(wc -c < "$D/$1") bytes)"
-}
-
 mkdir -p "$D"; cd "$D" || exit 1
 
-# The release ships either trial-set.tgz (everything in one file) or the loose
-# trial/ directory. Take whichever is being served.
-if try_fetch trial-set.tgz; then tar xzf trial-set.tgz; fi
-
-# kexec plus the shared objects it was linked against, as one tarball. This is NOT
-# part of the CI release: no OpenWrt feed carries kexec-tools for aarch64, so the
-# PC builds it from Alpine's musl packages with tools/getkexec.sh (it was verified
-# to run on this board). The box has no WAN, so a missing .so could not be fixed
-# after the fact - hence libs travel with the binary.
-if ! try_fetch trial-kx.tgz; then
-	die "trial-kx.tgz is not being served - run tools/getkexec.sh on the PC and serve its staging/trial directory"
-fi
-tar xzf trial-kx.tgz
-KX=$D/kexec
-[ -x "$KX" ] || chmod +x "$KX"
-export LD_LIBRARY_PATH=$D/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
-
-need() { # name - fetch only if the tarball did not already provide it
-	[ -s "$D/$1" ] || fetch "$1"
+get_http() { # name
+	say "fetching $1 over http from $PC:$PORT"
+	uclient-fetch -q -O "$1.tmp" "http://$PC:$PORT/$1" || return 1
+	[ -s "$1.tmp" ] || return 1
+	mv "$1.tmp" "$1"
 }
 
-need trial-dtb.bin
-need trial-Image.gz
+get_tftp() { # name
+	say "fetching $1 over tftp from $PC:$TPORT"
+	busybox tftp -g -r "$1" -l "$1.tmp" -b 1468 "$PC" "$TPORT" 2>/dev/null || return 1
+	[ -s "$1.tmp" ] || return 1
+	mv "$1.tmp" "$1"
+}
+
+# name - fetch one file into $D, preferring what is already there
+fetch() {
+	[ -s "$1" ] && { say "already on the box: $1 ($(wc -c < "$1") bytes)"; return 0; }
+	[ -n "$PC" ] || die "$1 is not in $D and PC= is not set - copy the trial files over or give me a server address"
+	if [ "$TFTP" = 1 ]; then
+		get_tftp "$1" || die "tftp get $1 failed"
+	else
+		get_http "$1" || get_tftp "$1" || die "cannot fetch $1 from $PC (http:$PORT, tftp:$TPORT)"
+	fi
+	say "got $1 ($(wc -c < "$1") bytes)"
+}
+
+# die exits, and a function in an `if` condition is not a subshell in ash, so an
+# optional fetch has to fork or a missing file would end the whole script.
+try_get() { # name - same, but a miss is not fatal
+	( fetch "$1" ) 2>/dev/null
+}
+
+# The release ships either trial-set.tgz (everything in one file) or loose files,
+# so take the tarball whenever it is available and be content without it.
+if [ -s trial-set.tgz ] || [ -n "$PC" ]; then
+	if try_get trial-set.tgz; then
+		tar xzf trial-set.tgz && say "unpacked trial-set.tgz"
+	fi
+fi
+
+# kexec plus the shared objects it was linked against. This is NOT part of the CI
+# release: no OpenWrt feed carries kexec-tools for aarch64, so the PC builds it
+# from Alpine's musl packages with tools/getkexec.sh (verified to run on this
+# board, as /tmp/kx/kexec here). The box has no WAN, so a missing .so could not be
+# fixed after the fact - hence the libs travel with the binary.
+if [ -z "$KX" ]; then
+	if [ -s kexec ]; then
+		KX=$D/kexec
+	else
+		if try_get trial-kx.tgz; then
+			tar xzf trial-kx.tgz
+			KX=$D/kexec
+		else
+			die "no kexec to boot with - copy trial-kx.tgz (built by tools/getkexec.sh on the PC) into $D or set KX=<path>"
+		fi
+	fi
+fi
+[ -x "$KX" ] || chmod +x "$KX"
+[ -d lib ] && export LD_LIBRARY_PATH=$D/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
+
+fetch trial-dtb.bin
+fetch trial-Image.gz
 gunzip -c trial-Image.gz > Image || die "gunzip failed"
+
+# A half-copied payload boots into a corrupt kernel, and over ssh a copy can end
+# early without anything complaining, so check the shipped hashes when both sides
+# have them.
+if [ -s sha256sums-trial ] && command -v sha256sum >/dev/null 2>&1; then
+	say "checking sha256sums-trial"
+	sha256sum -c sha256sums-trial || die "checksum mismatch - re-copy the trial files"
+fi
 
 say "kexec version: $("$KX" --version 2>&1 | head -1)"
 say "loading Image ($(wc -c < Image) bytes) + dtb ($(wc -c < trial-dtb.bin) bytes)"
 say "command line: $CMDLINE"
 
 # arm64 loads a raw Image; the initramfs is already inside it, so no --initrd.
-"$KX" --load Image --dtb=trial-dtb.bin --command-line="$CMDLINE" \
+"$KX" ${KEXEC_ARGS:---load} Image --dtb=trial-dtb.bin --command-line="$CMDLINE" \
 	|| die "kexec --load failed (check CONFIG_KEXEC on the running kernel)"
+
+if [ "${KEXEC_ARGS:-}" = "--load" ]; then
+	say "loaded, not executed. /proc/cmdline of the NEW kernel will be:"
+	say "  $CMDLINE"
+	say "Go on with:  $KX --exec   (or just reboot to stay where you are)"
+	exit 0
+fi
 
 say "loaded. /proc/cmdline of the NEW kernel will be:"
 say "  $CMDLINE"
 say "Going to leave the running kernel in 5 s - Ctrl-C now to stop."
-say "If the new system has no working LAN: power-cycle the board; nothing was written."
+say "The only port mainline can drive is the uplink RJ45 (the vendor's wan/eth0),"
+say "so the cable has to be in that one to see anything. If the new system stays"
+say "silent: power-cycle the board; nothing was written."
 sleep 5
 "$KX" --exec || die "kexec --exec failed"
 # not reached

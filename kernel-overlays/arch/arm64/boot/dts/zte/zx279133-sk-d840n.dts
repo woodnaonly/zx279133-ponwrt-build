@@ -26,7 +26,10 @@
 //     eth0..eth3, and /sys/bus/mdio_bus/devices is empty. There is no mainline
 //     equivalent, so SR1010's RTL8372N DSA node is dropped and the LAN-side
 //     zte,zx279133-lan-conduit child is left out too (it is the CPU port of an
-//     external switch this board does not have).
+//     external switch this board does not have). On the running unit that one
+//     usable port is the RJ45 the vendor image labels `wan`: its uci network has
+//     wan.device = eth0 while the lan bridge holds only eth1 eth2 eth3 - so a
+//     cable in a LAN port cannot show anything even when this tree boots well.
 //   * MAC address: the ZTE "parameter tags" nvmem layout of SR1010 does not
 //     apply, so no MAC source is given; see the comment on &nppt.
 

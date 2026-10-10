@@ -1,0 +1,32 @@
+#!/bin/sh
+# Overlaid on cnjn's file, so the sr1010 case is kept exactly as upstream has it.
+#
+# SK-D840N: the only netdev mainline can drive is the NPPT port whose PHY is the
+# external RTL8226, which the vendor image calls `wan`/eth0 (uci show network here:
+# lan bridge = eth1 eth2 eth3, wan.device = eth0). eth1..eth3 come out of the
+# SoC-internal "9132" UNI switch, which has no mainline driver - the vendor drives
+# it through /dev/ethdriver without phylib or DSA - so there is nothing to name
+# lan1..lanN here, and 99-default_network cannot fill the gap either: it exits as
+# soon as /etc/config/network already has a network object. Left unhandled the
+# image would boot with an address on a port that does not exist.
+
+. /lib/functions/uci-defaults.sh
+. /lib/functions/system.sh
+
+board_config_update
+
+case "$(board_name)" in
+zte,zx279133-sr1010)
+	ucidef_set_interfaces_lan_wan "lan1 lan2 lan3 lan4" "eth0"
+	;;
+skyworth,sk-d840n)
+	ucidef_set_interface_lan "eth0"
+	;;
+*)
+	echo "Unsupported hardware. Network interfaces not initialized"
+	;;
+esac
+
+board_config_flush
+
+exit 0
