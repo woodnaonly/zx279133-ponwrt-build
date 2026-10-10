@@ -19,7 +19,11 @@
 #include <sys/stat.h>
 #include <sys/sysmacros.h>
 #include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 #include <linux/netlink.h>
+#include <linux/if_packet.h>
+#include <linux/if_ether.h>
 
 #define DEV "/dev/gpondrv_dev"
 #define DEV_MAJOR 102
@@ -273,6 +277,64 @@ static int parse_hex(const char *s, unsigned char *out, int max)
 	return n;
 }
 
+/*
+ * Is the `omci` netdev a working transmit path, or only a registered interface? RX is
+ * already traced (netdriver.ko's omci_recv forwards to the Monitor netlink), but TX is
+ * ambiguous in the binaries: zte_xgpon's fi_Configure_Ponmac_Send_Omci_Msg is a
+ * `return 0` stub, so the netdev is the remaining candidate. This sends raw bytes on the
+ * interface named in argv so the question can be answered by observation instead of by
+ * more disassembly. With no fibre the frame goes nowhere on the wire; the counters are
+ * the point.
+ */
+static int cmd_tx(const char *ifname, const char *hex)
+{
+	unsigned char frame[256];
+	struct sockaddr_ll to;
+	int fd, n, ifi, rc, type;
+
+	n = hex ? parse_hex(hex, frame, (int)sizeof frame) : 0;
+	if (n < 14) {
+		fprintf(stderr, "need at least an Ethernet header (14 bytes) in hex\n");
+		return 1;
+	}
+	fd = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ALL));
+	if (fd < 0) {
+		fprintf(stderr, "socket(AF_PACKET): %s\n", strerror(errno));
+		return 1;
+	}
+	memset(&to, 0, sizeof to);
+	to.sll_family = AF_PACKET;
+	type = (frame[12] << 8) | frame[13];
+	to.sll_protocol = htons(type);
+	to.sll_halen = 6;
+	memcpy(to.sll_addr, frame, 6);
+	{
+		char path[64];
+		FILE *f;
+
+		snprintf(path, sizeof path, "/sys/class/net/%s/ifindex", ifname);
+		f = fopen(path, "r");
+		if (!f) {
+			fprintf(stderr, "%s: %s\n", path, strerror(errno));
+			close(fd);
+			return 1;
+		}
+		if (fscanf(f, "%d", &ifi) != 1)
+			ifi = 0;
+		fclose(f);
+	}
+	to.sll_ifindex = ifi;
+	if (sendto(fd, frame, n, 0, (struct sockaddr *)&to, sizeof to) < 0) {
+		printf("tx on %s (ifindex %d): FAILED %s\n", ifname, ifi, strerror(errno));
+		close(fd);
+		return 1;
+	}
+	printf("tx on %s (ifindex %d): %d bytes accepted\n", ifname, ifi, n);
+	rc = 0;
+	close(fd);
+	return rc;
+}
+
 static int cmd_raw(unsigned int macro, const char *hex)
 {
 	unsigned char p[128];
@@ -309,6 +371,8 @@ int main(int argc, char **argv)
 		return cmd_listen(argc > 2 ? atoi(argv[2]) : 26,
 				argc > 3 ? (unsigned)strtoul(argv[3], NULL, 0) : 0,
 				argc > 4 ? (unsigned)strtoul(argv[4], NULL, 0) : 1);
+	if (!strcmp(what, "tx"))
+		return argc < 4 ? 2 : cmd_tx(argv[2], argv[3]);
 	if (!strcmp(what, "raw"))
 		return argc < 3 ? 2 : cmd_raw((unsigned)strtoul(argv[2], NULL, 0),
 					     argc > 3 ? argv[3] : NULL);
@@ -317,7 +381,8 @@ int main(int argc, char **argv)
 		       "  ponctl status                             read ONU state over /dev/gpondrv_dev\n"
 		       "  ponctl sn <12charSN> [loid]                program identity (macro 14)\n"
 		       "  ponctl listen <25|26|27|28> [pid] [group]  the vendor kernel's Monitor netlink\n"
-		       "  ponctl raw <macro> [hex payload]          unsanitized ioctl\n");
+		       "  ponctl tx <if> <hex frame>                send raw bytes on a PON netdev
+		     ponctl raw <macro> [hex payload]          unsanitized ioctl\n");
 		return 2;
 	}
 	fd = open_dev();
