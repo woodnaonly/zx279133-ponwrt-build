@@ -1,0 +1,75 @@
+name: PON userspace client build
+
+# The 4.19 BSP loads the whole vendor PON stack but ships no client, so the ONU is
+# headless. tools/ponctl.c reaches it through the two doors recovered from the binaries
+# (pon/INVENTORY.md 4c/4e/4f): the /dev/gpondrv_dev ioctl macros, and the netlink
+# protocols 25-28 that the vendor kernel's MonitorInit creates.
+#
+# Static and aarch64 are both hard requirements: the target runs musl and has no
+# compiler, so a dynamically linked glibc binary would not exec at all. Nothing here is
+# built on a dev machine.
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - tools/ponctl.c
+      - .github/workflows/build-ponctl.yml
+
+permissions: write-all
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the cross toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc-aarch64-linux-gnu libc6-dev-arm64-cross qemu-user-static
+
+      - name: Build
+        run: |
+          set -e
+          aarch64-linux-gnu-gcc -static -O2 -Wall -Wextra -o ponctl tools/ponctl.c
+          file ponctl
+          ls -l ponctl
+
+      - name: Assert the link is really static
+        run: |
+          # Without this the failure mode is "binary does not run", discovered over ssh.
+          file ponctl | grep -q 'statically linked' || {
+            echo "ponctl is not statically linked" >&2; exit 1; }
+
+      - name: Smoke test under qemu
+        run: |
+          set -e
+          out=$(qemu-aarch64 ./ponctl || true)
+          echo "$out"
+          # Exit 2 with no arguments is the usage path; anything else means the binary
+          # does not even reach main().
+          echo "$out" | grep -q 'usage:' || {
+            echo "ponctl did not print usage under qemu" >&2; exit 1; }
+
+      - name: Checksum
+        run: sha256sum ponctl > sha256sums-ponctl
+
+      - name: Upload outputs
+        uses: actions/upload-artifact@v4
+        with:
+          name: ponctl
+          path: |
+            ponctl
+            sha256sums-ponctl
+
+      - name: Publish release
+        if: success()
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ponctl_${{ github.run_number }}_${{ github.run_id }}
+          files: |
+            ponctl
+            sha256sums-ponctl
