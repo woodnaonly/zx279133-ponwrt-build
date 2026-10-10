@@ -209,11 +209,19 @@ jobs:
             -n 'OpenWrt mainline 6.18.38 sk-d840n' -d "$IMG" flash-uImage
           cp "$DTB" flash-dtb.bin
           cp "$RS" flash-rootfs.jffs2
+          # The same three parts as one sysupgrade tar, for upgrading from inside a
+          # running system (LuCI or `sysupgrade -n`). base-files platform.sh writes
+          # them by label, so no partition offset is hard-coded on the device.
+          SU=$(find openwrt/bin/targets/zte/zx279133 -name '*jffs2-128k-sysupgrade.bin' | head -1)
+          [ -n "$SU" ] || SU=$(find openwrt/bin/targets/zte/zx279133 -name '*sysupgrade.bin' | head -1)
+          test -n "$SU" || { echo "no sysupgrade.bin produced" >&2; ls -l openwrt/bin/targets/zte/zx279133; exit 1; }
+          echo "sysupgrade: $SU"
+          cp "$SU" flash-sysupgrade.bin
           cp templates/flash-sk-d840n.sh flash-sk-d840n.sh
-          ls -l flash-uImage flash-dtb.bin flash-rootfs.jffs2
+          ls -l flash-uImage flash-dtb.bin flash-rootfs.jffs2 flash-sysupgrade.bin
           # one tarball so the RAM trial only has to tftp a single file
           mkdir -p flash-set
-          cp flash-uImage flash-dtb.bin flash-rootfs.jffs2 flash-sk-d840n.sh flash-set/
+          cp flash-uImage flash-dtb.bin flash-rootfs.jffs2 flash-sysupgrade.bin flash-sk-d840n.sh flash-set/
           tar czf flash-set.tgz -C flash-set .
           ls -l flash-set.tgz
 
@@ -261,7 +269,7 @@ jobs:
         run: |
           # In initramfs mode the flash-* files do not exist; sha256sum then exits
           # non-zero and pipefail would fail a job whose images are fine.
-          sha256sum flash-uImage flash-dtb.bin flash-rootfs.jffs2 sk-d840n-initramfs.itb 2>/dev/null | tee sha256sums || true
+          sha256sum flash-uImage flash-dtb.bin flash-rootfs.jffs2 flash-sysupgrade.bin sk-d840n-initramfs.itb 2>/dev/null | tee sha256sums || true
           {
             echo "## ${{ matrix.mode }} output"
             echo '```'; ls -l flash-* sk-d840n-*.itb sha256sums 2>/dev/null; cat sha256sums 2>/dev/null; echo '```'
@@ -286,6 +294,7 @@ jobs:
             flash-uImage
             flash-dtb.bin
             flash-rootfs.jffs2
+            flash-sysupgrade.bin
             flash-set.tgz
             sk-d840n-initramfs.itb
             sha256sums
@@ -304,11 +313,15 @@ jobs:
             - **未在本机验证**。免串口流程：先 `trial-kexec.sh` 用 kexec 起 RAM 镜像（不写 flash，断电即回原系统），
               确认 SSH 通了且 `/proc/mtd` 里 root 仍是第 5 个，再用 `flash-set.tgz` 里的 `flash-sk-d840n.sh --write`
               按 root → dtb → kernel 的顺序写入
+            - `flash-sysupgrade.bin`：同一套 kernel/dtb/root 打成的 sysupgrade tar，可在运行中的系统里用
+              LuCI 或 `sysupgrade -n` 刷入（设备侧 `platform.sh` 按分区标签写入，仍然 kernel 最后）。
+              注意：换了 kernel 的 sysupgrade 若内核起不来，没有串口就只能上编程器 —— 先用 kexec 试驾
             - LAN 口用的还是 SR1010 的 NPPT/ZX279051 路径；内置 9132 交换没有主线驱动，PON 侧主线也没有驱动
           files: |
             flash-uImage
             flash-dtb.bin
             flash-rootfs.jffs2
+            flash-sysupgrade.bin
             sk-d840n-initramfs.itb
             sha256sums
             flash-set.tgz

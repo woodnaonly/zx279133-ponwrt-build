@@ -38,7 +38,10 @@ define Device/skyworth_sk-d840n
   DEVICE_VENDOR := Skyworth
   DEVICE_MODEL := SK-D840N
   DEVICE_DTS := zx279133-sk-d840n
-  SUPPORTED_DEVICES := skyworth,sk-d840n
+  # zte,133 is the compatible of the 4.19 community dtb that is in the flash right
+  # now, so keeping it here means a sysupgrade issued from that system is not
+  # refused for a board-name mismatch.
+  SUPPORTED_DEVICES := skyworth,sk-d840n zte,133
   KERNEL_NAME := Image
   KERNEL = kernel-bin | gzip | uImage gzip
   KERNEL_SUFFIX := .uImage
@@ -48,7 +51,12 @@ define Device/skyworth_sk-d840n
   # i.e. ...-skyworth_sk-d840n-jffs2-128k-rootfs.jffs2. `Image/mkfs/jffs2/sub`
   # already appends the EOF mark, so the rootfs only needs to be concatenated.
   IMAGE/rootfs.jffs2 := append-rootfs
-  IMAGES := rootfs.jffs2
+  # The kernel member is $(IMAGE_KERNEL), i.e. the uImage built above, and OpenWrt
+  # stages the device dtb as $(KDIR)/image-<dts>.dtb, so the tar carries the same
+  # three files the raw flasher writes. base-files/lib/upgrade/platform.sh puts
+  # them back by partition label (root first, kernel last).
+  IMAGE/sysupgrade.bin := sysupgrade-tar dtb=$$(KDIR)/image-$$(firstword $$(DEVICE_DTS)).dtb | append-metadata
+  IMAGES := rootfs.jffs2 sysupgrade.bin
 endef
 TARGET_DEVICES += skyworth_sk-d840n
 

@@ -50,7 +50,8 @@ Workflow `ZX279133 SK-D840N Build`, matrix mode `initramfs` and `flash`
 | `trial-set.tgz` | `trial-Image.gz` + `trial-dtb.bin` + both scripts, one download |
 | `trial-Image.gz`, `trial-dtb.bin` | the kernel with the initramfs embedded, unpacked for `kexec`, and its dtb |
 | `flash-uImage` / `flash-dtb.bin` / `flash-rootfs.jffs2` | the triple the installed U-Boot bootcmd reads (`mtd read kernel`/`mtd read dtb`, `bootm`, `root=/dev/mtdblock5`) |
-| `flash-set.tgz` | those three plus `flash-sk-d840n.sh` |
+| `flash-sysupgrade.bin` | the same triple as a sysupgrade tar, for flashing from inside a running system |
+| `flash-set.tgz` | those four plus `flash-sk-d840n.sh` |
 
 `kexec` is **not** in these releases: no OpenWrt feed ships kexec-tools for
 aarch64 (verified against the 24.10 `aarch64_generic` base manifest and a full
@@ -60,7 +61,27 @@ which takes Alpine's musl `kexec-tools` plus the `libz`/`liblzma` its binary nee
 writes `staging/trial/trial-kx.tgz`. Serve that directory and both artifacts
 together.
 
-Order of operations, reversible up to step 4 because nothing is written before it:
+## Upgrading from inside the system (`flash-sysupgrade.bin`)
+
+`sysupgrade.bin` is an **uncompressed sysupgrade tar** whose members are
+`sysupgrade-skyworth_sk-d840n/{CONTROL,kernel,dtb,root}` - the exact triple above.
+`overlays/target/linux/zte/zx279133/base-files/lib/upgrade/platform.sh` writes them
+back by partition label, so no offset is hard-coded on the device, and it keeps the
+`kernel` partition for last for the same reason the flasher does.
+
+    sysupgrade -n flash-sysupgrade.bin        # or the LuCI firmware page
+
+This is safe with respect to the mounted root because `/sbin/sysupgrade` hands the
+work to `/lib/upgrade/do_stage2`, which runs from `/tmp/root` (`RAM_ROOT`) after the
+real root is no longer in use - the config archive is passed on with `mtd -j`, so
+`sysupgrade` without `-n` keeps the settings.
+
+It is **not** safe with respect to the kernel: a sysupgrade that replaces `kernel`
+with something that hangs has the same outcome as any other bad kernel - no
+console, programmer required. Trial the kernel with kexec first; use sysupgrade for
+the second and later changes once the image is proven on this unit.
+
+Order of operations, reversible up to step 5 because nothing is written before it:
 
 1. `sh templates/trial-kexec.sh` on the running system (needs `PC=<tftp-ip>`) - it
    fetches `trial-kx.tgz`, `trial-dtb.bin`, `trial-Image.gz`, then
