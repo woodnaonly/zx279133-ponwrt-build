@@ -143,9 +143,12 @@ jobs:
               exit 1
             fi
           fi
-          for d in /tmp/zx279133-sk-d840n.dts.dtb; do
-            [ -f "$d" ] && { ls -l "$d"; dtc -I dtb -O dts "$d" | grep -B1 -A2 'label = "root"'; }
-          done
+          # show the partition order the gate produced, but do not let a missing
+          # match end the step (set -e is on)
+          if [ -f /tmp/zx279133-sk-d840n.dts.dtb ]; then
+            ls -l /tmp/zx279133-sk-d840n.dts.dtb
+            dtc -I dtb -O dts /tmp/zx279133-sk-d840n.dts.dtb | grep -B1 -A2 'label = "root"' || true
+          fi
 
       - name: Cache dl/
         if: steps.pick.outputs.run == 'true' && inputs.clean_cache != 'true'
@@ -188,7 +191,9 @@ jobs:
         run: |
           set -e
           KT=$(ls -d openwrt/build_dir/target-*/linux-zte_zx279133/linux-*)
-          MKIMAGE=$(ls openwrt/staging_dir/host/bin/mkimage 2>/dev/null || command -v mkimage)
+          # `set -e` aborts on an assignment whose command substitution fails, so
+          # the probe must not be the thing that ends the step.
+          MKIMAGE=$(ls openwrt/staging_dir/host/bin/mkimage 2>/dev/null || command -v mkimage || true)
           [ -n "$MKIMAGE" ] || { sudo apt-get -qq update && sudo apt-get -qq install u-boot-tools; MKIMAGE=mkimage; }
           IMG="$KT/arch/arm64/boot/Image.gz"
           [ -f "$IMG" ] || { gzip -9nc "$KT/arch/arm64/boot/Image" > "$KT/arch/arm64/boot/Image.gz"; }
@@ -272,7 +277,12 @@ jobs:
           sha256sum flash-uImage flash-dtb.bin flash-rootfs.jffs2 flash-sysupgrade.bin sk-d840n-initramfs.itb 2>/dev/null | tee sha256sums || true
           {
             echo "## ${{ matrix.mode }} output"
-            echo '```'; ls -l flash-* sk-d840n-*.itb sha256sums 2>/dev/null; cat sha256sums 2>/dev/null; echo '```'
+            echo '```'
+            # Actions runs every step under `set -e`, and an unmatched glob makes
+            # ls exit 2 - which aborts the step even though all the images built.
+            ls -l flash-* sk-d840n-*.itb sha256sums trial-set.tgz 2>/dev/null || true
+            cat sha256sums 2>/dev/null || true
+            echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload logs on failure
