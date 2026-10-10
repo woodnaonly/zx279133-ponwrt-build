@@ -42,9 +42,14 @@ mkdir -p "$D"; cd "$D" || exit 1
 # trial/ directory. Take whichever is being served.
 if try_fetch trial-set.tgz; then tar xzf trial-set.tgz; fi
 
-# kexec plus the shared objects it was linked against, as one tarball: the box has
-# no WAN, so a missing .so cannot be fixed after the fact.
-fetch trial-kx.tgz
+# kexec plus the shared objects it was linked against, as one tarball. This is NOT
+# part of the CI release: no OpenWrt feed carries kexec-tools for aarch64, so the
+# PC builds it from Alpine's musl packages with tools/getkexec.sh (it was verified
+# to run on this board). The box has no WAN, so a missing .so could not be fixed
+# after the fact - hence libs travel with the binary.
+if ! try_fetch trial-kx.tgz; then
+	die "trial-kx.tgz is not being served - run tools/getkexec.sh on the PC and serve its staging/trial directory"
+fi
 tar xzf trial-kx.tgz
 KX=$D/kexec
 [ -x "$KX" ] || chmod +x "$KX"

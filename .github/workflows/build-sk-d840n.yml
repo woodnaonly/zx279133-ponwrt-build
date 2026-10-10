@@ -227,60 +227,41 @@ jobs:
           cp "$ITB" sk-d840n-initramfs.itb
           ls -l sk-d840n-initramfs.itb
 
-      - name: Stage serial-free trial inputs
+      - name: Stage trial inputs
         if: steps.pick.outputs.run == 'true'
         run: |
           set -u
           mkdir -p trial
-          # kexec for the system that is running now: it has no kexec binary and no
-          # WAN to install one from, so the build has to hand it out. Take the
-          # install image (same bytes that would land in /usr/bin) and carry every
-          # NEEDED library with it - a missing .so is a silent exec failure.
-          KX=$(find openwrt/staging_dir/target-*/pkgdir -type f -name kexec 2>/dev/null | head -1)
-          [ -n "$KX" ] || KX=$(find openwrt/build_dir/target-* -maxdepth 3 -type f -name kexec 2>/dev/null | head -1)
-          if [ -n "$KX" ]; then
-            echo "kexec: $KX"
-            cp "$KX" trial/kexec
-            for n in $(readelf -d "$KX" | sed -n 's/.*NEEDED.*\[\(.*\)\]/\1/p'); do
-              L=$(find openwrt/staging_dir/target-*/usr/lib openwrt/staging_dir/target-*/lib -name "$n" 2>/dev/null | head -1)
-              if [ -n "$L" ]; then mkdir -p trial/lib; cp -L "$L" trial/lib/; echo "  lib $n <- $L"; else echo "  MISSING LIB $n" >&2; fi
-            done
-          else
-            echo "no kexec binary in the build (kexec-tools not selected?)" >&2
-          fi
-          # one tarball because the box cannot resolve a dependency list over tftp
-          if [ -f trial/kexec ]; then
-            if [ -d trial/lib ]; then tar czf trial/trial-kx.tgz -C trial kexec lib; else tar czf trial/trial-kx.tgz -C trial kexec; fi
-            ls -l trial/trial-kx.tgz
-          fi
+          # No kexec in this build, on purpose: neither ImmortalWrt's nor upstream
+          # OpenWrt's package feed carries kexec-tools for aarch64 (0 hits in the
+          # 24.10 aarch64_generic base manifest, and `find feeds -iname 'kexec*'`
+          # after a full feeds install is empty). The loader instead comes from the
+          # PC side - tools/getkexec.sh assembles trial-kx.tgz from Alpine's musl
+          # aarch64 kexec-tools, which was verified to run on this board.
           if [ "${{ matrix.mode }}" = initramfs ]; then
             KT=$(ls -d openwrt/build_dir/target-*/linux-zte_zx279133/linux-* | head -1)
             test -n "$KT" || { echo "no kernel build dir" >&2; exit 1; }
             # OpenWrt builds the initramfs into Image, so this file *is* the RAM payload
             test -f "$KT/arch/arm64/boot/Image" || { echo "no Image in $KT" >&2; exit 1; }
             ls -l "$KT/arch/arm64/boot/Image"
+            # ~40 MB over tftp is slow, so it travels gzipped and is unpacked on the box
             gzip -9nc "$KT/arch/arm64/boot/Image" > trial/trial-Image.gz
             DTB=$(find "$KT/arch/arm64/boot/dts/zte" -name '*sk-d840n*.dtb' | head -1)
             test -n "$DTB" || { echo "no sk-d840n dtb in the kernel tree" >&2; exit 1; }
             cp "$DTB" trial/trial-dtb.bin
             cp templates/trial-kexec.sh templates/flash-sk-d840n.sh trial/
             ls -lR trial
-            ( cd trial && sha256sum trial-kx.tgz kexec trial-Image.gz trial-dtb.bin *.sh > sha256sums-trial 2>/dev/null || true )
-            # one download for the whole trial. Not a hard failure if kexec is
-            # missing - the .itb is still worth having, and the warning says why
-            # trial-kexec.sh cannot be used.
-            if [ -f trial/trial-kx.tgz ]; then
-              tar czf trial-set.tgz -C trial trial-kx.tgz trial-Image.gz trial-dtb.bin trial-kexec.sh sha256sums-trial
-              ls -l trial-set.tgz
-            else
-              echo "::warning::no trial-kx.tgz - kexec-tools was not built, so the kexec trial has no loader"
-            fi
+            ( cd trial && sha256sum trial-Image.gz trial-dtb.bin *.sh > sha256sums-trial )
+            tar czf trial-set.tgz -C trial trial-Image.gz trial-dtb.bin trial-kexec.sh flash-sk-d840n.sh sha256sums-trial
+            ls -l trial-set.tgz
           fi
 
       - name: Checksums and summary
         if: steps.pick.outputs.run == 'true' && success()
         run: |
-          sha256sum flash-uImage flash-dtb.bin flash-rootfs.jffs2 sk-d840n-initramfs.itb 2>/dev/null | tee sha256sums
+          # In initramfs mode the flash-* files do not exist; sha256sum then exits
+          # non-zero and pipefail would fail a job whose images are fine.
+          sha256sum flash-uImage flash-dtb.bin flash-rootfs.jffs2 sk-d840n-initramfs.itb 2>/dev/null | tee sha256sums || true
           {
             echo "## ${{ matrix.mode }} output"
             echo '```'; ls -l flash-* sk-d840n-*.itb sha256sums 2>/dev/null; cat sha256sums 2>/dev/null; echo '```'
@@ -333,5 +314,4 @@ jobs:
             flash-set.tgz
             trial-set.tgz
             trial/*
-            trial/lib/*
           ignore_missing_files: true
