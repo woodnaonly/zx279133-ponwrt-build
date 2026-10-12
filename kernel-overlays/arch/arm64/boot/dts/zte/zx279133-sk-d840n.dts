@@ -102,7 +102,10 @@
 	 * names itself, left to right:
 	 *   电源=led_power=gpio-10   注册=led_pon=gpio-63   光信号(red)=led_los=gpio-9
 	 *   上网=led_wan=gpio-24      lan1..lan4=led_lan0..3  usb1=led_usb1=gpio-21
-	 * led_wps, led_phone1 and led_wlan are on the case as well, just not in that row.
+	 * led_wps and led_phone1 are GPIO-backed in the vendor's list but were never
+	 * identified on the case, and **led_wlan is not described at all: this board has no
+	 * wireless and no WLAN lamp** (owner, 2026-10-12) - the vendor reserves gpio-65 under
+	 * that name the way it reserves led_usb2 (led-id 0x35), which also has no lamp here.
 	 *
 	 * What is deliberately absent: led_lan0..lan3 appear in the vendor's
 	 * /sys/class/leds and do light up when written, but they claim **no GPIO** in that
@@ -153,14 +156,6 @@
 			function = LED_FUNCTION_LAN;
 			gpios = <&gpio1 8 GPIO_ACTIVE_LOW>;
 			label = "skyworth:green:wan";
-		};
-
-		led-wlan {
-			color = <LED_COLOR_ID_GREEN>;
-			default-state = "keep";
-			function = LED_FUNCTION_WLAN;
-			gpios = <&gpio4 1 GPIO_ACTIVE_LOW>;
-			label = "skyworth:green:wlan";
 		};
 
 		led-usb1 {
