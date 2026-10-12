@@ -209,16 +209,21 @@ jobs:
           KC=$(ls -d openwrt/build_dir/target-*/linux-zte_zx279133/linux-*/.config | head -1)
           [ -n "$KC" ] || { echo "no kernel .config found under build_dir" >&2; ls -d openwrt/build_dir/target-*/linux-* 2>/dev/null; exit 1; }
           echo "kernel config: $KC"
-          # Appending a symbol to target/linux/.../config-6.18 is the supported way to
-          # reach the kernel build, but only the merged result proves it worked. Without
-          # RTL8226B binding a driver the image boots and stays silent, which from the
-          # board looks exactly like a kernel that does not boot.
-          grep -q '^CONFIG_REALTEK_PHY=y' "$KC" || {
-            echo "CONFIG_REALTEK_PHY is not built in - the RTL8226B on this board would have no driver" >&2
-            grep -i 'realtek\|ZX279051\|MDIO_ZX' "$KC" || true
-            exit 1
-          }
-          grep -i '^CONFIG_ZTE_ZX279133\|^CONFIG_REALTEK\|^CONFIG_MDIO_ZX' "$KC"
+          # Editing target/linux/.../config-6.18 is the supported way to reach the kernel
+          # build, but only the merged result proves it worked - a symbol name that does
+          # not exist is dropped in silence, so all four are checked against the kernel's
+          # own .config, not against the file that was edited. Each one failing here would
+          # cost a whole round on the board and look identical to "the kernel does not
+          # boot": no PHY driver means the one reachable port never links; no LEDS_GPIO or
+          # GPIO driver means the panel beacon that replaces a serial console is dark.
+          for s in REALTEK_PHY LEDS_GPIO GPIO_ZX279133 GPIO_SYSFS; do
+            grep -qx "CONFIG_$s=y" "$KC" || {
+              echo "CONFIG_$s is not built into the kernel" >&2
+              grep -iE 'CONFIG_(REALTEK|ZX279051|MDIO_ZX|LEDS_GPIO|GPIO_ZX|GPIO_SYSFS)' "$KC" || true
+              exit 1
+            }
+          done
+          grep -iE '^CONFIG_(ZTE_ZX279133|REALTEK|MDIO_ZX|EXTRA_FIRMWARE)' "$KC"
 
       - name: Package flash images
         if: steps.pick.outputs.run == 'true' && matrix.mode == 'flash'

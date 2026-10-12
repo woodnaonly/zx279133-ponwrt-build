@@ -118,7 +118,14 @@
 
 		led-power {
 			color = <LED_COLOR_ID_GREEN>;
-			default-state = "keep";
+			/* "on" rather than "keep" is the point, not a style choice: with no
+			 * serial port the panel is the only witness that exists before
+			 * userspace, and the vendor leaves every lamp dark, so a kernel that
+			 * reaches gpio-leds probe lights it by itself. That gives three states
+			 * to read off the case - dark = never got here, solid = probe done but
+			 * /init never ran, blinking = userspace alive.
+			 */
+			default-state = "on";
 			function = LED_FUNCTION_POWER;
 			gpios = <&gpio0 10 GPIO_ACTIVE_LOW>;
 			label = "skyworth:green:power";

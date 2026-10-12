@@ -40,8 +40,57 @@ EOF
 # rather than a 70-minute build with a dead port, which is the trade to remember.
 KCFG=$(ls target/linux/zte/zx279133/config-* 2>/dev/null | head -1)
 [ -n "$KCFG" ] || { echo "no target/linux/zte/zx279133/config-* to extend" >&2; exit 1; }
-grep -q '^CONFIG_REALTEK_PHY=' "$KCFG" || printf '\nCONFIG_REALTEK_PHY=y\n' >>"$KCFG"
-grep '^CONFIG_REALTEK_PHY=' "$KCFG" || { echo "CONFIG_REALTEK_PHY not in $KCFG" >&2; exit 1; }
+
+# pin_y <symbol>: make it =y in the target config whatever form the line is in (=m, "is
+# not set", or absent). Writing only the =y form is not enough - appending a second line
+# for a symbol the file already carries leaves the merge order to decide. The name is
+# passed without the CONFIG_ prefix, because prefixing it twice produces a symbol that
+# does not exist, and a symbol that does not exist is dropped by defconfig in silence:
+# the first version of this helper wrote CONFIG_CONFIG_REALTEK_PHY=y and self-verified it
+# by looking for the same misspelling.
+pin_y() {
+	sym=CONFIG_$1
+	if grep -q "^$sym=" "$KCFG"; then
+		sed -i "s|^$sym=.*|$sym=y|" "$KCFG"
+	elif grep -q "^# $sym is not set$" "$KCFG"; then
+		sed -i "s|^# $sym is not set\$|$sym=y|" "$KCFG"
+	else
+		printf '%s=y\n' "$sym" >>"$KCFG"
+	fi
+	grep -qx "$sym=y" "$KCFG" || { echo "could not pin $sym=y in $KCFG" >&2; exit 1; }
+}
+pin_y REALTEK_PHY
+
+# The panel beacon needs the LED class devices to exist *in the RAM image*, and =m means
+# they only appear if something loads kmod-leds-gpio first - which is exactly the
+# userspace that the beacon is there to prove. So these two are pinned built-in: without
+# LEDS_GPIO there is no /sys/class/leds entry per DTS node, and without the GPIO driver
+# there is no /sys/class/gpio either, leaving the trial with no signal at all. (cnjn's
+# config already has both =y; pinning them keeps that true if upstream changes it.)
+pin_y LEDS_GPIO
+pin_y GPIO_ZX279133
+grep -E '^CONFIG_(REALTEK_PHY|LEDS_GPIO|GPIO_ZX279133|GPIO_SYSFS)' "$KCFG"
+
+# cnjn's target config embeds the SoC's microcode into the kernel image, and points at
+# it with a path that is only correct for the directory names on his own machine:
+#   CONFIG_EXTRA_FIRMWARE="zte/zx279133/mcode_intel.bin"
+#   CONFIG_EXTRA_FIRMWARE_DIR="../../immortalwrt/target/linux/zte/zx279133/firmware"
+# This CI checks the tree out as `openwrt`, so the kernel build died in both modes with
+# "No rule to make target '../../immortalwrt/...mcode_intel.bin'" (run 38193151039,
+# 2026-10-12). The fix rewrites the value to this checkout, rather than clearing
+# EXTRA_FIRMWARE: a kernel that lacks the microcode is precisely the kind of change that
+# would leave the NPPT port dead and give no clue why. If upstream ever drops the symbol
+# the block does nothing, and if it comes back with a different relative path the sed
+# still pins it here.
+if grep -q '^CONFIG_EXTRA_FIRMWARE=' "$KCFG"; then
+	FWDIR=$(pwd)/target/linux/zte/zx279133/firmware
+	[ -f "$FWDIR/zte/zx279133/mcode_intel.bin" ] || {
+		echo "CONFIG_EXTRA_FIRMWARE is set but $FWDIR/zte/zx279133/mcode_intel.bin is absent" >&2
+		exit 1; }
+	grep -q '^CONFIG_EXTRA_FIRMWARE_DIR=' "$KCFG" || printf 'CONFIG_EXTRA_FIRMWARE_DIR=""\n' >>"$KCFG"
+	sed -i "s|^CONFIG_EXTRA_FIRMWARE_DIR=.*|CONFIG_EXTRA_FIRMWARE_DIR=\"$FWDIR\"|" "$KCFG"
+	grep -E '^CONFIG_EXTRA_FIRMWARE' "$KCFG"
+fi
 # GPIO_CDEV_V1 used to be appended here on the belief that it gates
 # /sys/class/gpio/export. It does not: that interface is CONFIG_GPIO_SYSFS, which
 # cnjn's target config already sets. GPIO_CDEV_V1 only selects the v1 ioctl ABI on
