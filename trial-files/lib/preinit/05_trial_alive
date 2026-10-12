@@ -1,0 +1,11 @@
+# Trial-only, sourced by /etc/preinit (every /lib/preinit/* file is `.`-ed in glob
+# order), so this runs before board detection and before any network configuration -
+# the earliest moment at which the panel can be made to say something. Nothing else
+# here depends on it: etc/rc.d/S15trial repeats the beacon once userspace is up.
+#
+# Deliberately only a coarse pulse-count: if it lights at all, the kernel reached
+# userspace, and the count of group pulses seen is the marker to ask the observer for.
+(
+	sleep 3
+	/usr/libexec/trial-blink 2
+) >/dev/null 2>&1 &

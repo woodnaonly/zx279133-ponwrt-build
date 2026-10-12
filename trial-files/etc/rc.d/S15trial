@@ -2,19 +2,20 @@
 # Trial-only (staged into the RAM image by CI, or via --initrd from
 # tools/mktrialram.py). Nothing here belongs in a released image.
 #
-# Two things must not depend on the image's own first-boot configuration, because a
-# wrong guess would look exactly like a kernel that does not boot:
+# Three things must not depend on the image's own first-boot configuration, because a
+# wrong guess in any of them looks exactly like a kernel that does not boot:
 #
+#   * the panel LEDs - tried first, because it is the only signal that needs neither a
+#     working port nor a working reset (see usr/libexec/trial-blink);
 #   * which netdev the usable RJ45 is. /etc/board.d/02_network puts the address on
-#     eth0, but the mainline NPPT driver may name this board's port something else,
-#     so every netdev that appears gets the address.
-#   * whether the boot got as far as userspace. There is no serial console, so a
-#     silent board is ambiguous - the canary reboot makes "it booted" observable as
-#     "the flashed system answers again about five minutes after the kexec", with no
-#     further work. PSCI reset is used, so this does not depend on the watchdogs
-#     (which the board DTS deliberately disables).
+#     eth0, but the mainline NPPT driver may name this board's port something else, so
+#     every netdev that appears gets the address, and ssh is started unbound as well;
+#   * whether a reboot is even observable. SoC reset does not reset the RTL8226, so the
+#     link stays Up through it - hence the deliberate flap before the canary.
 
 (
+	/usr/libexec/trial-blink 3 2>/dev/null
+
 	addr=192.168.1.1/24
 	i=0
 	while [ $i -lt 8 ]; do
@@ -41,29 +42,22 @@
 		sleep 300
 		# touch /tmp/trial-noreboot from ssh to keep the image running
 		[ -e /tmp/trial-noreboot ] && exit 0
-		# A reboot is not observable from the port under test: resetting the SoC
-		# does not reset the RTL8226, so the PC keeps seeing link Up across it.
-		# Flapping the links first is what makes "the kernel booted and drives this
-		# port" a *seen* event. netifd has to be stopped for it, or it re-brings the
-		# interface up within a second and the flap is invisible at the 7 s sampling
-		# the watcher can do over ssh-less probes.
 		echo "trial: beacon before reboot" >/dev/kmsg
+		/usr/libexec/trial-blink 2 2>/dev/null
+		# netifd has to be stopped first, or it re-raises any interface it manages
+		# inside the watcher's ~7 s sampling gap and the flap is invisible.
 		/etc/init.d/network stop 2>/dev/null
 		i=0
 		while [ $i -lt 3 ]; do
 			i=$((i + 1))
 			for d in /sys/class/net/*; do
 				[ -d "$d" ] || continue
-				n=${d#/sys/class/net/}
-				[ "$n" = lo ] && continue
-				ip link set "$n" down 2>/dev/null
+				ip link set "${d#/sys/class/net/}" down 2>/dev/null
 			done
 			sleep 12
 			for d in /sys/class/net/*; do
 				[ -d "$d" ] || continue
-				n=${d#/sys/class/net/}
-				[ "$n" = lo ] && continue
-				ip link set "$n" up 2>/dev/null
+				ip link set "${d#/sys/class/net/}" up 2>/dev/null
 			done
 			sleep 12
 		done

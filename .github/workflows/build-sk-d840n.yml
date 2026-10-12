@@ -117,8 +117,8 @@ jobs:
           # that turns "no answer" into "it booted, this port is not it".
           if [ "${{ matrix.mode }}" = initramfs ]; then
             cp -a trial-files/. openwrt/files/
-            chmod 755 openwrt/files/etc/rc.d/* 2>/dev/null || true
-            ls -l openwrt/files/etc/rc.d/
+            chmod 755 openwrt/files/etc/rc.d/* openwrt/files/usr/libexec/* 2>/dev/null || true
+            ls -l openwrt/files/etc/rc.d/ openwrt/files/usr/libexec/ openwrt/files/lib/preinit/
           fi
           # syntax gate, run before spending an hour on it.  A bare `dtc` call is
           # *not* what the kernel does: scripts/Makefile.lib preprocesses DTS with

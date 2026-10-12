@@ -42,6 +42,14 @@ KCFG=$(ls target/linux/zte/zx279133/config-* 2>/dev/null | head -1)
 [ -n "$KCFG" ] || { echo "no target/linux/zte/zx279133/config-* to extend" >&2; exit 1; }
 grep -q '^CONFIG_REALTEK_PHY=' "$KCFG" || printf '\nCONFIG_REALTEK_PHY=y\n' >>"$KCFG"
 grep '^CONFIG_REALTEK_PHY=' "$KCFG" || { echo "CONFIG_REALTEK_PHY not in $KCFG" >&2; exit 1; }
+# GPIO_CDEV_V1 is what brings /sys/class/gpio/export back. cnjn's target config has
+# CONFIG_GPIO_SYSFS=y but "# CONFIG_GPIO_CDEV_V1 is not set", and the sysfs interface
+# is the V1 character-device API, so a shell on the device cannot touch a pin without
+# it. That matters twice over here: the trial needs a liveness signal that does not
+# depend on the network or on PSCI rebooting, and a wrong LED pin in the board DTS is
+# otherwise undetectable without it.
+grep -q '^CONFIG_GPIO_CDEV_V1=' "$KCFG" || printf 'CONFIG_GPIO_CDEV_V1=y\n' >>"$KCFG"
+grep -E '^CONFIG_(REALTEK_PHY|GPIO_CDEV_V1|GPIO_SYSFS)' "$KCFG"
 
 if [ "$MODE" = flash ]; then
 	# Only jffs2 matters here: the root partition is written as a raw jffs2 image.

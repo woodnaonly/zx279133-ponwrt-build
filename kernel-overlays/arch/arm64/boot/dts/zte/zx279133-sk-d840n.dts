@@ -86,6 +86,70 @@
 		};
 	};
 
+	/* Read straight out of the stock DTB's `zxic,zx-leds` node, which lists them
+	 * as ordinary GPIOs, and mapped onto mainline's controllers by address:
+	 *   stock phandle 0x4f = gpio@10d10100 = &gpio4   (lan0..lan3, pins 2..5)
+	 *   stock phandle 0x15 = gpio@10d10080 = &gpio2   (usb1 pin 3, usb2 pin 6)
+	 *   stock phandle 0x50 = gpio@10d10040 = &gpio1   (phone1 pin 5)
+	 * The third cell in the stock `gpios` is 0x01 = GPIO_ACTIVE_LOW.
+	 *
+	 * Which silkscreen number each lan LED belongs to is deliberately *not*
+	 * guessed: pulse them and look at the panel. Until that has been done on this
+	 * unit these are named by the stock node, and board.d/01_leds does not map a
+	 * lan LED to an interface it has not seen light up.
+	 */
+	leds {
+		compatible = "gpio-leds";
+
+		led-lan0 {
+			color = <LED_COLOR_ID_GREEN>;
+			default-state = "keep";
+			function = LED_FUNCTION_LAN;
+			gpios = <&gpio4 2 GPIO_ACTIVE_LOW>;
+			label = "skyworth:green:lan0";
+		};
+
+		led-lan1 {
+			color = <LED_COLOR_ID_GREEN>;
+			default-state = "keep";
+			function = LED_FUNCTION_LAN;
+			gpios = <&gpio4 3 GPIO_ACTIVE_LOW>;
+			label = "skyworth:green:lan1";
+		};
+
+		led-lan2 {
+			color = <LED_COLOR_ID_GREEN>;
+			default-state = "keep";
+			function = LED_FUNCTION_LAN;
+			gpios = <&gpio4 4 GPIO_ACTIVE_LOW>;
+			label = "skyworth:green:lan2";
+		};
+
+		led-lan3 {
+			color = <LED_COLOR_ID_GREEN>;
+			default-state = "keep";
+			function = LED_FUNCTION_LAN;
+			gpios = <&gpio4 5 GPIO_ACTIVE_LOW>;
+			label = "skyworth:green:lan3";
+		};
+
+		led-usb1 {
+			color = <LED_COLOR_ID_GREEN>;
+			default-state = "keep";
+			function = LED_FUNCTION_USB;
+			gpios = <&gpio2 3 GPIO_ACTIVE_LOW>;
+			label = "skyworth:green:usb1";
+		};
+
+		led-usb2 {
+			color = <LED_COLOR_ID_GREEN>;
+			default-state = "keep";
+			function = LED_FUNCTION_USB;
+			gpios = <&gpio2 6 GPIO_ACTIVE_LOW>;
+			label = "skyworth:green:usb2";
+		};
+	};
+
 	thermal-zones {
 		soc-thermal {
 			thermal-sensors = <&pvt>;
