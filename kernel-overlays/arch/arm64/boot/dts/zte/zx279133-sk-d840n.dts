@@ -7,9 +7,10 @@
 //   - partition map is the community U-Boot one (env at boot+0x180000):
 //       boot 2048k@0x0 kernel 8192k@0x200000 dtb 1024k@0xa00000
 //       "parameter tags" 4096k@0xb00000 root 246784k@0xf00000
-//     fixed-partitions registration order below therefore yields
-//     mtd0=boot mtd1=kernel mtd2=dtb mtd3="parameter tags" mtd4="parameter tags 2"
-//     mtd5=root mtd6=scratch.
+//     The /dev/mtdN numbering is pinned by the mtd1..mtd6 aliases below, not counted off
+//     node order, so it survives a kernel-config change: boot=1 kernel=2 dtb=3
+//     "parameter tags"=4 root=5 scratch=6, and mtd0 is the SPI-NAND master if
+//     CONFIG_MTD_PARTITIONED_MASTER is enabled and absent if it is not.
 //     (`root` must stay index 5 - the installed U-Boot bootargs hard-code
 //      root=/dev/mtdblock5 - *and* must start at 0xf00000, because that is where the
 //      system that does the flashing puts its own `root`: the vendor 4.19 table is
@@ -56,6 +57,18 @@
 		serial0 = &uart0;
 		watchdog0 = &watchdog0;
 		watchdog1 = &watchdog1;
+		/* Pin the /dev/mtdN numbering (drivers/mtd/mtdcore.c add_mtd_device():
+		 * `ofidx = of_alias_get_id(np, "mtd")` then idr_alloc(ofidx, ofidx+1)).
+		 * Without this the numbers depend on CONFIG_MTD_PARTITIONED_MASTER, which
+		 * decides whether the SPI-NAND master itself occupies mtd0 - and a wrong
+		 * guess boots as a VFS panic on the wrong partition, with no serial to read.
+		 */
+		mtd1 = &bootpart;
+		mtd2 = &kernelpart;
+		mtd3 = &dtbpart;
+		mtd4 = &tagspart;
+		mtd5 = &rootpart;
+		mtd6 = &scratchpart;
 	};
 
 	chosen {
@@ -335,7 +348,13 @@
 /* Two constraints, and they only fit together one way.
  *
  * 1. No env edit is needed to boot this image: U-Boot's bootargs say
- *    `root=/dev/mtdblock5`, so exactly five partitions must precede `root`.
+ *    `root=/dev/mtdblock5`, so `root` has to end up as /dev/mtdblock5. That is now
+ *    *pinned* rather than counted - see the mtd1..mtd6 aliases above. Counting nodes
+ *    was the old approach and it was not safe: whether the SPI-NAND master itself takes
+ *    mtd0 depends on CONFIG_MTD_PARTITIONED_MASTER (mtdcore.c: `if
+ *    IS_ENABLED(CONFIG_MTD_PARTITIONED_MASTER) add_mtd_device(mtd)` runs before the
+ *    partitions are registered), so the same blob is mtd4 or mtd5 depending on a kernel
+ *    config nobody is looking at. A pin cannot drift.
  * 2. The image has to be programmable from the system that is installed now.
  *    That flasher runs on the vendor 4.19 and writes by partition LABEL,
  *    because `/sbin/mtd` can only erase/write a whole partition - there is no
@@ -345,16 +364,12 @@
  *    *below* where the new kernel looks for it, which boots as a panic on an
  *    empty root and leaves no way back without a serial cable.
  *
- * So the five slots before `root` are filled by boot, kernel, dtb and *two* pieces of
- * U-Boot's 4096k `parameter tags` region, and `scratch` (1 MiB at 0xff00000, outside
- * `root`'s range and outside anything U-Boot reads) takes the tail slot. `scratch` is not
- * a usable log area either - erasing a sub-range needs the MEMERASE ioctl, which no tool
- * on this image provides - its only job is to keep the chip fully described.
- *
- * fixed-partitions registers these children in blob order, so the order of the nodes
- * below *is* the /dev/mtdN numbering. Read it off the artifact, do not assume it:
- *   python tools/dtbparts.py staging/trial/flash-dtb.bin root=0xf00000,0xf000000
- * prints the table and the index order, and refuses (exit 1) if `root` is not at 0xf00000.
+ * The pin also frees the table from the hack that used to satisfy (1): U-Boot's single
+ * 4096k `parameter tags` region is no longer split in two to fill a slot, so it is one
+ * read-only node again and still covers the bytes U-Boot keeps its MAC/calibration in.
+ * `scratch` (1 MiB at 0xff00000) is not a usable log area either - erasing a sub-range
+ * needs the MEMERASE ioctl, which no tool on this image provides - its only job is to
+ * keep the chip fully described.
  *
  * Offsets/labels otherwise mirror the community U-Boot env
  * (boot 2048k@0x0, kernel 8192k@0x200000, dtb 1024k@0xa00000,
@@ -374,44 +389,34 @@
 			#address-cells = <1>;
 			#size-cells = <1>;
 
-			partition@0 {
+			bootpart: partition@0 {
 				label = "boot";
 				reg = <0x000000 0x200000>;
 				read-only;
 			};
 
-			partition@200000 {
+			kernelpart: partition@200000 {
 				label = "kernel";
 				reg = <0x200000 0x800000>;
 			};
 
-			partition@a00000 {
+			dtbpart: partition@a00000 {
 				label = "dtb";
 				reg = <0xa00000 0x100000>;
 			};
 
-			partition@b00000 {
+			tagspart: partition@b00000 {
 				label = "parameter tags";
-				reg = <0xb00000 0x200000>;
+				reg = <0xb00000 0x400000>;
 				read-only;
 			};
 
-			/* The second half of U-Boot's single 4096k `parameter tags` region, split
-			 * only so that five partitions precede `root` (see the block comment).
-			 * Nothing reads or writes it by label; it stays read-only.
-			 */
-			partition@d00000 {
-				label = "parameter tags 2";
-				reg = <0xd00000 0x200000>;
-				read-only;
-			};
-
-			partition@f00000 {
+			rootpart: partition@f00000 {
 				label = "root";
 				reg = <0xf00000 0xf000000>;
 			};
 
-			partition@ff00000 {
+			scratchpart: partition@ff00000 {
 				label = "scratch";
 				reg = <0xff00000 0x100000>;
 			};
