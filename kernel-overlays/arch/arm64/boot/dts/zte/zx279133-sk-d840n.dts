@@ -84,6 +84,27 @@
 			reg = <0x0 0x9f100000 0x0 0x0f00000>;
 			no-map;
 		};
+
+		/* pstore/ramoops: the console log written here survives a *warm* reset, which is
+		 * the only way this board can hand back a boot log with no serial port. The
+		 * trial round that uses it does not mask CRM 0x10e10208, so the vendor's
+		 * already-armed zx_wdt (8 s, fed in-kernel by 4.19) bites about 15-20 s after
+		 * the jump; the reset lands back in the flashed system, which dumps this
+		 * region from /dev/mem within its first seconds - before the page allocator
+		 * gets anywhere near the top 48 MiB of RAM.
+		 *
+		 * Placed under idm_reserved (0x9d700000) so it collides with none of the three
+		 * regions the NPPT driver needs, and no-map so mainline never uses it as free
+		 * memory either.
+		 */
+		ramoops: buffer@9d000000 {
+			compatible = "ramoops";
+			no-map;
+			reg = <0x0 0x9d000000 0x0 0x00200000>;
+			console-size = <0x100000>;
+			record-size = <0x4000>;
+			pmsg-size = <0x40000>;
+		};
 	};
 
 	/* Not copied from SR1010 and not read off the stock DTB's *node names* either -

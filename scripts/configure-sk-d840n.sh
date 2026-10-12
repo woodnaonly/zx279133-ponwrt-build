@@ -69,7 +69,16 @@ pin_y REALTEK_PHY
 # config already has both =y; pinning them keeps that true if upstream changes it.)
 pin_y LEDS_GPIO
 pin_y GPIO_ZX279133
-grep -E '^CONFIG_(REALTEK_PHY|LEDS_GPIO|GPIO_ZX279133|GPIO_SYSFS)' "$KCFG"
+
+# pstore/ramoops is the closest thing this board can have to a console: the log goes into
+# DRAM, a warm reset keeps it, and the flashed system dumps the region back out. Without
+# it every failed round teaches us nothing beyond "it did not come back". ImmortalWrt's
+# generic config ships "# CONFIG_PSTORE is not set", so all three are pinned here; the
+# board DTS carries the matching no-map ramoops region.
+pin_y PSTORE
+pin_y PSTORE_CONSOLE
+pin_y PSTORE_RAM
+grep -E '^CONFIG_(REALTEK_PHY|LEDS_GPIO|GPIO_ZX279133|GPIO_SYSFS|PSTORE)' "$KCFG"
 
 # cnjn's target config embeds the SoC's microcode into the kernel image, and points at
 # it with a path that is only correct for the directory names on his own machine:
