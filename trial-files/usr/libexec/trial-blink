@@ -10,9 +10,9 @@
 # Two independent routes to a panel LED are driven here on purpose:
 #   * /sys/class/leds/<name>/brightness - depends on LEDS_GPIO plus the LED node in the
 #     board DTS being right;
-#   * /sys/class/gpio/export - depends on CONFIG_GPIO_CDEV_V1 actually surviving
-#     defconfig (a symbol that is dropped there leaves no trace) and on pinctrl letting
-#     the pin be requested as GPIO.
+#   * /sys/class/gpio/export - depends on CONFIG_GPIO_SYSFS and, more usefully for
+#     reading rather than driving, on the pin not already being claimed by gpio-leds
+#     (see phase 3).
 # Either one alone would turn a config detail into a silent, wasted round.
 #
 # The pin numbers below are not a guess off the stock DTB: they are the vendor kernel's
