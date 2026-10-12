@@ -30,6 +30,19 @@ TPORT=${TPORT:-6969}
 TFTP=${TFTP:-0}
 KX=${KX:-}
 CMDLINE=${CMDLINE:-'root=/dev/ram0 rw console=ttyAMA0,115200'}
+# Freshness proof for a pstore round: the kernel echoes its own command line into the log,
+# and the log is what we read back out of DRAM after the watchdog reset. Without a tag, a
+# dump cannot be told apart from an older boot's leftovers - the region at 0x9d000000 that
+# the first round used turned out to hold the kexec'd Image's own text, which is exactly
+# the kind of "log" that would have been read as mainline's. Override with TRIALTAG=.
+CMDLINE="$CMDLINE trialtag=${TRIALTAG:-$(date -u +%Y%m%dT%H%M%SZ)}"
+
+# Keep the new kernel's segments below the ramoops region. The board DTS reserves
+# 0x9c000000+2MiB no-map, but no-map only binds the *new* kernel: the arm64 kexec loader
+# places the Image wherever the running system has a hole, and on this board it chose
+# 0x9d000000 - inside the region pstore was supposed to keep. Constrained here, the whole
+# payload (28 MB Image + 8 MB initrd + dtb) still has 300 MB to live in.
+MEMARGS="--mem-min=0x88000000 --mem-max=0x9b000000"
 
 say() { echo "trial: $*"; }
 die() { echo "trial: $*" >&2; exit 1; }
@@ -112,8 +125,13 @@ fi
 # early without anything complaining, so check the shipped hashes when both sides
 # have them.
 if [ -s sha256sums-trial ] && command -v sha256sum >/dev/null 2>&1; then
-	say "checking sha256sums-trial"
-	sha256sum -c sha256sums-trial || die "checksum mismatch - re-copy the trial files"
+	# trial-dtb.bin is excluded on purpose: it is a binary blob, and a property whose
+	# length does not change (e.g. moving the ramoops region) is patched in place on the
+	# PC, which no local build could reproduce without a dtc. Everything else must match.
+	say "checking sha256sums-trial (dtb excepted - it may be patched locally)"
+	grep -v 'trial-dtb.bin' sha256sums-trial > sha256sums-load || die "no sha256sums entries left"
+	sha256sum -c sha256sums-load || die "checksum mismatch - re-copy the trial files"
+	say "dtb is $(wc -c < trial-dtb.bin) bytes, sha $($(command -v sha256sum || echo false) trial-dtb.bin 2>/dev/null | cut -c1-12)"
 fi
 
 say "kexec version: $("$KX" --version 2>&1 | head -1)"
@@ -122,7 +140,7 @@ say "command line: $CMDLINE"
 
 # arm64 loads a raw Image; the initramfs inside it is the CI one unless the patched
 # trial-initramfs.cpio.gz is present, in which case that is handed over as initrd.
-"$KX" ${KEXEC_ARGS:---load} Image --dtb=trial-dtb.bin $INITRD --command-line="$CMDLINE" \
+"$KX" ${KEXEC_ARGS:---load} $MEMARGS Image --dtb=trial-dtb.bin $INITRD --command-line="$CMDLINE" \
 	|| die "kexec --load failed (check CONFIG_KEXEC on the running kernel)"
 
 if [ "${KEXEC_ARGS:-}" = "--load" ]; then

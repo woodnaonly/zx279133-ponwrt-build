@@ -88,19 +88,30 @@
 		/* pstore/ramoops: the console log written here survives a *warm* reset, which is
 		 * the only way this board can hand back a boot log with no serial port. The
 		 * trial round that uses it does not mask CRM 0x10e10208, so the vendor's
-		 * already-armed zx_wdt (8 s, fed in-kernel by 4.19) bites about 15-20 s after
-		 * the jump; the reset lands back in the flashed system, which dumps this
-		 * region from /dev/mem within its first seconds - before the page allocator
-		 * gets anywhere near the top 48 MiB of RAM.
+		 * already-armed zx_wdt (8 s, fed in-kernel by 4.19) bites some tens of seconds
+		 * after the jump; the reset lands back in the flashed system, which dumps this
+		 * region from /dev/mem within its first seconds.
 		 *
-		 * Placed under idm_reserved (0x9d700000) so it collides with none of the three
-		 * regions the NPPT driver needs, and no-map so mainline never uses it as free
-		 * memory either.
+		 * The address is measured, not guessed. Markers were written at nine addresses,
+		 * the board was rebooted normally, and the readback says:
+		 *   0x90000000 0x94000000 0x98000000 0x9c000000 0x9d000000   survived
+		 *   0x9e100000 0x9f100000 0x9fa00000 0x9ff00000              rewritten
+		 * so U-Boot owns roughly the top 32 MiB and everything from 0x9d700000 up is
+		 * off limits (that is also where idm/se_hash/bmu live). Below that the vendor's
+		 * page allocator works from the bottom up, so a dump taken seconds after boot
+		 * still has the high end intact - which is the whole race, and why the read has
+		 * to happen the moment the flashed system answers.
+		 *
+		 * 0x9c000000 rather than 0x9d000000 because the first round caught the loader:
+		 * kexec's arm64 placement put the trial kernel's own *text* at 0x9d000000 (the
+		 * bytes read back there are a literal substring of the Image), and no-map binds
+		 * the new kernel, not the loader. trial-kexec.sh now caps the placement below
+		 * this region with --mem-max.
 		 */
-		ramoops: buffer@9d000000 {
+		ramoops: buffer@9c000000 {
 			compatible = "ramoops";
 			no-map;
-			reg = <0x0 0x9d000000 0x0 0x00200000>;
+			reg = <0x0 0x9c000000 0x0 0x00200000>;
 			console-size = <0x100000>;
 			record-size = <0x4000>;
 			pmsg-size = <0x40000>;
