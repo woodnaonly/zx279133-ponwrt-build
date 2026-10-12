@@ -14,7 +14,13 @@
 #     link stays Up through it - hence the deliberate flap before the canary.
 
 (
-	/usr/libexec/trial-blink 3 2>/dev/null
+	# Forever, not once: with no serial port the panel is the console, and a single ~70 s
+	# walk is easy to miss - one round on this board was observed by nobody and its
+	# evidence was gone before it could be asked about. Cycling costs nothing (the canary
+	# reboot ends it anyway, and /tmp/trial-noreboot keeps the image alive so the walk
+	# keeps running while a shell is open), and every pass writes its own markers to kmsg,
+	# so the sequence can also be reconstructed from dmesg after the fact.
+	( while :; do /usr/libexec/trial-blink 3 2>/dev/null; sleep 20; done ) &
 
 	# Same address the flashed system's lan now uses, so one IP covers before and after
 	# the jump - and 192.168.9.0/24 exists only on the test PC's wired adapter, unlike the
