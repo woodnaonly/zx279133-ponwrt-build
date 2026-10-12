@@ -2,71 +2,75 @@
 # Trial-only liveness beacon (ci-build-repo/trial-files).
 #
 # There is no serial console on this unit, so "the RAM image reached userspace" has to
-# be visible from outside. The network is not a usable witness for that - it is itself
-# one of the things under test - and neither is a reboot (the reset can fail to reach
-# the chip, and the PHY keeps its link across a SoC reset anyway). The panel LEDs are
-# the one signal that depends on nothing but the kernel getting this far.
+# be visible from outside. The network cannot witness that - it is one of the things
+# under test - and neither can a reboot (the reset may not reach the chip, and the
+# RTL8226 keeps its link across a SoC reset anyway). The panel LEDs are the one signal
+# that needs nothing but a kernel that got this far.
 #
-#	pass 1: every LED flashes together, $1 times  => "alive", countable
-#	pass 2: each LED on its own for 3 s          => which silkscreen is which GPIO,
-#	                                            which is what board.d/01_leds needs
-#	fallback: no /sys/class/leds at all (wrong LED pins in the DTS, or leds-gpio did
-#	not probe) => pulse raw pins through /sys/class/gpio, which is why
-#	CONFIG_GPIO_CDEV_V1 is appended to the target config by CI.
+# The pin numbers below are not a guess off the stock DTB: they are the vendor kernel's
+# own claim list, read from /sys/kernel/debug/gpio on the running unit, which names the
+# GPIO each LED holds -
+#   gpio-9  led_los      gpio-10 led_power   gpio-13 led_wps     (10d10000 = &gpio0)
+#   gpio-21 led_usb1     gpio-24 led_wan                         (10d10040 = &gpio1)
+#   gpio-35 led_phone1                                          (10d10080 = &gpio2)
+#   gpio-63 led_pon                                             (10d100c0 = &gpio3)
+#   gpio-65 led_wlan                                            (10d10100 = &gpio4)
+# and the same list shows what is *not* there: led_lan0..lan3 claim no GPIO at all, so
+# those four LEDs are driven by the 9132 switch's own LED outputs, which mainline has no
+# driver for. Expect the LAN LEDs to stay dark under mainline - that is a missing
+# feature of this SoC's mainline support, not a failed boot.
+#
+# All of them are active-low (the running system shows the lit ones "out lo"), so
+# writing 0 turns an LED on.
+#
+# mainline numbers: the five controllers are 16+16+16+16+6 wide in the same address
+# order, so their bases are 0/16/32/48/64 and these global numbers are the same as the
+# vendor's. They are still recomputed from /sys/class/gpio/gpiochip* rather than
+# assumed.
 
-cycles=${1:-3}
-leds=$(ls -d /sys/class/leds/* 2>/dev/null)
+pins="10 9 13 21 24 35 63 65"
+alive_pin=10
 
-echo "trial-blink: start uptime=$(cut -d' ' -f1 /proc/uptime) leds=${leds:-none}" >/dev/kmsg 2>/dev/null
+pulse() { # <global pin> <on seconds> <off seconds>
+	n=$1
+	echo "$n" >/sys/class/gpio/export 2>/dev/null || return 0
+	echo out >/sys/class/gpio/gpio"$n"/direction 2>/dev/null
+	echo 0 >/sys/class/gpio/gpio"$n"/value 2>/dev/null
+	sleep "$2"
+	echo 1 >/sys/class/gpio/gpio"$n"/value 2>/dev/null
+	sleep "$3"
+	echo "$n" >/sys/class/gpio/unexport 2>/dev/null
+}
 
-if [ -n "$leds" ]; then
+have_gpio=0
+[ -w /sys/class/gpio/export ] && have_gpio=1
+
+echo "trial-blink: start uptime=$(cut -d' ' -f1 /proc/uptime) gpio=$have_gpio leds=$(ls /sys/class/leds 2>/dev/null | tr '\n' ' ')" >/dev/kmsg 2>/dev/null
+
+# 1) "alive": the power LED, five slow unmistakable blinks, before anything else.
+if [ "$have_gpio" = 1 ]; then
 	i=0
-	while [ $i -lt "$cycles" ]; do
+	while [ $i -lt 5 ]; do
 		i=$((i + 1))
-		for l in $leds; do
-			[ -w "$l/brightness" ] || continue
-			echo 255 >"$l/brightness" 2>/dev/null
-		done
-		sleep 0.7
-		for l in $leds; do
-			[ -w "$l/brightness" ] || continue
-			echo 0 >"$l/brightness" 2>/dev/null
-		done
-		sleep 0.7
+		pulse "$alive_pin" 0.6 0.6
 	done
 	sleep 2
-	n=0
-	for l in $leds; do
-		n=$((n + 1))
-		echo "trial-blink: led $n ${l#/sys/class/leds/}" >/dev/kmsg 2>/dev/null
-		echo 255 >"$l/brightness" 2>/dev/null
-		sleep 3
-		echo 0 >"$l/brightness" 2>/dev/null
-		sleep 1
+	# 2) one LED per pin, in the order above, so the observer can report which
+	#    silkscreen lit up at which position.
+	for n in $pins; do
+		echo "trial-blink: pin $n" >/dev/kmsg 2>/dev/null
+		pulse "$n" 2.5 1
 	done
-	exit 0
 fi
 
-# No LED devices at all: fall back to pin-level pulses. Which chip has which base is
-# not known here, so every pin of every chip is walked; the second the panel shows
-# anything, userspace is proven, and the number that lit it is derivable from the
-# elapsed time (0.5 s per pin, chip by chip).
-[ -w /sys/class/gpio/export ] || { echo "trial-blink: no leds, no gpio sysfs" >/dev/kmsg 2>/dev/null; exit 0; }
-for chip in /sys/class/gpio/gpiochip*; do
-	[ -d "$chip" ] || continue
-	base=$(cat "$chip/base" 2>/dev/null)
-	ng=$(cat "$chip/ngpio" 2>/dev/null)
-	echo "trial-blink: gpiochip ${chip#/sys/class/gpio/} base=$base ngpio=$ng" >/dev/kmsg 2>/dev/null
-	p=0
-	while [ $p -lt "$ng" ]; do
-		n=$((base + p))
-		if echo "$n" >/sys/class/gpio/export 2>/dev/null; then
-			echo out >/sys/class/gpio/gpio"$n"/direction 2>/dev/null
-			echo 1 >/sys/class/gpio/gpio"$n"/value 2>/dev/null
-			sleep 0.5
-			echo 0 >/sys/class/gpio/gpio"$n"/value 2>/dev/null
-			echo "$n" >/sys/class/gpio/unexport 2>/dev/null
-		fi
-		p=$((p + 1))
-	done
+# 3) whatever the image's own LED devices are (they come from the board DTS, so this is
+#    also how a wrong LED pin in the DTS shows up - the observer sees nothing here).
+for l in /sys/class/leds/*; do
+	[ -w "$l/brightness" ] || continue
+	echo 255 >"$l/brightness" 2>/dev/null
+	sleep 2
+	echo 0 >"$l/brightness" 2>/dev/null
+	sleep 0.5
 done
+
+echo "trial-blink: done" >/dev/kmsg 2>/dev/null

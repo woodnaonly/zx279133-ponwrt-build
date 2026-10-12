@@ -86,67 +86,90 @@
 		};
 	};
 
-	/* Read straight out of the stock DTB's `zxic,zx-leds` node, which lists them
-	 * as ordinary GPIOs, and mapped onto mainline's controllers by address:
-	 *   stock phandle 0x4f = gpio@10d10100 = &gpio4   (lan0..lan3, pins 2..5)
-	 *   stock phandle 0x15 = gpio@10d10080 = &gpio2   (usb1 pin 3, usb2 pin 6)
-	 *   stock phandle 0x50 = gpio@10d10040 = &gpio1   (phone1 pin 5)
-	 * The third cell in the stock `gpios` is 0x01 = GPIO_ACTIVE_LOW.
+	/* Not copied from SR1010 and not read off the stock DTB's *node names* either -
+	 * the running vendor kernel publishes the claim list directly, and it is the
+	 * authority: /sys/kernel/debug/gpio names the GPIO each LED holds.
 	 *
-	 * Which silkscreen number each lan LED belongs to is deliberately *not*
-	 * guessed: pulse them and look at the panel. Until that has been done on this
-	 * unit these are named by the stock node, and board.d/01_leds does not map a
-	 * lan LED to an interface it has not seen light up.
+	 *   10d10000 = &gpio0:  9 led_los, 10 led_power, 13 led_wps
+	 *   10d10040 = &gpio1:  5 led_usb1, 8 led_wan
+	 *   10d10080 = &gpio2:  3 led_phone1
+	 *   10d100c0 = &gpio3: 15 led_pon
+	 *   10d10100 = &gpio4:  1 led_wlan
+	 *
+	 * All active-low: the running system shows the lit ones as "out lo" (led_power is
+	 * on while the panel's other LEDs that are off read "out hi").
+	 *
+	 * What is deliberately absent: led_lan0..lan3 appear in the vendor's
+	 * /sys/class/leds but claim **no GPIO** in that list, because those four are driven
+	 * by the 9132 switch's own LED outputs. Mainline has no driver for the 9132 (see the
+	 * OPEN ITEMS above), so the four LAN LEDs cannot be described here at all - they
+	 * will stay dark under mainline even when a port links, and that is a missing
+	 * feature of this SoC's mainline support, not a boot failure.
 	 */
 	leds {
 		compatible = "gpio-leds";
 
-		led-lan0 {
+		led-power {
 			color = <LED_COLOR_ID_GREEN>;
 			default-state = "keep";
-			function = LED_FUNCTION_LAN;
-			gpios = <&gpio4 2 GPIO_ACTIVE_LOW>;
-			label = "skyworth:green:lan0";
+			function = LED_FUNCTION_POWER;
+			gpios = <&gpio0 10 GPIO_ACTIVE_LOW>;
+			label = "skyworth:green:power";
 		};
 
-		led-lan1 {
+		led-pon {
 			color = <LED_COLOR_ID_GREEN>;
 			default-state = "keep";
-			function = LED_FUNCTION_LAN;
-			gpios = <&gpio4 3 GPIO_ACTIVE_LOW>;
-			label = "skyworth:green:lan1";
+			function = LED_FUNCTION_WAN;
+			gpios = <&gpio3 15 GPIO_ACTIVE_LOW>;
+			label = "skyworth:green:pon";
 		};
 
-		led-lan2 {
-			color = <LED_COLOR_ID_GREEN>;
+		led-los {
+			color = <LED_COLOR_ID_RED>;
 			default-state = "keep";
-			function = LED_FUNCTION_LAN;
-			gpios = <&gpio4 4 GPIO_ACTIVE_LOW>;
-			label = "skyworth:green:lan2";
+			function = LED_FUNCTION_WAN;
+			gpios = <&gpio0 9 GPIO_ACTIVE_LOW>;
+			label = "skyworth:red:los";
 		};
 
-		led-lan3 {
+		led-wan {
 			color = <LED_COLOR_ID_GREEN>;
 			default-state = "keep";
 			function = LED_FUNCTION_LAN;
-			gpios = <&gpio4 5 GPIO_ACTIVE_LOW>;
-			label = "skyworth:green:lan3";
+			gpios = <&gpio1 8 GPIO_ACTIVE_LOW>;
+			label = "skyworth:green:wan";
+		};
+
+		led-wlan {
+			color = <LED_COLOR_ID_GREEN>;
+			default-state = "keep";
+			function = LED_FUNCTION_WLAN;
+			gpios = <&gpio4 1 GPIO_ACTIVE_LOW>;
+			label = "skyworth:green:wlan";
 		};
 
 		led-usb1 {
 			color = <LED_COLOR_ID_GREEN>;
 			default-state = "keep";
 			function = LED_FUNCTION_USB;
-			gpios = <&gpio2 3 GPIO_ACTIVE_LOW>;
+			gpios = <&gpio1 5 GPIO_ACTIVE_LOW>;
 			label = "skyworth:green:usb1";
 		};
 
-		led-usb2 {
+		led-phone1 {
 			color = <LED_COLOR_ID_GREEN>;
 			default-state = "keep";
-			function = LED_FUNCTION_USB;
-			gpios = <&gpio2 6 GPIO_ACTIVE_LOW>;
-			label = "skyworth:green:usb2";
+			gpios = <&gpio2 3 GPIO_ACTIVE_LOW>;
+			label = "skyworth:green:phone1";
+		};
+
+		led-wps {
+			color = <LED_COLOR_ID_GREEN>;
+			default-state = "keep";
+			function = LED_FUNCTION_WPS;
+			gpios = <&gpio0 13 GPIO_ACTIVE_LOW>;
+			label = "skyworth:green:wps";
 		};
 	};
 
