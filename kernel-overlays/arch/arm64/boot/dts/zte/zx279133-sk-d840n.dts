@@ -8,12 +8,14 @@
 //       boot 2048k@0x0 kernel 8192k@0x200000 dtb 1024k@0xa00000
 //       "parameter tags" 4096k@0xb00000 root 246784k@0xf00000
 //     fixed-partitions registration order below therefore yields
-//     mtd0=boot mtd1=kernel mtd2=dtb mtd3="parameter tags" mtd4=scratch mtd5=root.
-//     (`root` must stay index 5 - that is what the installed U-Boot bootargs
-//      hard-code as root=/dev/mtdblock5, so exactly five partitions precede it.
-//      The U-Boot env still calls the 241 MiB region at 0xf00000 `root`, but its
-//      bootcmd only ever reads `kernel` and `dtb`, so moving root to 0x1000000
-//      costs nothing and leaves the first erase blocks of the old jffs2 intact.)
+//     mtd0=boot mtd1=kernel mtd2=dtb mtd3="parameter tags" mtd4="parameter tags 2"
+//     mtd5=root mtd6=scratch.
+//     (`root` must stay index 5 - the installed U-Boot bootargs hard-code
+//      root=/dev/mtdblock5 - *and* must start at 0xf00000, because that is where the
+//      system that does the flashing puts its own `root`: the vendor 4.19 table is
+//      whole/boot/kernel/dtb/param/root@0xf00000 (241 MiB), and /sbin/mtd on it can
+//      only erase and write a whole partition by label. An image that satisfied one
+//      constraint but not the other boots as a VFS panic with no serial to read.)
 //   - console is the PL011-compatible zte,zx279133-uart at 0x10d0d000, 115200n8
 //   - memory is 512 MiB at 0x80000000 (stock DTB: reg = <0x0 0x80000000 0x0 0x20000000>)
 //
@@ -343,11 +345,16 @@
  *    *below* where the new kernel looks for it, which boots as a panic on an
  *    empty root and leaves no way back without a serial cable.
  *
- * So `scratch` keeps the index at the tail of the chip instead of at 0xf00000:
- * 1 MiB at 0xff00000, outside `root`'s range and outside anything U-Boot reads.
- * It is not a usable log area either - erasing it still needs the MEMERASE
- * ioctl on a sub-range, which no tool here provides - its only job is to be
- * partition number 4.
+ * So the five slots before `root` are filled by boot, kernel, dtb and *two* pieces of
+ * U-Boot's 4096k `parameter tags` region, and `scratch` (1 MiB at 0xff00000, outside
+ * `root`'s range and outside anything U-Boot reads) takes the tail slot. `scratch` is not
+ * a usable log area either - erasing a sub-range needs the MEMERASE ioctl, which no tool
+ * on this image provides - its only job is to keep the chip fully described.
+ *
+ * fixed-partitions registers these children in blob order, so the order of the nodes
+ * below *is* the /dev/mtdN numbering. Read it off the artifact, do not assume it:
+ *   python tools/dtbparts.py staging/trial/flash-dtb.bin root=0xf00000,0xf000000
+ * prints the table and the index order, and refuses (exit 1) if `root` is not at 0xf00000.
  *
  * Offsets/labels otherwise mirror the community U-Boot env
  * (boot 2048k@0x0, kernel 8192k@0x200000, dtb 1024k@0xa00000,
@@ -385,7 +392,17 @@
 
 			partition@b00000 {
 				label = "parameter tags";
-				reg = <0xb00000 0x400000>;
+				reg = <0xb00000 0x200000>;
+				read-only;
+			};
+
+			/* The second half of U-Boot's single 4096k `parameter tags` region, split
+			 * only so that five partitions precede `root` (see the block comment).
+			 * Nothing reads or writes it by label; it stays read-only.
+			 */
+			partition@d00000 {
+				label = "parameter tags 2";
+				reg = <0xd00000 0x200000>;
 				read-only;
 			};
 
