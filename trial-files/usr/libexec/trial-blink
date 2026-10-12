@@ -28,8 +28,13 @@
 # driver for. Expect the LAN LEDs to stay dark under mainline - that is a missing
 # feature of this SoC's mainline support, not a failed boot.
 #
-# All of them are active-low (the running system shows the lit ones "out lo"), so
-# writing 0 turns an LED on.
+# Polarity is settled and still not depended upon: writing to the vendor's own LED class
+# pulls each of these eight pins to "out lo" and lights the matching lamp, so they are
+# active-low exactly as the stock DTB's flag cell (0x01) says. Every phase below is
+# nevertheless a train of alternating halves, because a blink is the signal and a hold is
+# not - and led_lan0..lan3 are deliberately absent, since the vendor drives those four
+# through the SoC's LED engine (they light up without holding any GPIO) and mainline has
+# no driver for it. Expect the four LAN lamps to stay dark.
 #
 # mainline numbers: the five controllers are 16+16+16+16+6 wide in the same address
 # order, so their bases are 0/16/32/48/64 and these global numbers are the same as the
@@ -131,24 +136,36 @@ if [ "$have_gpio" = 1 ] && [ -z "$leds" ]; then
 		kmsg "pin $n"
 		echo "$n" >/sys/class/gpio/export 2>/dev/null
 		echo out >/sys/class/gpio/gpio"$n"/direction 2>/dev/null
-		echo 0 >/sys/class/gpio/gpio"$n"/value 2>/dev/null
-		sleep 2.5
-		echo 1 >/sys/class/gpio/gpio"$n"/value 2>/dev/null
+		i=0
+		while [ $i -lt 3 ]; do
+			i=$((i + 1))
+			echo 0 >/sys/class/gpio/gpio"$n"/value 2>/dev/null
+			sleep 2
+			echo 1 >/sys/class/gpio/gpio"$n"/value 2>/dev/null
+			sleep 0.6
+		done
 		echo "$n" >/sys/class/gpio/unexport 2>/dev/null
-		sleep 1
 	done
 fi
 
 # 4) the same walk over the image's own LED devices, named, so a wrong pin in the DTS
 #    shows up as a dark silkscreen next to a kmsg line that claims it lit.
+#
+# Three long-short pulses per device rather than one long hold: a train is harder to miss
+# than a dim hold, and if the DTS names the wrong pin the observer still gets a positive
+# statement - "the lamp that flashed is not the one you said" - rather than an absence.
 set -- $leds
 while [ $# -gt 0 ]; do
 	kmsg "led $2"
-	led_on "$1"
-	sleep 2.5
-	led_off "$1"
+	i=0
+	while [ $i -lt 3 ]; do
+		i=$((i + 1))
+		led_on "$1"
+		sleep 2
+		led_off "$1"
+		sleep 0.6
+	done
 	shift 2
-	sleep 0.5
 done
 
 kmsg done

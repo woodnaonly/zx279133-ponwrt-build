@@ -96,15 +96,22 @@
 	 *   10d100c0 = &gpio3: 15 led_pon
 	 *   10d10100 = &gpio4:  1 led_wlan
 	 *
-	 * All active-low: the running system shows the lit ones as "out lo" (led_power is
-	 * on while the panel's other LEDs that are off read "out hi").
+	 * Active-low, measured rather than inherited: driving the vendor's own LED class
+	 * (echo 255 > /sys/class/leds/led_power/brightness) pulls that pin to "out lo" and
+	 * the lamp lights, and all eight GPIO LEDs did exactly that. The front row then
+	 * names itself, left to right:
+	 *   电源=led_power=gpio-10   注册=led_pon=gpio-63   光信号(red)=led_los=gpio-9
+	 *   上网=led_wan=gpio-24      lan1..lan4=led_lan0..3  usb1=led_usb1=gpio-21
+	 * led_wps, led_phone1 and led_wlan are on the case as well, just not in that row.
 	 *
 	 * What is deliberately absent: led_lan0..lan3 appear in the vendor's
-	 * /sys/class/leds but claim **no GPIO** in that list, because those four are driven
-	 * by the 9132 switch's own LED outputs. Mainline has no driver for the 9132 (see the
-	 * OPEN ITEMS above), so the four LAN LEDs cannot be described here at all - they
-	 * will stay dark under mainline even when a port links, and that is a missing
-	 * feature of this SoC's mainline support, not a boot failure.
+	 * /sys/class/leds and do light up when written, but they claim **no GPIO** in that
+	 * list - the vendor reaches them through the SoC's LED engine instead, addressed by
+	 * the stock DTB's `led-id` cell (led_power = 0x33, led_usb1 = 0x34, led_los = 0x08,
+	 * ...), and on this panel those four are its only users. Mainline has no driver for
+	 * that engine (see the OPEN ITEMS above), so the four LAN LEDs cannot be described
+	 * here at all - they will stay dark under mainline even when a port links, and that
+	 * is a missing feature of this SoC's mainline support, not a boot failure.
 	 */
 	leds {
 		compatible = "gpio-leds";
