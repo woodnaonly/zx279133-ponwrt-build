@@ -7,6 +7,14 @@
 # RTL8226 keeps its link across a SoC reset anyway). The panel LEDs are the one signal
 # that needs nothing but a kernel that got this far.
 #
+# Two independent routes to a panel LED are driven here on purpose:
+#   * /sys/class/leds/<name>/brightness - depends on LEDS_GPIO plus the LED node in the
+#     board DTS being right;
+#   * /sys/class/gpio/export - depends on CONFIG_GPIO_CDEV_V1 actually surviving
+#     defconfig (a symbol that is dropped there leaves no trace) and on pinctrl letting
+#     the pin be requested as GPIO.
+# Either one alone would turn a config detail into a silent, wasted round.
+#
 # The pin numbers below are not a guess off the stock DTB: they are the vendor kernel's
 # own claim list, read from /sys/kernel/debug/gpio on the running unit, which names the
 # GPIO each LED holds -
@@ -25,52 +33,122 @@
 #
 # mainline numbers: the five controllers are 16+16+16+16+6 wide in the same address
 # order, so their bases are 0/16/32/48/64 and these global numbers are the same as the
-# vendor's. They are still recomputed from /sys/class/gpio/gpiochip* rather than
-# assumed.
+# vendor's. They are still recomputed from /sys/class/gpio/gpiochip* rather than assumed.
 
 pins="10 9 13 21 24 35 63 65"
 alive_pin=10
+blinks=${1:-3}
 
-pulse() { # <global pin> <on seconds> <off seconds>
-	n=$1
-	echo "$n" >/sys/class/gpio/export 2>/dev/null || return 0
-	echo out >/sys/class/gpio/gpio"$n"/direction 2>/dev/null
-	echo 0 >/sys/class/gpio/gpio"$n"/value 2>/dev/null
-	sleep "$2"
-	echo 1 >/sys/class/gpio/gpio"$n"/value 2>/dev/null
-	sleep "$3"
-	echo "$n" >/sys/class/gpio/unexport 2>/dev/null
-}
+kmsg() { echo "trial-blink: $*" >/dev/kmsg 2>/dev/null; }
 
 have_gpio=0
 [ -w /sys/class/gpio/export ] && have_gpio=1
 
-echo "trial-blink: start uptime=$(cut -d' ' -f1 /proc/uptime) gpio=$have_gpio leds=$(ls /sys/class/leds 2>/dev/null | tr '\n' ' ')" >/dev/kmsg 2>/dev/null
+leds=""
+for l in /sys/class/leds/*; do
+	[ -d "$l" ] || continue
+	leds="$l ${l#/sys/class/leds/}"
+done
 
-# 1) "alive": the power LED, five slow unmistakable blinks, before anything else.
-if [ "$have_gpio" = 1 ]; then
+led_max() { [ -r "$1/max_brightness" ] && cat "$1/max_brightness" || echo 255; }
+led_on() { [ -w "$1/brightness" ] && echo "$(led_max "$1")" >"$1/brightness" 2>/dev/null; }
+led_off() { [ -w "$1/brightness" ] && echo 0 >"$1/brightness" 2>/dev/null; }
+
+# pulse_led <dev>
+pulse_led() {
+	led_on "$1"
+	sleep 0.6
+	led_off "$1"
+	sleep 0.6
+}
+
+# pulse_gpio <global pin> <on s> <off s>
+pulse_gpio() {
+	n=$1
+	echo "$n" >/sys/class/gpio/export 2>/dev/null || return 0
+	echo out >/sys/class/gpio/gpio"$n"/direction 2>/dev/null
+	echo 0 >/sys/class/gpio/gpio"$n"/value 2>/dev/null
+	sleep 0.6
+	echo 1 >/sys/class/gpio/gpio"$n"/value 2>/dev/null
+	sleep 0.6
+	echo "$n" >/sys/class/gpio/unexport 2>/dev/null
+}
+
+# power_led - the one device every phase of "alive" should use, by either route
+set -- $leds
+power=$1
+while [ $# -gt 0 ]; do
+	case "$2" in
+	*power*) power=$1; break ;;
+	esac
+	shift 2
+done
+
+kmsg "start uptime=$(cut -d' ' -f1 /proc/uptime) gpio=$have_gpio blinks=$blinks leds=$(echo $leds | sed 's|/sys/class/leds/||g')"
+
+# 1) "alive": the power LED, slow unmistakable blinks, before anything else.
+i=0
+while [ $i -lt "$blinks" ]; do
+	i=$((i + 1))
+	[ -n "$power" ] && pulse_led "$power"
+	[ -z "$power" ] && [ "$have_gpio" = 1 ] && pulse_gpio "$alive_pin"
+	sleep 0.4
+done
+sleep 1
+
+# 2) all LEDs at once, three times - the signal that does not need the observer to
+#    notice one small green dot.
+if [ -n "$leds" ]; then
 	i=0
-	while [ $i -lt 5 ]; do
+	while [ $i -lt 3 ]; do
 		i=$((i + 1))
-		pulse "$alive_pin" 0.6 0.6
+		set -- $leds
+		while [ $# -gt 0 ]; do
+			led_on "$1"
+			shift 2
+		done
+		sleep 0.8
+		set -- $leds
+		while [ $# -gt 0 ]; do
+			led_off "$1"
+			shift 2
+		done
+		sleep 0.6
 	done
-	sleep 2
-	# 2) one LED per pin, in the order above, so the observer can report which
-	#    silkscreen lit up at which position.
+	sleep 1
+fi
+
+# 3) one LED per raw pin, in the order of the vendor's claim list, so the observer can
+#    report which silkscreen lit at which position. This route is independent of the
+#    board DTS: it proves the GPIO numbers themselves.
+#
+# Only when the image registered no LED devices at all: gpio-leds holds its own pins, so
+# exporting one it owns answers EBUSY, and a busy export is invisible here by design
+# (2>/dev/null) - which would make this walk look like "no LED at that pin" when it
+# really means "the DTS already owns it". Phase 4 covers that case, named.
+if [ "$have_gpio" = 1 ] && [ -z "$leds" ]; then
 	for n in $pins; do
-		echo "trial-blink: pin $n" >/dev/kmsg 2>/dev/null
-		pulse "$n" 2.5 1
+		kmsg "pin $n"
+		echo "$n" >/sys/class/gpio/export 2>/dev/null
+		echo out >/sys/class/gpio/gpio"$n"/direction 2>/dev/null
+		echo 0 >/sys/class/gpio/gpio"$n"/value 2>/dev/null
+		sleep 2.5
+		echo 1 >/sys/class/gpio/gpio"$n"/value 2>/dev/null
+		echo "$n" >/sys/class/gpio/unexport 2>/dev/null
+		sleep 1
 	done
 fi
 
-# 3) whatever the image's own LED devices are (they come from the board DTS, so this is
-#    also how a wrong LED pin in the DTS shows up - the observer sees nothing here).
-for l in /sys/class/leds/*; do
-	[ -w "$l/brightness" ] || continue
-	echo 255 >"$l/brightness" 2>/dev/null
-	sleep 2
-	echo 0 >"$l/brightness" 2>/dev/null
+# 4) the same walk over the image's own LED devices, named, so a wrong pin in the DTS
+#    shows up as a dark silkscreen next to a kmsg line that claims it lit.
+set -- $leds
+while [ $# -gt 0 ]; do
+	kmsg "led $2"
+	led_on "$1"
+	sleep 2.5
+	led_off "$1"
+	shift 2
 	sleep 0.5
 done
 
-echo "trial-blink: done" >/dev/kmsg 2>/dev/null
+kmsg done
