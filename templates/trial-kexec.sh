@@ -10,8 +10,8 @@
 # Usage, from the PC (a copy over ssh is the only reliable path on this unit: the
 # image has no tftp client, and plain `scp` fails because /usr/libexec/sftp-server
 # is not in it - `scp -O` or `cat | ssh "cat > f"` both work, 30 MB in ~1.5 s):
-#       scp -O -i ~/.ssh/id_onu trial/* root@192.168.1.1:/tmp/trial/
-#       ssh  root@192.168.1.1 sh /tmp/trial/trial-kexec.sh
+#       scp -O -i ~/.ssh/id_onu trial/* root@192.168.9.1:/tmp/trial/
+#       ssh  root@192.168.9.1 sh /tmp/trial/trial-kexec.sh
 # Everything the script needs may therefore already be sitting in $D, which is the
 # mode it prefers.  If a file is missing and PC= is set it fetches it over HTTP
 # with uclient-fetch, then tries tftp (kept for images that have it; this one does

@@ -87,8 +87,8 @@ Order of operations, reversible up to step 5 because nothing is written before i
    this unit has **no tftp client** (`/bin/uclient-fetch` is the only fetcher) and
    its `scp` cannot serve the default SFTP protocol (`/usr/libexec/sftp-server` is
    not in the image), so push with `scp -O` or a plain ssh pipe:
-   `scp -O -i ~/.ssh/id_onu trial/* root@192.168.1.1:/tmp/trial/` then
-   `ssh root@192.168.1.1 sh /tmp/trial/trial-kexec.sh` (30 MB lands in ~1.5 s this
+   `scp -O -i ~/.ssh/id_onu trial/* root@192.168.9.1:/tmp/trial/` then
+   `ssh root@192.168.9.1 sh /tmp/trial/trial-kexec.sh` (30 MB lands in ~1.5 s this
    way). `PC=<ip>` makes the script fetch whatever is missing itself over HTTP,
    `TFTP=1` over tftp. It then runs `kexec --load` / `--exec` into the mainline RAM
    image. That load path is not assumed: a mainline 6.18 arm64 Image `--load`ed on
@@ -126,10 +126,10 @@ Order of operations, reversible up to step 5 because nothing is written before i
    cannot drive. The vendor driver prints the port number with the netdev, which is
    how to find the jack: `dmesg` shows `[eth0] port 4 link down` / `[eth1] port 1
    link up:1000M`, so move a cable and watch. `overlays/.../board.d/02_network`
-   puts `eth0` alone in `lan`, which gives it 192.168.1.1 (base-files'
+   puts `eth0` alone in `lan`, which gives it 192.168.9.1 (base-files'
    default address). An ICMP/ARP answer from there already proves kernel + NPPT +
    PHY + TCP/IP. The image is then reached the same way as the running one
-   (`ssh root@192.168.1.1`, blank password - that is base-files' own default, no key
+   (`ssh root@192.168.9.1`, blank password - that is base-files' own default, no key
    or password is baked into these artifacts). If the new system ever ships a
    locked root, rebuild with a root password rather than with an authorized key: a
    released image must not carry anyone's key.
@@ -140,7 +140,7 @@ Order of operations, reversible up to step 5 because nothing is written before i
 
 **A silent round is still a result, and `trial-files/` is what makes it one.** The
 initramfs mode job also stages `trial-files/` into `openwrt/files/` (never into a
-flash build): `etc/rc.d/S15trial` puts 192.168.1.1 on every netdev the kernel
+flash build): `etc/rc.d/S15trial` puts 192.168.9.1 on every netdev the kernel
 registers and starts ssh unbound, so an answer does not depend on guessing which
 name the NPPT driver picks or on the `lan` interface existing; and 300 s after
 userspace it runs `/sbin/reboot -f`, which on arm64 goes through PSCI and so does

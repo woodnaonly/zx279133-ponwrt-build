@@ -16,7 +16,11 @@
 (
 	/usr/libexec/trial-blink 3 2>/dev/null
 
-	addr=192.168.1.1/24
+	# Same address the flashed system's lan now uses, so one IP covers before and after
+	# the jump - and 192.168.9.0/24 exists only on the test PC's wired adapter, unlike the
+	# 192.168.1.1 this board used to answer as, which its own WiFi router also owns. An
+	# answer there proved nothing; an answer here can only have come through this jack.
+	addr=192.168.9.1/24
 	i=0
 	while [ $i -lt 8 ]; do
 		i=$((i + 1))
