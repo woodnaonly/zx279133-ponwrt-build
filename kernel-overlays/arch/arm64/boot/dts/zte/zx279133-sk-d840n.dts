@@ -330,16 +330,28 @@
 	status = "disabled";
 };
 
-/* No env edit is needed to boot this image: U-Boot's bootargs say
- * `root=/dev/mtdblock5`, so exactly five partitions must precede `root`.
- * `scratch` is the cheapest way to spend one of those indices: 1 MiB at
- * 0xf00000, which is where the community `root` partition begins, so the first
- * erase blocks of the 4.19 jffs2 stay untouched and a rollback keeps its oldest
- * nodes. `root` then starts one MiB later and gets the rest of the chip
- * (240 MiB) instead of being squeezed to make the tail fit.
+/* Two constraints, and they only fit together one way.
+ *
+ * 1. No env edit is needed to boot this image: U-Boot's bootargs say
+ *    `root=/dev/mtdblock5`, so exactly five partitions must precede `root`.
+ * 2. The image has to be programmable from the system that is installed now.
+ *    That flasher runs on the vendor 4.19 and writes by partition LABEL,
+ *    because `/sbin/mtd` can only erase/write a whole partition - there is no
+ *    tool on this image that erases a sub-range. The 4.19's own mtd table puts
+ *    `root` at 0xf00000, so `root` here must start at 0xf00000 too: an offset
+ *    of 0x1000000 would have the flasher write the jffs2 one erase block
+ *    *below* where the new kernel looks for it, which boots as a panic on an
+ *    empty root and leaves no way back without a serial cable.
+ *
+ * So `scratch` keeps the index at the tail of the chip instead of at 0xf00000:
+ * 1 MiB at 0xff00000, outside `root`'s range and outside anything U-Boot reads.
+ * It is not a usable log area either - erasing it still needs the MEMERASE
+ * ioctl on a sub-range, which no tool here provides - its only job is to be
+ * partition number 4.
+ *
  * Offsets/labels otherwise mirror the community U-Boot env
  * (boot 2048k@0x0, kernel 8192k@0x200000, dtb 1024k@0xa00000,
- *  "parameter tags" 4096k@0xb00000).
+ *  "parameter tags" 4096k@0xb00000, root 246784k@0xf00000).
  */
 &spifc {
 	spi-max-frequency = <25000000>;
@@ -377,19 +389,14 @@
 				read-only;
 			};
 
-			/* Holds the index so `root` lands on mtdblock5. Not a usable
-			 * log/scratch area in practice: a partial write needs the
-			 * MEMERASE ioctl and this image has no tool that can erase a
-			 * sub-partition range (/sbin/mtd erases whole partitions).
-			 */
 			partition@f00000 {
-				label = "scratch";
-				reg = <0xf00000 0x100000>;
+				label = "root";
+				reg = <0xf00000 0xf000000>;
 			};
 
-			partition@1000000 {
-				label = "root";
-				reg = <0x1000000 0xf000000>;
+			partition@ff00000 {
+				label = "scratch";
+				reg = <0xff00000 0x100000>;
 			};
 		};
 	};
