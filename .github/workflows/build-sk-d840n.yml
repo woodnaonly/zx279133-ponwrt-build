@@ -224,6 +224,16 @@ jobs:
             }
           done
           grep -iE '^CONFIG_(ZTE_ZX279133|REALTEK|MDIO_ZX|EXTRA_FIRMWARE)' "$KC"
+          # The built-in command line is the reason the last image waited forever for a root
+          # device that this board never creates, so it is checked in the merged kernel config
+          # rather than in the file that was edited. Searching the kernel *binary* for the old
+          # string would not work: cnjn appends every board dtb to Image, and SR1010's own dtb
+          # legitimately carries mtdblock7.
+          grep -qx 'CONFIG_CMDLINE="console=ttyAMA0,115200n8 root=/dev/mtdblock5 rootfstype=jffs2 ro rootwait"' "$KC" || {
+            echo "CONFIG_CMDLINE is not the pinned cmdline" >&2
+            grep -iE '^CONFIG_CMDLINE' "$KC" || echo "no CONFIG_CMDLINE at all" >&2
+            exit 1; }
+          ! grep -q 'mtdblock7' "$KC" || { echo "a mtdblock7 cmdline is still in the kernel config" >&2; exit 1; }
           # And the same rule for the flash itself. The Unim entry is added to core.c's
           # manufacturer array and to spinand-objs by scripts/configure-sk-d840n.sh, both of
           # which self-report success; only the compiled tree proves the chip will be known

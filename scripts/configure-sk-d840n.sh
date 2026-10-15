@@ -79,6 +79,34 @@ pin_y PSTORE
 pin_y PSTORE_CONSOLE
 pin_y PSTORE_RAM
 
+# The board hangs at `Waiting for root device /dev/mtdblock7...`, and for a while that looked
+# like the community U-Boot's `ft_fixup_flash-spinand`, because that function does print
+# itself into the boot log and does own a `root=/dev/mtdblock%d rootfstype=%s` template. It
+# is not the source. Three readings say so:
+#   - "rootwait" is not a string anywhere in the boot partition (backups/mtd1_boot.bin);
+#   - our built dtb carries no /chosen/bootargs at all;
+#   - the literal `console=ttyAMA0,115200n8 root=/dev/mtdblock7 rootfstype=squashfs ro
+#     rootwait` is inside the kernel image, next to the other early-params literals.
+# So it is CONFIG_CMDLINE, inherited from the SR1010 profile, and SR1010's flash layout is
+# not ours: on this board U-Boot's own table (`mtdparts` in env) is
+# whole,boot,kernel,dtb,parameter tags,root -> root is mtdblock5, and our DTS pins rootpart
+# to alias mtd5, so 5 is what mainline really creates.
+#
+# Both files are searched because a kernel symbol may live in the subtarget config, in the
+# target's generic one, or in the profile copy under configs/. Which one is irrelevant to the
+# sed and vital to the assertion afterwards: a leftover mtdblock7 anywhere in the tree boots
+# a board that waits forever, and the two cases look identical from outside.
+CMDLINE='console=ttyAMA0,115200n8 root=/dev/mtdblock5 rootfstype=jffs2 ro rootwait'
+hits=$(grep -rl --include='config-*' '^CONFIG_CMDLINE=' target/linux/ 2>/dev/null || true)
+[ -n "$hits" ] || { echo "no CONFIG_CMDLINE= in any target/linux/**/config-* - where does the built-in cmdline come from?" >&2; exit 1; }
+for f in $hits; do
+	printf 'patching built-in cmdline in %s\n' "$f"
+	sed -i "s|^CONFIG_CMDLINE=.*|CONFIG_CMDLINE=\"$CMDLINE\"|" "$f"
+done
+left=$(grep -rn --include='config-*' 'mtdblock7' target/linux/ 2>/dev/null || true)
+[ -z "$left" ] || { echo "a mtdblock7 cmdline survived: $left" >&2; exit 1; }
+grep -rn --include='config-*' '^CONFIG_CMDLINE' target/linux/
+
 # The flash on this board is a Unim UM19A1HISW (READ ID b0 24 b0 24 b0) and no spi-nand
 # table in this tree - or in mainline - has manufacturer 0xb0, so the driver rejects the
 # chip and the board ends up with no MTD devices at all:

@@ -73,6 +73,13 @@
 
 	chosen {
 		stdout-path = "serial0:115200n8";
+		/* Same string the build script pins into CONFIG_CMDLINE. It belongs here as
+		 * well because the kernel's built-in-vs-bootloader precedence (FROM_BOOTLOADER,
+		 * EXTEND, FORCE) is a config choice nobody is looking at, and the two spellings
+		 * agreeing is what makes the root device the same in all three. mtdblock5 is
+		 * pinned by the mtd5 alias below, and jffs2 is what the root partition holds.
+		 */
+		bootargs = "console=ttyAMA0,115200n8 root=/dev/mtdblock5 rootfstype=jffs2 ro rootwait";
 	};
 
 	memory@80000000 {
