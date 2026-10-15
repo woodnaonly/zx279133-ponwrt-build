@@ -143,11 +143,12 @@ cat <<EOF
 
 If the two READ_OK lines appeared, the flash now holds mainline. Reboot deliberately:
   ssh root@192.168.9.1 reboot
-Then the only jack that can answer is the RTL8226/2.5G one. The flashed image puts it at
-192.168.9.1: ci-build-repo's 02_network binds lan straight to eth0 and spells the address
-out as 192.168.9.1, so there is no br-lan and nothing carries 192.168.9.2 - that address
-belonged to the old community root, where lan was br-lan (ports eth1..eth3, which
-mainline has no driver for) and eth0 was wan. ping/ARP at 192.168.9.1 means mainline
+Then the only jack that can answer is the RTL8226/2.5G one, at 192.168.9.1. Traced through
+the built rootfs: ci-build-repo's 02_network puts device=eth0 protocol=static ipaddr=192.168.9.1
+into the board JSON, board_detect sources it, and config_generate reads it back to build
+/etc/config/network - so the address is the overlay's own value, not a default. Nothing
+carries 192.168.9.2: that was the old community root's wan, where lan was br-lan over
+eth1..eth3, ports mainline has no driver for. ping/ARP at 192.168.9.1 means mainline
 booted; if dropbear is bound to the 'lan' interface, tools/reachcheck.sh unwraps that
 binding beforehand. The audit after rebooting is plain:
   sh tools/postflash.sh

@@ -32,12 +32,19 @@ OUT=staging/postflash-$(date +%Y%m%d-%H%M).txt
 # With no HOST given, try each address this board can be on, in the order that keeps the
 # fastest answer first, and use the one where ssh actually returns a uname line.
 #
-# The flashed image answers on 192.168.9.1. 02_network binds lan straight to eth0 and
-# spells the address out as 192.168.9.1, so eth0 carries it directly and there is no
-# br-lan. 192.168.9.2 belonged to the old community root - there lan was br-lan (ports
-# eth1..eth3, which mainline has no driver for, so that address had no path to a cable)
-# and eth0 was wan. It is still probed, because which root is installed is not known
-# from here, but after flashing this project's own image it will not answer there.
+# The flashed image answers on 192.168.9.1. Traced through the built rootfs:
+# 02_network's ucidef_set_interface writes device=eth0 protocol=static ipaddr=192.168.9.1
+# into the board JSON, /bin/board_detect sources it into /etc/board.json, and
+# /bin/config_generate reads those values back out to build /etc/config/network - so the
+# overlay's address is config_generate's input, not something it overwrites. generate_network
+# forces lan into a bridge when it has no ports array, so the address ends up on br-lan
+# whose only port is eth0. config_generate's own fallback of 192.168.1.1 is never reached,
+# because ipaddr is set.
+#
+# 192.168.9.2 belonged to the old community root - there lan was br-lan over eth1..eth3
+# (ports mainline has no driver for, so that address had no path to a cable) and eth0 was
+# wan. It is still probed, because which root is installed is not known from here, but after
+# flashing this project's own image it will not answer there.
 #
 # 192.168.1.1 is also probed, and is only accepted on a real ssh answer, never on a ping:
 # this PC sits on 192.168.1.0/24 twice (wired and WLAN) and the owner's own router answers
