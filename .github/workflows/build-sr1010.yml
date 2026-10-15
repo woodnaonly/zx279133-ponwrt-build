@@ -19,7 +19,7 @@ on:
         default: 'sr1010-zx279133'
         type: string
       kernel_ref:
-        description: 'cnjn/linux-mainline-zte-zxslc-sr1010 分支（build 内含 linux-6.18.38 submodule）'
+        description: 'cnjn/linux-mainline-zte-zxslc-sr1010 分支（build 分支内的 linux submodule）'
         required: false
         default: 'build'
         type: string
@@ -39,6 +39,10 @@ env:
   IW_BRANCH: sr1010-zx279133
   KERNEL_URL: https://github.com/cnjn/linux-mainline-zte-zxslc-sr1010
   KERNEL_BRANCH: build
+  # The same submodule version build-sk-d840n.yml builds against. It used to be spelled out
+  # here in four places as well, so a bump could move one workflow's kernel and not the
+  # other's - and this workflow exists precisely to re-validate against that one.
+  KVER: '6.18.38'
 
 permissions: write-all
 
@@ -81,17 +85,19 @@ jobs:
           git clone --depth 1 -b "$IW_REF" "$IW_URL" openwrt
           cd openwrt && git log -1 --format='== ImmortalWrt head: %h %s (%cd)' --date=short
 
-      - name: Clone mainline kernel tree (linux-6.18.38 submodule)
+      - name: Clone mainline kernel tree (linux submodule)
         run: |
-          # Sibling layout on purpose: scripts/configure-sr1010-initramfs.sh defaults
-          # KERNEL_TREE to ../linux-mainline-zte-zxslc-sr1010/linux-6.18.38.
+          # Sibling layout on purpose: the upstream openwrt/scripts/configure-sr1010-initramfs.sh
+          # defaults KERNEL_TREE to ../linux-mainline-zte-zxslc-sr1010/linux-<version>. That
+          # default is in the ImmortalWrt fork, not in this repo, so the version is checked
+          # here rather than assumed - which is the point of the test -f lines below.
           K_REF="${{ inputs.kernel_ref }}"
           [ -n "$K_REF" ] || K_REF="$KERNEL_BRANCH"
           echo "cloning $KERNEL_URL @ $K_REF"
           git clone --branch "$K_REF" --recurse-submodules --shallow-submodules "$KERNEL_URL" linux-mainline-zte-zxslc-sr1010
-          test -f linux-mainline-zte-zxslc-sr1010/linux-6.18.38/Makefile
-          test -f linux-mainline-zte-zxslc-sr1010/linux-6.18.38/arch/arm64/boot/dts/zte/zx279133-sr1010.dts
-          make -C linux-mainline-zte-zxslc-sr1010/linux-6.18.38 kernelversion
+          test -f linux-mainline-zte-zxslc-sr1010/linux-$KVER/Makefile
+          test -f linux-mainline-zte-zxslc-sr1010/linux-$KVER/arch/arm64/boot/dts/zte/zx279133-sr1010.dts
+          make -C linux-mainline-zte-zxslc-sr1010/linux-$KVER kernelversion
 
       - name: Cache dl/
         if: ${{ inputs.clean_cache != 'true' }}

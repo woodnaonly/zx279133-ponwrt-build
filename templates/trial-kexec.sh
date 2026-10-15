@@ -111,19 +111,14 @@ fi
 
 fetch trial-dtb.bin
 fetch trial-Image.gz
-gunzip -c trial-Image.gz > Image || die "gunzip failed"
-# Optional: a patched RAM rootfs (tools/mktrialram.py, or trial-initramfs.cpio.gz
-# from CI). Given to kexec as an initrd, it is unpacked over the one baked into the
-# Image, so the trial files apply without rebuilding 30 MB of kernel.
-INITRD=
-if [ -s trial-initramfs.cpio.gz ]; then
-	INITRD=--initrd=$(pwd)/trial-initramfs.cpio.gz
-	say "using patched initramfs: trial-initramfs.cpio.gz ($(wc -c < trial-initramfs.cpio.gz) bytes)"
-fi
 
 # A half-copied payload boots into a corrupt kernel, and over ssh a copy can end
 # early without anything complaining, so check the shipped hashes when both sides
 # have them.
+#
+# This runs BEFORE the gunzip below. The manifest covers trial-Image.gz, not the Image
+# it unpacks to, so verifying first means a rejected payload never gets materialised as
+# a 30 MB Image on the box - and the hash that is actually shipped is the one checked.
 if [ -s sha256sums-trial ] && command -v sha256sum >/dev/null 2>&1; then
 	# trial-dtb.bin is excluded on purpose: it is a binary blob, and a property whose
 	# length does not change (e.g. moving the ramoops region) is patched in place on the
@@ -132,6 +127,17 @@ if [ -s sha256sums-trial ] && command -v sha256sum >/dev/null 2>&1; then
 	grep -v 'trial-dtb.bin' sha256sums-trial > sha256sums-load || die "no sha256sums entries left"
 	sha256sum -c sha256sums-load || die "checksum mismatch - re-copy the trial files"
 	say "dtb is $(wc -c < trial-dtb.bin) bytes, sha $($(command -v sha256sum || echo false) trial-dtb.bin 2>/dev/null | cut -c1-12)"
+fi
+
+gunzip -c trial-Image.gz > Image || die "gunzip failed"
+
+# Optional: a patched RAM rootfs (tools/mktrialram.py, or trial-initramfs.cpio.gz
+# from CI). Given to kexec as an initrd, it is unpacked over the one baked into the
+# Image, so the trial files apply without rebuilding 30 MB of kernel.
+INITRD=
+if [ -s trial-initramfs.cpio.gz ]; then
+	INITRD=--initrd=$(pwd)/trial-initramfs.cpio.gz
+	say "using patched initramfs: trial-initramfs.cpio.gz ($(wc -c < trial-initramfs.cpio.gz) bytes)"
 fi
 
 say "kexec version: $("$KX" --version 2>&1 | head -1)"

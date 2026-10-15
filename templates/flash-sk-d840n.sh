@@ -31,6 +31,26 @@ for f in "$KERNEL_IMG" "$DTB_IMG" "$ROOT_IMG"; do
 	[ -f "$f" ] || die "missing $f (run from the directory holding the images)"
 done
 
+# Integrity, checked before a single eraseblock is touched.
+#
+# sha256sums-release ships inside flash-set.tgz next to these images for exactly this.
+# The `mtd verify` below is NOT a substitute: it only proves that what was just written
+# reads back, so it happily confirms garbage, and it does not notice a truncated file
+# either, because after a short copy both sides are the same length. An image cut short
+# by tftp, or a half-finished scp, would be programmed to three partitions - kernel
+# included - and reported as success. On a unit with no serial console that is a brick
+# found only when the box does not come back.
+#
+# The manifest is optional so an unpacked release that predates it still runs, but its
+# absence is announced rather than passed over in silence.
+if [ -f "$D/sha256sums-release" ]; then
+	say "verifying images against sha256sums-release"
+	( cd "$D" && sha256sum -c sha256sums-release ) || die "checksum mismatch - refusing to program flash"
+else
+	say "WARNING: no sha256sums-release beside the images - integrity is UNVERIFIED."
+	say "         a truncated or corrupted image would be programmed without complaint."
+fi
+
 mtd_of() { # label -> index, from the quoted name in /proc/mtd
 	awk -F'"' -v n="$1" '$2==n { s=$1; sub(/^mtd/,"",s); sub(/:.*/,"",s); print s }' \
 		/proc/mtd | head -1
@@ -99,4 +119,12 @@ program kernel "$KERNEL_IMG"
 
 sync
 say "done. Reboot into it (or power-cycle). If it does not come back on the LAN,"
-say "restore_set/ in this repo holds the verified stock set for a full rollback."
+say "roll the kernel and dtb back with:"
+say "  SRC=staging/rollback EXPECT='root=0xf00000,0xf100000' sh tools/flash-direct.sh write"
+say "That writes the vendor 4.19 uImage and the vendor dtb; both are byte-exact"
+say "prefixes of what was in mtd2/mtd3 before this project touched them. The root"
+say "partition has never been written by any tool here, so the board comes back"
+say "exactly as it was - no rootfs rollback is needed or possible."
+say "Do NOT rely on restore_set/: it holds ZTE firmware image data"
+say "('ZXIC 133 UNI V2.0.0', 'U-Boot uImage source file for 133 project'), not a"
+say "filesystem - there is no jffs2 magic anywhere in its 241 MB."

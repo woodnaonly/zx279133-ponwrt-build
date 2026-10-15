@@ -37,6 +37,11 @@ env:
   IW_BRANCH: sr1010-zx279133
   KERNEL_URL: https://github.com/cnjn/linux-mainline-zte-zxslc-sr1010
   KERNEL_BRANCH: build
+  # Single source of truth for the kernel version. It used to be spelled out in eight
+  # places across three workflow files plus the release text, so a version bump meant
+  # editing ten strings and missing one produced a build that used one tree and announced
+  # another. Everything that names a version now reads this.
+  KVER: '6.18.38'
 
 permissions: write-all
 
@@ -92,12 +97,12 @@ jobs:
         run: |
           git clone --depth 1 -b "$IW_BRANCH" "$IW_URL" openwrt
           git clone --branch "$KERNEL_BRANCH" --recurse-submodules --shallow-submodules "$KERNEL_URL" linux-mainline-zte-zxslc-sr1010
-          test -f linux-mainline-zte-zxslc-sr1010/linux-6.18.38/arch/arm64/boot/dts/zte/zx279133.dtsi
+          test -f linux-mainline-zte-zxslc-sr1010/linux-$KVER/arch/arm64/boot/dts/zte/zx279133.dtsi
 
       - name: Apply SK-D840N overlays
         if: steps.pick.outputs.run == 'true'
         run: |
-          KT=linux-mainline-zte-zxslc-sr1010/linux-6.18.38
+          KT=linux-mainline-zte-zxslc-sr1010/linux-$KVER
           cp -a kernel-overlays/. "$KT"/
           cp -a overlays/. openwrt/
           # board dts must be reachable and the SoC dtsi unmodified
@@ -110,6 +115,27 @@ jobs:
           NET=openwrt/target/linux/zte/zx279133/base-files/etc/board.d/02_network
           grep -q 'zte,zx279133-sr1010' "$NET"
           grep -q 'skyworth,sk-d840n' "$NET"
+          # The lan address has to be stated in the file, not left to config_generate, whose
+          # default for lan is 192.168.1.1. dropbear ships `option Interface 'lan'` and binds to
+          # the addresses on that interface, so the default would decide the one address ssh
+          # answers on - and it is also the address the owner's own router holds on the LAN this
+          # PC is attached to, so nothing that pings can tell the two apart. Assert the literal
+          # here so an edit that drops it fails the build instead of shipping a board that is up
+          # and unreachable.
+          grep -q 'ipaddr "192\.168\.9\.1"' "$NET" || {
+            echo "::error::02_network no longer pins lan to 192.168.9.1"; exit 1; }
+          # and it must still be LF: the call spans a backslash continuation, and a CRLF checkout
+          # turns the arguments into empties on the device (verified - the four options come
+          # through empty). board.d files have no .sh suffix, so .gitattributes' *.sh rule does
+          # not cover them; this is the belt to that braces.
+          #
+          # grep -U with a $'\r' is NOT portable here and silently matches nothing - it was
+          # tried and reported the CRLF copy as clean. Counting CR bytes is unambiguous:
+          # a pure-LF file has exactly zero.
+          CRCOUNT=$(tr -cd '\r' < "$NET" | wc -c)
+          if [ "$CRCOUNT" != 0 ]; then
+            echo "::error::02_network carries $CRCOUNT CR byte(s) - it is a shell script and CRLF breaks its continuation"; exit 1
+          fi
           # trial-files are RAM-image scaffolding only: a released flashed rootfs
           # must not carry a script that reboots the board five minutes after boot.
           # They make the trial readable from one wire - an address on every netdev
@@ -166,6 +192,96 @@ jobs:
             dtc -I dtb -O dts /tmp/zx279133-sk-d840n.dts.dtb | grep -B1 -A2 'label = "root"' || true
           fi
 
+          # Content gate on the compiled blob. The dtc run above only proves the DTS
+          # compiles; it does not prove the board comes up reachable. These are the
+          # properties that decide that, and each one is a way this board has already
+          # been unreachable in the field:
+          #
+          #   - the ethernet node enabled: with it disabled the kernel registers no
+          #     port, the lan bridge has nothing to bridge, and 02_network's explicit
+          #     `device "eth0"` has nothing to attach to.
+          #   - the mdio bus the PHY hangs off enabled, for the same reason one step
+          #     further out.
+          #   - `root` at partition index 5: the U-Boot env on this board hardcodes
+          #     `root=/dev/mtdblock5` and carries no `mtdparts=` on the cmdline, so
+          #     this DT's partition list is the only thing that decides what mtdblock5
+          #     *is*. Add or drop a partition above root and the board mounts the
+          #     wrong region with no error anyone would notice.
+          #   - `scratch`: our last MiB, split out of root. Its presence is also the
+          #     marker that this blob is the mainline layout and not the vendor one,
+          #     which is how the kexec rounds proved which dtb was live.
+          if [ -f /tmp/zx279133-sk-d840n.dts.dtb ]; then
+            dtc -I dtb -O dts -o /tmp/sk-d840n-gate.dts /tmp/zx279133-sk-d840n.dts.dtb
+            # dtc writes a string LIST as ONE quoted run with a literal backslash-zero
+            # between entries:
+            #     compatible = "skyworth,sk-d840n\0zte,zx279133";
+            # The root-compatible assertion below looks for
+            #     compatible = "skyworth,sk-d840n"
+            # complete with its closing quote, and that spelling does not contain one. On
+            # the real compiled blob the assertion therefore fails, `need` returns 1, and
+            # line "[ $rc -eq 0 ] || exit 1" kills this step - which runs before Compile,
+            # so the whole run dies having produced nothing.
+            #
+            # It never fired only because this gate is newer than the last release, so it
+            # had not run yet. Normalise the backslash-zero form into the comma form once,
+            # and run every assertion against that. Single-string properties are untouched
+            # by the substitution.
+            sed 's/\\0/", "/g' /tmp/sk-d840n-gate.dts >/tmp/sk-d840n-gate.norm.dts
+            # print one named node so a failure names the node, not a line number.
+            # NOTE: this matches the FIRST node whose header matches, so it must
+            # not be used to look for a property repeated across siblings (every
+            # partition@ would resolve to partition@0). Partitions are handled by
+            # index below instead.
+            node_block() {
+              awk -v pat="$1" '$0 ~ pat {f=1} f{print} f && /^[[:space:]]*};/ {exit}' /tmp/sk-d840n-gate.norm.dts
+            }
+            need() { # $1=label $2=pattern $3=node-header-regex
+              if node_block "$3" | grep -qE "$2"; then
+                echo "ok   $1"
+              else
+                echo "::error::$1 -- expected a node matching /$3/ to contain /$2/"
+                node_block "$3" | sed 's/^/      /'
+                return 1
+              fi
+            }
+            rc=0
+            # root compatible: first entry is what board_detect/02_sysinfo turn into
+            # board_name, which fwtool.sh then compares against the image name. It is a
+            # list, and only the FIRST entry is the board name.
+            need "dtb root compatible names this board" \
+                 'compatible = "skyworth,sk-d840n"' '^/ \{' || rc=1
+            need "ethernet node is enabled" \
+                 'status = "okay"' 'ethernet@[0-9a-f]+ \{' || rc=1
+            need "ethernet node binds the nppt driver" \
+                 'compatible = "zte,zx279133-nppt"' 'ethernet@[0-9a-f]+ \{' || rc=1
+            need "mdio bus is enabled" \
+                 'status = "okay"' 'mdio@[0-9a-f]+ \{' || rc=1
+            # "enabled" alone is not a discriminating check: the vendor dtb also
+            # has enabled mdio nodes. It is the *mainline* compatible that shows
+            # this node is the one the mainline driver will bind.
+            need "mdio bus binds the mainline mdio driver" \
+                 'compatible = "zte,zx279133-mdio"' 'mdio@[0-9a-f]+ \{' || rc=1
+            # Partition order, asserted by position rather than by label presence.
+            # The U-Boot env on this board hardcodes `root=/dev/mtdblock5` and has
+            # no `mtdparts=` on the cmdline, so this DT's partition list alone
+            # decides what mtdblock5 is. mtd1..mtd5 map to entries 1..5 here.
+            LABELS=$(awk '/^[[:space:]]*partition@[0-9a-f]+ \{/ {inp=1; next}
+                             inp && /label = / {gsub(/^.*label = /, ""); gsub(/;.*$/, ""); print; inp=0}
+                             inp && /^[[:space:]]*\};/ {inp=0}' /tmp/sk-d840n-gate.norm.dts)
+            echo "     partitions in order: $(echo "$LABELS" | tr '\n' ' ')"
+            WANT='"boot" "kernel" "dtb" "parameter tags" "root" "scratch"'
+            GOT=$(echo "$LABELS" | tr '\n' ' ')
+            if [ "$(echo "$GOT" | sed 's/[[:space:]]*$//')" = "$WANT" ]; then
+              echo "ok   partition order matches, so mtdblock5 == root"
+            else
+              echo "::error::partition order is wrong - U-Boot hardcodes root=/dev/mtdblock5"
+              echo "::error::  want: $WANT"
+              echo "::error::  got : $GOT"
+              rc=1
+            fi
+            [ "$rc" -eq 0 ] || exit 1
+          fi
+
       - name: Cache dl/
         if: steps.pick.outputs.run == 'true' && inputs.clean_cache != 'true'
         uses: actions/cache@v4
@@ -186,7 +302,7 @@ jobs:
         run: |
           sh scripts/configure-sk-d840n.sh \
             "$GITHUB_WORKSPACE/openwrt" \
-            "$GITHUB_WORKSPACE/linux-mainline-zte-zxslc-sr1010/linux-6.18.38" \
+            "$GITHUB_WORKSPACE/linux-mainline-zte-zxslc-sr1010/linux-$KVER" \
             "${{ matrix.mode }}"
 
       - name: Download packages
@@ -206,8 +322,13 @@ jobs:
         if: steps.pick.outputs.run == 'true'
         run: |
           set -e
-          KC=$(ls -d openwrt/build_dir/target-*/linux-zte_zx279133/linux-*/.config | head -1)
-          [ -n "$KC" ] || { echo "no kernel .config found under build_dir" >&2; ls -d openwrt/build_dir/target-*/linux-* 2>/dev/null; exit 1; }
+          # Pinned to $KVER for the same reason the packaging step is: this reads the merged
+          # .config of the kernel that is actually shipped, and a bare `linux-*` glob would
+          # check whatever version directory happened to be there. It is also the one place
+          # where picking wrong would be invisible - a stale config would still answer every
+          # one of the seven `grep -qx` questions below, just about a kernel nobody ships.
+          KC=$( { ls -d openwrt/build_dir/target-*/linux-zte_zx279133/linux-$KVER/.config 2>/dev/null || true; } | head -1 )
+          [ -n "$KC" ] || { echo "::error::no .config for linux-$KVER (KVER=$KVER) under build_dir; what is there:"; ls -d openwrt/build_dir/target-*/linux-* 2>&1 || true; exit 1; }
           echo "kernel config: $KC"
           # Editing target/linux/.../config-6.18 is the supported way to reach the kernel
           # build, but only the merged result proves it worked - a symbol name that does
@@ -259,19 +380,42 @@ jobs:
         if: steps.pick.outputs.run == 'true' && matrix.mode == 'flash'
         run: |
           set -e
-          KT=$(ls -d openwrt/build_dir/target-*/linux-zte_zx279133/linux-*)
-          # `set -e` aborts on an assignment whose command substitution fails, so
-          # the probe must not be the thing that ends the step.
+          # Pinned to $KVER, not a bare `linux-*` glob. The glob matched whatever the build
+          # happened to leave in that directory, so a stale or unexpected version directory
+          # would be packaged and gated while the release text still named $KVER - the same
+          # shape as the dtb one ("check something other than what you ship"), one level up.
+          # The `|| true` lives inside the substitution on purpose: under `set -euo pipefail`
+          # a failed `ls` would end the step before the check below could say anything.
+          KT=$( { ls -d openwrt/build_dir/target-*/linux-zte_zx279133/linux-$KVER 2>/dev/null || true; } | head -1 )
+          test -n "$KT" || { echo "::error::no build dir for linux-$KVER (KVER=$KVER); what is there:"; ls -d openwrt/build_dir/target-*/linux-zte_zx279133/* 2>&1 || true; exit 1; }
+          echo "KT: $KT"
+          # Same trap as the KT line above, one line down: `set -e` aborts on an assignment
+          # whose command substitution fails, so the probe for mkimage must not be the thing
+          # that ends the step. This one installs the tool instead, which is deliberate.
           MKIMAGE=$(ls openwrt/staging_dir/host/bin/mkimage 2>/dev/null || command -v mkimage || true)
           [ -n "$MKIMAGE" ] || { sudo apt-get -qq update && sudo apt-get -qq install u-boot-tools; MKIMAGE=mkimage; }
           IMG="$KT/arch/arm64/boot/Image.gz"
           [ -f "$IMG" ] || { gzip -9nc "$KT/arch/arm64/boot/Image" > "$KT/arch/arm64/boot/Image.gz"; }
           test -f "$IMG"
-          # the dtb is where the kernel build left it; OpenWrt also stages a copy
-          # named image-<dts>.dtb next to the kernel
-          DTB=$(find "$KT/arch/arm64/boot/dts/zte" openwrt/build_dir -name '*sk-d840n*.dtb' 2>/dev/null | head -1)
+          # the dtb is where the kernel build left it. OpenWrt also stages a copy named
+          # image-<dts>.dtb under build_dir, and OpenWrt patches dtbs on the way to an
+          # image, so more than one file can match. The old line took whichever `find`
+          # happened to list first, which is an accident of argument order rather than a
+          # stated choice - and a staged copy that differs from the kernel's would then ship
+          # silently. Pick the kernel build explicitly and announce any divergence.
+          DTB=$(find "$KT/arch/arm64/boot/dts/zte" -name '*sk-d840n*.dtb' | head -1)
           test -n "$DTB" || { echo "no sk-d840n dtb produced" >&2; ls -l "$KT/arch/arm64/boot/dts/zte"; exit 1; }
           echo "DTB: $DTB"
+          echo "DTB: $(sha256sum "$DTB" | cut -d' ' -f1)"
+          for other in $(find openwrt/build_dir -name '*sk-d840n*.dtb' 2>/dev/null); do
+            if cmp -s "$DTB" "$other"; then
+              echo "     staged copy identical: $other"
+            else
+              echo "::warning::staged copy differs from the kernel build:"
+              echo "::warning::  $other  ($(sha256sum "$other" | cut -d' ' -f1))"
+              echo "::warning::  shipping the kernel build ($DTB); confirm that is the intent"
+            fi
+          done
           # include/image.mk emits $(prefix)-$(fstype)-rootfs.jffs2; the SPI-NAND
           # erase block on this board is 128 KiB, so take the 128k variant.
           RS=$(find openwrt/bin/targets/zte/zx279133 -name '*jffs2-128k-rootfs.jffs2' | head -1)
@@ -280,7 +424,7 @@ jobs:
           echo "rootfs: $RS"
           # bootargs from the board's env load a legacy uImage at the FIT load address
           "$MKIMAGE" -A arm64 -O linux -T kernel -C gzip -a 0x80200000 -e 0x80200000 \
-            -n 'OpenWrt mainline 6.18.38 sk-d840n' -d "$IMG" flash-uImage
+            -n "OpenWrt mainline $KVER sk-d840n" -d "$IMG" flash-uImage
           cp "$DTB" flash-dtb.bin
           cp "$RS" flash-rootfs.jffs2
           # The same three parts as one sysupgrade tar, for upgrading from inside a
@@ -293,11 +437,229 @@ jobs:
           cp "$SU" flash-sysupgrade.bin
           cp templates/flash-sk-d840n.sh flash-sk-d840n.sh
           ls -l flash-uImage flash-dtb.bin flash-rootfs.jffs2 flash-sysupgrade.bin
+          # Manifest travels INSIDE the tarball, not just as a release attachment: the
+          # flasher runs on the board, and it can only check integrity against a manifest
+          # that came across with the images. `mtd verify` cannot do this - it confirms
+          # whatever was just written, so a truncated image is programmed and reported as
+          # success.
+          ( cd . && sha256sum flash-uImage flash-dtb.bin flash-rootfs.jffs2 \
+                            flash-sysupgrade.bin flash-sk-d840n.sh > sha256sums-release )
+          cat sha256sums-release
+          # prove the manifest describes these exact files before shipping it
+          sha256sum -c sha256sums-release
           # one tarball so the RAM trial only has to tftp a single file
           mkdir -p flash-set
-          cp flash-uImage flash-dtb.bin flash-rootfs.jffs2 flash-sysupgrade.bin flash-sk-d840n.sh flash-set/
+          cp flash-uImage flash-dtb.bin flash-rootfs.jffs2 flash-sysupgrade.bin \
+             flash-sk-d840n.sh sha256sums-release flash-set/
           tar czf flash-set.tgz -C flash-set .
+          # and prove the tarball carries both the images and the manifest that covers them
+          tar tzf flash-set.tgz | sort
+          rm -rf flash-set-verify && mkdir flash-set-verify
+          tar xzf flash-set.tgz -C flash-set-verify
+          ( cd flash-set-verify && sha256sum -c sha256sums-release )
+          rm -rf flash-set-verify
           ls -l flash-set.tgz
+
+      - name: "Gate: every dtb compatible has a driver in this kernel"
+        if: steps.pick.outputs.run == 'true' && matrix.mode == 'flash'
+        run: |
+          set -euo pipefail
+          # Pinned to $KVER, not a bare `linux-*` glob. The glob matched whatever the build
+          # happened to leave in that directory, so a stale or unexpected version directory
+          # would be packaged and gated while the release text still named $KVER - the same
+          # shape as the dtb one ("check something other than what you ship"), one level up.
+          # The `|| true` lives inside the substitution on purpose: under `set -euo pipefail`
+          # a failed `ls` would end the step before the check below could say anything.
+          KT=$( { ls -d openwrt/build_dir/target-*/linux-zte_zx279133/linux-$KVER 2>/dev/null || true; } | head -1 )
+          test -n "$KT" || { echo "::error::no build dir for linux-$KVER (KVER=$KVER); what is there:"; ls -d openwrt/build_dir/target-*/linux-zte_zx279133/* 2>&1 || true; exit 1; }
+          echo "KT: $KT"
+          IMG="$KT/arch/arm64/boot/Image.gz"
+          [ -f "$IMG" ] || IMG="$KT/arch/arm64/boot/Image"
+          test -f "$IMG"
+          # Check the artifact that will actually ship.
+          #
+          # "Package flash images" runs immediately before this step and leaves
+          # flash-dtb.bin in the working directory - that byte stream is what reaches the
+          # board. OpenWrt also stages its own copy under build_dir, and OpenWrt patches
+          # dtbs on its way to an image, so "some file whose name matches *sk-d840n*.dtb" is
+          # not the same claim as "the dtb we ship". A gate that inspects one copy while the
+          # release carries another is exactly the kind of thing that passes and means
+          # nothing. Prefer the shipped file; fall back to the kernel tree only in initramfs
+          # mode, where no flash-dtb.bin exists.
+          DTB=
+          if [ -f flash-dtb.bin ]; then
+            DTB=flash-dtb.bin
+          else
+            DTB=$(find "$KT/arch/arm64/boot/dts/zte" -name '*sk-d840n*.dtb' 2>/dev/null | head -1)
+          fi
+          test -n "$DTB" || { echo "::error::no sk-d840n dtb to check"; exit 1; }
+          echo "kernel: $IMG"
+          echo "dtb   : $DTB  ($(sha256sum "$DTB" | cut -c1-16)...)"
+
+          # A device tree node whose `compatible` names a driver that was not built is
+          # SKIPPED SILENTLY by the kernel: the board boots, logs nothing wrong, and
+          # simply has no network port. The dtb content gate above only proves the DTS
+          # compiles, and the config gate above only proves some CONFIG symbols are
+          # set - neither can see a compatible with no driver behind it. This one can.
+          #
+          # Verified before being added, against the real pairing and a wrong one:
+          #   our dtb + this kernel      -> pass (25 compatibles accounted for)
+          #   vendor dtb + this kernel   -> fail, naming the drivers that are absent
+          # The vendor run is what makes this a gate rather than decoration: it is
+          # rejected for zte,zx279133-pon, -se-ddr and -woe-ddr.
+          WORK=$(mktemp -d); trap 'rm -rf "$WORK"' EXIT
+          dtc -I dtb -O dts -o "$WORK/dts" "$DTB"
+
+          # Pipe-separated, never tab: this is a YAML block scalar.
+          awk '
+            function flush() {
+              if (name != "") printf "%s|%s|%s|%s\n", name, node, (fb != "" ? fb : "-"), st
+              name = ""; fb = ""
+            }
+            /^[[:space:]]*[A-Za-z0-9_,@-]+[[:space:]]*\{/ {
+              line = $0; sub(/^[[:space:]]*/, "", line); sub(/[[:space:]]*\{.*$/, "", line)
+              node = line; st = "-"
+            }
+            /^[[:space:]]*compatible[[:space:]]*=/ {
+              # dtc writes a string LIST as ONE quoted run with a literal backslash-zero
+              # between entries:
+              #     compatible = "zte,zx279133-topcrm\0syscon";
+              # Splitting the line on `"` alone therefore yields the single token
+              # "zte,zx279133-topcrm\0syscon", which matches no zte,zx279133-* pattern,
+              # and the node was dropped from the scan without a word. Every node whose
+              # compatible carries a fallback is exactly such a node, so on this board
+              # that was pon-route, idm-cci, wdt-reset, topcrm, lsp-clk, sfc, efuse and
+              # uart - the gate was not looking at a third of the tree, and the syscon
+              # branch below could not be reached from a real build.
+              #
+              # This was invisible for three reasons. The scan still found 25-something
+              # rows, so the "the scan found nothing - it is broken, not clean" guard
+              # never fired; the offline rehearsal fed this text rendered as "a", "b",
+              # a spelling dtc does not emit; and the whole step did not parse as shell
+              # at all, so none of this was ever reached in a real build.
+              #
+              # DO NOT write an apostrophe anywhere inside this awk program. It is wrapped
+              # in shell single quotes, so the phrase "the gate - own rehearsal" below,
+              # had it kept its apostrophe, would have closed the quote 53 lines early,
+              # and bash would have blamed an innocent gsub() 24 lines further down.
+              # `bash -n` over every run: block is now part of the offline suite
+              # (test_workflow_shell_parses.sh) so this cannot come back.
+              #
+              # Normalise the backslash-zero form into the comma form first, so both
+              # spellings reach the same loop.
+              line = $0; gsub(/\\0/, "\", \"", line)
+              n = split(line, parts, "\"")
+              generic = ""
+              for (i = 2; i <= n; i += 2) {
+                q = parts[i]
+                if (q ~ /^zte,zx279133-[a-z0-9-]+$/) { flush(); name = q }
+                else if (i < n) { generic = q }
+              }
+              fb = generic
+            }
+            /^[[:space:]]*status[[:space:]]*=/ {
+              s = $0; sub(/^[^"]*"/, "", s); sub(/".*$/, "", s); st = s
+            }
+            /^[[:space:]]*\};/ { flush() }
+            END { flush() }
+          ' "$WORK/dts" | LC_ALL=C sort -u >"$WORK/compat.txt"
+
+          total=$(wc -l <"$WORK/compat.txt")
+          echo "     SoC compatibles in the compiled dtb: $total"
+          if [ "$total" -eq 0 ]; then
+            echo "::error::the scan found no zte,zx279133-* compatibles - it is broken, not clean"
+            exit 1
+          fi
+
+          # Whole-string match, never substring. These live NUL-terminated in the
+          # kernel, so a substring search reports zte,zx279133-pon as "present" only
+          # because zte,zx279133-pon-serdes is. Verified: exact=False, substring=True.
+          case "$(od -An -tx1 -N2 "$IMG" | tr -d ' \n')" in
+          1f8b) gzip -dc "$IMG" >"$WORK/img.raw" ;;
+          *)    cat "$IMG" >"$WORK/img.raw" ;;
+          esac
+          test -s "$WORK/img.raw"
+          LC_ALL=C tr -c '[:print:]' '\n' <"$WORK/img.raw" | grep -aE '.{3,}' \
+            | LC_ALL=C sort -u >"$WORK/strings.txt"
+          has_driver() { LC_ALL=C grep -Fxq -e "$1" "$WORK/strings.txt"; }
+
+          rc=0
+          while IFS='|' read -r compat node fb status; do
+            [ -n "$compat" ] || continue
+            if [ "$status" = "disabled" ]; then
+              echo "ok   $compat  ($node is disabled - never probed, driver not needed)"
+              continue
+            fi
+            if [ -n "$fb" ] && [ "$fb" != "-" ]; then
+              # This branch used to print "ok ... falls back to X" and stop, so a fallback with
+              # no driver behind it looked exactly like a working one. The check was then
+              # rewritten to ask whether the fallback has a driver - and it was still wrong,
+              # because `has_driver syscon` can never succeed here: this kernel has no
+              # standalone "syscon" token. Its drivers/mfd/syscon.c has no of_device_id table
+              # and no platform driver at all; it registers on demand -
+              #     syscon_node_to_regmap(np) -> device_node_get_regmap(np,
+              #         of_device_is_compatible(np, "syscon"), true)
+              # - so zte,zx279133-idm-cci, -wdt-reset and -pon-route all get a regmap at lookup
+              # time, because every one of those nodes carries "syscon" as its fallback
+              # compatible. A node-to-driver table cannot see that, and neither can a string
+              # search. The substring test below is therefore about the *syscon core being
+              # compiled in*, which is the thing that actually decides.
+              case "$fb" in
+              syscon)
+                if grep -Fq -e 'regmap init failed' "$WORK/strings.txt" \
+                   && grep -Fxq -e '__regmap_init_mmio_clk' "$WORK/strings.txt"; then
+                  echo "ok   $compat  (falls back to 'syscon', and this tree's syscon core is"
+                  echo "ok     built and self-registers for any node compatible with syscon)"
+                else
+                  echo "note $compat  falls back to 'syscon', but drivers/mfd/syscon.c does not look"
+                  echo "note   built in this kernel - the lookup would fail at probe time"
+                  echo "note   Not fatal. The gate cannot tell whether the driver requires it."
+                fi
+                ;;
+              *)
+                if has_driver "$fb"; then
+                  echo "ok   $compat  (falls back to '$fb', which does have a driver)"
+                else
+                  # FATAL, and it was a note until 2026-10-15. Measured first: this board's
+                  # three non-syscon fallbacks - fixed-layout on calibration@44,
+                  # fixed-partitions on partition@0, arm,primecell on serial@10d0d000 - all
+                  # have drivers, so this rejects nothing today. It is a guard, not a fix.
+                  # What it removes is an asymmetry: a missing PRIMARY compatible was
+                  # already fatal, and a missing FALLBACK produces the same outcome - an
+                  # enabled node gets probed, matches nothing, binds to nothing, and the
+                  # board boots on without a word. "There is a fallback" is not a reason to
+                  # let a dead node through quietly.
+                  echo "::error::$compat falls back to '$fb', which has NO driver in this kernel"
+                  echo "::error::   $node is enabled, so it will be probed and bind to nothing."
+                  echo "::error::   Same outcome as a driver-less compatible, which is already"
+                  echo "::error::   fatal above. If this is a false positive from has_driver"
+                  echo "::error::   - it matches kernel strings whole-line, and the linker can"
+                  echo "::error::   tail-merge them - fix the matching, do not weaken this branch."
+                  rc=1
+                fi
+                ;;
+              esac
+              continue
+            fi
+            if has_driver "$compat"; then
+              echo "ok   $compat  (driver string present in the kernel)"
+            else
+              echo "::error::$compat is used by $node but no driver for it is in the kernel"
+              echo "::error::   the kernel skips such a node silently - the board would boot without it"
+              rc=1
+            fi
+          done <"$WORK/compat.txt"
+
+          # Named on its own because it is the one that decides whether this board has
+          # a usable network port at all, and because 02_network hardcodes eth0 to it.
+          if has_driver "zte,zx279133-nppt"; then
+            echo "ok   zte,zx279133-nppt present - the dtb's ethernet node has a driver"
+          else
+            echo "::error::zte,zx279133-nppt is not in the kernel - the board would boot with no network port"
+            rc=1
+          fi
+          echo "     gate verdict: $rc"
+          exit "$rc"
 
       - name: Package initramfs image
         if: steps.pick.outputs.run == 'true' && matrix.mode == 'initramfs'
@@ -321,8 +683,9 @@ jobs:
           # PC side - tools/getkexec.sh assembles trial-kx.tgz from Alpine's musl
           # aarch64 kexec-tools, which was verified to run on this board.
           if [ "${{ matrix.mode }}" = initramfs ]; then
-            KT=$(ls -d openwrt/build_dir/target-*/linux-zte_zx279133/linux-* | head -1)
-            test -n "$KT" || { echo "no kernel build dir" >&2; exit 1; }
+            KT=$( { ls -d openwrt/build_dir/target-*/linux-zte_zx279133/linux-$KVER 2>/dev/null || true; } | head -1 )
+            test -n "$KT" || { echo "::error::no build dir for linux-$KVER (KVER=$KVER)" >&2; exit 1; }
+            echo "KT: $KT"
             # OpenWrt builds the initramfs into Image, so this file *is* the RAM payload
             test -f "$KT/arch/arm64/boot/Image" || { echo "no Image in $KT" >&2; exit 1; }
             ls -l "$KT/arch/arm64/boot/Image"
@@ -381,6 +744,7 @@ jobs:
             flash-set.tgz
             sk-d840n-initramfs.itb
             sha256sums
+            sha256sums-release
             trial-set.tgz
             trial
 
@@ -389,6 +753,17 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: skd840n_${{ matrix.mode }}_${{ github.run_number }}_${{ github.run_id }}
+          # The version below is a literal, not $KVER, because GitHub does not expose the
+          # `env` context inside a step's `with:` values - `${{ env.KVER }}` written here
+          # would render as an empty string, and the release would be titled "mainline ".
+          # test_kernel_version_single_source.py asserts this literal equals KVER, so a
+          # version bump cannot leave the two apart. Everything that runs in a shell - every
+          # `test -f`, every `cp`, every build-dir lookup - does read $KVER.
+          #
+          # This note is a YAML comment ON PURPOSE, one line above the block. A `#` line
+          # INSIDE `body: |` is not a comment: it is Markdown that gets published with the
+          # release, and `${{ ... }}` inside it is still evaluated. Implementation notes about
+          # the note do not belong in the document a person reads to decide what to do.
           body: |
             ## SK-D840N（ZX279133，mainline 6.18.38）— ${{ matrix.mode }}
             - ImmortalWrt `cnjn/ImmortalWrt@sr1010-zx279133` + `cnjn/linux-mainline-zte-zxslc-sr1010@build`
@@ -399,7 +774,33 @@ jobs:
             - `flash-sysupgrade.bin`：同一套 kernel/dtb/root 打成的 sysupgrade tar，可在运行中的系统里用
               LuCI 或 `sysupgrade -n` 刷入（设备侧 `platform.sh` 按分区标签写入，仍然 kernel 最后）。
               注意：换了 kernel 的 sysupgrade 若内核起不来，没有串口就只能上编程器 —— 先用 kexec 试驾
-            - LAN 口用的还是 SR1010 的 NPPT/ZX279051 路径；内置 9132 交换没有主线驱动，PON 侧主线也没有驱动
+            - LAN 口走 SR1010 的 NPPT 路径，PHY 是 **RTL8226B**（Realtek）。板级 dts 里那个节点
+              就叫 `rtl8226b: ethernet-phy@5`，`max-speed = <2500>`，并且**故意不给 `compatible`**。
+              原因在 dts 的注释里：SR1010 那个节点写的是
+              `zx279051: ethernet-phy@1 { compatible = "ethernet-phy-id0000.84b9"; }`，
+              而** PHY 节点上的 compatible 会覆盖按 ID 的匹配**——第一次主线试车就是这么把
+              ZX279051 的驱动绑到了一颗 Realtek 芯片上，还往里面写了 ZX279051 的寄存器。
+              不给 compatible 时，phylib 才会拿芯片自己报的 ID 去匹配 `CONFIG_REALTEK_PHY`。
+              内核里编进的是 **`CONFIG_REALTEK_PHY=y`**（CI 的 PHY 门查的就是这个），
+              **不是** `CONFIG_ZX279051_PHY`：已构建内核里没有任何独立的 `zx279051` token，
+              只有 `tzx279051` 这种内核字符串表 tail-merge 的残渣。
+              `02_network` 把 lan 绑在 eth0 上，地址固定 192.168.9.1。
+              **关于 PON，修正一句旧说法**：内核不是上游 torvalds/linux，而是
+              `CONFIG_EXTERNAL_KERNEL_TREE` 指向的 prepared ZX279133 树
+              （`target/linux/zte/Makefile` 里不设它就直接报错）。
+              那棵树里的 **`ZTE_ZX279133_ETH` 就是 PON MAC**——它的 Kconfig 硬依赖
+              `PHY_ZX279133_PON_SERDES`，dtb 节点 `zte,zx279133-nppt` 挂在 pon_serdes/uni_serdes 上、
+              `phy-mode = "2500base-x"`、带 PON MAC 时钟；它在 probe 时
+              `request_firmware("zte/zx279133/mcode_intel.bin")` 加载中兴自己的 PPU 微码
+              （树里那份 103456 B，CRC32 `0xef1d7647`，正好是驱动自己判定标定的那两个值）。
+              `zte,pon-route` / `zte,idm-cci` 是**必需**属性，但能解析：这棵树的
+              `drivers/mfd/syscon.c` 没有匹配表、查找时按需注册，凡 compatible 带 `"syscon"` 的节点都能拿到 regmap。
+              **仍未证实**：G.984.1 的 PLOAM/GEM/T-CONT/OMCI **状态机不在这棵树里**——
+              已构建内核中 `PLOAM`/`Op State Machine`/`p_o7_enable_sn_msg`/`Serena` 零命中，
+              而厂商 `zte_xgpon.ko` 里逐字带着这些（该模块在 4.19 上跑 ITU 状态机）。
+              也就是说这棵树实现的是 **PON 数据通路**，不是 PON。
+              微码里的 packet-type / port-flow 表是否自带 GEM 分流，从头部读不出来；这需要一次起内核看日志。
+              运行时网口会不会出现，同样只能在板子上看 `/sys/class/net`。
           files: |
             flash-uImage
             flash-dtb.bin
@@ -407,6 +808,7 @@ jobs:
             flash-sysupgrade.bin
             sk-d840n-initramfs.itb
             sha256sums
+            sha256sums-release
             flash-set.tgz
             trial-set.tgz
             trial/*

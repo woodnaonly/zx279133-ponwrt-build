@@ -19,6 +19,8 @@ env:
   IW_BRANCH: sr1010-zx279133
   KERNEL_URL: https://github.com/cnjn/linux-mainline-zte-zxslc-sr1010
   KERNEL_BRANCH: build
+  # Same submodule version as build-sk-d840n.yml; see the note there.
+  KVER: '6.18.38'
 
 jobs:
   probe:
@@ -43,7 +45,7 @@ jobs:
 
       - name: Apply overlays
         run: |
-          cp -a kernel-overlays/. linux-mainline-zte-zxslc-sr1010/linux-6.18.38/
+          cp -a kernel-overlays/. linux-mainline-zte-zxslc-sr1010/linux-$KVER/
           cp -a overlays/. openwrt/
 
       - name: What pins the rootfs symbols
@@ -76,7 +78,7 @@ jobs:
         run: |
           sh scripts/configure-sk-d840n.sh \
             "$GITHUB_WORKSPACE/openwrt" \
-            "$GITHUB_WORKSPACE/linux-mainline-zte-zxslc-sr1010/linux-6.18.38" flash
+            "$GITHUB_WORKSPACE/linux-mainline-zte-zxslc-sr1010/linux-$KVER" flash
           cd openwrt
           echo "### resolved rootfs symbols (flash)"
           grep -nE 'CONFIG_TARGET_ROOTFS|CONFIG_TARGET_IMAGES|JFFS2' .config || echo "NO rootfs symbols at all"
@@ -85,7 +87,7 @@ jobs:
         run: |
           sh scripts/configure-sk-d840n.sh \
             "$GITHUB_WORKSPACE/openwrt" \
-            "$GITHUB_WORKSPACE/linux-mainline-zte-zxslc-sr1010/linux-6.18.38" initramfs
+            "$GITHUB_WORKSPACE/linux-mainline-zte-zxslc-sr1010/linux-$KVER" initramfs
           cd openwrt
           echo "### resolved rootfs symbols (initramfs)"
           grep -nE 'CONFIG_TARGET_ROOTFS|CONFIG_TARGET_IMAGES|JFFS2' .config || echo "NO rootfs symbols at all"

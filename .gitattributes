@@ -2,3 +2,11 @@
 *.yml text eol=lf
 *.config text eol=lf
 *.md text eol=lf
+
+# Files under the overlay that are shell scripts but have no .sh suffix. 02_network ends in a
+# line continuation (`ucidef_set_interface ... \`), so a CRLF checkout makes the device run
+# "... <CR>" as an argument and the whole lan definition is lost - on a board whose only
+# reachable port is eth0, that is an image with no address at all.
+overlays/**/etc/board.d/* text eol=lf
+overlays/**/lib/upgrade/platform.sh text eol=lf
+overlays/**/etc/rc.d/* text eol=lf

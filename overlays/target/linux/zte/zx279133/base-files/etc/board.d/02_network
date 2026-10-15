@@ -20,7 +20,27 @@ zte,zx279133-sr1010)
 	ucidef_set_interfaces_lan_wan "lan1 lan2 lan3 lan4" "eth0"
 	;;
 skyworth,sk-d840n)
-	ucidef_set_interface_lan "eth0"
+	# The address is spelled out here rather than left to config_generate's default, and it
+	# has to be 192.168.9.1. Confirmed by extracting the image that is actually built
+	# (staging/trial/flash-rootfs.jffs2, read with jefferson):
+	#   /etc/config/dropbear   -> ships "option Interface 'lan'" (the OpenWrt package default;
+	#                              nothing in this overlay or in target/linux/zte overrides it)
+	#   /etc/init.d/dropbear   -> present, so the daemon really starts
+	#   /etc/config/network    -> ABSENT, i.e. generated on first boot by config_generate
+	# and dropbear.init binds an Interface to the *IP addresses on* it (network_get_ipaddrs_all),
+	# not to a netdev. So the address below decides the only address ssh will answer on.
+	#
+	# config_generate would supply 192.168.1.1 for lan
+	# (base-files/files/bin/config_generate: lan) ipad=${ipaddr:-"192.168.1.1"}).
+	# That is wrong twice over here:
+	#   - every tool in this project waits on 192.168.9.x, so the board would be reported dead
+	#     while it is up and serving ssh
+	#   - the owner's own router answers 192.168.1.1 on the 192.168.1.0/24 this PC is also on,
+	#     so that address cannot be told apart from the LAN's gateway by anything that pings it
+	# 192.168.9.1 is the address the installed vendor image already uses for its lan bridge, so
+	# this also keeps the rollback target and the flashed system on one address.
+	ucidef_set_interface "lan" device "eth0" protocol "static" \
+		ipaddr "192.168.9.1" netmask "255.255.255.0"
 	;;
 *)
 	echo "Unsupported hardware. Network interfaces not initialized"
