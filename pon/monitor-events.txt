@@ -1,0 +1,50 @@
+# Monitor event vocabulary, as far as it can be known without light
+#
+# The ids on the wire are numbers only (see pon/INVENTORY.md 4f); the vendor enum lives in
+# no string table and is computed at each call site, so this file pairs the call sites
+# with the names the same function prints. Regenerate with:
+#   python tools/ponevents.py pon/vendor-modules/{gpondrv_xg,switch,netdriver}.ko
+
+# gpondrv_xg.ko
+# Monitor event ids read out of the call sites. The frame on the wire is
+#   struct nlmsghdr { nlmsg_type = 25 } + { u16 source, u16 event, u16 prio,
+#   u16 payload_len } + payload.
+# bind proto 25 with nl_pid = 0x48a3 and the kernel flushes whatever it has
+# cached to that portid the moment you bind.
+sender     called from                            event    source/prio/len
+MontorSendMsg gpondrv_task_thread                    ?        
+MontorSendMsg gpondrv_task_thread                    ?        
+MontorSendMsg gpondrv_task_thread                    ?        
+MontorSendMsg gpondrv_task_thread                    ?        
+MontorSendMsg gpondrv_task_thread                    ?        
+MontorSendMsg gpondrv_task_thread                    ?        
+MontorSendMsg gpondrv_task_thread                    ?        
+MontorSendMsg gpondrv_task_thread                    ?        
+MontorSendMsg gpondrv_task_thread                    ?        
+MontorSendMsg gpondrv_task_thread                    ?        
+MontorSendMsg gpondrv_task_thread                    ?        
+# 11 call sites, 0 with a constant event id
+# switch.ko
+# Monitor event ids read out of the call sites. The frame on the wire is
+#   struct nlmsghdr { nlmsg_type = 25 } + { u16 source, u16 event, u16 prio,
+#   u16 payload_len } + payload.
+# bind proto 25 with nl_pid = 0x48a3 and the kernel flushes whatever it has
+# cached to that portid the moment you bind.
+sender     called from                            event    source/prio/len
+MontorSendMsg Alarm_Msg                              ?        
+MontorSendMsg sw_alarm_scanforalarm                  ?        
+MontorSendMsg sw_alarm_scanforalarm                  ?        
+# 3 call sites, 0 with a constant event id
+# netdriver.ko
+# Monitor event ids read out of the call sites. The frame on the wire is
+#   struct nlmsghdr { nlmsg_type = 25 } + { u16 source, u16 event, u16 prio,
+#   u16 payload_len } + payload.
+# bind proto 25 with nl_pid = 0x48a3 and the kernel flushes whatever it has
+# cached to that portid the moment you bind.
+sender     called from                            event    source/prio/len
+MontorSendAnyMsg oam_recv                               ?        
+OtherMontorSendMsg omci_recv                              ?        
+OtherMontorSendMsg omci_recv                              ?        
+# 3 call sites, 0 with a constant event id
+
+# names printed alongside the sends (gpondrv_xg.ko .rodata.str1.1):

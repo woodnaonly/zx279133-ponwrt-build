@@ -1,0 +1,468 @@
+========================================================================
+np_133.ko  (5208496 bytes, 23515 strings)
+  -- dt-compatible (14)
+     zte,zx279133-bmu-ddr
+     zte,zx279133-gephy-apb
+     zte,zx279133-idm-intr
+     zte,zx279133-ipsec
+     zte,zx279133-nppt
+     zte,zx279133-pcu
+     zte,zx279133-pon
+     zte,zx279133-pps
+     zte,zx279133-rgmii
+     zte,zx279133-se-ddr
+     zte,zx279133-woe-ddr
+     zte,zx279133-xmac0-pcs
+     zxic,apb-timer0
+     zxic,apb-timer2
+  -- dev-or-proc-node (2)
+     gpondrvCfgCntnusprbs
+     pon_registered
+  -- ioctl-ish (2)
+     netdebug_dev_ioctl
+     ppu_msoft_debug_dev_ioctl
+  -- omci-or-me (206)
+         fwd_nomci_cnt(rc)         : %u
+         gemport or vlan = 0x%x
+         gemport/llid(58:43)   : 0x%x
+         omci_flag                 : 0x%x
+         omci_flag(42:42)      : 0x%x
+         omci_pkt_cnt(rc)          : %u
+        Gem PortID:%12d
+        OMCI OAM DROP CNT:%19d
+        OMCI OAM REVC CNT:%19d
+       ACTION_REASON_OMCI_FLAG = 0x0 
+       bit(%3u~%3u), data[%2u] RSP[%2u] (%2u~%2u) gem_port =%u =0x%x (%d bit)
+       bit(%3u~%3u), data[%2u] RSP[%2u] (%2u~%2u) gemport =%u =0x%x (%d bit)
+       bit(%3u~%3u), data[%2u] RSP[%2u] (%2u~%2u) gemport_id =%u =0x%x (%d bit)
+       bit(%3u~%3u), data[%2u]:%2u~%2u, mc:%2u(%u)~%2u(%u) mask=0x%x gem_port =%u =0x%x (%d bit)
+       dn omci cnt(0x%x)                :%u
+       gemport/llid(16)                     : 0x%x
+       omci drop cnt(0x%x)                    :%u
+       omci flag en:       %u
+       omci_bud_cnt     : ( 16bit,0x%x)  0x%04x
+       omci_drop_cnt    : ( 16bit,0x%x)  0x%04x
+       omci_flag(1)                         : %u
+       up omci cnt(0x%x)                :%u
+       usch to uopc cpu omci cnt:     0x%x
+      %s_omci_type3_cnt(16bit)    : 0x%x
+      cat gemport_vlan_map_table_show
+      cat gqueagemode                                      - get que age mode
+      echo 1 > me_drop_reason_clr
+      echo [0-5] xx xx xx xx xx xx > sdmac: set downstream rx no_omci pkt dmac.index:[0-5] support 6  group dmac
+      echo [gemport_id] > supgem:    config upstream gemport for tx data, need config from reality
+      echo [me_id] > me_fifo_int_status
+      echo [me_id] > me_stats
+      echo [mode]                          > squeagemode       - set queue age mode
+      echo [op:0-add 1-del 2-update] [mac:xxxxxxxxxxxx] [gemport_or_vid] > gemport_vlan_map_table_set
+      echo [sdt_no][add_del][gemport/uni][dir][vlan][pri][vlan_mask][pri_mask][index] > g988_stat_table_set
+     1gmac_dgemt
+     1gmac_ugemt
+     ACTION_REASON_OMCI_FLAG
+     Down low power rx no-omci pkt cnt:%5d
+     Down rx nomci pkt a stat int:%11d
+     Down rx nomci pkt b stat int:%11d
+     ... 166 more
+  -- firmware (7)
+         egr_mtk_fwd(act_0)   : (0x44)  0x%x 
+         ing_fwd_mtk(act_0)   : (0x41)  0x%04x 
+         ing_fwd_mvl(act_0)   : (0x41)  0x%04x 
+     /etc/mcode/mcode_133.bin
+     tm_port_brdcast_fwd_ena_set
+     tm_port_unknwn_multicast_fwd_set
+     tm_port_unknwn_unicast_fwd_set
+========================================================================
+zte_xgpon.ko  (308856 bytes, 1502 strings)
+  -- dev-or-proc-node (9)
+     description=gponsdk device
+     gponsdk_cleanupModule
+     gponsdk_dev
+     gponsdk_initModule
+     gponsdk_omci_devCleanup
+     gponsdk_omci_devFops
+     gponsdk_omci_devIoctl
+     gponsdk_omci_devReg
+     insmod gponsdk_dev
+  -- omci-or-me (165)
+       gem_byte    : total %12lld     inc  %12lld
+       gem_byte   : total %12lld     inc  %12lld
+       gem_err    : total %12lld     inc  %12lld
+       gem_frame   : total %12lld     inc  %12lld
+       gem_frame  : total %12lld     inc  %12lld
+      <<<<<<<<  omci aes key  >>>>>>
+     %s %d :fail to alloc omci receive buffer!
+     %s %d :fail to alloc omci send buffer!
+     %s LINE%d :XGMAC SDK OMCI Mic Check failed!
+     0:off,1:open,disable gemport when leave O5,and restore when goto O5.
+     =======================GEM PORT TAB=====================
+     =======================GEMPORT_ID%d=======================
+     =======================STACK OMCI DATA=======================
+     ===================OMCI Monitor===================
+     ===================UGEMT GEMPORT %d STATICS===================
+     ===================UGEMT TCONT %d STATICS===================
+     ASSIGN_GEM_PORT_MESSAGE
+     DGEMT AES Drop Part Encrypt Cnt
+     DGEMT AES Drop Part None Encrypt Cnt
+     DGEMT AES Drop Total Encrypt Cnt
+     DGEMT AES Drop Total None Encrypt Cnt
+     DGEMT AES Trans Encrypt Cnt
+     DGEMT AES Trans None Encrypt Cnt
+     DGEMT Drop  Index 01 Frame Cnt
+     DGEMT Drop  Index 10 Frame Cnt
+     DGEMT Drop  Index 11 Frame Cnt
+     DGEMT FPORTID EOP Mismatch Drop Cnt
+     DGEMT FPORTID IDLE Frame Cnt
+     DGEMT FPORTID Not Local Drop Frame Cnt
+     DGEMT FPORTID SOP Mismatch Drop Cnt
+     DGEMT FPORTID Trans EOP Cnt
+     DGEMT FPORTID Trans SOP Cnt
+     DGEMT HEC Correct Xgem Frame Cnt
+     DGEMT HEC One Bit Error Xgem Frame Cnt
+     DGEMT HEC Rcv EOP Cnt
+     DGEMT HEC Rcv SOP Cnt
+     DGEMT HEC Trans EOP Cnt
+     DGEMT HEC Trans SOP Cnt
+     DGEMT HEC Two Bit Error Xgem Frame Cnt
+     DGEMT HEC Uncorrectable Xgem Frame Cnt
+     ... 125 more
+  -- firmware (10)
+     mg_fwi_irq_cnt            =      %d 
+     power_p2_fwi
+     power_p2_fwi 
+     power_p3_fwi
+     power_p3_fwi:power P3--->P1 
+     power_p5_fwi
+     power_p5_fwi:power P5--->P1 
+     power_p6_fwi
+     power_p6_fwi:power P6--->P1 
+     pwn2mg_fwi_cnt            =      %d 
+========================================================================
+gpondrv_xg.ko  (66504 bytes, 406 strings)
+  -- dev-or-proc-node (69)
+     description=gpondrv device
+     fi_onuGponSetOpState : gpondrvCfgO7StateAdapter failed, ret : %d
+     gpondrvCfg1GRegInfoAdapter
+     gpondrvCfgBroadcastKeyAdapter
+     gpondrvCfgCntnusTransmttngAdapter
+     gpondrvCfgGemportAdapter
+     gpondrvCfgGemportAdkeyAdapter
+     gpondrvCfgGemportEnableAdapter
+     gpondrvCfgGemportEncryptAdapter
+     gpondrvCfgGemportEncryptAdapter failed, ret : %d
+     gpondrvCfgGemportMapAdapter
+     gpondrvCfgLonglaserSelfDetect
+     gpondrvCfgMtuAdapter
+     gpondrvCfgMulGemportAdapter
+     gpondrvCfgO7StateAdapter
+     gpondrvCfgPonEnaAdapter
+     gpondrvCfgPonSendEnaAdapter
+     gpondrvCfgRegisterValueAdapter
+     gpondrvCfgSfSdAdapter
+     gpondrvCfgTcontAdapter
+     gpondrvCfgTcontMaxAdapter
+     gpondrvCfgTcontQueueAdapter
+     gpondrvCfgTcontqueueRatelimitAdapter
+     gpondrvCfgXGRegInfoAdapter
+     gpondrvGetCntnusTransmttngAdapter
+     gpondrvGetEncryptStateAdapter
+     gpondrvGetFecCounterAdapter
+     gpondrvGetFecStateAdapter
+     gpondrvGetGemCounterAdapter
+     gpondrvGetGemEncryptAdKeyAdapter
+     gpondrvGetGemportCounterAdapter
+     gpondrvGetGemportKeyAdapter
+     gpondrvGetLonglaserSelfDetect
+     gpondrvGetLosInfoAdapter
+     gpondrvGetOnuEqualizationDelayAdapter
+     gpondrvGetOnuIdAdapter
+     gpondrvGetOnuResponseTimeAdapter
+     gpondrvGetOpStateAdapter
+     gpondrvGetPonDnCounterAdapter
+     gpondrvGetPonStatAdapter
+     ... 29 more
+  -- ioctl-ish (2)
+     hw_led_los_ioctl
+     ioctl_data->m_gponFuncMacro == %d
+  -- omci-or-me (33)
+     %s act=%d direction=%d,gemportIndex=%d,gemportId=%d,allocId=%d,tcontId=%d, queueId=%d
+     %s m_gemportId=%d
+     %s m_gemportId=%u
+     %s set mul_gemport_id = %d
+     ERROR:GEMPORT Clear Error, err code:%d
+     ERROR:GEMPORT Config Err act:%d
+     ERROR:GEMPORT add Error, err code:%d
+     ERROR:GEMPORT delete Error, err code:%d
+     generate_key_omci
+     generate_key_omci failed,ret=%d
+     gpondrvCfgGemportAdapter
+     gpondrvCfgGemportAdkeyAdapter
+     gpondrvCfgGemportEnableAdapter
+     gpondrvCfgGemportEncryptAdapter
+     gpondrvCfgGemportEncryptAdapter failed, ret : %d
+     gpondrvCfgGemportMapAdapter
+     gpondrvCfgMulGemportAdapter
+     gpondrvGetGemCounterAdapter
+     gpondrvGetGemEncryptAdKeyAdapter
+     gpondrvGetGemportCounterAdapter
+     gpondrvGetGemportKeyAdapter
+     gpondrvSetOmciEnSecurityAdapter
+     gpondrvSetOmciMskAdapter
+     zxic_api_gp_add_gemport
+     zxic_api_gp_clr_gemport
+     zxic_api_gp_del_gemport
+     zxic_api_gp_get_gemport_adkey
+     zxic_api_gp_get_gemport_adkey failed,ret=%d
+     zxic_api_gp_get_gemport_stat
+     zxic_api_gp_get_gemport_stat failed,ret=%d
+     zxic_api_gp_set_gemport_encrypt
+     zxic_api_gp_set_multicast_gemport
+     zxic_api_gp_set_multicast_gemport failed,ret=%d
+========================================================================
+zx_ponreg_133.ko  (8792 bytes, 67 strings)
+  -- ioctl-ish (1)
+     fpga_ioctl
+========================================================================
+switch.ko  (853280 bytes, 4066 strings)
+  -- dev-or-proc-node (1)
+     switch_dev
+  -- ioctl-ish (78)
+      ioctl_data_sweth.m_CommonArgs.FlowConfigResult.index =0x%llx 
+      ioctl_data_sweth.m_CommonArgs.FlowConfigResult.statistics =0x%llx 
+      ioctl_data_sweth.m_CommonArgs.Statistics1.inbroadcast =0x%llx 
+      ioctl_data_sweth.m_CommonArgs.Statistics1.inbytes =0x%llx 
+      ioctl_data_sweth.m_CommonArgs.Statistics1.indiscard =0x%llx 
+      ioctl_data_sweth.m_CommonArgs.Statistics1.inerror =0x%llx 
+      ioctl_data_sweth.m_CommonArgs.Statistics1.inmulticast =0x%llx 
+      ioctl_data_sweth.m_CommonArgs.Statistics1.inpkts =0x%llx 
+      ioctl_data_sweth.m_CommonArgs.Statistics1.inunicast =0x%llx 
+      ioctl_data_sweth.m_CommonArgs.Statistics1.outbroadcast =0x%llx 
+      ioctl_data_sweth.m_CommonArgs.Statistics1.outbytes =0x%llx 
+      ioctl_data_sweth.m_CommonArgs.Statistics1.outdiscard =0x%llx 
+      ioctl_data_sweth.m_CommonArgs.Statistics1.outerror =0x%llx 
+      ioctl_data_sweth.m_CommonArgs.Statistics1.outmulticast =0x%llx 
+      ioctl_data_sweth.m_CommonArgs.Statistics1.outpkts =0x%llx 
+      ioctl_data_sweth.m_CommonArgs.Statistics1.outunicast =0x%llx 
+      ioctl_data_sweth.m_CommonArgs.Statistics2.dropevents =0x%llx 
+      ioctl_data_sweth.m_CommonArgs.Statistics2.infragments =0x%llx 
+      ioctl_data_sweth.m_CommonArgs.Statistics2.injabbers =0x%llx 
+      ioctl_data_sweth.m_CommonArgs.Statistics2.inoversize =0x%llx 
+      ioctl_data_sweth.m_CommonArgs.Statistics2.inundersize =0x%llx 
+      ioctl_data_sweth.m_CommonArgs.Statistics2.outoversize =0x%llx 
+      ioctl_data_sweth.m_CommonArgs.Statistics2.outpause =0x%llx 
+      ioctl_data_sweth.m_CommonArgs.Statistics2.outundersize =0x%llx 
+      ioctl_data_sweth.m_CommonArgs.Statistics2.pppoefiltered =0x%llx 
+      ioctl_data_sweth.m_CommonArgs.Statistics2.statechange =0x%llx 
+      ioctl_data_sweth.m_CommonArgs.Statistics3.in1024tomax =0x%llx 
+      ioctl_data_sweth.m_CommonArgs.Statistics3.in128to255 =0x%llx 
+      ioctl_data_sweth.m_CommonArgs.Statistics3.in256to511 =0x%llx 
+      ioctl_data_sweth.m_CommonArgs.Statistics3.in512to1023 =0x%llx 
+      ioctl_data_sweth.m_CommonArgs.Statistics3.in64 =0x%llx 
+      ioctl_data_sweth.m_CommonArgs.Statistics3.in65to127 =0x%llx 
+      ioctl_data_sweth.m_CommonArgs.Statistics3.out1024tomax =0x%llx 
+      ioctl_data_sweth.m_CommonArgs.Statistics3.out128to255 =0x%llx 
+      ioctl_data_sweth.m_CommonArgs.Statistics3.out256to511 =0x%llx 
+      ioctl_data_sweth.m_CommonArgs.Statistics3.out512to1024 =0x%llx 
+      ioctl_data_sweth.m_CommonArgs.Statistics3.out64 =0x%llx 
+      ioctl_data_sweth.m_CommonArgs.Statistics3.out65to127 =0x%llx 
+      ioctl_data_sweth.m_CommonArgs.Statistics4.SQE =0x%llx 
+      ioctl_data_sweth.m_CommonArgs.Statistics4.inalignment =0x%llx 
+     ... 38 more
+  -- omci-or-me (24)
+       hff.pdt_hff_info.gemport =%u =0x%x (%d bit)
+       item.gemport =%u =0x%x (%d bit)
+     FlowConfig.fwd.gemport
+     [%s] omci_trap_qid_init fail
+     des_q--The destination queue is gemport q or tcont q on the uplink and uni q on the downlink
+     gemport
+     gemport %d, tcont %d, q %d, rcqueue %d
+     gemport--The destination gemport is valid for uplink
+     gemport=
+     gemport=%u
+     gemport=0x
+     gemport=0x%x
+     hff.pdt_hff_info.gemport
+     hff.pdt_hff_info.gemport=
+     hff.pdt_hff_info.gemport=%u
+     hff.pdt_hff_info.gemport=0x
+     hff.pdt_hff_info.gemport=0x%x
+     item.gemport
+     item.gemport=
+     item.gemport=%u
+     item.gemport=0x
+     item.gemport=0x%x
+     item.gemport=ffff
+     sw_init_omci_trap_qid_init
+  -- firmware (3)
+     tm_port_brdcast_fwd_ena_set
+     tm_port_unknwn_multicast_fwd_set
+     tm_port_unknwn_unicast_fwd_set
+========================================================================
+ffe.ko  (169224 bytes, 750 strings)
+  -- dt-compatible (1)
+     zxic,pon-plat
+  -- ioctl-ish (33)
+     CMD_INSERT_ETH_HEADER
+     CMD_INSERT_IPV6_HEADER
+     CMD_INSERT_L2TP_HEADER
+     CMD_INSERT_PPPOA_HEADER
+     CMD_INSERT_PPPOE_HEADER
+     CMD_INSERT_VLAN_HEADER
+     CMD_IPSEC_PROCESS
+     CMD_MODIFY_DECREASE_HOPLIMIT
+     CMD_MODIFY_DECREASE_TTL
+     CMD_MODIFY_ICMP_CSUM
+     CMD_MODIFY_ICMP_ID
+     CMD_MODIFY_IP4_DADDR
+     CMD_MODIFY_IP4_SADDR
+     CMD_MODIFY_IP6_DADDR
+     CMD_MODIFY_IP6_SADDR
+     CMD_MODIFY_IPV4_TOS
+     CMD_MODIFY_L3_CSUM
+     CMD_MODIFY_L4_DPORT
+     CMD_MODIFY_L4_SPORT
+     CMD_MODIFY_L4_TCP_CSUM
+     CMD_MODIFY_L4_UDP_CSUM
+     CMD_MODIFY_LOCAL_TCP_CSUM
+     CMD_MODIFY_LOCAL_UDP_CSUM
+     CMD_MODIRY_IP6_TCLASS
+     CMD_POP_PPPOE_HEADER
+     CMD_REMOVE_IPV6_HEADER
+     FFE [%d  %s] ffe_ioctl_handler copy_from_user failed
+     FFE [%d  %s] ffe_ioctl_handler entry alloc failed 
+     FFE [%d  %s] ffe_ioctl_handler wrong cmd!
+     VXLAN_CMD_INSERT_INNERVLAN_HEADER
+     VXLAN_CMD_INSERT_VXLAN_HEADER
+     ffe_ioctl_handler
+     ffe_ioctl_set
+========================================================================
+wan_bridge.ko  (84928 bytes, 378 strings)
+  -- ioctl-ish (4)
+     wb_ioctl_handler
+     wbdev_ioctl_check
+     wbioctl_set
+     xpon_ioctl_set
+  -- omci-or-me (3)
+     dev|out vid|out pri|in vid|in pri|gemport|tcont|queue|
+     l3entry:-----vid|----pri|----gemport|----tcont|---queue|
+     pon0 : gemport %d,tcont %d,queue %d 
+  -- firmware (1)
+     wb_fwd_mvlan_flow
+========================================================================
+netdriver.ko  (48552 bytes, 271 strings)
+  -- dev-or-proc-node (7)
+     (ethdriver)clean up Module
+     ethdriver
+     ethdriver exit....
+     ethdriver_init....
+     ethdriver_proc_root
+     pdt_ethdriver_init
+     register_chrdev ethdriver failed!
+  -- ioctl-ish (4)
+     SWETH WARRNING: pdt_dev_ioctl Failure
+     ethdrv_dev_ioctl
+     ethdrv_port_dev_ioctl
+     pdt_dev_ioctl
+  -- omci-or-me (6)
+     omci_msg
+     omci_recv
+     register_omci_oam_handle
+     send OMCI msg  failed %d
+     send OMCI update msg failed %d
+     tcont %d,gemport %d,llid:%d
+========================================================================
+optical.ko  (47496 bytes, 277 strings)
+  -- ioctl-ish (5)
+     REGDRV_IOCG_OPTICAL_TRANSCEIVER_INFO 
+     REGDRV_IOCS_OPTICAL_CLOSE_DEBUG !
+     REGDRV_IOCS_OPTICAL_OPEN_DEBUG2 !
+     REGDRV_IOCS_OPTICAL_OPEN_DEBUG3 !
+     optical_ioctl
+========================================================================
+multicast.ko  (284928 bytes, 1139 strings)
+  -- omci-or-me (3)
+     clear_igmpfdb_v3_mibreset
+     set_igmp_mibreset_v3
+     set_igmp_mibreset_v3!
+========================================================================
+GN28L95.ko  (27960 bytes, 123 strings)
+  -- dev-or-proc-node (1)
+     gpondrvCfgCntnusprbs
+  -- ioctl-ish (1)
+     bob_ioctl
+========================================================================
+GN28L96.ko  (15816 bytes, 83 strings)
+  -- dev-or-proc-node (1)
+     gpondrvCfgCntnusprbs
+  -- ioctl-ish (1)
+     bob_ioctl
+========================================================================
+bspdriver.ko  (260664 bytes, 1096 strings)
+  -- dt-compatible (19)
+     sanechips,lsp-tdm
+     snps,dwc3
+     zte,topcrm
+     zte,zx-pinctrl
+     zte,zx27912x-sysctrl
+     zte,zx279131-sysctrl
+     zte,zx279131-topcrm
+     zte,zx279132-pcu
+     zte,zx279132-sysctrl
+     zte,zx279132-topcrm
+     zte,zx279133-pcu
+     zte,zx279133-sysctrl
+     zte,zx279133-topcrm
+     zxic,zx-efuse
+     zxic,zx-leds
+     zxic,zx-sec
+     zxic,zx-slic
+     zxic,zx27912x-usb
+     zxic,zx279131-usb
+  -- ioctl-ish (9)
+     [DEBUG] zx_verify_dev_ioctl cmd[%d] not support
+     [DEBUG] zx_vid_dev_ioctl cmd[%d] not support
+     [DEBUG] zx_voip_ioctl cmd[%d] not support
+     zx_verify_dev_ioctl
+     zx_vid_dev_ioctl
+     zx_voip_ioctl
+     zx_voip_ioctl pot led blink.
+     zx_voip_ioctl pot led off.
+     zx_voip_ioctl pot led on.
+========================================================================
+qos_mod.ko  (92352 bytes, 447 strings)
+  -- ioctl-ish (3)
+     ZXICKernel_QC_ioctl, cmd %0x
+     ZXICKernel_QC_ioctl, normal return, iRet:%d
+     _ZXICKernel_QC_ioctl
+========================================================================
+region_init.ko  (5736 bytes, 50 strings)
+========================================================================
+download.ko  (33528 bytes, 185 strings)
+  -- dev-or-proc-node (1)
+     /proc/sys/net/ipv4/tcp_timestamps
+  -- ioctl-ish (6)
+     3 dl_chrdev_ioctl : g_ack_freq is %d
+     3 dl_chrdev_ioctl : g_timer is %d
+     3 dl_chrdev_ioctl : pid is %d
+     3 dl_chrdev_ioctl : timeout is %d
+     3 dl_chrdev_ioctl called : %s %d
+     dl_chrdev_ioctl
+========================================================================
+upload_optimize.ko  (38288 bytes, 213 strings)
+  -- dev-or-proc-node (2)
+     /proc/sys/net/ipv4/tcp_dsack
+     /proc/sys/net/ipv4/tcp_timestamps
+  -- ioctl-ish (7)
+     [kernel upload]:UPLOAD_CMD_GET_BOM_TIME error
+     [kernel upload]:UPLOAD_CMD_GET_END_TIME error
+     [kernel upload]:UPLOAD_CMD_GET_EOM_TIME error
+     [kernel upload]:UPLOAD_CMD_GET_ROM_TIME error
+     [kernel upload]:UPLOAD_CMD_GET_START_TIME error
+     [kernel upload]:UPLOAD_CMD_GET_TEST_BYTES error
+     [kernel upload]:upload_unlock_ioctl called cmd :%d
+========================================================================
+rlt8226b.ko  (67816 bytes, 199 strings)
+  -- firmware (4)
+     /lib/firmware/mvl_10gphy_flashdslave.bin
+     /lib/firmware/mvl_10gphy_fw.hdr
+     aal_phy_fw_upgrade_get
+     aal_phy_fw_upgrade_set

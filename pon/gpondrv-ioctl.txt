@@ -1,0 +1,58 @@
+# /dev/gpondrv_dev - the command table read out of gpondrv_xg.ko
+#
+# ABI, from gpondrv_devIoctl(): ioctl(fd, ANY_CMD, &buf) over a 136-byte
+# struct, synchronous request/response:
+#   +0x00 u32  result flag - if the handler leaves it nonzero nothing is
+#              copied back, so a caller must zero it first
+#   +0x04 u32  the macro id below (dmesg: "ioctl_data->m_gponFuncMacro")
+#   +0x08..    payload; the handler is invoked as fn(buf + 8)
+# The ioctl() cmd argument itself is ignored. All 136 bytes are copied
+# back to userspace on success.
+#
+# major 102 ("gpondrv_dev" in /proc/devices); this image creates no node:
+#   mknod /dev/gpondrv_dev c 102 0
+table    macro  handler
+public   1      unnamed .text+3cc
+public   2      gpondrvCfgTcontAdapter
+public   3      gpondrvCfgGemportAdapter
+public   4      gpondrvCfgGemportMapAdapter
+public   5      gpondrvCfgTcontQueueAdapter
+public   6      gpondrvCfgTcontqueueRatelimitAdapter
+public   7      gpondrvCfgGemportEncryptAdapter
+public   8      gpondrvGetGemportKeyAdapter
+public   9      gpondrvCfgGemportAdkeyAdapter
+public   10     gpondrvGetGemEncryptAdKeyAdapter
+public   11     gpondrvGetGemCounterAdapter
+public   12     gpondrvGetFecCounterAdapter
+public   13     gpondrvCfg1GRegInfoAdapter
+public   14     gpondrvCfgXGRegInfoAdapter
+public   15     gpondrvGetOpStateAdapter
+public   16     gpondrvGetOnuIdAdapter
+public   17     gpondrvCfgPonEnaAdapter
+public   18     gpondrvCfgSfSdAdapter
+public   20     gpondrvCfgCntnusTransmttngAdapter
+public   21     gpondrvGetCntnusTransmttngAdapter
+public   22     gpondrvCfgO7StateAdapter
+public   23     gpondrvCfgMtuAdapter
+public   24     gpondrvCfgRegisterValueAdapter
+public   25     gpondrvGetRegisterValueAdapter
+private  1001   gpondrvGetPonStatAdapter
+private  1002   gpondrvGetGemportCounterAdapter
+private  1003   gpondrvGetTcontCounterAdapter
+private  1004   gpondrvGetPonDnCounterAdapter
+private  1005   gpondrvGetPonUpCounterAdapter
+private  1006   gpondrvCfgTcontMaxAdapter
+private  1007   gpondrvGetLosInfoAdapter
+private  1008   gpondrvCfgLonglaserSelfDetect
+private  1009   gpondrvGetLonglaserSelfDetect
+private  1010   gpondrvGetFecStateAdapter
+private  1011   gpondrvGetEncryptStateAdapter
+private  1012   (none)
+private  1013   gpondrvGetOnuResponseTimeAdapter
+private  1014   gpondrvGetOnuEqualizationDelayAdapter
+private  1015   (none)
+private  1016   gpondrvSetOmciMskAdapter
+private  1017   gpondrvSetOmciEnSecurityAdapter
+private  1018   gpondrvGetXgPonTcStatAdapter
+private  1019   gpondrvGetXgPonDownStatAdapter
+private  1020   gpondrvGetXgPonUpStatAdapter

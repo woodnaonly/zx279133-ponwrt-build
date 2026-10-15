@@ -1,0 +1,20 @@
+# Working artifacts, never source.
+#
+# staging/ is where the PC-side tools/ scripts expect to find everything they operate on:
+# downloaded release artifacts, extracted kernel images, DTB dumps of the stock firmware, and
+# the md5-verified rollback set. It is 431 MiB on this machine and the single largest file in
+# it is a 33.5 MB decompressed stock kernel. None of it belongs in a repository - and note
+# that a clone cannot run most of these scripts anyway, because the tools assume a populated
+# staging/ next to them. Building that directory is the reader's first job, not the clone's.
+staging/
+
+# Vendor kernel modules recovered from the stock SK-D840N firmware: 18 binaries, 7.2 MiB.
+# These are ZTE/Skyworth proprietary objects, not something this project wrote and not
+# something the licence permits redistributing. They are kept on the machine that pulled
+# them out of the flash; the reverse-engineering notes that describe them (INVENTORY.md,
+# abi-scan.txt and friends) are tracked, which is the part that can be shared.
+pon/vendor-modules/
+
+# Python bytecode from running the tools/ scripts.
+__pycache__/
+*.pyc

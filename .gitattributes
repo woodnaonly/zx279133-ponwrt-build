@@ -19,3 +19,24 @@ overlays/**/etc/rc.d/* text eol=lf
 # reading text the build will never see. The committed blobs were always LF - this pins
 # the working tree to the same thing so an offline check means what it says.
 kernel-overlays/** text eol=lf
+
+# The PC-side tools/, docs/ and pon/ trees, brought under version control so the fix for
+# gettrial.sh (two defects) and preflight.sh (one) stop being local-only. Scoped to these
+# directories instead of to *.py / *.txt / *.c because a broad rule plus a renormalize pass
+# would rewrite the already-committed decompiled/*.fdtdump.txt blobs, and that is a
+# different question from this one.
+#
+# pon/*.txt is the one place where this could have destroyed data rather than cosmetics:
+# those are raw captures of ioctl numbers, proc output and netlink monitors, so a CR in
+# them might have been a captured byte instead of a line ending. Measured first - in all
+# five files every CR is followed by an LF and the files that mix CRLF and LF terminators
+# still have zero lone CRs - so normalising loses nothing. A file where the CR did not
+# terminate a line would have shown a lone CR and this rule would not be safe.
+tools/** text eol=lf
+docs/** text eol=lf
+pon/** text eol=lf
+
+# The vendor .ko files under pon/vendor-modules/ are excluded by .gitignore and must stay
+# that way. They are proprietary ZTE/Skyworth objects, not text: -text makes a forced
+# `git add -f` store them verbatim instead of running them through EOL normalisation.
+pon/vendor-modules/** -text

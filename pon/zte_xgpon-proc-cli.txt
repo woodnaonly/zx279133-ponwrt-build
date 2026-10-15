@@ -1,0 +1,59 @@
+# /proc/gpon_sdk/debug - the 44-command table read out of zte_xgpon.ko
+# write syntax:  echo "<name> [args]" > /proc/gpon_sdk/debug
+# the handler is called as fn(int, ...) after sscanf(rest, fmt, &a0..a6).
+# The kernel answers in dmesg with "func <name> return success".
+# An unknown token does not error - the write handler dumps this whole
+# table into dmesg instead, so `echo nonsense > /proc/gpon_sdk/debug` is
+# the read-only way to recover the vocabulary from a live unit.
+#
+# p* = print   (read only; output goes to the kernel log)
+# s* = set     (writes real PON configuration)
+# r* = remove, c* = clear   <-- destructive, they delete T-CONT/GEM entries
+#
+# one command is not in this table: `ssn <12 chars>` is matched before the
+# loop and calls test_Configure_Ponmac_Set_Sn(), i.e. programs the SN.
+command            argc fmt      handler                                              usage
+pstate             0    -        PrintState                                           none
+pdebug             0    -        PrintDebugLevel                                      none
+ptcont             0    -        PrintTcontTable                                      none
+pgemport           0    -        PrintGemportTable                                    none
+pstatictcont       0    -        PrintTcont                                           none
+pstaticgemport     1    %d       PrintGemport                                         gemportId[%d]
+pstaticfec         0    -        PrintFecCnt                                          
+pmic               0    -        PrintStackDebugData                                  none
+pkey               0    -        printkey                                             none
+pploam             0    -        PrintPloamCnt                                        none
+pomci              0    -        PrintOmciCnt                                         none
+pirq               0    -        PrintIrqCnt                                          none
+ptimer             0    -        PrintTimer                                           none
+ppower             0    -        PrintPowerData                                       none
+sbrdgem            1    %d       fi_Configure_Gem_Set_Downsteam_Broadcast_GemportId   gemport_id[%d]
+sponen             1    %d       fi_Configure_Ponmac_Set_Gpon_Enable                  enable[0~1]
+sdebug             2    %d %d    fi_Configure_Logger_Debug_Level                      print_level[%d] logger_level[%d](0:all, 1:debug, 2:run, 3:event, 4:aes, 5:ploam, 6:normal, 7:warning, 8:error, 9:crash, 10:none)
+srawtcont          1    %d       fi_Configure_Gem_Create_Raw_Tcont                    alloc_id[%d]
+rrawtcont          1    %d       fi_Configure_Gem_Remove_Raw_Tcont                    alloc_id[%d]
+crawtcont          0    -        fi_Configure_Gem_Clear_Raw_Tcont                     none
+stcont             2    %d %d    fi_Configure_Gem_Create_Tcont                        tcont_id[%d] alloc_id[%d]
+rtcont             1    %d       fi_Configure_Gem_Remove_Tcont                        tcont_id[%d]
+sugemp             1    %d       fi_Configure_Gem_Create_Upstream_GemPort             gemport_id[%d]
+sdgemp             1    %d       fi_Configure_Gem_Create_Downstream_GemPort           gemport_id[%d]
+rgemp              1    %d       fi_Configure_Gem_Remove_GemPort                      gemport_id[%d]
+stimer             2    %d %d    fi_Configure_Ponmac_Set_Timer                        timerNum[%d] timer_delay[%d]
+smic               2    %d %d    fi_Configure_Ponmac_Set_MicEnable                    mic_enable[%d] fake_enable[%d]
+slpmtype           1    %d       fi_Configure_Ponmac_Set_PmwMode                      lpmtype[%d] (0 software 1 hardware)
+pregs              2    %x %d    PrintRegs                                            addr[%d] n[%d]
+skeyen             2    %d %d    fi_Configure_Ponmac_Set_KeyEncryptEnable             newKeyEncrpt[%d] keyComfirmEncrypt[%d]
+sbwmap             2    %d %d    fi_configure_Set_Bwmap_Record_Mode                   mode[%d] enable[%d](mode:0 local 1 all,enable:0 dis 1 en)
+pbwmap             1    %d       PrintBwmapRecord                                     mode[%d]
+pgemcnt            1    %d       GemportCount                                         gemportid
+slpmtotaltimer     2    %d %d    PowerIntvlSet                                        tm_numer[%d],tm_denom [%d] (format:tm_numer/tm_denom)
+pdnploamcnt        0    -        PrintMacPloamStatics                                 none
+pdnframecnt        0    -        PrintMacDataStatics                                  none
+pdnbwmapcnt        0    -        PrintMacBwmapStatics                                 none
+pdnaescnt          0    -        PrintMacAesDataStatics                               none
+pdnheccnt          0    -        PrintMacHecCheckStatics                              none
+pdnomcimonitor     0    -        PrintMacRcvOmciMsgMonitor                            none
+pdngemcnt          2    %d %d    PrintMacDrsmtGemStatics                              gemIndex[0-7],gemportId[%d]
+pupgemcnt          2    %d %d    PrintMacUgemtGemportStatics                          gemIndex[0-7],gemportId[%d]
+puptcontcnt        2    %d %d    PrintMacUgemtTcontStatics                            gemIndex[0-7],tcontId[%d]
+sponmode           1    %x       fi_Configure_Pon_Mode                                mode[%x] xgpon1:0x3 xgpon2:0x7 ngpon2.5G:0xB ngpon10G:0xF

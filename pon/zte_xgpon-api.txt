@@ -1,0 +1,95 @@
+# zte_xgpon.ko - the API it publishes and the API it demands
+# regenerated with:
+#   python tools/ponelf.py pon/vendor-modules/zte_xgpon.ko ksymtab   (exports)
+#   python tools/ponelf.py pon/vendor-modules/zte_xgpon.ko imports    (undefined syms + the function that uses them)
+
+=== .modinfo ===
+description=gponsdk device
+author=mengxiangjuan
+license=Dual BSD/GPL
+srcversion=533BB7E5866E52F63B9ACCB
+depends=np_133,zx_ponreg_133
+name=zte_xgpon
+vermagic=4.19.136 SMP mod_unload aarch64
+
+=== exports (__ksymtab) ===
+fi_Configure_Logger_Debug_Level                <- fi_Configure_Logger_Debug_Level
+g_xgmac_enable_flag                            <- g_xgmac_enable_flag
+generate_key_omci                              <- generate_key_omci
+gponsdk_omci_devCleanup                        <- gponsdk_omci_devCleanup
+gponsdk_omci_devReg                            <- gponsdk_omci_devReg
+o7_flag                                        <- o7_flag
+zte_api_gp_get_chipver                         <- zte_api_gp_get_chipver
+zxic_api_get_mode_change                       <- zxic_api_get_mode_change
+zxic_api_gp_add_gemport                        <- zxic_api_gp_add_gemport
+zxic_api_gp_alarm_notify_register              <- zxic_api_gp_alarm_notify_register
+zxic_api_gp_clear_multicast_encrypt_key        <- zxic_api_gp_clear_multicast_encrypt_key
+zxic_api_gp_clr_gemport                        <- zxic_api_gp_clr_gemport
+zxic_api_gp_clr_tcont                          <- zxic_api_gp_clr_tcont
+zxic_api_gp_del_gemport                        <- zxic_api_gp_del_gemport
+zxic_api_gp_del_multicast_encrypt_key          <- zxic_api_gp_del_multicast_encrypt_key
+zxic_api_gp_del_tcont                          <- zxic_api_gp_del_tcont
+zxic_api_gp_get_aes_state                      <- zxic_api_gp_get_aes_state
+zxic_api_gp_get_equalization_delay             <- zxic_api_gp_get_equalization_delay
+zxic_api_gp_get_fec_stat                       <- zxic_api_gp_get_fec_stat
+zxic_api_gp_get_fec_state                      <- zxic_api_gp_get_fec_state
+zxic_api_gp_get_gemport_adkey                  <- zxic_api_gp_get_gemport_adkey
+zxic_api_gp_get_gemport_stat                   <- zxic_api_gp_get_gemport_stat
+zxic_api_gp_get_longlaser                      <- zxic_api_gp_get_longlaser
+zxic_api_gp_get_lp_para                        <- zxic_api_gp_get_lp_para
+zxic_api_gp_get_multicast_encrypt_key          <- zxic_api_gp_get_multicast_encrypt_key
+zxic_api_gp_get_onuid                          <- zxic_api_gp_get_onuid
+zxic_api_gp_get_opstate                        <- zxic_api_gp_get_opstate
+zxic_api_gp_get_pon_stat                       <- zxic_api_gp_get_pon_stat
+zxic_api_gp_get_ponrcv                         <- zxic_api_gp_get_ponrcv
+zxic_api_gp_get_response_time                  <- zxic_api_gp_get_response_time
+zxic_api_gp_get_rx_stat                        <- zxic_api_gp_get_rx_stat
+zxic_api_gp_get_tx_rough_det                   <- zxic_api_gp_get_tx_rough_det
+zxic_api_gp_get_xgpon_down_stat                <- zxic_api_gp_get_xgpon_down_stat
+zxic_api_gp_get_xgpon_tc_stat                  <- zxic_api_gp_get_xgpon_tc_stat
+zxic_api_gp_get_xgpon_tcont_stat               <- zxic_api_gp_get_xgpon_tcont_stat
+zxic_api_gp_get_xgpon_up_stat                  <- zxic_api_gp_get_xgpon_up_stat
+zxic_api_gp_link_status_notify_register        <- zxic_api_gp_link_status_notify_register
+zxic_api_gp_o7_state_notify_register           <- zxic_api_gp_o7_state_notify_register
+zxic_api_gp_pon_state_notify_register          <- zxic_api_gp_pon_state_notify_register
+zxic_api_gp_set_debug_level                    <- zxic_api_gp_set_debug_level
+zxic_api_gp_set_gemport_encrypt                <- zxic_api_gp_set_gemport_encrypt
+zxic_api_gp_set_longlaser                      <- zxic_api_gp_set_longlaser
+zxic_api_gp_set_lp_para                        <- zxic_api_gp_set_lp_para
+zxic_api_gp_set_multicast_encrypt_key          <- zxic_api_gp_set_multicast_encrypt_key
+zxic_api_gp_set_multicast_gemport              <- zxic_api_gp_set_multicast_gemport
+zxic_api_gp_set_o7state                        <- zxic_api_gp_set_o7state
+zxic_api_gp_set_ponrcv                         <- zxic_api_gp_set_ponrcv
+zxic_api_gp_set_ponsend                        <- zxic_api_gp_set_ponsend
+zxic_api_gp_set_pwd                            <- zxic_api_gp_set_pwd
+zxic_api_gp_set_ratelimt                       <- zxic_api_gp_set_ratelimt
+zxic_api_gp_set_regid                          <- zxic_api_gp_set_regid
+zxic_api_gp_set_sfsd                           <- zxic_api_gp_set_sfsd
+zxic_api_gp_set_sn                             <- zxic_api_gp_set_sn
+zxic_api_gp_set_tcont                          <- zxic_api_gp_set_tcont
+zxic_api_gp_set_tcont_queue                    <- zxic_api_gp_set_tcont_queue
+zxic_api_set_high_pri_channel_en               <- zxic_api_set_high_pri_channel_en
+zxic_api_set_high_pri_channel_gemport          <- zxic_api_set_high_pri_channel_gemport
+zxic_api_xgpon_interface_dn_pm_get             <- zxic_api_xgpon_interface_dn_pm_get
+zxic_api_xgpon_interface_up_pm_get             <- zxic_api_xgpon_interface_up_pm_get
+zxic_ploamMsgLaserControl                      <- zxic_ploamMsgLaserControl
+
+=== imports from the platform layer (np_133 / zx_ponreg_133), with the user ===
+fpga_read_reg                                      Hal_ReadPonGreg, Hal_ReadXmacReg
+fpga_read_reg_one_module                           fi_Configure_Tmp_Disable_Downstream, fi_Configure_restore_Downstream
+fpga_write_reg                                     Hal_WritePonGreg, Hal_WriteXmacReg
+fpga_write_reg_one_module                          fi_Configure_Tmp_Disable_Downstream, fi_Configure_restore_Downstream
+g_up_mode                                          fi_Configure_Hw_Init, fi_Configure_SN_AllocId_Set
+g_zxic_xgmac_cfg_info                              init_module
+hw_power_optx_set                                  fi_Configure_Init, p_o7_enable_sn_msg, zxic_api_gp_set_o7state
+pon_base                                           fi_Configure_gmac_vir_remap
+pon_plat_pinctrl_set                               fi_Configure_Init
+pon_serdes_base                                    init_module
+regisetr_omci_mic_add_handle                       fi_Configure_Init
+register_lp_int                                    fi_Configure_Interrupt_Init
+register_omci_mic_check_handle                     fi_Configure_Init
+register_xgmac_int                                 fi_Configure_Interrupt_Init
+tm_get_statistic                                   zxic_api_gp_get_pon_stat
+tm_set_cpu_rate_limit                              fi_set_ONU_activation_state
+tm_tcont_que_sch_sp_dwwr_mod_set                   zxic_api_gp_set_tcont_queue
+tm_tcont_que_sch_weight_set                        zxic_api_gp_set_tcont_queue
