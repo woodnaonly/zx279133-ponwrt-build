@@ -803,8 +803,12 @@ jobs:
               `zte,pon-route` / `zte,idm-cci` 是**必需**属性，但能解析：这棵树的
               `drivers/mfd/syscon.c` 没有匹配表、查找时按需注册，凡 compatible 带 `"syscon"` 的节点都能拿到 regmap。
               **仍未证实**：G.984.1 的 PLOAM/GEM/T-CONT/OMCI **状态机不在这棵树里**——
-              已构建内核中 `PLOAM`/`Op State Machine`/`p_o7_enable_sn_msg`/`Serena` 零命中，
-              而厂商 `zte_xgpon.ko` 里逐字带着这些（该模块在 4.19 上跑 ITU 状态机）。
+              已构建内核中 `PLOAM`/`Op State Machine`/`p_o7_enable_sn_msg`/`Serena` 全部零命中。
+              厂商侧：18 个厂商模块逐个数过，这四个精确 token 里只有 `p_o7_enable_sn_msg`
+              在 `zte_xgpon.ko` 里（另有 `power_p5_fwi`、`ASSIGN_ALLOC_ID_MESSAGE`）；
+              `PLOAM`、`Op State Machine`、`Serena` 在任何一个厂商模块里都不是独立字符串。
+              该模块确实带着整套 PLOAM 机制，只是以更长字符串的形式存在——
+              `STACK PLOAM DATA`、`%s %d Ploam Msg Is NULL!`、`DGTCT Rcv Ploam Cnt`。
               也就是说这棵树实现的是 **PON 数据通路**，不是 PON。
               微码里的 packet-type / port-flow 表是否自带 GEM 分流，从头部读不出来；这需要一次起内核看日志。
               运行时网口会不会出现，同样只能在板子上看 `/sys/class/net`。
