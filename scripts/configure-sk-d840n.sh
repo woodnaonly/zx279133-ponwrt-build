@@ -117,14 +117,36 @@ grep -rn --include='config-*' '^CONFIG_CMDLINE' target/linux/
 # because both of those are upstream-owned, and a stale copy of a 49 kB file wins silently
 # and would take the flash with it.
 SN=$KERNEL_TREE/drivers/mtd/nand/spi
+HDR=$KERNEL_TREE/include/linux/mtd/spinand.h
 [ -f "$SN/unim.c" ] || { echo "$SN/unim.c missing (kernel-overlays not applied?)" >&2; exit 1; }
-grep -q 'unim_spinand_manufacturer' "$SN/core.c" ||
+[ -f "$HDR" ] || { echo "$HDR missing - the manufacturer externs live there" >&2; exit 1; }
+# Three edits, not two. core.c's spinand_manufacturers[] refers to the symbol, and the only
+# reason it compiles for the other vendors is that spinand.h declares each one extern:
+# without that line the array entry is a plain compile error
+#   core.c:1273: error: 'unim_spinand_manufacturer' undeclared here; did you mean
+#   'xtx_spinand_manufacturer'?
+# which is how run 22/23 died an hour into the kernel build (2026-10-15). Anchor on any
+# sibling declaration rather than on `xtx_...` specifically, because a rename upstream would
+# otherwise take this patch down with it - and assert each edit separately, because all three
+# failures look identical on the board: a chip that is not in any table has no MTD devices.
+grep -q 'unim_spinand_manufacturer;' "$HDR" || {
+	# Not sed: `0,/regex/i` is a *range*, and a range address runs the command once per line
+	# inside it, so the first rehearsal of this inserted the declaration 362 times - once
+	# before every line up to the first sibling extern. awk with a latch inserts exactly once.
+	awk '!done && /^extern const struct spinand_manufacturer /{
+		print "extern const struct spinand_manufacturer unim_spinand_manufacturer;"
+		done = 1
+	}
+	{print}' "$HDR" >"$HDR.new" && mv "$HDR.new" "$HDR"; }
+grep -q '&unim_spinand_manufacturer' "$SN/core.c" ||
 	sed -i '/spinand_manufacturers\[\] = {/a\
 	&unim_spinand_manufacturer,' "$SN/core.c"
 grep -q 'unim\.o' "$SN/Makefile" || printf 'spinand-objs += unim.o\n' >>"$SN/Makefile"
 # Assert the outcome, not the intent: an unregistered manufacturer is indistinguishable
 # from the -95 this patch exists to fix, and both show up as a board that never gets a
 # root device.
+grep -q '^extern const struct spinand_manufacturer unim_spinand_manufacturer;$' "$HDR" || {
+	echo "spinand.h did not take the unim declaration" >&2; exit 1; }
 grep -q '&unim_spinand_manufacturer,' "$SN/core.c" || {
 	echo "core.c did not take the unim manufacturer" >&2; exit 1; }
 grep -q 'unim\.o' "$SN/Makefile" || {
