@@ -78,6 +78,29 @@ pin_y GPIO_ZX279133
 pin_y PSTORE
 pin_y PSTORE_CONSOLE
 pin_y PSTORE_RAM
+
+# The flash on this board is a Unim UM19A1HISW (READ ID b0 24 b0 24 b0) and no spi-nand
+# table in this tree - or in mainline - has manufacturer 0xb0, so the driver rejects the
+# chip and the board ends up with no MTD devices at all:
+#   spi-nand spi0.0: unknown raw ID b024b024b0
+#   spi-nand spi0.0: probe with driver spi-nand failed with error -95
+# unim.c arrives through kernel-overlays; these two edits are what register it. They are
+# done as targeted insertions rather than by shipping whole copies of core.c/Makefile
+# because both of those are upstream-owned, and a stale copy of a 49 kB file wins silently
+# and would take the flash with it.
+SN=$KERNEL_TREE/drivers/mtd/nand/spi
+[ -f "$SN/unim.c" ] || { echo "$SN/unim.c missing (kernel-overlays not applied?)" >&2; exit 1; }
+grep -q 'unim_spinand_manufacturer' "$SN/core.c" ||
+	sed -i '/spinand_manufacturers\[\] = {/a\
+	&unim_spinand_manufacturer,' "$SN/core.c"
+grep -q 'unim\.o' "$SN/Makefile" || printf 'spinand-objs += unim.o\n' >>"$SN/Makefile"
+# Assert the outcome, not the intent: an unregistered manufacturer is indistinguishable
+# from the -95 this patch exists to fix, and both show up as a board that never gets a
+# root device.
+grep -q '&unim_spinand_manufacturer,' "$SN/core.c" || {
+	echo "core.c did not take the unim manufacturer" >&2; exit 1; }
+grep -q 'unim\.o' "$SN/Makefile" || {
+	echo "spi-nand Makefile did not take unim.o" >&2; exit 1; }
 grep -E '^CONFIG_(REALTEK_PHY|LEDS_GPIO|GPIO_ZX279133|GPIO_SYSFS|PSTORE)' "$KCFG"
 
 # cnjn's target config embeds the SoC's microcode into the kernel image, and points at

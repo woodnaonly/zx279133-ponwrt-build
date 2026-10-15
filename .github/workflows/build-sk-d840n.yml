@@ -224,6 +224,26 @@ jobs:
             }
           done
           grep -iE '^CONFIG_(ZTE_ZX279133|REALTEK|MDIO_ZX|EXTRA_FIRMWARE)' "$KC"
+          # And the same rule for the flash itself. The Unim entry is added to core.c's
+          # manufacturer array and to spinand-objs by scripts/configure-sk-d840n.sh, both of
+          # which self-report success; only the compiled tree proves the chip will be known
+          # at probe time. If this fails, the board boots to exactly the symptom the patch
+          # exists to remove - no MTD devices, no root device, and one line of evidence that
+          # is only visible on a serial console.
+          KT=$(ls -d openwrt/build_dir/target-*/linux-zte_zx279133/linux-*)
+          SPI=$KT/drivers/mtd/nand/spi
+          have=0
+          for blob in "$KT/vmlinux" "$SPI/built-in.a" "$SPI/unim.o"; do
+            if [ -f "$blob" ] && grep -aq UM19A1HISW "$blob"; then
+              echo "spi-nand Unim table is in $blob"
+              have=1
+              break
+            fi
+          done
+          [ "$have" = 1 ] || {
+            echo "UM19A1HISW is not in the built kernel" >&2
+            ls -l "$SPI" 2>/dev/null || echo "no $SPI" >&2
+            exit 1; }
 
       - name: Package flash images
         if: steps.pick.outputs.run == 'true' && matrix.mode == 'flash'
