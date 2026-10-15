@@ -10,3 +10,12 @@
 overlays/**/etc/board.d/* text eol=lf
 overlays/**/lib/upgrade/platform.sh text eol=lf
 overlays/**/etc/rc.d/* text eol=lf
+
+# kernel-overlays/ is copied straight into the kernel tree. core.autocrlf=true is the
+# default on a Windows checkout, and without this rule git rewrites every file here to
+# CRLF on the way out - which is how zx279133-sk-d840n.dts arrived with 432 CR bytes in a
+# working tree whose committed blob has zero. The gates in build-sk-d840n.yml match on
+# line shapes (`^/ \{`, `status = "okay"`), so a stray CR is not cosmetic: it is a gate
+# reading text the build will never see. The committed blobs were always LF - this pins
+# the working tree to the same thing so an offline check means what it says.
+kernel-overlays/** text eol=lf

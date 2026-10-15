@@ -361,7 +361,14 @@ jobs:
           # at probe time. If this fails, the board boots to exactly the symptom the patch
           # exists to remove - no MTD devices, no root device, and one line of evidence that
           # is only visible on a serial console.
-          KT=$(ls -d openwrt/build_dir/target-*/linux-zte_zx279133/linux-*)
+          # Pinned to $KVER like every other build_dir lookup here, and for the same
+          # reason: this step goes on to grep a compiled kernel, so "whatever version is
+          # in the tree" is the wrong subject. The || true lives INSIDE the substitution
+          # on purpose - under set -euo pipefail a failing ls ends the step before the
+          # refusal below could say anything.
+          KT=$( { ls -d openwrt/build_dir/target-*/linux-zte_zx279133/linux-$KVER 2>/dev/null || true; } | head -1 )
+          test -n "$KT" || { echo "::error::no build dir for linux-$KVER (KVER=$KVER); what is there:"; ls -d openwrt/build_dir/target-*/linux-zte_zx279133/* 2>&1 || true; exit 1; }
+          echo "KT: $KT"
           SPI=$KT/drivers/mtd/nand/spi
           have=0
           for blob in "$KT/vmlinux" "$SPI/built-in.a" "$SPI/unim.o"; do
