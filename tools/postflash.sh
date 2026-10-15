@@ -19,8 +19,7 @@
 #                         done here on the PC, so a reboot mid-round cannot be mistaken for
 #                         "flashed")
 #
-#	HOST=192.168.9.2 sh tools/postflash.sh
-#	sh tools/postflash.sh          # now also probes the addresses this board can answer on
+#	sh tools/postflash.sh          # probes the addresses this board can answer on, in order
 #
 # It also carries a PON verdict block, because that is the one thing this script exists to
 # settle and the rest of it cannot answer it. See "PON verdict" below.
@@ -33,15 +32,19 @@ OUT=staging/postflash-$(date +%Y%m%d-%H%M).txt
 # With no HOST given, try each address this board can be on, in the order that keeps the
 # fastest answer first, and use the one where ssh actually returns a uname line.
 #
-# The order matters and 192.168.1.1 has to be in it. Our own flashed root answers on .1.1,
-# not on .9.x: immortalwrt's dropbear package ships `option Interface 'lan'` by default,
-# ci-build-repo's 02_network puts eth0 alone in lan, and config_generate then applies lan the
-# stock default (base-files/files/bin/config_generate: "lan) ipad=${ipaddr:-192.168.1.1}").
-# Nothing in the build overrides it. A board that is up and serving ssh on .1.1 would
-# otherwise be reported as a failed flash.
+# The flashed image answers on 192.168.9.1. 02_network binds lan straight to eth0 and
+# spells the address out as 192.168.9.1, so eth0 carries it directly and there is no
+# br-lan. 192.168.9.2 belonged to the old community root - there lan was br-lan (ports
+# eth1..eth3, which mainline has no driver for, so that address had no path to a cable)
+# and eth0 was wan. It is still probed, because which root is installed is not known
+# from here, but after flashing this project's own image it will not answer there.
 #
-# .1.1 is tried LAST and is only accepted on a real ssh answer, never on a ping: this PC sits
-# on 192.168.1.0/24 twice (wired and WLAN) and the owner's own router answers .1.1 there.
+# 192.168.1.1 is also probed, and is only accepted on a real ssh answer, never on a ping:
+# this PC sits on 192.168.1.0/24 twice (wired and WLAN) and the owner's own router answers
+# .1.1 there.
+#
+# Naming a single HOST= pins the probe to that one address. Do not name 192.168.9.2 after
+# a flash - it would report a healthy board as dead.
 if [ -n "${HOST:-}" ]; then
 	CANDIDATES=$HOST
 else

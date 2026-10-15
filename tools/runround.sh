@@ -168,7 +168,9 @@ if sh tools/gatecheck.sh staging/trial/flash-uImage staging/trial/flash-dtb.bin;
 	sh tools/flash-direct.sh write
 	say "write attempt finished. Reboot deliberately, then audit with:"
 	say "  ssh root@192.168.9.1 reboot   # only once READ_OK appeared twice"
-	say "  HOST=192.168.9.2 sh tools/postflash.sh"
+	# No HOST= here on purpose: passing it pins the probe to one address, and after this
+	# project's own image is installed that address is 192.168.9.1, not 192.168.9.2.
+	say "  sh tools/postflash.sh"
 else
 	say "NOT permitted - no write. The gate round above says why."
 	# A payload that never reached its /init leaves no other trace, and with MASK=0 the eject

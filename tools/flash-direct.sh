@@ -143,11 +143,17 @@ cat <<EOF
 
 If the two READ_OK lines appeared, the flash now holds mainline. Reboot deliberately:
   ssh root@192.168.9.1 reboot
-Then the only jack that can answer is the RTL8226/2.5G one, at 192.168.9.2 (eth0's static
-address in the installed config). ping/ARP there means mainline booted; ssh may still fail
-if dropbear is bound to the 'lan' interface, which mainline has no ports for - tools/
-reachcheck.sh unwraps that binding beforehand, and HOST=192.168.9.2 sh tools/postflash.sh is
-the audit.
+Then the only jack that can answer is the RTL8226/2.5G one. The flashed image puts it at
+192.168.9.1: ci-build-repo's 02_network binds lan straight to eth0 and spells the address
+out as 192.168.9.1, so there is no br-lan and nothing carries 192.168.9.2 - that address
+belonged to the old community root, where lan was br-lan (ports eth1..eth3, which
+mainline has no driver for) and eth0 was wan. ping/ARP at 192.168.9.1 means mainline
+booted; if dropbear is bound to the 'lan' interface, tools/reachcheck.sh unwraps that
+binding beforehand. The audit after rebooting is plain:
+  sh tools/postflash.sh
+with no HOST: it probes 192.168.9.1, then 192.168.9.2, then 192.168.1.1 and settles on
+the one that returns a uname line. Passing HOST= pins it to a single address, so naming
+192.168.9.2 there would report a healthy board as dead.
 Going back is the same script pointed at the staged vendor pair, which tools/gatecheck.sh
 already permits because those bytes came off this board:
   SRC=staging/rollback EXPECT='root=0xf00000,0xf100000' sh tools/flash-direct.sh write
