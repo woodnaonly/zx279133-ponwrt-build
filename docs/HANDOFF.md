@@ -685,6 +685,48 @@ dw-xpcs、Realtek RTL8226B PHY）在两个将要启动的内核里都在，`phy-
 `bmu`/`se-hash`/`idm` 三块（最低那块在 `0x9d700000`，高出窗口 39 MiB）**——
 所以「端口不通」不会是载荷放错位置造成的。
 
+### ssh 起来的是谁：`S19dropbear`，不是 `S15trial` 里那条命令
+
+`S15trial:40` 确实会跑 `/usr/sbin/dropbear -s -B -p 22`，但**它每次都失败，
+而且是在绑定 22 之前就退的**。原因已查到源码一级（2025.89，`svr-main.c:149`
+`commonsetup()` → `:472` `load_all_hostkeys()` → `svr-runopts.c:729`
+`dropbear_exit("No hostkeys available…")`，而 `dropbear_listen()` 在 `:489`，
+排在 `commonsetup()` 返回之后）：镜像里没有任何主机密钥，也没有 `-R`。
+`-B` 本身**是**合法选项（`svr-runopts.c:87`，含义是「允许空口令登录」）。
+
+**这条不影响任何人**：`S15trial` 的主体包在 `( ... ) &` 里、末尾 `exit 0`，
+立刻返回，procd 接着跑 `S19dropbear`。所以**如果串口上看到 dropbear 报
+「No hostkeys available」，那是我写的死代码，不是板子坏了**，别顺着它查。
+
+真正起 ssh 的是 `S19dropbear`（`/etc/rc.d/S19dropbear -> ../init.d/dropbear`）：
+它自己用 `dropbearkey` 生成 rsa/ecdsa/ed25519 主机密钥，每个都用 `-r` 传给 dropbear，
+再带 `-F -P`。试配置里 `PasswordAuth on` / `RootPasswordAuth on`，所以既不加 `-s`
+也不加 `-g`。
+
+**公钥路径是 `/etc/dropbear/authorized_keys`，不是 `/root/.ssh/authorized_keys`** ——
+`/root` 在两棵树里都是空的，但 OpenWrt 有 `patches/100-pubkey_path.patch`，
+uid 为 0 且没传 `-D` 时 `authorized_keys_filepath()` 直接返回 `/etc/dropbear/authorized_keys`。
+不要因为看到 `/root` 空就判 ssh 认证不可能成功。
+
+**现场还剩一条只能上板查的**：
+
+```sh
+stat -c '%U %a' /etc/dropbear
+```
+
+jffs2 不存 Unix 权限，jefferson 解出来的 755 是它自己的默认值、**不能当证据**。
+dropbear 只要求该目录不是 group/other 可写（`checkfileperm`），构建默认 0755 满足。
+
+**试镜像和刷机后系统的不对称**（别当成不一致）：
+
+| | `/etc/config/dropbear` | 监听范围 |
+|---|---|---|
+| 试 initramfs | 430 B，overlay **删掉了** `option Interface 'lan'` | 所有地址 |
+| flash rootfs | 310 B，与包默认值**逐字节相同** | 只绑 `lan` |
+
+刷机后 `lan` 由 `config_generate` 按 `board.d/02_network` 建出来并带 `192.168.9.1`，
+所以绑 `lan` 在那条路径上是对的；试镜像删掉它，是因为地址可能落在别的 netdev 上。
+
 ## 5b. 刷完的板子到底答哪个地址（已从镜像实测，不是推论）
 
 这一条被改错过两次，所以写下推导。全部读自
