@@ -67,6 +67,23 @@ Workflow `ZX279133 SK-D840N Build`, matrix mode `initramfs` and `flash`
 | `flash-sysupgrade.bin` | the same triple as a sysupgrade tar, for flashing from inside a running system |
 | `flash-set.tgz` | those four plus `flash-sk-d840n.sh` |
 
+### Browser recovery (`sk-d840n-initramfs.itb`, initramfs mode only)
+
+The RAM image also carries `zrec`. Boot it (`tftpboot 0x89000000 sk-d840n-initramfs.itb`
+then `bootm 0x89000000`) and open `http://192.168.9.1/`: upload a `flash-set.tgz` and
+the manifest is checked before anything is erased, then `flash-sk-d840n.sh` programs
+root → dtb → kernel; or pick one partition and program a single image, which is
+erased, written, read back and hash-compared. Routes and JSON field names follow
+`pbs05/uboot-an758x`'s lwIP httpd, so that project's page is the model rather than a
+coincidence.
+
+It is deliberately **not** in the flashed root - a page that can erase kernel and root
+should not be listening on a running system - and both halves of that rule are asserted
+by the build. `Check zrec` compiles the server with host gcc and runs it on x86 (page
+bytes, every route, an upload compared byte for byte, one job through to captured
+output) in about two minutes; `tests/test_zrec_contract.py` is the source-level half of
+the same check and runs from a plain checkout.
+
 `kexec` is **not** in these releases: no OpenWrt feed ships kexec-tools for
 aarch64 (verified against the 24.10 `aarch64_generic` base manifest and a full
 `feeds install`). Build it on the PC with `sh tools/getkexec.sh` (parent project),
