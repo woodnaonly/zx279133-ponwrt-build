@@ -524,10 +524,54 @@ SRC=staging/rollback EXPECT='root=0xf00000,0xf100000' sh tools/flash-direct.sh w
 #    **没有 jffs2**；jffs2 归 flash job。看清楚再取。
 git ls-remote --tags origin | grep skd840n_flash      # 通道二，最省事
 
-sh tools/gettrial.sh flash <新的 run id>     # 会在 scratch 目录逐文件验清单后才落地
+sh tools/gettrial.sh flash     <新的 run id>   # 会在 scratch 目录逐文件验清单后才落地
+sh tools/gettrial.sh initramfs <同一个 run id>  # ← 这一行原来漏了，见下
 sh tools/check-imagelineage.sh               # 应当三层全过；无参数即可
 sh staging/diag-20261014/regress_round_backup.sh   # 应当 41/41 rc_all=0
 ```
+
+**两个模式都要跑，而且要钉同一个 run。** `flash` 模式只更新 flash 那半，
+同目录里那半 trial 文件**原封不动**——2026-10-16 实测踩到过：
+
+| `staging/trial/` | 大小 | `phy-mode` |
+|---|---|---|
+| `flash-dtb.bin`（刚落地，run 33） | 12,009 B | `sgmii` |
+| `trial-dtb.bin`（**没动**，run 27） | 12,013 B | **`2500base-x`** |
+
+于是**照原来那一条命令走完，再从同一个目录做 RAM 启动，会把 `2500base-x` 放回 eth0**，
+也就是实测「carrier 亮着一个帧都不过」的那个配置，而一路上没有任何提示。
+
+两个半都落地之后还有两处变化值得知道：
+
+* 两个 dtb 变成同一个文件，`sha256sums-trial` 覆盖目录里每一个 payload；
+* 门多查了一样东西——RAM 启动器那项从「不在本 set 里所以不可能陈旧」
+  （一个**空洞的通过**：文件不在，没得比）变成 `trial-kexec.sh matches templates/`。
+
+### `gettrial.sh` 依赖 API，而 API 在这条网络上时开时关
+
+它用 `api.github.com/repos/…/releases` 列表来定位 release。共享 NAT 的 60/hr 配额：
+
+| 时刻 | `core` 配额 | `/releases` |
+|---|---|---|
+| 2026-10-16 ~16:35 | **0 / 60** | 403 |
+| 2026-10-16 ~17:04 | **57 / 60** | 200 |
+
+所以**取件可能失败也可能成功，取决于你几点按**。`WANT_RUN`（第二个参数）能钉住 run，
+但解决不了配额——列表请求本身就要花配额。**不依赖 API 的两条路**：
+
+```sh
+git -C ci-build-repo ls-remote --tags origin | grep skd840n_flash
+curl -sSL https://github.com/woodnaonly/zx279133-ponwrt-build/releases/expanded_assets/<tag>
+```
+
+### `staging/trial/` 里有三个内核
+
+`trial-Image`（28,092,424 B，10-12）、`trial-Image.gz`（11,426,876 B，10-16）、
+`trial-Image.old13`（29,989,376 B，10-10）。
+**当前 `.gz` 解开是 28,092,424 B，而那个散件也是 28,092,424 B——同尺寸、不同内容**
+（kernel Image 会填充，大小分不出新旧）。好消息是 `trial-kexec.sh` 只用 `.gz`
+（取件后在板子上 `gunzip -c trial-Image.gz > Image`），所以散件是惰性的。
+但挑错的信号是零。
 
 `check-imagelineage.sh` 的**无参数调用曾经是坏的**（2026-10-16 修，`e8f6036`）：
 三个默认值写成相对路径，而它自己先 `cd` 进了仓库，于是每次都先吐三条
