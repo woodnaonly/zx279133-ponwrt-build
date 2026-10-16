@@ -73,7 +73,17 @@ fi
 SSH="ssh $SSHOPT root@$HOST"
 
 echo "=== $HOST ===" | tee "$OUT"
-if ! $SSH "echo uname: \$(uname -a);
+# The capture's own exit status has to be ssh's, and a pipeline cannot carry it: in dash a
+# pipeline's status is the LAST command's, and tee succeeds even when ssh wrote nothing.
+# Measured rather than assumed - a `false | tee f` here exits 0, and dash has no pipefail at
+# all. So an earlier version of this line, `if ! $SSH ... | tee "$OUT"; then`, was dead code:
+# the board could answer the probe and then fail the real capture, the warning could never
+# print, and the script went on to exit 0 having collected no evidence. This is the same shape
+# as the DTS content gate - failure and success producing identical evidence - except here the
+# script that answers "did the flash work" was the thing that could not say it did not.
+#
+# `cmd && rc=0 || rc=$?` is the portable form: it keeps the assignment from tripping set -e.
+CAP=$($SSH "echo uname: \$(uname -a);
 	echo cmdline: \$(cat /proc/cmdline);
 	echo uptime: \$(cut -d. -f1 /proc/uptime);
 	echo root-mount:; mount | grep ' / ' || echo '  NO ROOT MOUNT LINE';
@@ -83,8 +93,21 @@ if ! $SSH "echo uname: \$(uname -a);
 	echo; echo leds:; ls /sys/class/leds;
 	echo; echo dmesg-interesting:; dmesg 2>/dev/null | grep -iE 'spi-nand|spinand|nand|jffs2|mtd|nppt|xmac|rtl822|phy|led|watchdog|error|fail|warn' | tail -40;
 	echo; echo kmods:; ls /lib/modules 2>/dev/null | head -3; lsmod 2>/dev/null | head -5;
-	echo; echo release:; cat /etc/openwrt_release 2>/dev/null | head -4" 2>&1 | tee "$OUT"; then
-	echo "  no ssh on $HOST - see the discriminators below before concluding anything."
+	echo; echo release:; cat /etc/openwrt_release 2>/dev/null | head -4" 2>&1) && CAPRC=0 || CAPRC=$?
+printf '%s\n' "$CAP" > "$OUT"
+cat "$OUT"
+if [ "$CAPRC" -ne 0 ]; then
+	echo "  ssh capture FAILED (rc=$CAPRC) on $HOST after the probe had answered."
+	echo "  Everything printed above and below is NOT evidence from this board."
+	echo "  Treat this run as no result - not as a failed flash and not as a good one."
+	exit 1
+fi
+# Having ssh's status is necessary but not sufficient: ssh can succeed and still return
+# nothing useful. Require the one line that every capture above must produce.
+if ! grep -q '^uname:' "$OUT"; then
+	echo "  ssh returned rc=0 but no 'uname:' line - the capture did not run."
+	echo "  Treat this run as no result."
+	exit 1
 fi
 
 # ---------------------------------------------------------------------------------------
