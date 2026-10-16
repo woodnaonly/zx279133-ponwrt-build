@@ -708,6 +708,17 @@ announce 用 `INIT_TMPL`（RAM 启动 init），flash 用带 `do_write` 的 `FLA
 **判据是能 ping/ssh，不是 `Link is Up`。** 上一次 carrier 两端都亮着，
 `rx_packets` 一直是 0，20 包的突发也没让对端计数动一个字节。
 
+**出货件本身已经逐条核过**：CI 的门查的是构建机上的 `.config`，但那份配置
+**嵌在 `flash-uImage` 里**，可以直接读出来（`IKCFG_ST@0xbb3b38` → 159,992 B）。
+对着它核过：`DETECT_HUNG_TASK` **is not set**（run 28–32 的根因）、
+`PANIC_TIMEOUT=0`、`SERIAL_AMBA_PL011{,_CONSOLE}=y`（`ttyAMA0` 真有驱动）、
+`DEVTMPFS_MOUNT=y`（**`/dev/kmsg` 标记会出来**）、`REALTEK_PHY=y`、
+`MDIO_ZX279133=y`、`CMDLINE` 逐字等于钉死的那串。
+
+`CONFIG_RD_GZIP` **is not set**，这不是缺陷：profile 是
+`INITRAMFS_COMPRESSION_NONE`，`trial-Image.gz` 解开后 `0x010e9448` 处直接就是
+裸 newc cpio，而 `gate-Image` 根本不嵌 initramfs。**不要去「修」它。**
+
 `/dev/kmsg` 里有三个标记（没有串口时这是唯一证据）：
 
 ```
