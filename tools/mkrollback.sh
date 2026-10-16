@@ -15,13 +15,26 @@
 #	sh tools/mkrollback.sh
 set -eu
 cd "$(dirname "$0")/.."
-OUT=staging/rollback
+# OUT is overridable for the same reason PERMIT already is (line 67): the caller has to be
+# able to name the directory it is going to inspect afterwards. tests/test_mkrollback_reproducible.sh
+# backs the real pair up, regenerates it, and compares - and it can only do that if it knows
+# which directory got written. Left hard-coded, the alternative was for that suite to keep
+# running the workspace-root copy of this script, i.e. to test a file that is not shipped.
+OUT=${OUT:-staging/rollback}
+# LOCAL names the tree holding the board-derived state: the mtd2/mtd3 dumps, the pre-flash
+# snapshots and the permit. Those cannot live in a clone - they come off the board - so on a
+# machine where the repository sits inside a larger workspace they are one level up, and a
+# tool that hard-codes them relative to itself cannot see them at all. Default "." keeps the
+# single-clone layout working exactly as before.
+LOCAL=${LOCAL:-.}
+CTL="$LOCAL/staging/ctl"
 mkdir -p "$OUT"
-python - "$OUT" <<'PY'
+python - "$OUT" "$CTL" <<'PY'
 import hashlib, struct, sys, gzip, os
 
 out = sys.argv[1]
-k = open("staging/ctl/mtd2.bin", "rb").read()
+ctl = sys.argv[2]
+k = open(os.path.join(ctl, "mtd2.bin"), "rb").read()
 magic, hcrc, ctime, dsize, load, ep, dcrc = struct.unpack(">7I", k[:28])
 assert magic == 0x27051956, "mtd2 dump does not start with a legacy uImage (%08x)" % magic
 name = k[32:64].split(b"\0")[0].decode("latin1")
@@ -37,7 +50,7 @@ print("kernel : name=%r data=%d load/ep=0x%08x -> %s (%d B)" % (name, dsize, loa
       os.path.join(out, "flash-uImage"), len(kernel)))
 print("         banner: %s" % banner[:78])
 
-d = open("staging/ctl/mtd3.bin", "rb").read()
+d = open(os.path.join(ctl, "mtd3.bin"), "rb").read()
 assert d[:4] == b"\xd0\x0d\xfe\xed", "mtd3 dump does not start with an FDT"
 totalsize, = struct.unpack(">I", d[4:8])
 assert totalsize <= len(d), "FDT totalsize %d beyond the dump" % totalsize
@@ -64,7 +77,7 @@ python tools/dtbparts.py "$OUT/flash-dtb.bin" root=0xf00000,0xf100000
 DEV=${DEV:-root@192.168.9.1}
 KEY=${KEY:-$HOME/.ssh/id_onu}
 SSH="ssh -q -o BatchMode=yes -o IdentitiesOnly=yes -i $KEY -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no $DEV"
-PERMIT=${PERMIT:-staging/ctl/flash.permit}
+PERMIT=${PERMIT:-$CTL/flash.permit}
 UM=$(md5sum "$OUT/flash-uImage" | awk '{print $1}')
 DM=$(md5sum "$OUT/flash-dtb.bin" | awk '{print $1}')
 echo "=== which of these bytes can be proved to be what this board boots? ==="
@@ -85,8 +98,8 @@ if [ "${SKIP_BOARD:-0}" != 1 ] && $SSH "cat /proc/mtd" >/tmp/mtd-live.$$ 2>/dev/
 fi
 [ -n "$PROVEN" ] || echo "  live check unavailable or the flash already holds other bytes - trying the snapshot"
 
-SNAPK=$(ls -1 backups/preflash-*/mtd2-*.bin.gz 2>/dev/null | tail -1)
-SNAPD=$(ls -1 backups/preflash-*/mtd3-*.bin.gz 2>/dev/null | tail -1)
+SNAPK=$(ls -1 "$LOCAL"/backups/preflash-*/mtd2-*.bin.gz 2>/dev/null | tail -1)
+SNAPD=$(ls -1 "$LOCAL"/backups/preflash-*/mtd3-*.bin.gz 2>/dev/null | tail -1)
 if [ -z "$PROVEN" ]; then
 	if [ -z "$SNAPK" ] || [ -z "$SNAPD" ]; then
 		echo "  no preflash snapshot (backups/preflash-*/mtd2-*.bin.gz) - run tools/preflashbackup.sh"

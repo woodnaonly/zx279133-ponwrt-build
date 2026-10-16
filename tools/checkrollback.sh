@@ -14,6 +14,13 @@ set -eu
 cd "$(dirname "$0")/.."
 OUT=${OUT:-staging/rollback}
 EXPECT=${EXPECT:-root=0xf00000,0xf100000}
+# LOCAL names the tree holding the board-derived state - the pre-flash snapshots and the
+# vendor restore_set/. They are dumped off the board, so they cannot be in a clone, and on a
+# machine where the repository sits inside a larger workspace they are one level up. Without
+# this, sections 6 and 7 silently degrade: section 6 reports a missing snapshot as a FAIL and
+# section 7 never runs, which reads as "the rollback pair is not usable" when the pair is
+# fine and this tool simply looked in the wrong tree. Default "." is the single-clone layout.
+LOCAL=${LOCAL:-.}
 export LC_ALL=C
 
 pass=0; fail=0; warn=0
@@ -78,8 +85,8 @@ else
 fi
 
 head2 "6. these bytes are what the board was booting before anything was changed"
-SNAPK=$(ls -1 backups/preflash-*/mtd2-*.bin.gz 2>/dev/null | tail -1)
-SNAPD=$(ls -1 backups/preflash-*/mtd3-*.bin.gz 2>/dev/null | tail -1)
+SNAPK=$(ls -1 "$LOCAL"/backups/preflash-*/mtd2-*.bin.gz 2>/dev/null | tail -1)
+SNAPD=$(ls -1 "$LOCAL"/backups/preflash-*/mtd3-*.bin.gz 2>/dev/null | tail -1)
 if [ -z "$SNAPK" ] || [ -z "$SNAPD" ]; then
 	bad "a pre-flash snapshot exists to compare against" "run tools/preflashbackup.sh"
 else
@@ -100,7 +107,7 @@ else
 fi
 
 head2 "7. the trap: restore_set/ is NOT a rollback set"
-RS=restore_set/root_stock.bin
+RS="$LOCAL/restore_set/root_stock.bin"
 if [ -f "$RS" ]; then
 	if grep -a -q 'ZXIC 133 UNI' "$RS" 2>/dev/null; then
 		note "restore_set/root_stock.bin is ZTE firmware image data" "no filesystem in it"
