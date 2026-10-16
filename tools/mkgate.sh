@@ -15,6 +15,13 @@ set -eu
 cd "$(dirname "$0")/.."
 [ -s staging/trial/flash-uImage ] || { echo "staging/trial/flash-uImage missing - sh tools/gettrial.sh flash 38235539279" >&2; exit 1; }
 [ -s staging/trial/flash-dtb.bin ] || { echo "flash-dtb.bin missing" >&2; exit 1; }
+# staging/ctl is gitignored, so on any fresh checkout it does not exist - and nothing else in
+# tools/ creates it (grep mkdir tools/ finds no writer for it). Without this line the payload
+# below dies on a bare FileNotFoundError for staging/ctl/gate-Image, which reads like "you have
+# not run a gate round yet, i.e. you have no board" and stops the boardless preflight rehearsal
+# at step 4 for a reason that has nothing to do with the board. Same defensive mkdir the permit
+# writers already use (gatewatch.sh:111, mkrollback.sh:107).
+mkdir -p staging/ctl
 
 python - <<'EOF'
 import gzip, hashlib, struct, time
