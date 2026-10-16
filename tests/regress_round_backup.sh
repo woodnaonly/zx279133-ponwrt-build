@@ -106,7 +106,8 @@ for t in $d/test_platform_sh.sh \
          $d/test_gate_ships_what_it_checks.sh \
          $d/test_release_body_claims.sh \
          $d/test_kernel_version_single_source.sh \
-         $d/test_workflow_shell_parses.sh; do
+         $d/test_workflow_shell_parses.sh \
+         $d/test_readme_refs.sh; do
 	echo "  --- ${t##*/}"
 	ran=$((ran+1))
 	if sh "$t" >/tmp/reg.out 2>&1; then

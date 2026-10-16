@@ -1,7 +1,7 @@
 # tests/：本地排演套件（**不接进 CI**）
 
-这 104 个文件是 `tools/` 与 `overlays/` 行为的离线回归：一个 runner
-（`regress_round_backup.sh`）、39 个套件、25 个被套件调用的助手脚本、
+这 107 个文件是 `tools/` 与 `overlays/` 行为的离线回归：一个 runner
+（`regress_round_backup.sh`）、**40 个套件**、25 个被套件调用的助手脚本、
 `kernelsrc/`（37 个内核源码副本）和一个夹具校验清单。
 
 每个 `.sh` / `.py` 的文件头都写了同一句话，不是重复，是刻意的——
@@ -17,14 +17,14 @@
 | `test_imagelineage2.sh` | 1 | `FAIL ./fixtures/stale-set/flash-rootfs.jffs2 missing - cannot prove the refusal` |
 | `check_preflight_9c.sh` | 1 | `FAIL refused without an instruction` |
 
-补上夹具再跑，工作副本上是 **39/39/39、rc_all=0**。
+补上夹具再跑，是 **40/40/40、rc_all=0**（这一条也在本机上实跑过，见下）。
 
 三条里前两条把缺的文件名写出来了，第三条没有——它只说「拒绝时没有给出指令」，
 读的人得自己回头看才知道根因是夹具不在。**这是这套件该补的短板，不是可以一笔带过的噪音。**
 
 ```sh
-sh tests/round36-make-fixture.sh      # 拉那个 4 MiB 的 jffs2 和它的两个同伴
-sh tests/regress_round_backup.sh     # 之后：rc_all=0
+sh tests/round36-make-fixture.sh      # 拉那个 4 MiB 的 jffs2 和它的两个同伴，并按钉子校验
+sh tests/regress_round_backup.sh     # 之后：40/40/40，rc_all=0
 ```
 
 一个不会正确失败的测试，也无法正确地通过——所以这里宁可让它红，也不给它一个
@@ -34,17 +34,17 @@ sh tests/regress_round_backup.sh     # 之后：rc_all=0
 
 | 分类 | 数量 |
 |---|---|
-| 引用真实构建产物 `staging/{rollback,trial,ctl}` | 24 / 39 |
-| 硬编码 `cd /mnt/c/ugit/SK-D840N4` | 38 / 39 |
+| 引用真实构建产物 `staging/{rollback,trial,ctl}` | 24 / 40 |
+| 硬编码 `cd /mnt/c/ugit/SK-D840N4` | 38 / 40 |
 | 两者都有 | 23 |
-| **两者都没有（自包含）** | **0 / 39** |
+| **两者都没有（自包含）** | **0 / 40** |
 
 24 个引用产物的套件里，**0 个**写了产物缺失的处理。唯一在沙箱里实测过的
 （`test_payload_id.sh`，因为只有它不硬编码路径，能安全地放进一个没有产物的目录树），
 产物缺失时是**响亮地红**：exit 1，`FAIL plain run exited 1`。
 
 样本只有 **n=1**，其余 23 个没测——它们会 `cd` 回真实工作树，而其中有套件会写
-`staging/ctl/uimage-payload-id.txt`（`payload-id.sh --record` 就是），
+`staging/ctl/uimage-payload-id.txt`（`tools/payload-id.sh --record` 就是），
 在真产物上做实验不安全。这个 n=1 不能推广成「39 个都不会静默变绿」。
 
 ## 为什么没有接进 CI
@@ -76,8 +76,19 @@ runner 自己算 `d=$(dirname "$0")` 再定位套件，所以在 `tests/` 里直
 库里的 `sha256sums-release`（85 B）钉住 jffs2 的 sha256。
 2026-10-16 实测该 asset 仍然存在（302 → 200）。
 
-该脚本有 direct → `ghproxy.net` → `ghfast.top` 三级回退。能不能走通取决于当时的网络：
-本会话里 WSL 直连 `github.com:443` 是被拒绝的（`example.com` 却 200）。
+**钉子自己不会被重新下载**——它是仓库里跟踪着的那一份，而实测那个 release 在这个
+tag 下**根本没有** `sha256sums-release`：三级全失败。更糟的是脚本原本会先把已存在的
+文件改名成 `.partial` 再去抓，等于把自己唯一的依据弄没了。现在它在钉子已存在时跳过，
+并在最后用 `sha256sum -c` 校验（实测输出 `flash-rootfs.jffs2: OK`），
+校验不过就拒绝把这套夹具交给任何测试。
+
+该脚本有 direct → `ghproxy.net` → `ghfast.top` 三级回退。实测本会话里 WSL 直连
+`github.com:443` 被拒（`example.com` 却 200），而两个代理都在 2 秒内返回 200——
+所以这条路是通的，只是要走代理。
+
+抓下来的文件被 `.gitignore` 挡在版本控制之外（`tests/fixtures/stale-set/*`，
+只放行那 85 字节），免得在跑过一次抓取的机器上 `git add tests/` 就把 4 MiB
+发布件提交进去。
 
 ## 为什么 `kernelsrc/` 在库里，而 4 MiB 那个不在
 
@@ -93,3 +104,17 @@ runner 自己算 `d=$(dirname "$0")` 再定位套件，所以在 `tests/` 里直
 `test_pon_protocol_absence.sh`、`test_release_body_claims.sh`。
 其中 `test_phy_gate_symbols.sh` 在文件缺失时会红，并且直接告诉你跑哪个抓取脚本——
 这是这套件里处理缺失最规矩的一个，可以当作范本。
+
+## `test_readme_refs.sh`：这份 README 不能点名不存在的文件
+
+它遍历 README，把每个裸 `*.sh` / `*.py` 名字取出来，要求文件就在同目录；
+带目录的（`tools/…`、`scripts/…`）跳过，那些归仓库管。它自己也带反向对照，
+用一个确定不存在的名字跑同一段循环，确认那段循环会红。
+
+加它是因为真出过事：这份 README 的**第一条指令**
+`sh tests/round36-make-fixture.sh`，那个脚本根本没随套件交付——
+它在工作副本里，但不在「从 runner 循环算出的依赖闭包」里，因为**只有 README 引用它，
+没有任何套件引用它**。README 是唯一的引用者，于是闭包漏了它。
+
+所以这条检查的原则是：**文档点名的文件必须存在，这件事要有人替它盯着**，
+而不是靠「我刚才是照着做的」。

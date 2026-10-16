@@ -18,3 +18,15 @@ pon/vendor-modules/
 # Python bytecode from running the tools/ scripts.
 __pycache__/
 *.pyc
+
+# tests/fixtures/stale-set/ holds a *fetched* release artifact, not something this repository
+# wrote: round36-make-fixture.sh pulls four files from the skd840n_flash_21_38243906799
+# release, the largest being a 4.0 MiB jffs2 rootfs. Only the 85-byte sha256 pin is tracked,
+# which is the part that says what the fixture has to be - without it the other three files
+# cannot be checked at all, and with it a reader can rebuild the set byte for byte.
+#
+# Written as a rule rather than as a habit on purpose: `git add tests/` on a machine that has
+# run the fetch script would otherwise stage 4 MiB of release artifact in one keystroke, and
+# the person doing it would not notice until the push.
+tests/fixtures/stale-set/*
+!tests/fixtures/stale-set/sha256sums-release
