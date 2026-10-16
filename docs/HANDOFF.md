@@ -534,7 +534,7 @@ kexec 是 aarch64 静态构建（Alpine 的 kexec-tools 2.0.31），已确认它
 | 谁读 | 读哪一棵 |
 |---|---|
 | RAM 启动（§5a，`staging/trial/*`） | `/mnt/c/ugit/SK-D840N4/staging/trial` |
-| `check-imagelineage.sh` 无参数调用 | **同一棵**（`ROOT=${1:-$WS/staging/trial/flash-rootfs.jffs2}`，`WS=dirname(REPO)`） |
+| `check-imagelineage.sh` 无参数调用 | 工作区根那棵（`ROOT=${1:-$WS/staging/trial/flash-rootfs.jffs2}`，`WS=dirname(REPO)`） |
 | `preflight.sh` → `mkgate.sh`（gate round 的载荷） | `/mnt/c/ugit/SK-D840N4/ci-build-repo/staging/trial` |
 
 后两者读的是**不同副本**。今天两份的 flash 文件逐字节相同
@@ -544,12 +544,19 @@ kexec 是 aarch64 静态构建（Alpine 的 kexec-tools 2.0.31），已确认它
 
 **但「今天相同」不等于「被检查过相同」**：只往 `ci-build-repo/staging/`
 重新拉过 flash 集（`preflight` 就是这么做的），而 lineage 门默认看的
-工作区根那份没跟着动，那道门依旧会绿。**真要重拉，两边都要拉**，
-或者把重拉的那一棵显式传给门：
+工作区根那份没跟着动，那道门依旧会绿。
+
+**这条已经修了（2026-10-16）**：`preflight.sh` 三处调门现在都显式传
+`staging/trial/flash-rootfs.jffs2`，第 2 层的 `SETDIR` 也跟着从 `dirname(ROOT)` 走到
+repo 那棵。手动跑门时仍然要显式指明：
 
 ```sh
-SETDIR=ci-build-repo/staging/trial sh tools/check-imagelineage.sh
+sh tools/check-imagelineage.sh staging/trial/flash-rootfs.jffs2   # 从仓库根跑
 ```
+
+注意 `staging/ctl/`、`staging/rollback/` **只在工作区根**有，仓库那份没有；
+所以测试仍需 `cd` 到工作区根，但**被测的 `tools/` 必须指 `ci-build-repo/tools/`**——
+工作区根那份 `tools/` 是化石，见 docs/07 补二十六。
 
 ### ⚠ 这个镜像会自己 reboot，操作窗口很短
 
@@ -634,7 +641,8 @@ git ls-remote --tags origin | grep skd840n_flash      # 通道二，最省事
 
 sh tools/gettrial.sh flash     <新的 run id>   # 会在 scratch 目录逐文件验清单后才落地
 sh tools/gettrial.sh initramfs <同一个 run id>  # ← 这一行原来漏了，见下
-sh tools/check-imagelineage.sh               # 应当三层全过；无参数即可
+sh tools/check-imagelineage.sh staging/trial/flash-rootfs.jffs2   # 三层全过；**必须显式传**，
+                                                             # 无参数会去看工作区根那棵（补二十六）
 sh staging/diag-20261014/regress_round_backup.sh   # 应当 41/41 rc_all=0
 ```
 
