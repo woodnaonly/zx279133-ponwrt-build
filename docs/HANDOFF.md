@@ -646,16 +646,23 @@ kexec 是 aarch64 静态构建（Alpine 的 kexec-tools 2.0.31），已确认它
 
    字节级扫描，仪器阳性对照 `cpus` 在三个文件里各命中 1 次 ⇒ 0 命中是真的 0。
 
-   > ⚠ **这一条会骗过 §5 那个三秒判据。** 按 §5 的推导，`phy-mode="2500base-x"`
-   > 会把 `RTL822X_VND1_SERDES_OPTION (0x697a)` 的 `GENMASK(5,0)` 写成 **2**，
-   > 而 `sgmii` 才是 **0**。所以刷了这个 dtb 的板子，
+   > ⚠ **这一条会骗过 §5 那个三秒判据。** 刷了这个 dtb 的板子，
    > `cat /sys/class/net/eth0/phy*/driver` **照样是 realtek**（驱动认得这颗 PHY，
-   > §5 的「出现 genphy 就停」那道门**不会响**），而
-   > `cat /sys/bus/mdio_bus/devices/ethernet-phy@5/mmd/30/697a` 的低 6 位会读到 **2**。
+   > §5 的「出现 genphy 就停」那道门**不会响**）。而且按 §5 的推导，
+   > `phy-mode="2500base-x"` 会把 `RTL822X_VND1_SERDES_OPTION (0x697a)` 的
+   > `GENMASK(5,0)` 写成 **2**（`sgmii` 才是 **0**），
+   > **但那个寄存器用户空间读不到**（见 §5 的更正），所以现场只能从 `phy-mode` 判：
    >
-   > **现场判据因此要补一句：`0x697a` 低 6 位读到 2 ⇒ 你刷的是 sgmii 修复前的 dtb，
-   > 不是驱动或硬件坏了。** 停手，从**工作区根**那棵树重新 stage，别去查驱动。
-   > 只读 2 这一次就足以定性；读到 0 才继续往下走。
+   > ```sh
+   > # 期望 sgmii
+   > tr -d '\0' < /proc/device-tree/soc/mdio@14f02000/ethernet-phy@5/phy-mode; echo
+   > cat /sys/bus/mdio_bus/devices/*/phy_interface
+   > ```
+   > **两条都该出 `sgmii`。** 出 `2500base-x` ⇒ 你刷的是 sgmii 修复前的 dtb，
+   > **不是驱动或硬件坏了**：停手，从**工作区根**那棵树重新 stage，别去查驱动。
+   > 第一条读的是 DT 原值（路径由 `zx279133.dtsi:359` 的
+   > `mdio1: mdio@14f02000` 与 dts 里的 `ethernet-phy@5` 推出来），
+   > 第二条读的是驱动吃进去之后的 `phydev->interface`。
 
 2. **混搭状态在 `sha256sum -c` 上是可见的**，不是只有尺寸能看出来：
 
@@ -1025,19 +1032,42 @@ dmesg | grep -i -e rtl8226 -e rtl8221 -e realtek
 > 所以**只要绑上这六条里的任何一条，SGMII 的 serdes option 就一定会被编程**——
 > 这把 genphy 风险从「可能」压到「ID 落在这六个之外」。
 >
-> **更省事、也更硬的判据**：直接读那颗寄存器。
-> `RTL822X_VND1_SERDES_OPTION = 0x697a`，在 MMD30（vendor 1）下，
-> 字段是 `GENMASK(5,0)`。`phy-mode="sgmii"` 时驱动写入 **`0`**，
-> `2500base-x` 时写入 **`2`**（`realtek_main.c:1238-1244`）。
-> 若板上存在 mdio-mmd 的 sysfs（`/sys/bus/mdio_bus/devices/ethernet-phy@5/mmd/30/697a`），
-> 读它，低 6 位应是 **0**。这条比「驱动绑上了」更直接——它验的就是修复本身。
+> **更省事、也更硬的判据**：读 `phy-mode` 的两个落点。
+> `RTL822X_VND1_SERDES_OPTION = 0x697a` 在 MMD30 下，字段是 `GENMASK(5,0)`；
+> `phy-mode="sgmii"` 写入 **`0`**，`2500base-x` 写入 **`2`**
+> （`realtek_main.c:1238-1244`）。**那颗寄存器本身用户空间读不到**（更正见下），
+> 但能读到造成这个差的**那个 `phy-mode` 值**：
 >
-> **读到 2 时不要去查驱动**（round498 实测 `ci-build-repo/staging/trial/flash-dtb.bin`
-> 就是那份 11,916 B 的 `2500base-x` 旧 dtb，见「有两棵 `staging/`」那节）：
-> 2 精确对应 `phy-mode="2500base-x"`，意思是**刷进去的 dtb 是 sgmii 修复之前的那份**。
-> 这种情况下 `driver` 仍会显示 realtek，上面的 genphy 那道门不会响——
-> **只有这一条寄存器读数能抓住它**，所以别跳过。
-> 读到 0 才继续往下走。
+> ```sh
+> # 期望 sgmii（两条都该是 sgmii）
+> tr -d '\0' < /proc/device-tree/soc/mdio@14f02000/ethernet-phy@5/phy-mode; echo
+> cat /sys/bus/mdio_bus/devices/*/phy_interface
+> ```
+>
+> 第一条是 DT 原值，路径由 `zx279133.dtsi:359` 的 `mdio1: mdio@14f02000`
+> 与 dts 里的 `rtl8226b: ethernet-phy@5` 推出来；
+> 第二条是 `phy_device.c:582` 的 `DEVICE_ATTR_RO(phy_interface)`，
+> 内容为 `phy_modes(phydev->interface)`。`tr`/`cat` 都在出货 rootfs 里（实测）。
+>
+> ⚠ **`0x697a` 读不了，这条是本轮更正掉的**（round501–510）。原先这里写的是
+> `cat /sys/bus/mdio_bus/devices/ethernet-phy@5/mmd/30/697a`，
+> **两处都是错的**：
+> **文件不存在**——MDIO core 在新内核里已经合并成单个
+> `drivers/net/mdio.c`（`drivers/net/Makefile:22` = `obj-$(CONFIG_MDIO) += mdio.o`），
+> `mdio-mmd.c` 这个文件在 torvalds/linux 和 cnjn 树里**都是 404**（同目录
+> `Makefile`/`Kconfig` 都 200，所以不是路径走错、也不是限流）；
+> `drivers/net/mdio.c` 里**没有任何 debugfs 注册、没有任何 sysfs 文件**，
+> 旧的 `/sys/kernel/debug/mdio_bus/<bus>/mmd/<dev>` 那套接口随文件一起没了。
+> **设备名也不对**——`PHY_ID_FMT` 是 `"%s:%02x"`（`include/linux/phy.h:322`），
+> PHY 在 sysfs 里叫 `eth0:05` 这种形式，不是 `ethernet-phy@5`，所以只能 glob。
+> **寄存器级分析本身仍然成立**（那是从 `realtek_main.c` 推出来的），只是读不出来。
+>
+> **出 `2500base-x` 时不要去查驱动**（round498 实测
+> `ci-build-repo/staging/trial/flash-dtb.bin` 就是那份 11,916 B 的旧 dtb，
+> 见「有两棵 `staging/`」那节）：它精确对应 `phy-mode="2500base-x"`，
+> 意思是**刷进去的 dtb 是 sgmii 修复之前的那份**。这种情况下 `driver` 仍会显示
+> realtek，上面的 genphy 那道门不会响——**只有 `phy-mode` 这条读数能抓住它**。
+> 两条都出 `sgmii` 才继续往下走。
 >
 > **这颗芯片的 IEEE ID 在本项目任何记录里都没有出现过**：厂商侧 dmesg 只有
 > `r8226b_phy_probe`、`phy_id:0x5`（那是 **MDIO 地址 5**，不是 IEEE ID）和
