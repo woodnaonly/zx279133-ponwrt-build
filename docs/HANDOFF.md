@@ -864,9 +864,10 @@ stat -c '%U %a' /etc/dropbear
 这个前提**便宜地就能在板上验**，而且失败时没有任何报错。
 
 ```sh
-cat /sys/class/net/eth0/phy*/phy_id      # 期望 0x001ccf（RTL8226B 系）
-cat /sys/class/net/eth0/phy*/driver     # 期望 realtek
-dmesg | grep -i -e rtl8226 -e r8226b -e genphy
+# 2026-10-18 更正: 原来这里写「期望 0x001ccf」—— 那个值不对, 见下。
+cat /sys/class/net/eth0/phy*/phy_id      # 期望 0x001cc8xx, 且是下面六个之一
+cat /sys/class/net/eth0/phy*/driver     # 期望 .../drivers/net/phy/realtek, 不是 genphy
+dmesg | grep -i -e rtl8226 -e rtl8221 -e realtek
 ```
 
 **`driver` 显示 `genphy` 就是没匹配上。** 因为我们给 PHY 节点**故意不写 `compatible`**
@@ -874,13 +875,96 @@ dmesg | grep -i -e rtl8226 -e r8226b -e genphy
 不报错，现象只是「ping 不通」，和「内核没起来」长得一模一样。
 那种情况下 `sgmii` 的前提不成立，要回来重谈 PHY 节点，**不要继续往下调链路**。
 
+> ⚠ **2026-10-18 更正一条写错的期望值。** 原来这里写 `期望 0x001ccf`。
+> **这个值不是 Realtek 的 OUI**，驱动里所有 RTL822x 都在 `0x001cc8xx`。
+> 照着这条判，`phy_id` 读出 `0x001cc840` 会被当成「不对」——
+> 而那恰恰是**正确**的绑定。
+>
+> 期望值改成下面这张表（逐条读自 `drivers/net/phy/realtek/realtek_main.c`，
+> ref `codex/sr1010-mainline`）。**`CONFIG_REALTEK_PHY=y` 已确认**：
+> `modules.builtin:302` = `realtek.ko`。
+>
+> | `phy_id` | 绑到的 `.name` | 额外条件 |
+> |---|---|---|
+> | `0x001cc800` | `RTL8226 2.5Gbps PHY` | 且 `rtlgen_supports_2_5gbps()` 且 `rtlgen_supports_mmd()`——**按能力探测，不按型号** |
+> | `0x001cc840` | `RTL8226B_RTL8221B 2.5Gbps PHY` | 且 `rtlgen_supports_mmd()` |
+> | `0x001cc838` | `RTL8226-CG 2.5Gbps PHY` | 精确 |
+> | `0x001cc848` | `RTL8226B-CG_RTL8221B-CG 2.5Gbps PHY` | 精确 |
+> | `0x001cc849` | `RTL8221B-VB-CG 2.5Gbps PHY (C22/C45)` | 精确（`rtlgen_is_c45_match` 用**相等**不是掩码） |
+> | `0x001cc84a` | `RTL8221B-VM-CG 2.5Gbps PHY (C22/C45)` | 精确 |
+>
+> **这六条全部带 `config_init`，而两个 `config_init` 都调
+> `rtl822x_set_serdes_option_mode()`**（`realtek_main.c:1274` 与 `:1279`）。
+> 所以**只要绑上这六条里的任何一条，SGMII 的 serdes option 就一定会被编程**——
+> 这把 genphy 风险从「可能」压到「ID 落在这六个之外」。
+>
+> **更省事、也更硬的判据**：直接读那颗寄存器。
+> `RTL822X_VND1_SERDES_OPTION = 0x697a`，在 MMD30（vendor 1）下，
+> 字段是 `GENMASK(5,0)`。`phy-mode="sgmii"` 时驱动写入 **`0`**，
+> `2500base-x` 时写入 **`2`**（`realtek_main.c:1238-1244`）。
+> 若板上存在 mdio-mmd 的 sysfs（`/sys/bus/mdio_bus/devices/ethernet-phy@5/mmd/30/697a`），
+> 读它，低 6 位应是 **0**。这条比「驱动绑上了」更直接——它验的就是修复本身。
+>
+> **这颗芯片的 IEEE ID 在本项目任何记录里都没有出现过**：厂商侧 dmesg 只有
+> `r8226b_phy_probe`、`phy_id:0x5`（那是 **MDIO 地址 5**，不是 IEEE ID）和
+> `14f02000.mdio "MDIO id = 1"`。所以**上面那张表是「期望集合」，不是「已知值」**。
+
 **为什么要问这个**：上游自己的 hardware-truth 写着
 「`rlt8226b.ko` 被加载并初始化，但现有证据**不能证明板上另有一颗独立 RTL8226B**，
 更可能是 SDK/交换芯片 PHY 支持」——**那条是关于 SR1010 的**（那边有 RTL8372N 交换芯片），
 我们这块板有自己板子的 dmesg（`r8226b_phy_probe` / `phy_id:0x5`），**不受它直接反驳**。
 但它点出了这条链路上的机制性风险，所以值得在板上花三秒看一眼。
 
+### `phy-mode = "sgmii"` 到底改了什么：从 DTS 一行一直推到 PHY 寄存器
+
+上一小节说「上游在 SGMII 上没有硬件历史，只能按第一次跑设期望」。
+**2026-10-18 补：那个期望现在有了寄存器级的支撑**，不再只是「应该对」。
+
+读的是 `drivers/net/phy/realtek/realtek_main.c`（ref `codex/sr1010-mainline`，
+与 CI 钉的 submodule commit 同一个分支）。函数体逐行：
+
+```c
+/* :1214  —— docs/07 引用过但一直没能独立复核的那个符号，就是它 */
+static int rtl822x_set_serdes_option_mode(struct phy_device *phydev, bool gen1)
+{
+	has_2500 = test_bit(PHY_INTERFACE_MODE_2500BASEX, phydev->host_interfaces) ||
+		   phydev->interface == PHY_INTERFACE_MODE_2500BASEX;
+	has_sgmii = test_bit(PHY_INTERFACE_MODE_SGMII,  phydev->host_interfaces) ||
+		    phydev->interface == PHY_INTERFACE_MODE_SGMII;
+	...
+	if (has_2500 && !has_sgmii) {
+		mode = RTL822X_VND1_SERDES_OPTION_MODE_2500BASEX;      /* = 2 */
+		phydev->rate_matching = RATE_MATCH_PAUSE;
+	} else {
+		mode = RTL822X_VND1_SERDES_OPTION_MODE_2500BASEX_SGMII; /* = 0 */
+		phydev->rate_matching = RATE_MATCH_NONE;
+	}
+	...
+	phy_modify_mmd_changed(phydev, MDIO_MMD_VEND1,
+			       RTL822X_VND1_SERDES_OPTION,          /* 0x697a */
+			       RTL822X_VND1_SERDES_OPTION_MODE_MASK, /* GENMASK(5,0) */
+			       mode);
+}
+```
+
+于是 DTS 那一行的后果是确定的：
+
+| `phy-mode` | `has_2500` | `has_sgmii` | 写进 `0x697a` 低 6 位 | `rate_matching` |
+|---|---|---|---|---|
+| `"sgmii"`（现在） | 0 | 1 | **`0`** | `NONE` |
+| `"2500base-x"`（dtsi 默认，被我们翻掉） | 1 | 0 | **`2`** | `PAUSE` |
+
+**这解释了那次实测。** `2500base-x` 时 PHY 的 serdes 跑 2.5G、而线缆那一端是 1G，
+于是 phylink 拿到 `Link is Up - 1Gbps/Full`、两端 carrier 都是 1，
+**而 board rx_packets 恒为 0、20 包突发在对端计数器上一个字节都不动**
+（dts 注释 L267-274 记的 2026-10-16 实测）。改成 `sgmii` 之后写入值变成 `0`，
+PHY 的 serdes 与对端同速——**「Up 但一字节不通」这个失效模式在这一层被消掉了。**
+
+⚠ **仍然不是「已验证」**：这一整段是从源码推出来的，`phy_id` 和寄存器实测都还是板上。
+但期望值的形状现在有了：**低 6 位必须是 0**，而 `2` 就复现那次死链。
+
 ### 期望值：SGMII 上游从来没在硬件上跑过
+
 
 `phy-mode = "sgmii"` 现在的证据是三份：驱动只接受 `{2500BASEX, SGMII}`（`zx279133-main.c:477-480`）、
 驱动从 `plat_132.ko` 逆出来的 `xpcs_1g_mode_conf(xmac, speed=3, duplex=1, pcs_mode=2)`
