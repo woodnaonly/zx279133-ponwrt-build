@@ -505,45 +505,55 @@ jobs:
         if: steps.pick.outputs.run == 'true'
         run: |
           set -e
-          # Inspect the ipk, because the ipk is what OpenWrt installs into the rootfs:
-          # "the package compiled", "the files sit at the paths the server opens them
-          # by" and "the exec bits survived packaging" are all answered by its
-          # data.tar.gz, and none of them are answered by a build log.
+          # Inspect the package archive, because the package archive is what gets
+          # installed into the rootfs: "the package compiled", "the files sit at the
+          # paths the server opens them by" and "the exec bits survived packaging" are
+          # all answered by its data.tar.gz, and none of them are answered by a build log.
           #
           # The staged-rootfs directory is only reported, never required: the first
           # version of this step globbed build_dir/target-*/rootfs-*, matched nothing in
           # a flash build, and failed a job 74 minutes deep over a guess at a directory
           # name. A gate that cannot find its subject is not evidence of absence.
+          #
+          # And the extension is matched both ways for the same reason. This tree is
+          # ImmortalWrt with the apk package manager, not opkg - proven from a built
+          # trial initramfs, which carries lib/apk/db/installed and
+          # lib/apk/packages/<pkg>.list and no lib/opkg/anything. A gate written against
+          # *.ipk alone would therefore have found no package in a build that packaged
+          # zrec correctly, which is the guessed-path mistake again, one layer down.
           want="usr/sbin/zrec usr/sbin/zrec-run usr/libexec/zrec-ops usr/libexec/zrec-bringup lib/preinit/85_zrec etc/rc.d/S21zrec www/zrec/index.html"
           noexec="www/zrec/index.html lib/preinit/85_zrec"
-          IPK=$( { find openwrt/bin openwrt/build_dir \( -name 'zrec_*.ipk' -o -name 'zrec-*.ipk' \) 2>/dev/null || true; } | head -1)
-          MAN=$( { ls openwrt/bin/targets/zte/zx279133/manifest 2>/dev/null || true; } | head -1)
+          PKG=$( { find openwrt/bin openwrt/build_dir -name 'zrec*' \( -name '*.apk' -o -name '*.ipk' \) 2>/dev/null || true; } | sort | head -1)
+          MAN=$( { find openwrt/bin/targets -maxdepth 3 -name '*manifest*' 2>/dev/null || true; } | sort | head -1)
           R=$( { find openwrt/build_dir -maxdepth 3 -type d -name 'rootfs*' 2>/dev/null || true; } | sort | head -1)
-          echo "ipk: ${IPK:-none}  manifest: ${MAN:-none}  staged rootfs: ${R:-none}"
+          echo "package: ${PKG:-none}  manifest: ${MAN:-none}  staged rootfs: ${R:-none}"
           if [ "${{ matrix.mode }}" = initramfs ]; then
-            test -n "$IPK" || {
+            test -n "$PKG" || {
               echo "::error::zrec produced no package, so it cannot be in the RAM image" >&2
-              find openwrt/build_dir -maxdepth 2 -name 'zrec*' 2>/dev/null || true
+              echo "--- anything named zrec under bin/ and build_dir/ ---" >&2
+              find openwrt/build_dir openwrt/bin -maxdepth 4 -name 'zrec*' 2>/dev/null >&2 || true
               exit 1; }
-            # data.tar.gz is extracted to a file first, and every read of it says -z:
-            # `tar -xOzf ipk data.tar.gz | tar -tv` looks equivalent and is not, because
-            # on a pipe GNU tar does not sniff the gzip stream - it dies with "Archive is
-            # compressed. Use -z option", LIST comes back empty and every file is then
-            # reported missing. Same reason the names are normalised with awk rather than
-            # sed: with -v the member name is the LAST field and still carries its ./
-            # prefix, so a `s|^\./||` on the whole line matches nothing at all. Both
-            # shapes were caught by running the gate against a package built to OpenWrt's
-            # layout, not by reading it.
+            # The outer archive is read with tar -x (auto-detected compression), not -xzf:
+            # the two differ only for a pipe, and naming one format would fail on the
+            # other. Everything under data.tar.* is then read from a real file.
             T=$(mktemp -d)
-            tar -xzf "$IPK" -C "$T" data.tar.gz || {
-              echo "::error::$IPK has no data.tar.gz"; tar -tzf "$IPK"; exit 1; }
-            LIST=$(tar -tvzf "$T/data.tar.gz" |
+            tar -xf "$PKG" -C "$T" || { echo "::error::$PKG is not a readable package"; exit 1; }
+            echo "--- archive members ---"
+            ls -l "$T"
+            D=$( { ls "$T"/data.tar.* 2>/dev/null || true; } | head -1)
+            test -n "$D" || {
+              echo "::error::$PKG has no data.tar.* member, so nothing of zrec's is in it" >&2
+              tar -tf "$PKG" >&2; exit 1; }
+            # Member names are normalised with awk, not sed: with -v the name is the LAST
+            # field and still carries its ./ prefix, so `s|^\./||` on the whole line
+            # matches nothing at all. Caught by running the gate against a real package.
+            LIST=$(tar -tvf "$D" |
               awk '{ n = $NF; sub(/^\.\//, "", n); if (n !~ /\/$/) print $1, n }')
             echo "--- package contents ---"
             echo "$LIST"
             for f in $want; do
               echo "$LIST" | grep -q " ${f}\$" || {
-                echo "::error::$f is not in $IPK"; exit 1; }
+                echo "::error::$f is not in $PKG"; exit 1; }
             done
             for f in $want; do
               case " $noexec " in *" $f "*) continue ;; esac
@@ -555,7 +565,7 @@ jobs:
             done
             # Unpack for real, then read what the boot depends on.
             mkdir -p "$T/x"
-            tar -xzf "$T/data.tar.gz" -C "$T/x"
+            tar -xf "$D" -C "$T/x"
             grep -aq '/www/zrec/index.html' "$T/x/usr/sbin/zrec" || {
               echo "::error::the compiled zrec does not reference /www/zrec/index.html"; exit 1; }
             P="$T/x/lib/preinit/85_zrec"
@@ -580,9 +590,9 @@ jobs:
             fi
             echo "recovery service is packaged for the RAM image"
           else
-            if [ -n "$IPK" ]; then
+            if [ -n "$PKG" ]; then
               echo "::error::flash mode built a zrec package - a released root must not ship a flasher" >&2
-              ls -l "$IPK"
+              ls -l "$PKG"
               exit 1
             fi
             if [ -n "$MAN" ] && grep -qw zrec "$MAN"; then

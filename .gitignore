@@ -30,3 +30,9 @@ __pycache__/
 # the person doing it would not notice until the push.
 tests/fixtures/stale-set/*
 !tests/fixtures/stale-set/sha256sums-release
+
+# tests/rehearse_zrec_gate.sh builds a fake OpenWrt tree - ten synthetic package
+# archives with a rootfs layout inside - next to the workflow it is rehearsing,
+# because the real subject of that gate only exists 74 minutes into a build. All
+# of it is regenerable from the script and none of it is evidence, so it stays out.
+gate-rehearse/
