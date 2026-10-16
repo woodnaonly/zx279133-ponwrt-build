@@ -24,7 +24,7 @@ ok()  { pass=$((pass+1)); printf 'PASS %s\n' "$1"; }
 bad() { printf 'FAIL %s\n' "$1"; exit 1; }
 
 echo "=== walker self-test ==="
-python3 tools/fdtwalk.py "$DTB" --compat >/dev/null 2>&1 || bad "fdtwalk could not read $DTB"
+python3 ci-build-repo/tools/fdtwalk.py "$DTB" --compat >/dev/null 2>&1 || bad "fdtwalk could not read $DTB"
 ok "dtb readable by the validated walker"
 
 echo

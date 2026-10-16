@@ -184,7 +184,7 @@ rm -rf "$tmp"
 
 echo
 echo "=== 7. the flashed dtb enables the whole path ==="
-python3 tools/fdtwalk.py staging/ctl/gate-dtb >/tmp/dtb.txt 2>&1 || bad "fdtwalk failed"
+python3 ci-build-repo/tools/fdtwalk.py staging/ctl/gate-dtb >/tmp/dtb.txt 2>&1 || bad "fdtwalk failed"
 grep -q 'FDT totalsize=' /tmp/dtb.txt || bad "fdtwalk self-test did not pass"
 node() { awk -v n="$1" '$0 ~ "NODE " n"$" {f=1;print;next} f&&/NODE /{exit} f{print}' /tmp/dtb.txt; }
 for nd in '/soc/ethernet@19000000' '/soc/phy@16000000' '/soc/phy@16100000'; do

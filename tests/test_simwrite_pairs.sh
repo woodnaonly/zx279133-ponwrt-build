@@ -22,7 +22,7 @@ for pair in staging/trial staging/rollback; do
 	fi
 	printf '  kernel %s bytes, dtb %s bytes\n' \
 		"$(wc -c <"$pair/flash-uImage")" "$(wc -c <"$pair/flash-dtb.bin")"
-	if SRC="$pair" sh tools/simwrite.sh >/tmp/sw.$$ 2>&1; then
+	if SRC="$PWD/$pair" sh ci-build-repo/tools/simwrite.sh >/tmp/sw.$$ 2>&1; then
 		n_ok=$(grep -c '^  ok ' /tmp/sw.$$)
 		n_bad=$(grep -c '^  FAIL ' /tmp/sw.$$)
 		echo "  exit 0 | $n_ok ok, $n_bad FAIL"

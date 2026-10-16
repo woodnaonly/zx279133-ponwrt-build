@@ -42,7 +42,7 @@ for f in "$DTS" "$NET" "$WF" "$DTB" "$IMG"; do
 done
 
 echo "=== 1. the compiled dtb: nppt points at MDIO address 5 ==="
-python3 tools/fdtwalk.py "$DTB" >/tmp/dtb.txt 2>&1 || bad "fdtwalk failed"
+python3 ci-build-repo/tools/fdtwalk.py "$DTB" >/tmp/dtb.txt 2>&1 || bad "fdtwalk failed"
 grep -q 'FDT totalsize=' /tmp/dtb.txt || bad "fdtwalk self-test did not pass"
 node() { awk -v n="$1" '$0 ~ "NODE " n"$" {f=1;print;next} f&&/NODE /{exit} f{print}' /tmp/dtb.txt; }
 NP=$(node '/soc/ethernet@19000000')

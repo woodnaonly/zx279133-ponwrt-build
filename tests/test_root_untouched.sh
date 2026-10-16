@@ -50,24 +50,24 @@ echo
 echo "=== 2. the rollback path itself writes exactly two partitions ==="
 # flash-direct.sh stages two files and hands flash-write.sh to the board. Neither may name
 # root. This is a property of the code, checked by running it, not by reading it.
-if grep -qE 'mtd(_debug)? +(write|erase)[^\n]*\broot\b' tools/flash-direct.sh tools/flash-write.sh; then
+if grep -qE 'mtd(_debug)? +(write|erase)[^\n]*\broot\b' ci-build-repo/tools/flash-direct.sh ci-build-repo/tools/flash-write.sh; then
 	bad "neither rollback script names root in an mtd write/erase" "see the grep above"
 else
 	ok "neither rollback script names root in an mtd write/erase" "flash-direct.sh + flash-write.sh"
 fi
 # and the worker only ever resolves two labels
 for l in kernel dtb; do
-	grep -q "dev_of $l" tools/flash-write.sh && ok "flash-write.sh resolves '$l'" "" || bad "flash-write.sh resolves '$l'" "absent"
+	grep -q "dev_of $l" ci-build-repo/tools/flash-write.sh && ok "flash-write.sh resolves '$l'" "" || bad "flash-write.sh resolves '$l'" "absent"
 done
-n=$(grep -c 'dev_of [a-z]' tools/flash-write.sh)
+n=$(grep -c 'dev_of [a-z]' ci-build-repo/tools/flash-write.sh)
 if [ "$n" -eq 2 ]; then ok "and resolves no third partition" "dev_of calls: $n"
 else bad "and resolves no third partition" "dev_of calls: $n"; fi
 
 echo
 echo "=== 3. the one path that does write root is guarded and deliberate ==="
-if grep -q 'write-root' tools/flash-round.sh; then
+if grep -q 'write-root' ci-build-repo/tools/flash-round.sh; then
 	ok "flash-round.sh exposes a write-root mode" "the deliberate full-image path"
-	if grep -q 'MODE.*=.*write-root' tools/flash-round.sh && grep -q 'if \[ "\$MODE" = write-root \]' tools/flash-round.sh; then
+	if grep -q 'MODE.*=.*write-root' ci-build-repo/tools/flash-round.sh && grep -q 'if \[ "\$MODE" = write-root \]' ci-build-repo/tools/flash-round.sh; then
 		ok "  and it is gated by its own conditional" "mtime freshness, not a default"
 	else
 		bad "  and it is gated" "no dedicated guard found"
@@ -76,13 +76,13 @@ else
 	note "flash-round.sh has no write-root mode" "nothing in this repo can write root"
 fi
 # the default modes must not reach it
-grep -q 'write) *TAG=FW1\|write) *ARGS' tools/flash-round.sh \
+grep -q 'write) *TAG=FW1\|write) *ARGS' ci-build-repo/tools/flash-round.sh \
 	&& ok "plain 'write' is a distinct mode from 'write-root'" "" \
 	|| note "could not confirm write and write-root are distinct modes" ""
 
 echo
 echo "=== 4. negative control: the checker must fail on a script that DOES write root ==="
-cp tools/flash-direct.sh "$T/broken.sh"
+cp ci-build-repo/tools/flash-direct.sh "$T/broken.sh"
 printf '\n# injected by the test\nmtd write flash-rootfs.jffs2 root\n' >>"$T/broken.sh"
 if grep -qE 'mtd(_debug)? +(write|erase)[^\n]*\broot\b' "$T/broken.sh"; then
 	ok "a script with an mtd write to root is caught" "the check is live"
@@ -90,13 +90,13 @@ else
 	bad "a script with an mtd write to root is caught" "the check never fires - useless"
 fi
 # and the real one is not caught
-if grep -qE 'mtd(_debug)? +(write|erase)[^\n]*\broot\b' tools/flash-direct.sh; then
+if grep -qE 'mtd(_debug)? +(write|erase)[^\n]*\broot\b' ci-build-repo/tools/flash-direct.sh; then
 	bad "and the real script is NOT flagged" "false positive"
 else
 	ok "and the real script is not flagged" ""
 fi
 # a comment must not trip it - otherwise the check would cry wolf on flash-round.sh:42
-cp tools/flash-round.sh "$T/commented.sh"
+cp ci-build-repo/tools/flash-round.sh "$T/commented.sh"
 if grep -qE '^[^\#]*mtd(_debug)? +(write|erase)[^\n]*\broot\b' "$T/commented.sh"; then
 	bad "a comment mentioning the write is not flagged" "false positive"
 else

@@ -42,7 +42,12 @@ mkdir -p "$T/rollback"
 # the script hard-codes OUT=staging/rollback, so keep the real pair safe and restore after
 cp -a staging/rollback/flash-uImage staging/rollback/flash-dtb.bin "$T/keep-" 2>/dev/null || true
 mkdir -p "$T/keepdir" && cp staging/rollback/flash-uImage staging/rollback/flash-dtb.bin "$T/keepdir/" 2>/dev/null
-OUT=$(SKIP_BOARD=1 PERMIT="$T/permit.txt" sh tools/mkrollback.sh 2>&1); rc=$?
+# OUT is named explicitly (mkrollback.sh honours it) because the tool cds to its own repository
+# root first: left relative it would write to ci-build-repo/staging/rollback, and every
+# comparison below would be against the workspace copy that nothing had regenerated - which
+# compares equal by doing nothing at all.
+OUT=$(OUT="$PWD/staging/rollback" LOCAL="$PWD" SKIP_BOARD=1 PERMIT="$T/permit.txt" \
+      sh ci-build-repo/tools/mkrollback.sh 2>&1); rc=$?
 printf '%s\n' "$OUT" | sed 's/^/    /'
 if [ "$rc" -eq 0 ]; then ok "mkrollback.sh runs clean" "rc=0"
 else bad "mkrollback.sh runs clean" "rc=$rc"; fi

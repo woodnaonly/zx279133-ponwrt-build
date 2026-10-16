@@ -16,8 +16,13 @@ bad() { printf '  FAIL  %-52s %s\n' "$1" "${2:-}"; fail=$(( fail + 1 )); }
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
 
 # run the tool against a given directory, report rc and whether it said VERIFIED
+# $2 is absolutised here: checkrollback.sh does `cd "$(dirname "$0")/.."`, so a relative OUT
+# would resolve against the repository root instead of this workspace, and the suite would
+# quietly verify ci-build-repo/staging/rollback - which is not where the pair it just printed
+# the size of lives.
 run() { # $1 label  $2 dir
-	OUT="$2" sh tools/checkrollback.sh >"$T/out" 2>&1; rc=$?
+	d=$(cd "$2" 2>/dev/null && pwd) || d=$2
+	OUT="$d" LOCAL="$PWD" sh ci-build-repo/tools/checkrollback.sh >"$T/out" 2>&1; rc=$?
 	verdict=$(grep -c 'ROLLBACK VERIFIED' "$T/out" || true)
 	printf '  rc=%-3s %s\n' "$rc" "$1"
 	sed 's/^/      /' "$T/out" | grep -E '^\s+(ok|FAIL|\.\.\.\.)' | head -4 | sed 's/^/  /'
@@ -75,25 +80,31 @@ if grep -q 'restore_set/root_stock.bin is ZTE firmware image data' "$T/out"; the
 else
 	bad "restore_set is named as not a rollback set" "the warning is missing"
 fi
-if grep -q 'not a substitute for staging/rollback' "$T/out"; then
+# The tool prints "not a substitute for $OUT". This used to grep the literal
+# 'not a substitute for staging/rollback', which made the assertion a claim about how OUT
+# happens to be spelled rather than about the behaviour: checkrollback.sh is now handed an
+# absolute OUT, prints the same sentence with the same directory in it, and the check went red
+# over a leading /mnt/c. The directory it was given is the thing that must appear.
+realpair=$(cd staging/rollback && pwd)
+if grep -q "not a substitute for $realpair" "$T/out"; then
 	ok "and the usable alternative is named" ""
 else
-	bad "the usable alternative is named" ""
+	bad "the usable alternative is named" "the tool did not name $realpair as the usable pair"
 fi
 
 echo
 echo "=== 6. the preflight entry point actually calls it ==="
-if grep -q 'tools/checkrollback.sh' tools/preflight.sh; then
+if grep -q 'tools/checkrollback.sh' ci-build-repo/tools/preflight.sh; then
 	ok "preflight.sh runs checkrollback.sh" ""
 else
 	bad "preflight.sh runs checkrollback.sh" "an operator would never see the check"
 fi
-if grep -q 'SRC=staging/rollback sh tools/simwrite.sh' tools/preflight.sh; then
+if grep -q 'SRC=staging/rollback sh tools/simwrite.sh' ci-build-repo/tools/preflight.sh; then
 	ok "and rehearses the writer with the rollback pair too" ""
 else
 	bad "preflight rehearses the rollback pair" "only the mainline pair is rehearsed"
 fi
-if grep -q 'was previously described here as' tools/preflight.sh; then
+if grep -q 'was previously described here as' ci-build-repo/tools/preflight.sh; then
 	ok "and records that the old restore_set claim was wrong" ""
 else
 	bad "preflight records the corrected claim" ""
@@ -102,7 +113,7 @@ fi
 echo
 echo "=== 7. and the tool is read-only ==="
 before=$(md5sum staging/rollback/flash-uImage staging/rollback/flash-dtb.bin | md5sum)
-OUT=staging/rollback sh tools/checkrollback.sh >/dev/null 2>&1
+OUT="$PWD/staging/rollback" LOCAL="$PWD" sh ci-build-repo/tools/checkrollback.sh >/dev/null 2>&1
 after=$(md5sum staging/rollback/flash-uImage staging/rollback/flash-dtb.bin | md5sum)
 if [ "$before" = "$after" ]; then ok "running it changes nothing" ""
 else bad "running it changes nothing" "the pair was modified"; fi

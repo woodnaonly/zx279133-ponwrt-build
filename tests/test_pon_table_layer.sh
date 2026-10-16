@@ -51,9 +51,9 @@ grep -Fxq -e 'zte,zx279133-nppt' "$kostr" \
 	&& ok "and zte,zx279133-nppt - the same node the mainline driver binds" \
 	|| bad "np_133.ko does not claim zte,zx279133-nppt"
 rm -f "$kostr"
-python3 tools/ponelf.py "$KO" symbols 'np_downlaod_mcode$' 2>/dev/null | grep -q 'np_downlaod_mcode' \
+python3 ci-build-repo/tools/ponelf.py "$KO" symbols 'np_downlaod_mcode$' 2>/dev/null | grep -q 'np_downlaod_mcode' \
 	&& ok "and exports np_downlaod_mcode" || bad "np_133.ko lost np_downlaod_mcode"
-python3 tools/ponelf.py "$KO" xref 'np_downlaod_mcode$' 2>/dev/null | grep -q 'ppu_set_inst' \
+python3 ci-build-repo/tools/ponelf.py "$KO" xref 'np_downlaod_mcode$' 2>/dev/null | grep -q 'ppu_set_inst' \
 	&& ok "whose job is to hand the blob to ppu_set_inst" || bad "np_downlaod_mcode no longer calls ppu_set_inst"
 
 echo
@@ -62,13 +62,13 @@ for s in spa_pon_static_llid_set uopc_set_tcont_mode \
          red_set_tcont_in_share_max gemport_vlan_map_table_update \
          ppu_cluster_set_pkt_type_detail spa_set_pkt_type_table \
          ppu_set_dup_start_num ppu_debug_hash_set_tbl; do
-	python3 tools/ponelf.py "$KO" symbols "$s\$" 2>/dev/null | grep -q "$s" \
+	python3 ci-build-repo/tools/ponelf.py "$KO" symbols "$s\$" 2>/dev/null | grep -q "$s" \
 		&& ok "np_133.ko exports $s" || bad "np_133.ko lost $s"
 done
-n=$(python3 tools/ponelf.py "$KO" symbols '^tm_' 2>/dev/null | grep -c FUNC || true)
+n=$(python3 ci-build-repo/tools/ponelf.py "$KO" symbols '^tm_' 2>/dev/null | grep -c FUNC || true)
 [ "$n" -gt 100 ] && ok "and a whole T-CONT queue scheduler: $n tm_ functions" \
 	|| bad "only $n tm_ functions - the scheduler is not there"
-n=$(python3 tools/ponelf.py "$KO" symbols '^llid|llid' 2>/dev/null | grep -c FUNC || true)
+n=$(python3 ci-build-repo/tools/ponelf.py "$KO" symbols '^llid|llid' 2>/dev/null | grep -c FUNC || true)
 [ "$n" -gt 0 ] && ok "plus $n LLID functions" || bad "no LLID functions at all"
 
 echo

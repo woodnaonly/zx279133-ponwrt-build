@@ -23,7 +23,7 @@ ok()  { pass=$((pass+1)); printf 'PASS %s\n' "$1"; }
 bad() { printf 'FAIL %s\n' "$1"; exit 1; }
 
 echo "=== the walker's own self-test ==="
-out=$(python3 tools/fdtwalk.py "$DTB" --leds 2>&1) || bad "fdtwalk.py failed: $(echo "$out" | tail -3)"
+out=$(python3 ci-build-repo/tools/fdtwalk.py "$DTB" --leds 2>&1) || bad "fdtwalk.py failed: $(echo "$out" | tail -3)"
 echo "$out" | grep -q 'walker works' || bad "fdtwalk.py refuses to report: $(echo "$out" | head -5)"
 ok "fdtwalk.py calibrated itself and answered"
 
@@ -64,7 +64,7 @@ echo "=== the scripts really drive that path ==="
 # Not flash-round.sh: that is the PC-side driver, and the beacon code is not its job. The code
 # that writes brightness lives in the generated RAM-root inits - mkctlram.py is what emits them,
 # and init-flash.sh is a checked-in copy of one. Naming flash-round.sh here was wrong.
-for f in staging/ctl/init-flash.sh tools/mkctlram.py; do
+for f in staging/ctl/init-flash.sh ci-build-repo/tools/mkctlram.py; do
 	[ -f "$f" ] || bad "$f missing"
 	grep -q '/sys/class/leds/\*/brightness' "$f" \
 		&& ok "$(basename "$f") drives /sys/class/leds/*/brightness" \
@@ -75,7 +75,7 @@ echo
 echo "=== NEGATIVE: a dtb with one unresolvable phandle must be refused ==="
 python3 - "$DTB" <<'PY'
 import struct, sys
-sys.path.insert(0, 'tools')
+sys.path.insert(0, 'ci-build-repo/tools')
 from fdtwalk import FDT
 
 fdt = FDT(open(sys.argv[1], 'rb').read())
@@ -103,14 +103,14 @@ open('/tmp/fake-dangling.dtb', 'wb').write(bytes(blob))
 PY
 
 [ -s /tmp/fake-dangling.dtb ] || bad "could not build the negative-control tree"
-bad_out=$(python3 tools/fdtwalk.py /tmp/fake-dangling.dtb --leds 2>&1)
+bad_out=$(python3 ci-build-repo/tools/fdtwalk.py /tmp/fake-dangling.dtb --leds 2>&1)
 echo "$bad_out" | grep -q 'UNRESOLVED' \
 	|| bad "the walker did not notice a dangling phandle - it cannot be trusted to notice a real fault"
 echo "  walker says: $(echo "$bad_out" | grep UNRESOLVED | head -1 | sed 's/^ *//')"
 ok "NEGATIVE: a dangling phandle is reported as UNRESOLVED"
 
 # And the suite's own verdict must flip on that tree.
-if python3 tools/fdtwalk.py /tmp/fake-dangling.dtb --leds 2>&1 | grep -q UNRESOLVED; then
+if python3 ci-build-repo/tools/fdtwalk.py /tmp/fake-dangling.dtb --leds 2>&1 | grep -q UNRESOLVED; then
 	ok "NEGATIVE: the acceptance condition fails on the broken tree, as it must"
 else
 	bad "the broken tree still passes"

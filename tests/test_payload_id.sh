@@ -7,7 +7,13 @@
 # A tool that only ever succeeds is not a tool. Every branch here has to be shown refusing
 # something it should refuse, otherwise "it printed a verdict" proves nothing about the verdict.
 set -eu
-cd "$(dirname "$0")/../.."
+# Into the repository, not one level above it. This suite used to `cd ../..` and then say
+# `tools/payload-id.sh`, which is the workspace-root copy - the fossil. Both payload-id.sh
+# (line 22) and the suite read staging/ relative to wherever they were started, and the two
+# trees hold different builds (workspace flash-uImage is 8142017 B, the repository's 8142016 B),
+# so pointing the suite at the shipped tool while leaving it standing in the workspace would
+# have had the tool fingerprint one image and the suite rebuild another.
+cd "$(dirname "$0")/.."
 T=tools/payload-id.sh
 T1=$(tr -cd '\r' < "$T" | wc -c)
 [ "$T1" = 0 ] || { echo "FAIL: $T carries $T1 CR bytes"; exit 1; }

@@ -49,7 +49,7 @@ else
 	REPRO="broken"
 fi
 # and prove the shipped script really carries the fix, not just this test's copy
-if grep -q 'grep -c "READ_OK" || true' tools/flash-direct.sh; then
+if grep -q 'grep -c "READ_OK" || true' ci-build-repo/tools/flash-direct.sh; then
 	ok "tools/flash-direct.sh carries the fixed form" ""
 else
 	bad "tools/flash-direct.sh carries the fixed form" "it still has the bare grep -c"
@@ -65,7 +65,7 @@ setup() { # $1 = what the worker log should say
 	# (staging/rollback, tools/dtbparts.py, tools/flash-write.sh) resolves to nothing.
 	mkdir -p "$W/repo/tools" "$W/repo/staging/rollback" "$W/bin" "$W/dev/tmp/flash"
 	cp staging/rollback/flash-uImage staging/rollback/flash-dtb.bin "$W/repo/staging/rollback/"
-	cp tools/flash-write.sh tools/dtbparts.py "$W/repo/tools/"
+	cp ci-build-repo/tools/flash-write.sh ci-build-repo/tools/dtbparts.py "$W/repo/tools/"
 	# the worker log is a template the fake device serves on every poll; arming must not
 	# consume it, or every verdict case degenerates into the empty-log case
 	printf '%s' "$1" >"$W/log.template"
@@ -232,12 +232,12 @@ rm -rf "$W"
 
 echo
 echo "=== 9. the rollback pair passes the dtb gate on its own ==="
-if python tools/dtbparts.py staging/rollback/flash-dtb.bin 'root=0xf00000,0xf100000' >/dev/null 2>&1; then
+if python ci-build-repo/tools/dtbparts.py staging/rollback/flash-dtb.bin 'root=0xf00000,0xf100000' >/dev/null 2>&1; then
 	ok "staging/rollback/flash-dtb.bin satisfies the vendor EXPECT" "TABLE OK"
 else
 	bad "vendor EXPECT satisfied" "gate rejects the rollback pair"
 fi
-if python tools/dtbparts.py staging/trial/flash-dtb.bin 'root=0xf00000,0xf100000' >/dev/null 2>&1; then
+if python ci-build-repo/tools/dtbparts.py staging/trial/flash-dtb.bin 'root=0xf00000,0xf100000' >/dev/null 2>&1; then
 	bad "mainline dtb must NOT satisfy the vendor EXPECT" "it does - the gate is not discriminating"
 else
 	ok "mainline dtb is correctly rejected by the vendor EXPECT" "the gate discriminates"

@@ -43,9 +43,12 @@ echo
 echo "=== 3b. CR hygiene on the files edited for the release ==="
 for f in ci-build-repo/templates/flash-sk-d840n.sh \
          ci-build-repo/templates/trial-kexec.sh \
-         tools/flash-direct.sh tools/flash-write.sh tools/simwrite.sh \
-         tools/mkrollback.sh tools/checkrollback.sh tools/preflight.sh \
-         tools/payload-id.sh tools/fdtwalk.py tools/check-imagelineage.sh \
+         ci-build-repo/tools/flash-direct.sh ci-build-repo/tools/flash-write.sh \
+         ci-build-repo/tools/simwrite.sh \
+         ci-build-repo/tools/mkrollback.sh ci-build-repo/tools/checkrollback.sh \
+         ci-build-repo/tools/preflight.sh \
+         ci-build-repo/tools/payload-id.sh ci-build-repo/tools/fdtwalk.py \
+         ci-build-repo/tools/check-imagelineage.sh \
          $d/fdt2dts.py \
          $d/test_phy_gate_symbols.py \
          $d/test_phy_gate_symbols.sh \
