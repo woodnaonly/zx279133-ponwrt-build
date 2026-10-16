@@ -76,8 +76,14 @@ echo "=== 2. pull and verify its flash set ==="
 #
 # So: when the caller did NOT name a run, and the staged set already carries the current
 # tree, leave it alone. An explicit RUN is operator intent and still pulls.
+#
+# The rootfs is named explicitly at every call below. With no argument the gate defaults
+# to $WS/staging/trial, and $WS is the *workspace* root - a different copy of the set
+# from the one this script stages, checks the partition table of, and builds the gate
+# payload from. That is a gate that validates one tree while acting on another, and it
+# fails silently: the other copy is usually a slightly older build that also passes.
 if [ "$PULL" = 1 ] && [ "$RUN_EXPLICIT" = 0 ] && [ -s staging/trial/flash-uImage ] &&
-   sh tools/check-imagelineage.sh >/dev/null 2>&1; then
+   sh tools/check-imagelineage.sh staging/trial/flash-rootfs.jffs2 >/dev/null 2>&1; then
 	echo "  the staged set already carries the current tree - not pulling over it"
 	echo "  (RUN was not set; set RUN=<id> to pull a different build on purpose)"
 	PULL=0
@@ -138,12 +144,12 @@ if [ "$ALLOW_UNVERIFIED" = 1 ]; then
 	# stale". Those are opposite findings. An earlier version ran the gate as
 	# `... || echo "(skipped by operator decision)"`, so a positive refusal was filed as a
 	# skip - the one thing this step exists to prevent, wearing the operator's own name.
-	if ! sh tools/check-imagelineage.sh; then
+	if ! sh tools/check-imagelineage.sh staging/trial/flash-rootfs.jffs2; then
 		echo "  the waiver did NOT cover this: the gate read what it was given and still refuses."
 		echo "  That is a finding, not a skip. Do not flash on the strength of ALLOW_UNVERIFIED=1."
 	fi
 else
-	sh tools/check-imagelineage.sh
+	sh tools/check-imagelineage.sh staging/trial/flash-rootfs.jffs2
 fi
 
 echo "=== 5. bootloader in flash versus the image we would write ==="
