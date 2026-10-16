@@ -1009,6 +1009,19 @@ skd840n_initramfs_39_38896098366
    $env:GIT_SSH_COMMAND = "ssh -o Hostname=ssh.github.com -p 443 -o StrictHostKeyChecking=accept-new"
    ```
 
+8. **`dtb` 里 `pcs-handle` 不要改成 `xpcs0`**（2026-10-17 读驱动源码后写死的）。
+
+   `xpcs1@0x1b000000` 是 **XMAC1 的 PCS**，而 NPPT MAC 就是 XMAC1（驱动里的
+   `ZX279133_XMAC1_SOPC_*` 寄存器名）。`zte,lan-pcs-handle` 指向的
+   `xpcs0@0x1a000000` 是 **XMAC0**，它的**唯一**消费者是 RTL8372N 交换驱动
+   （`zx279133-rtl8372n.c:7785`），**这块板上没有交换芯片**。
+   驱动只读 `pcs-handle`（`zx279133-main.c:434`，缺了直接 `-ENODEV`），
+   拿到了就通过 `mac_select_pcs` 亲手交给 phylink
+   （`phylink_of_phy_connect(..., 0)`，第三个参数 0 = 不让 phylink 自己找）。
+
+   **改了的坏法是静默的**：没有报错，只是链路起不来。
+   和「不要给 `S15trial` 加 `-R`」是同一类——看着像修好，实际掐掉唯一能走的路。
+
 ---
 
 ## 8. 读证据时的一条警告
