@@ -265,6 +265,43 @@ git checkout-index -f -u -- $path     # 这时才真正跑换行转换
 一次是 `git checkout 8e2507b` 而新旧提交 blob 相同，git 认为「文件没变」压根没重写。
 这两次都差点让我把巧合写成结论。
 
+### 接线前必须知道的三件事（2026-10-16 实测，都会当场炸）
+
+**1. 暂存的 `staging/trial/` 已经不可刷，必须重拉。**
+
+镜像里新增了 `etc/dropbear/authorized_keys`（见下一条），所以现产物是旧的。
+`tools/check-imagelineage.sh` 现在会**自己**拒绝：
+
+```
+REFUSE in-image/ssh access: etc/dropbear/authorized_keys is not in the image at all
+```
+
+顺序：推送 → 等 CI（约 75 分钟）→ 重新拉 flash set → 重跑 lineage 门。
+
+**2. 刷完的板子靠公钥进来，钥匙在 WSL 容器里。**
+
+```
+私钥：/root/.ssh/id_onu            （容器文件系统，不在 /mnt/c 下）
+公钥：已烤进镜像 /etc/dropbear/authorized_keys
+指纹：SHA256:2pb66wadj2rDLhc9Z3FCYfu9OVzpG0ley5LBON/iJPM   (ed25519)
+```
+
+公钥**随仓库走**，所以任何人 clone 下来刷出来的板子都是认这把钥匙的；
+但**私钥不随仓库走**，只有这台机器有。换个机器操作就要先把私钥带过去，
+或者用 `KEY=/path/to/key` 覆盖（所有工具都支持这个环境变量）。
+
+无口令是刻意的：所有工具都带 `-o BatchMode=yes`，回答不了口令提示。
+
+**3. 命令在 WSL 里跑，WSL 现在有 ssh 了。**
+
+2026-10-16 之前这个容器里 `ssh/scp/sftp` 一个都没有，26 个工具全是 `not found`；
+现已装 `openssh-client 1:8.4p1`。`nc` 没装也不需要——
+宿主侧 `.sh` 没有一处调它，那些调用都在设备侧（initrd 的 busybox 自带）。
+
+顺带修掉两个坑：`ow.sh` 和 `zpush.sh` 原先硬编码
+`/c/Users/woodn/.ssh/id_onu`（别人机器的路径，还是 Git-Bash 拼写），
+是全仓库唯一两个在提交它们的这台机器上跑不通的工具，现已统一成可覆盖写法。
+
 ### 完全没验证的（需要板子）
 
 * eth0 是否真的 link、插哪个口能通、192.168.9.1 是否应答
