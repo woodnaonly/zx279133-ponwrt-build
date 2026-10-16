@@ -93,6 +93,13 @@ pin_y PSTORE_RAM
 # These are bring-up instruments, not features: they cost a little RAM and a taint flag on
 # the hung-task print, and they are what makes the next silent round legible.
 pin_y MAGIC_SYSRQ
+# The break path in the serial core is what makes a TTL line able to reach sysrq at all,
+# and it is MAGIC_SYSRQ_SERIAL that compiles it (Kconfig: "Enable magic SysRq key over
+# serial", default y once MAGIC_SYSRQ is on). cnjn's base config carries it as "is not set"
+# only because MAGIC_SYSRQ was off, so this pin is insurance against a default moving -
+# without it, a board with sysrq built in is still unreachable from the wire, which reads
+# exactly like a dead board.
+pin_y MAGIC_SYSRQ_SERIAL
 pin_y DETECT_HUNG_TASK
 pin_y SOFTLOCKUP_DETECTOR
 pin_y IKCONFIG

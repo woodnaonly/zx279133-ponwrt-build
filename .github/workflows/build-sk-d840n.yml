@@ -351,13 +351,14 @@ jobs:
           echo "kernel config: $KC"
           # Editing target/linux/.../config-6.18 is the supported way to reach the kernel
           # build, but only the merged result proves it worked - a symbol name that does
-          # not exist is dropped in silence, so all four are checked against the kernel's
+          # not exist is dropped in silence, so every symbol is checked against the kernel's
           # own .config, not against the file that was edited. Each one failing here would
           # cost a whole round on the board and look identical to "the kernel does not
           # boot": no PHY driver means the one reachable port never links; no LEDS_GPIO or
-          # GPIO driver means the panel beacon that replaces a serial console is dark.
+          # GPIO driver means the panel beacon that replaces a serial console is dark; and
+          # no MAGIC_SYSRQ means a stalled round cannot be told apart from a dead board.
           for s in REALTEK_PHY LEDS_GPIO GPIO_ZX279133 GPIO_SYSFS PSTORE PSTORE_CONSOLE PSTORE_RAM \
-                   MAGIC_SYSRQ DETECT_HUNG_TASK SOFTLOCKUP_DETECTOR IKCONFIG IKCONFIG_PROC; do
+                   MAGIC_SYSRQ MAGIC_SYSRQ_SERIAL DETECT_HUNG_TASK SOFTLOCKUP_DETECTOR IKCONFIG IKCONFIG_PROC; do
             grep -qx "CONFIG_$s=y" "$KC" || {
               echo "CONFIG_$s is not built into the kernel" >&2
               grep -iE 'CONFIG_(REALTEK|ZX279051|MDIO_ZX|LEDS_GPIO|GPIO_ZX|GPIO_SYSFS)' "$KC" || true
