@@ -8,7 +8,12 @@ set -u
 L=${1:-}
 [ -n "$L" ] && [ -f "$L" ] || { grep '^# ' "$0" | sed 's/^# //'; exit 2; }
 R=${2:-/tmp/$(basename "$L")}
-SSH="ssh -q -o BatchMode=yes -o IdentitiesOnly=yes -i /c/Users/woodn/.ssh/id_onu -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no root@192.168.9.1"
+# Was hardcoded to /c/Users/woodn/.ssh/id_onu - a path on someone else's machine, which
+# happens to be the Git-Bash spelling of a Windows user directory. Every other tool here
+# resolves $HOME with an overridable KEY, and this one silently did not, so it was the only
+# tool that could not work on the machine it was committed from.
+KEY=${KEY:-$HOME/.ssh/id_onu}
+SSH="ssh -q -o BatchMode=yes -o IdentitiesOnly=yes -i $KEY -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no root@192.168.9.1"
 
 MD5L=$(md5sum "$L" | awk '{print $1}')
 SZ=$(stat -c%s "$L")

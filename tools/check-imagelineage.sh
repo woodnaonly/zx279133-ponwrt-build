@@ -130,6 +130,20 @@ check_one \
 	'network defaults' \
 	'the board comes up on 192.168.1.1 instead of 192.168.9.1, so every tool in this project reports it dead'
 
+# This gate works by naming files. A file the overlay gains and this list does not mention is
+# a file whose staleness goes unreported while the closing line still says "carries the current
+# overlays" - the same shape as the silent-skip hole that was fixed in this file already, just
+# one level up: there it was a branch that skipped its own check, here it would be a check that
+# was never written. etc/dropbear/authorized_keys is in that position as of 2026-10-16.
+#
+# Consequence if stale is the whole toolchain: every script here calls ssh with -o BatchMode=yes
+# and -i ~/.ssh/id_onu, and with no authorized_keys the board trusts nobody, so ssh cannot
+# succeed. The flash would appear to work and would leave a board nobody can reach.
+check_one \
+	etc/dropbear/authorized_keys \
+	'ssh access' \
+	'the board comes up trusting no ssh key, so all 26 tools that call ssh fail against it'
+
 # ------------------------------------------------- layer 2: beside the image, and the
 # ---------------------------------------------------------------------- integrity manifest
 #
