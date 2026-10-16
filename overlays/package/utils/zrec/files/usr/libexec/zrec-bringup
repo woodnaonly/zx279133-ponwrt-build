@@ -37,7 +37,7 @@ pidof zrec >/dev/null 2>&1 && exit 0
 			ip link set "$n" up 2>/dev/null
 			# replace, not add: after a deconfig the address may be half there
 			ip addr show dev "$n" 2>/dev/null | grep -q "inet $IP/" ||
-				ip addr replace $ADDR dev "$n" 2>/dev/null
+				ip addr replace "$ADDR" dev "$n" 2>/dev/null
 			nets="$nets $n"
 		done
 

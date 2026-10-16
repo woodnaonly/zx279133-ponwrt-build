@@ -42,9 +42,9 @@ jobs:
           # -Wall -Werror, and an implicit declaration (strncasecmp without
           # <strings.h>, uint16_t without <stdint.h>) is the class of failure that
           # otherwise only shows up as a red compile step an hour later.
-          gcc -std=gnu11 -O1 -Wall -Wextra -Werror -o /tmp/zrec "$SRC"
+          gcc -std=gnu11 -O1 -Wall -Wextra -Werror -o /tmp/zrecsrv "$SRC"
           gcc -std=gnu11 -O1 -Wall -Wextra -Werror -fsyntax-only "$SRC"
-          ls -l /tmp/zrec
+          ls -l /tmp/zrecsrv
 
       - name: Install the payload where the server expects it
         run: |
@@ -90,7 +90,11 @@ jobs:
         run: |
           set -e
           sudo rm -rf /tmp/zrec
-          sudo /tmp/zrec 8080 >/tmp/zrec-server.log 2>&1 &
+          # /tmp/zrec is the server's own state directory, which this step clears
+          # first - so the binary is /tmp/zrecsrv. Building it to /tmp/zrec deletes
+          # the program before starting it, which is how the first rehearsal died
+          # without a message.
+          sudo /tmp/zrecsrv 8080 >/tmp/zrec-server.log 2>&1 &
           for i in 1 2 3 4 5 6 7 8 9 10; do
             curl -sf -o /dev/null http://127.0.0.1:8080/api/task && break
             sleep 1
@@ -201,4 +205,4 @@ jobs:
 
           echo '--- server log ---'
           tail -20 /tmp/zrec-server.log
-          sudo pkill -f '/tmp/zrec 8080' || true
+          sudo pkill -f '/tmp/zrecsrv 8080' || true

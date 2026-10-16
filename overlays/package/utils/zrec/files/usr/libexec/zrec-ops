@@ -8,7 +8,6 @@
 set -u
 
 ZROOT=/tmp/zrec
-OPS_VERSION=1
 
 op=${1:-}
 [ -n "$op" ] || { echo "zrec-ops: no operation"; exit 2; }
@@ -158,7 +157,9 @@ backup)
 	out=$ZROOT/bk/$(printf '%s' "$name" | tr ' /' '_-').bin
 	set_kv phase working
 	if [ -n "$offset" ] || [ -n "$count" ]; then
-		[ -n "$offset" ] && [ -n "$count" ] || die "offset and size must both be given"
+		if [ -z "$offset" ] || [ -z "$count" ]; then
+			die "offset and size must both be given"
+		fi
 		[ "$((offset % erasesize))" = 0 ] || die "offset $offset is not eraseblock-aligned ($erasesize)"
 		[ "$((count % erasesize))" = 0 ] || die "size $count is not eraseblock-aligned ($erasesize)"
 		bs=$erasesize
