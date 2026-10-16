@@ -588,22 +588,60 @@ SIM OK - every guard fired when it had to and nothing was erased when it must no
 need staging/rollback/flash-uImage (sh tools/gettrial.sh flash <run>)
 ```
 
-第 4b 步是 `SRC=staging/rollback sh tools/simwrite.sh`——**回滚对的排演**，
-而 `staging/rollback/` 只在工作区根有。第 4a（主line那对）过了，第 4b 过不去，
-于是 4c/4d/5/6/6b/6c 全部**没跑到**。
+### 让 `preflight.sh` 在这台机器上跑完整个离线段（2026-10-16 实测，已解决）
 
-也就是说：**出货的 `preflight.sh` 是按「单一 clone」写的**——它假定
-`staging/`、`backups/`、`restore_set/` 全在仓库里。woodnaonly 自己的 clone 就是这样，
-所以对他没问题；但这台机器的仓库是嵌在工作区里的子目录，本地状态全在上一层，于是走不通。
+先说清楚**问题是什么**：出货的 `preflight.sh` 是按「单一 clone」写的——它假定
+`staging/`、`backups/`、`restore_set/` 全在仓库里。woodnaonly 自己的 clone 就是这样；
+本机仓库是嵌在工作区里的子目录，本地状态全在上一层，于是最初停在第 4b 步：
 
-**这里有两条路，需要拍板**：
+```
+need staging/rollback/flash-uImage (sh tools/gettrial.sh flash <run>)
+```
 
-* 把本机的本地状态（`staging/ctl`、`staging/rollback`、`backups/`、`restore_set/`）
-  搬进 `ci-build-repo/`，让机器回到「单一 clone」布局——不动任何出货代码；
-* 或者给 `preflight.sh` 也加 `LOCAL=`，并把它传给 `simwrite` / `preflashbackup` /
-  `mkrollback` / `checkrollback`——改的是出货代码，换的是在两棵树布局下也能跑。
+第 4b 是 `SRC=staging/rollback sh tools/simwrite.sh`（回滚对的排演），
+而过不去就意味着 4c/4d/5/6/6b/6c 全部没跑到。
 
-在选之前，**「preflight 离线全过」这句话在这台机器上不可复现**，别拿它当证据。
+**不要把本机的本地状态整个搬进仓库**。`git check-ignore` 实测：`staging/` 被忽略，
+但 `backups/` 和 `restore_set/` **没有**被忽略——后者是 268 MB 中兴专有固件。
+按「单一 clone」那条路走，等于把 301 MB 板子 dump 和 268 MB 专有固件放到
+一次 `git add -A` 就能推到公开仓库的位置。（这两个目录现已补进 `.gitignore`，
+理由和 `pon/vendor-modules/` 那条一样。）
+
+**实际做法是让工具自己生成，而不是拷贝**，因为 `staging/rollback/` 根本不是发布产物，
+它是从这台板子的 mtd2/mtd3 dump 推导出来的：
+
+```sh
+cd ci-build-repo
+# 1. 回滚对：从板子 dump 推导，两份都与 pre-flash 快照 MATCH，与工作区那份逐字节相同
+LOCAL=/mnt/c/ugit/SK-D840N4 OUT=$PWD/staging/rollback SKIP_BOARD=1 \
+  PERMIT=/tmp/permit.txt sh tools/mkrollback.sh
+# 2. 4c 排演用的 initramfs：只拷 3 个输入（1.2 MB），然后跑 preflight 自己打印的那条命令
+mkdir -p staging/ctl/rootfs
+cp /mnt/c/ugit/SK-D840N4/staging/ctl/rootfs/{busybox,ld-musl-aarch64.so.1,libgcc_s.so.1} staging/ctl/rootfs/
+python3 tools/mkctlram.py --mode announce --tag K5
+```
+
+**`--mode announce` 是离线的，`--mode flash` 不是**：读过 `mkctlram.py:657-661`，
+announce 用 `INIT_TMPL`（RAM 启动 init），flash 用带 `do_write` 的 `FLASH_INIT`。
+生成出来的那份实测含 `192.168.9.1`、不含 `ctl-flash` 和 `mtd_debug`，是 RAM 启动那个。
+
+**结果**：`SKIP_BOARD=1 sh tools/preflight.sh` 现在跑到**第 5 步**
+（`staging/boot.bin missing`），而第 5 步正是它自己注释里写的离线/上板分界
+（第 118 行：「Everything from step 5 on needs the board」）。离线段 0→4d 全过：
+
+* 4b 两对都 `SIM OK`；
+* 4c `SIM OK - payload report to flash permit, all on the real /init bytes`；
+* **4d 那道门打印 `staging/trial/flash-rootfs.jffs2`（repo 那棵、run 38）并判 OK**——
+  这正是今天早上修的那处，修之前它读的是工作区那棵。
+
+第 5 步**不可能离线完成**，所以停在这里是对的：读过 `tools/checkuboot.sh` 的函数体——
+它先要 `staging/boot.bin`（板上 bootloader 的 dump），然后 `:28` 直接
+`$SSH "dd if=/dev/mtd1 bs=64k"` 读**活的板子**再做 diff，脚本里没有 `SKIP_BOARD` 分支。
+把工作区那份 2 MB 的 `boot.bin` 拷进来也只会多走一行，然后卡在 ssh 上，所以没拷。
+`backups/` 和 `restore_set/` 一个字节都没动，仍然留在工作区，由 `LOCAL=` 指过去。
+（顺带：`checkuboot.sh:21` 会往 `backups/live-*` 写，那条路径现在也在 `.gitignore` 里。）
+
+
 
 
 ### ⚠ 这个镜像会自己 reboot，操作窗口很短
