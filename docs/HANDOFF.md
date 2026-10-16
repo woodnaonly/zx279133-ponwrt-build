@@ -492,7 +492,20 @@ cd /mnt/c/ugit/SK-D840N4        # WSL；或在 Git Bash 里用 Windows 路径
 #    （注：名字这一条现已由 §5g 在产物层面确定，不必再当作风险；但那个「没有
 #      fallback」的结构事实仍在——它只在名字真的变了时才咬人。）
 #    ssh 可能仍然不通：dropbear 被绑在 'lan' 接口上，要靠 reachcheck 解开。
-sh tools/backwatch.sh           # 看网卡有没有 carrier
+sh tools/backwatch.sh           # 看网卡有没有 carrier（**PC 侧**：网卡状态 + arp + ssh）
+
+# 0c. 板子侧的 carrier —— 比 grep dmesg 稳，round524–530 核实过
+cat /sys/class/net/eth0/carrier     # 期望 1
+cat /sys/class/net/eth0/operstate   # 期望 up
+cat /sys/class/net/eth0/speed       # duplex 同理
+#   ⚠ 这三个是 net/core/net-sysfs.c 里的 netdev 无条件属性
+#     （carrier_show 在 :307，注册为 DEVICE_ATTR_**RW**(carrier)，所以 grep
+#      DEVICE_ATTR_RO 找不到；operstate_show 在 :436）。
+#   ⚠ **接口没起时 `carrier` 返回 -EINVAL，不是 0**：
+#     `cat` 读出的是一次读错误，**别把「读不出来」当成「没链路」**。
+#     拿 `operstate` 交叉判断：非 running 时它会打印 `down`。
+#   ⚠ 文档里那句「挪一根线看 dmesg: `port N link up`」是**厂商镜像专用**的
+#     （主线不打印那个字符串）。主线就认上面这三行。
 
 # 1. 刷完先看它活着没有。
 #    注意：**不要传 HOST=**。传了就把候选锁死成那一个地址，
