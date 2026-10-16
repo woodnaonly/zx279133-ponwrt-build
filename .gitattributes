@@ -69,3 +69,28 @@ pon/vendor-modules/** -text
 # already LF, so their object ids do not move. It only makes the working tree agree with
 # what is already committed.
 decompiled/** text eol=lf
+
+# The paths a Windows cloner was still getting wrong after the rules above. Measured on a
+# fresh clone of this repository with core.autocrlf=true: nine files arrived carrying CR that
+# their committed blob does not contain. Seven of those are text whose blob is pure LF with
+# zero lone CR, so normalising them loses nothing - the same test pon/*.txt passed.
+#
+# Three of the seven are shell scripts - trial-files/etc/rc.d/S15trial,
+# trial-files/lib/preinit/05_trial_alive and trial-files/usr/libexec/trial-blink - and
+# tools/mktrialram.py patches exactly this tree into the device initramfs. A CR there is not
+# whitespace to a shell: it becomes part of the command the board runs. That is the same
+# failure mode already documented for overlays/**/etc/rc.d/* and 02_network, arriving through
+# a door nobody had checked.
+#
+# overlays/** and trial-files/** are written directory-wide because a NUL-byte scan of all
+# 128 tracked files found exactly two binaries and neither is under either tree. Re-check
+# that before widening a rule further.
+.gitignore text eol=lf
+overlays/** text eol=lf
+trial-files/** text eol=lf
+
+# The only two binaries in the repository. Each blob holds ~26k NUL bytes and 86 CR bytes,
+# and a fresh clone reproduces the same 86, so autocrlf has not damaged them and there is no
+# bug to fix here. -text is a lock, not a repair: it stops a future renormalise pass or a
+# forced `git add -f` from reading those CR bytes as line endings and rewriting a device tree.
+dtb/** -text
