@@ -435,16 +435,20 @@ cd /mnt/c/ugit/SK-D840N4        # WSL；或在 Git Bash 里用 Windows 路径
 #    刷之前板子答 192.168.9.1；**刷完本项目的镜像后也答 192.168.9.1**，
 #    没有任何接口带 192.168.9.2——那是旧社区镜像的拓扑（lan = br-lan over
 #    eth1..eth3，mainline 无驱动；eth0 = wan @ .2）。
-#    （更正：这里原来写的是「由只含 eth0 一个端口的 br-lan 承载」，**不准确**。
-#      从 run 33 的 flash-rootfs.jffs2 解出来的那份 02_network 写的是
-#      `ucidef_set_interface "lan" device "eth0" protocol "static"`——单数版，
-#      生成的是 `config interface 'lan'` 带 `option device 'eth0'`，**不建桥**。
-#      sr1010 那一支用的是复数版 `ucidef_set_interfaces_lan_wan ... "lan1..lan4"`，
-#      那个才建 br-lan。）
+#    192.168.9.1 由 **br-lan over eth0** 承载（推导见 §5b）。
+#    ⚠ 2026-10-17 撤回一条更正的更正：这里曾被「更正」成「单数版 ucidef_set_interface
+#      → 不建桥」。**那次更正是错的**，原文本（br-lan over eth0）才是对的。
+#      错在只读了 `02_network` 就去推 `config_generate` 的输出，没读它的函数体；
+#      §5b 里那条 `[ "$1" = "lan" -a -z "$ports" ] && ports="$device"`
+#      恰恰在「无 ports」时**强制建桥**。单数/复数不是判据。
+#    ⚠ 由此有一处很容易自己吓自己的现象：`ip addr show eth0` 是**空的**，
+#      地址在 `ip -br addr show br-lan` 上。eth0 上没有地址 ≠ 网卡没起来。
+#      （RAM 启动那条路不一样：S15trial 把地址直接打在每个 netdev 上，不经 br-lan。）
 #    ⚠ 刷机路径在「netdev 叫什么」这件事上**没有 fallback**：
-#      02_network 点名 eth0。带「每个 netdev 都拿地址」这个兜底的
-#      S15trial 只存在于 RAM 启动用的 initramfs，**不在发布镜像里**。
-#      若主线把这个口起成别的名字，RAM 启动仍 ping 得通、刷机后不会应答。
+#      02_network 点名 eth0，config_generate 把桥的唯一端口也钉成 eth0。
+#      带「每个 netdev 都拿地址」这个兜底的 S15trial 只存在于 RAM 启动用的
+#      initramfs，**不在发布镜像里**。若主线把这个口起成别的名字，
+#      RAM 启动仍 ping 得通、刷机后 br-lan 会因为没有真实端口而起不来。
 #    ssh 可能仍然不通：dropbear 被绑在 'lan' 接口上，要靠 reachcheck 解开。
 sh tools/backwatch.sh           # 看网卡有没有 carrier
 
@@ -644,7 +648,7 @@ announce 用 `INIT_TMPL`（RAM 启动 init），flash 用带 `do_write` 的 `FLA
 
 
 
-### ⚠ 这个镜像会自己 reboot，操作窗口很短
+### ⚠ 这个镜像曾经会自己 reboot，操作窗口很短（2026-10-17 更正：当前镜像不会）
 
 `etc/rc.d/S15trial` 在板上做的事（已逐个核过依赖都在且可执行）：
 
@@ -670,11 +674,31 @@ Usage: ip address {add|change|replace} IFADDR dev IFNAME [ LIFETIME ]
 | 时刻 | 发生什么 |
 |---|---|
 | 0 – 约 120 秒 | 分配地址的循环只跑 **8 × 15 秒** |
-| **300 秒** | **除非 `/tmp/trial-noreboot` 存在，它会 `reboot -f`**（canary 重启） |
+| **300 秒** | 除非 `/tmp/trial-noreboot` 存在，它会先 flap 三次再 `reboot -f`（canary 重启） |
 
-**所以 ssh 进去第一件事：`touch /tmp/trial-noreboot`。** 不 touch 的话，
-你在窗口里还没来得及做什么，镜像自己就没了——而没有串口，
-面板 LED 是当时唯一的信号。
+**2026-10-17 更正：当前的试镜像里这个 5 分钟窗口根本不会到来。**
+
+`usr/libexec/zrec-bringup:27` 是这个 marker 的**唯一写者**：
+
+```sh
+[ -e /tmp/trial-noreboot ] || : >/tmp/trial-noreboot
+```
+
+而它挂在 `lib/preinit/85_zrec` 的 `preinit_main` 钩子上，**preinit 阶段就跑完了**，
+比 `S15trial` 的 `sleep 300` 早得多。门槛只有 `[ -x /usr/sbin/zrec ]`——
+试镜像里 `/usr/sbin/zrec` 是 `-rwxr-xr-x`，**成立**。
+
+两个后果，方向相反：
+
+* **好消息：RAM 启动的镜像不会自己重启，操作时间不受限**，不用抢。
+* **坏消息：那三次故意的 link flap 和 canary 重启也不会发生**，也就是
+  「重启是否可观测」这条测试**在当前镜像上跑不到**。zrec 的注释说这是**故意的**
+  （擦 flash 中途被重启是它唯一不能造成的后果），不是缺陷。
+
+判据随时可能被打破：**哪天真在镜像里跑出一个 `[ -x /usr/sbin/zrec ]` 为假的构建，
+5 分钟期限就回来了。** 所以现场仍然可以 `touch /tmp/trial-noreboot`（无害、幂等），
+但**不要把「我还有 5 分钟」当作前提**；反过来也别为了试重启去 `rm` 它——
+那会同时把擦除保护拆掉。
 
 ### kexec 能不能用：已证实，不是假设
 
@@ -883,6 +907,118 @@ dmesg | grep -i -e rtl8226 -e r8226b -e genphy
 生成名为 `br-lan`、唯一端口 `eth0` 的桥，再把 lan 指过去。
 
 **结论：板子答 192.168.9.1，由 br-lan over eth0 承载；.2 不存在。**
+
+### 链条的另一半：`board_name` 决定上面那句成不成立（2026-10-17，只读函数体）
+
+`02_network:18` 是 `case "$(board_name)" in` 起的头。这个函数**不**定义在
+`uci-defaults.sh` 里，全树搜只有一处定义，在 `/lib/functions.sh:532`：
+
+```sh
+board_name() {
+	[ -e /tmp/sysinfo/board_name ] && cat /tmp/sysinfo/board_name || echo "generic"
+}
+```
+
+而 `/tmp/sysinfo/board_name` 由 `lib/preinit/02_sysinfo:4-5` 造出来：
+
+```sh
+echo "$(strings /proc/device-tree/compatible | head -1)" > /tmp/sysinfo/board_name
+```
+
+**根节点 `compatible` 的第一个字符串，就是决定 `192.168.9.1` 会不会被写下去的那个值。**
+本板 dtb 根节点是 `"skyworth,sk-d840n\0zte,zx279133"`，第一项 `skyworth,sk-d840n`，
+命中 `02_network:22` 那一支。取不到 `/proc/device-tree` 时 `board_name` 返回
+`generic`，同样不命中——**静默变成 `*)` 分支，打印 "Unsupported hardware"，
+什么接口都不建**。
+
+> ⚠ **这条推导在 PC 上无法实跑**：`/sbin/uci` 的 ELF 头是
+> `7f 45 4c 46 02 01 … b7 00`，`e_machine=0xb7`=183=**AArch64 静态可执行**，
+> `/usr/bin/jshn` 同理。WSL 是 x86_64，跑不了。**所以下面那段 `/etc/config/network`
+> 是从镜像里这几个函数的源码推出来的，不是执行出来的**；dtb 的 `compatible`
+> 那半边另有实测（CI 的 dtb 门 + `docs/07` 的 `fdtdump`）。
+
+推导出的 `/etc/config/network`（`config_generate` 的 `generate_network`，
+`:94` 起，`:107`–`:129` 强制建桥，`:166` 取 `ipad`）：
+
+> 下面是 `uci` 归一化之后的**形态**，不是逐字节的 uci 输出——`uci` 会重排并按
+> section 分组，板上要看就用 `uci show network`。**关键内容就是这几行。**
+
+```
+config interface 'loopback'          # generate_static_network()
+        option device 'lo'
+config globals 'globals'
+config device
+        option name 'br-lan'
+        option type 'bridge'
+        list ports 'eth0'
+config interface 'lan'
+        option device 'br-lan'
+        option metric ''
+        option proto 'static'
+        list ipaddr '192.168.9.1/24'
+        option ip6assign '60'
+```
+
+`/24` 的来历：`netmask "255.255.255.0"` → `str2ip` 得 `0xffffff00` →
+`netmask2prefix`（`lib/functions/ipv4.sh`，`is_contiguous` + `bitcount`）得 `24`。
+`ipad=${ipaddr:-"192.168.1.1"}` 里 `ipaddr` 已由 board.d 给定，兜底走不到。
+`ip6assign` 那行在 `[ -e /proc/sys/net/ipv6 ]` 成立时写，所以板子还会有一个 ULA。
+
+**桥不需要任何模块**：`lib/modules/6.18.38+/modules.builtin:433` 就是 `bridge.ko`，
+且该目录下 **0 个 `.ko`**（441 条全部内建），`/etc/modules.d` 整个不存在。
+若 `br-lan` 得靠 `kmod-bridge`，这个镜像起不来桥。
+
+**镜像里根本没有 `wan` 接口**：`02_network` 只建 `lan`；`99-default_network:9` 是
+`json_is_a network object && exit 0`，见到 lan 就退出、不补 wan；`config_generate`
+只遍历 board.json 里存在的 network 键。后果见 §5c。
+
+## 5c. 上游 SR1010 的残留在本板上照样会跑（2026-10-17 实测，**不是缺陷**）
+
+镜像里带着一整套 SR1010 的东西，本板没有对应硬件，它们**照样会被执行**：
+
+| 文件 | 大小 | 在本板上的实际行为 |
+|---|---|---|
+| `/etc/init.d/sr1010-netled` | 352 B | `S99sr1010-netled` 已 enable。`start_service` 的闸是 `[ "$(uci -q get sr1010-netled.main.enabled)" = 0 ] && return`；`/etc/config/sr1010-netled` 里 `enabled='1'`，**闸不关**，procd 拉起 `/usr/sbin/sr1010-netled` 并 `respawn` |
+| `/usr/sbin/sr1010-netled` | 2,342 B | **是 `#!/bin/sh` 脚本**（首字节 `23 21 2f 62`），不是二进制。它每 5 s 查一次 `ubus call network.interface.wan status`——**本板没有 wan**，ubus 报错被 `2>/dev/null` 吃掉，`online_now` 恒返回 1，于是永远停在 offline |
+| 同脚本的 `show()` | — | 写 `/sys/class/leds/sr1010:{white,red}/brightness`。`01_leds:7-8` 的 `case` 只认 `zte,zx279133-sr1010`，本板不命中，所以这两个 LED **不存在**，写失败；脚本没有 `set -e`，继续跑 |
+| `/etc/uci-defaults/98-sr1010-defaults` | 1,160 B | 会跑：设 `CST-8` / `Asia/Shanghai`、`luci.main.lang=zh_cn`、`flow_offloading=1`+`flow_offloading_hw=1`、`network.@globals[0].packet_steering=0`，并写 `system.@system[0].sr1010_defaults=1` |
+| `/etc/uci-defaults/99-sr1010-netled` | 50 B | `/etc/init.d/sr1010-netled enable` |
+| `/etc/sysctl.d/12-sr1010-conntrack.conf` | — | 一组 sysctl |
+
+**代价**：稳态下每 5 s 一次 `ubus` fork，CPU 可忽略；启动时那两次 LED 写失败会在串口
+留两行 `No such file or directory`。**它不会挡住 ping 或 ssh。**
+现场看到 `sr1010-netled` 进程**不是**异常，别顺手当成故障去 kill。
+顺带白拿的好处：界面是中文、时区是北京。
+
+## 5d. 开机顺序：实测 rc.d 全表（2026-10-17）
+
+试 initramfs 的 `/etc/rc.d/` 共 **29** 项（**22** 个 `S*` + 7 个 `K*`），
+其中**只有 2 个是普通文件**：
+
+```
+S15trial   3106 B  -rwxr-xr-x   ← CI 打进试镜像的普通文件
+S21zrec     347 B  -rwxr-xr-x   ← CI 打进试镜像的普通文件
+```
+
+其余 27 个全是 `-> ../init.d/*` 符号链接。**flash rootfs 里这些一个都没有**：
+`S15trial`、`S21zrec`、`lib/preinit/85_zrec`、`usr/libexec/zrec-bringup`、`usr/sbin/zrec`
+在 `/tmp/r320x` 上全部 ABSENT，全树 grep `trial-noreboot` 也是 0 命中。
+试镜像里 zrec 有 7 处（`etc/rc.d/S21zrec`、`lib/apk/packages/zrec.list`、
+`lib/preinit/85_zrec`、`usr/libexec/{zrec-bringup,zrec-ops}`、`usr/sbin/{zrec,zrec-run}`、`www/zrec`）。
+
+与网口有关的顺序：
+
+| 次序 | 脚本 | 做什么 |
+|---|---|---|
+| 15 | `S15trial` | 试镜像专属：把 `192.168.9.1/24` 打在**每个**非 `lo` netdev 上（S15trial:29-42），并按需起一个 **unbound** dropbear（`:40`）。分配循环只跑 **8 × 15 秒** |
+| 19 | `S19dnsmasq` / `S19dropbear` | 真正的 dropbear 在这里起 |
+| 20 | `S20network` → `../init.d/network` | 2,701 B、`START=20`、`USE_PROCD=1`，只 `procd_open_instance` 起 `/sbin/netifd`。**启动路径上不动任何地址**——全脚本里唯一的 `ifdown -a` 在 `stop_service()`（L38）和 `shutdown()`（L141） |
+| 21 | `S21zrec` | `zrec-bringup` 的第二个入口；它自己用 `pidof zrec` 保证幂等（第一个入口是 `lib/preinit/85_zrec` 注册的 `preinit_main` 钩子） |
+| 99 | `S99sr1010-netled` | 见 §5c |
+
+**`trialtag` 在两棵完整的树上 0 命中**（试镜像 532 个文件、flash rootfs 520 个文件，
+二进制一起 grep）。U-Boot CMDLINE 里的 `trialtag=<ts>` **没有任何用户态读者**——
+它是给 bootloader/回滚脚本那一侧用的，不要在用户态里找它。
 
 ---
 
