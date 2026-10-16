@@ -1110,6 +1110,18 @@ dmesg | grep -i -e rtl8226 -e rtl8221 -e realtek
 > realtek，上面的 genphy 那道门不会响——**只有 `phy-mode` 这条读数能抓住它**。
 > 两条都出 `sgmii` 才继续往下走。
 >
+> **这两条读数各自的核实级别不一样，别当成一样（round533–537）**：
+> - `phy_interface` 不会被协商改掉：`phydev->interface` 在 `phy_device.c` 里
+>   **只有一个赋值点**（`:1841`，在 `phy_attach_direct()` 里），其余三处是读；
+>   `phy_modify_interface` 在该文件里**根本不存在**。
+>   它是「驱动连接时向 DT 要到了什么」的一次性镜像，**来源层面已核实**。
+> - `/proc/device-tree/.../phy-mode` 在**产物层面**已核实：
+>   出货 dtb 的 offset 8340 就是 `sgmii`（run 41 的 `trial-dtb.bin` 刚又核一遍）。
+> - 中间那一步「DT 字符串被解析成那个枚举」是通用 OF 代码，但**我没能在本树里
+>   定位到它**（`drivers/of/net/`、`drivers/net/of_net.c`、`drivers/of/base/of_net.c`
+>   都是 404；枚举 `drivers/of/` 只剩 `unittest-data`，枚举 `drivers/net/` 顶层
+>   29 个 .c 里名字含 `of` 的为 0）。**所以这一环不写成「已核实」。**
+>
 > **这颗芯片的 IEEE ID 在本项目任何记录里都没有出现过**：厂商侧 dmesg 只有
 > `r8226b_phy_probe`、`phy_id:0x5`（那是 **MDIO 地址 5**，不是 IEEE ID）和
 > `14f02000.mdio "MDIO id = 1"`。所以**上面那张表是「期望集合」，不是「已知值」**。
