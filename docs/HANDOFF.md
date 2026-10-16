@@ -464,6 +464,9 @@ SKIP_BOARD=1 sh tools/preflight.sh
 #     这是从 dropbear 2025.89 源码推出的唯一硬条件（补五十）：
 #     **/etc/dropbear 这个目录**必须 root 属主、group/other 不可写。
 #     文件本身不用管——/etc/init.d/dropbear 开机会自己 chmod 0600。
+#     **这一步只能在板上做**：jffs2 提取出来的权限读不出原权限
+#     （解包目标是 wslfs，不保留 mode；jefferson 日志也只有 `writing S_ISDIR path`
+#     没有 mode 列）。别试图从 PC 上解镜像得出这个结论。
 #     在板子上：
 #         stat -c '%U %a' /etc/dropbear
 #     必须是 root，且不是 775/777 一类。真出问题的话 dropbear 日志里只有一行：
