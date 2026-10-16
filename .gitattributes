@@ -3,6 +3,12 @@
 *.config text eol=lf
 *.md text eol=lf
 
+# This file last. With core.autocrlf=true and no rule of its own, a Windows checkout leaves
+# it CRLF - measured at 65 CR after the decompiled/ rule below was added, one per line. Git
+# tolerates CRLF in an attribute file, so nothing was broken; but the one file that decides
+# every other file's line endings was the one file no rule covered.
+.gitattributes text eol=lf
+
 # Files under the overlay that are shell scripts but have no .sh suffix. 02_network ends in a
 # line continuation (`ucidef_set_interface ... \`), so a CRLF checkout makes the device run
 # "... <CR>" as an argument and the whole lan definition is lost - on a board whose only
@@ -22,9 +28,13 @@ kernel-overlays/** text eol=lf
 
 # The PC-side tools/, docs/ and pon/ trees, brought under version control so the fix for
 # gettrial.sh (two defects) and preflight.sh (one) stop being local-only. Scoped to these
-# directories instead of to *.py / *.txt / *.c because a broad rule plus a renormalize pass
-# would rewrite the already-committed decompiled/*.fdtdump.txt blobs, and that is a
-# different question from this one.
+# directories instead of a broad *.py / *.txt / *.c rule so the intent stays readable: a
+# future file outside these three trees has to argue for its own EOL policy.
+#
+# An earlier revision of this comment said a broad rule plus a renormalize pass "would
+# rewrite the already-committed decompiled/*.fdtdump.txt blobs, and that is a different
+# question". Measured, that was wrong: those blobs were already LF, so no rule rewrites
+# them. decompiled/ now carries its own rule at the bottom of this file.
 #
 # pon/*.txt is the one place where this could have destroyed data rather than cosmetics:
 # those are raw captures of ioctl numbers, proc output and netlink monitors, so a CR in
@@ -40,3 +50,22 @@ pon/** text eol=lf
 # that way. They are proprietary ZTE/Skyworth objects, not text: -text makes a forced
 # `git add -f` store them verbatim instead of running them through EOL normalisation.
 pon/vendor-modules/** -text
+
+# decompiled/ has exactly one producer: .github/workflows/inspect-dtb.yml runs
+# `dtc -f -I dtb -O dts` and `fdtdump` on ubuntu-24.04 and commits the result with
+# `git add -f decompiled`, so every blob already arrives as LF. No workflow reads the
+# committed copies back - the one grep inspect-dtb.yml does runs against the file it just
+# wrote, in the same job - so the CRLF these four files picked up was never reaching a gate.
+#
+# With no rule here and core.autocrlf=true (the Windows default), a checkout rewrote all
+# four to CRLF while the committed blobs stayed at zero CR. Measured before this rule was
+# written: working tree CR = 2373 / 2115 / 2433 / 2163, every blob CR = 0.
+#
+# lone-CR = 0 is the part that makes normalising safe rather than lossy: in all four blobs
+# every CR terminates a line, so there is no captured byte to destroy. Same test that let
+# pon/*.txt be normalised above. Without it this rule would have been a guess.
+#
+# The renormalise pass this rule accompanies is a no-op by construction - the blobs are
+# already LF, so their object ids do not move. It only makes the working tree agree with
+# what is already committed.
+decompiled/** text eol=lf
