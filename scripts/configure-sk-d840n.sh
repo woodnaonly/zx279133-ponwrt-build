@@ -105,6 +105,19 @@ pin_y SOFTLOCKUP_DETECTOR
 pin_y IKCONFIG
 pin_y IKCONFIG_PROC
 
+# CONFIG_PANIC_TIMEOUT=1 (cnjn's generic config) means a panic prints and then reboots one
+# second later. Measured 2026-10-16: a ^C that killed /init in the RAM trial came back as a
+# clean-looking U-Boot banner ~30 s later with nothing left to read, because the panic text
+# had already scrolled past a reboot. Zero leaves the message on the console forever, which
+# is the difference between "the kernel said why" and "the board is cycling".
+sym=CONFIG_PANIC_TIMEOUT
+if grep -q "^$sym=" "$KCFG"; then
+	sed -i "s|^$sym=.*|$sym=0|" "$KCFG"
+else
+	printf '%s=0\n' "$sym" >>"$KCFG"
+fi
+grep -qx "$sym=0" "$KCFG" || { echo "could not pin $sym=0 in $KCFG" >&2; exit 1; }
+
 # The board hangs at `Waiting for root device /dev/mtdblock7...`, and for a while that looked
 # like the community U-Boot's `ft_fixup_flash-spinand`, because that function does print
 # itself into the boot log and does own a `root=/dev/mtdblock%d rootfstype=%s` template. It

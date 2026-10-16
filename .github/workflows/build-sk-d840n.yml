@@ -366,6 +366,10 @@ jobs:
             }
           done
           grep -iE '^CONFIG_(ZTE_ZX279133|REALTEK|MDIO_ZX|EXTRA_FIRMWARE)' "$KC"
+          grep -qx 'CONFIG_PANIC_TIMEOUT=0' "$KC" || {
+            echo "CONFIG_PANIC_TIMEOUT is not 0 - a panic would reboot before the console could be read" >&2
+            grep -E '^CONFIG_PANIC_TIMEOUT' "$KC" || echo "no CONFIG_PANIC_TIMEOUT at all" >&2
+            exit 1; }
           # The built-in command line is the reason the last image waited forever for a root
           # device that this board never creates, so it is checked in the merged kernel config
           # rather than in the file that was edited. Searching the kernel *binary* for the old
