@@ -433,9 +433,18 @@ cd /mnt/c/ugit/SK-D840N4        # WSL；或在 Git Bash 里用 Windows 路径
 
 # 0. 先把网段对上。
 #    刷之前板子答 192.168.9.1；**刷完本项目的镜像后也答 192.168.9.1**，
-#    由只含 eth0 一个端口的 br-lan 承载。没有任何接口带 192.168.9.2——
-#    那是旧社区镜像的拓扑（lan = br-lan over eth1..eth3，mainline 无驱动；
-#    eth0 = wan @ .2）。
+#    没有任何接口带 192.168.9.2——那是旧社区镜像的拓扑（lan = br-lan over
+#    eth1..eth3，mainline 无驱动；eth0 = wan @ .2）。
+#    （更正：这里原来写的是「由只含 eth0 一个端口的 br-lan 承载」，**不准确**。
+#      从 run 33 的 flash-rootfs.jffs2 解出来的那份 02_network 写的是
+#      `ucidef_set_interface "lan" device "eth0" protocol "static"`——单数版，
+#      生成的是 `config interface 'lan'` 带 `option device 'eth0'`，**不建桥**。
+#      sr1010 那一支用的是复数版 `ucidef_set_interfaces_lan_wan ... "lan1..lan4"`，
+#      那个才建 br-lan。）
+#    ⚠ 刷机路径在「netdev 叫什么」这件事上**没有 fallback**：
+#      02_network 点名 eth0。带「每个 netdev 都拿地址」这个兜底的
+#      S15trial 只存在于 RAM 启动用的 initramfs，**不在发布镜像里**。
+#      若主线把这个口起成别的名字，RAM 启动仍 ping 得通、刷机后不会应答。
 #    ssh 可能仍然不通：dropbear 被绑在 'lan' 接口上，要靠 reachcheck 解开。
 sh tools/backwatch.sh           # 看网卡有没有 carrier
 
