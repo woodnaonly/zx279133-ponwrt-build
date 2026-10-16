@@ -708,14 +708,26 @@ dw-xpcs、Realtek RTL8226B PHY）在两个将要启动的内核里都在，`phy-
 uid 为 0 且没传 `-D` 时 `authorized_keys_filepath()` 直接返回 `/etc/dropbear/authorized_keys`。
 不要因为看到 `/root` 空就判 ssh 认证不可能成功。
 
-**现场还剩一条只能上板查的**：
+**这一条不用上板查了，已经从两份镜像本身结案：**
+
+| 镜像 | `/etc/dropbear` 权限 | 来源 |
+|---|---|---|
+| 试 initramfs | **0755 uid 0** | cpio 条目头的 mode 字段（newc **存**权限） |
+| flash rootfs | 全镜像 334 个 inode **全部 uid 0/gid 0**；100 个目录里 **0 个** group/other 可写 | jffs2 raw inode 节点的 mode 字段 |
+
+`checkfileperm()` 只问两件事：属主是不是该用户或 root、是不是 group/other 可写。
+**flash 那份镜像里没有任何一个目录满足后者**，所以 `/etc/dropbear` 不可能是失败的那个。
+
+顺带更正一句我此前写错的话：**jffs2 是存权限的**（`fs/jffs2/fs.c:281`
+`inode->i_mode = jemode_to_cpu(latest_node.mode)`）。
+**不还原权限的是 `jefferson`** —— 同一份镜像里 `/root` 的真实 mode 是 0750，
+jefferson 解出来是 755。别拿 jefferson 的 `stat` 当证据，也别因此以为 jffs2 不存。
+
+想现场复核的话仍是那一条，但它现在只是复核、不是未知：
 
 ```sh
 stat -c '%U %a' /etc/dropbear
 ```
-
-jffs2 不存 Unix 权限，jefferson 解出来的 755 是它自己的默认值、**不能当证据**。
-dropbear 只要求该目录不是 group/other 可写（`checkfileperm`），构建默认 0755 满足。
 
 **试镜像和刷机后系统的不对称**（别当成不一致）：
 
