@@ -42,7 +42,11 @@ sh tests/regress_round_backup.sh     # 之后：42/42/42，rc_all=0
 2026-10-16 重数过一遍（方法：对 runner 循环里的每个脚本分别 grep 模式
 `staging/(trial|ctl|rollback)` 和 `cd /mnt/c`）。自包含的那两个是
 `test_readme_refs.sh` 和 `rehearse_zrec_gate.sh`——后者是第一个既不引用任何真实产物、
-也不硬编码路径的排演，它自己造十种合成包形状。**所以「0 / 40」当时是对的，现在不是了。**
+也不硬编码路径的排演。它造的不再是「合成包归档」：`.apk` 是 `ADBd` 容器，runner 上没有
+任何工具能读（见那个 gate 步骤自己的注释），所以它造的是**打包器被喂的那棵树**
+（`build_dir/target-*/zrec-*/ipkg-*/zrec`）加上打包器写进树里的
+`lib/apk/packages/zrec*.list`，十二种形状，含一个用 chmod 的另一个方向造出来的
+exec 位缺陷。**所以「0 / 40」当时是对的，现在不是了。**
 
 25 个引用产物的套件里，**0 个**写了产物缺失的处理。唯一在沙箱里实测过的
 （`test_payload_id.sh`，因为只有它不硬编码路径，能安全地放进一个没有产物的目录树），
