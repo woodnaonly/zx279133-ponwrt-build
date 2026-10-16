@@ -575,7 +575,10 @@ trial: canary reboot
 第一行一次就能把三种不同的「失败」分开：**端口没协商上** / **netdev 名字对不上**
 / **镜像自己 reboot 了**。离线这边已经排掉的：四个驱动（NPPT MAC、ZX279133 MDIO、
 dw-xpcs、Realtek RTL8226B PHY）在两个将要启动的内核里都在，`phy-handle` 通到
-`ethernet-phy@5`（MDIO 地址 5），S15trial 依赖的每个二进制都在。
+`ethernet-phy@5`（MDIO 地址 5），S15trial 依赖的每个二进制都在，
+**kexec 的载荷窗口 `0x88000000–0x9b000000` 也没有压到 MAC 要的
+`bmu`/`se-hash`/`idm` 三块（最低那块在 `0x9d700000`，高出窗口 39 MiB）**——
+所以「端口不通」不会是载荷放错位置造成的。
 
 ## 5b. 刷完的板子到底答哪个地址（已从镜像实测，不是推论）
 
