@@ -200,6 +200,11 @@ DNS 正常（解析出 `20.205.243.166`），通用 HTTPS 正常，**只有 gith
 | **驱动门能过** | CI run 25 = **success**，25 个节点全 ok（此前全部历史里一次都没执行过） |
 | 门禁脚本是合法 shell | 5 个 workflow 的 **39 个 `run:` 块**全部 `bash -n` 通过 |
 | overlay 能落到内核树 | `Apply SK-D840N overlays` success；本地 `cp -a` 模拟 10516 文件落地 |
+| **镜像里装着 dropbear** | run 25 的 `flash-rootfs.jffs2` 解包（jefferson）：`usr/sbin/dropbear` 234,603 B / mode 755 |
+| **`/etc/dropbear` 已经是 755 root:root** | 同一次解包实测。补五十唯一那个残留项已关：dropbear 只要求这个目录 root 属主且 group/other 无写位 |
+| **镜像里的 `etc/init.d/dropbear` 就是 immortalwrt 那份** | md5 `29f5756b12ef3df641a4a8fc293f9df4`，与源码树**逐字节一致**；所以它开机 `chmod 0600` authorized_keys 的行为就是板子上的行为 |
+| **root 的公钥登录不会被禁掉** | `/etc/config/dropbear` 里没有 `RootLogin` 项，init 的 uci 默认是 `RootLogin:bool:1` → 不追加 `-w` |
+| dropbear 会开机自启 | `etc/rc.d/S19dropbear` 存在 |
 
 ### 离线已验证、但只跑在「上一次发布的产物」上
 
