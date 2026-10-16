@@ -808,6 +808,43 @@ stat -c '%U %a' /etc/dropbear
 刷机后 `lan` 由 `config_generate` 按 `board.d/02_network` 建出来并带 `192.168.9.1`，
 所以绑 `lan` 在那条路径上是对的；试镜像删掉它，是因为地址可能落在别的 netdev 上。
 
+### 一条很便宜的判据：先确认 PHY 绑对了驱动（2026-10-17 加）
+
+`sgmii` 那套推断有一个前提：**`ethernet-phy@5` 真的是一颗 RTL8226B。**
+这个前提**便宜地就能在板上验**，而且失败时没有任何报错。
+
+```sh
+cat /sys/class/net/eth0/phy*/phy_id      # 期望 0x001ccf（RTL8226B 系）
+cat /sys/class/net/eth0/phy*/driver     # 期望 realtek
+dmesg | grep -i -e rtl8226 -e r8226b -e genphy
+```
+
+**`driver` 显示 `genphy` 就是没匹配上。** 因为我们给 PHY 节点**故意不写 `compatible`**
+（§7 第 4 条，为了不覆盖按 ID 的匹配），ID 认不出来时 phylib 会**静默退回 `genphy`** ——
+不报错，现象只是「ping 不通」，和「内核没起来」长得一模一样。
+那种情况下 `sgmii` 的前提不成立，要回来重谈 PHY 节点，**不要继续往下调链路**。
+
+**为什么要问这个**：上游自己的 hardware-truth 写着
+「`rlt8226b.ko` 被加载并初始化，但现有证据**不能证明板上另有一颗独立 RTL8226B**，
+更可能是 SDK/交换芯片 PHY 支持」——**那条是关于 SR1010 的**（那边有 RTL8372N 交换芯片），
+我们这块板有自己板子的 dmesg（`r8226b_phy_probe` / `phy_id:0x5`），**不受它直接反驳**。
+但它点出了这条链路上的机制性风险，所以值得在板上花三秒看一眼。
+
+### 期望值：SGMII 上游从来没在硬件上跑过
+
+`phy-mode = "sgmii"` 现在的证据是三份：驱动只接受 `{2500BASEX, SGMII}`（`zx279133-main.c:477-480`）、
+驱动从 `plat_132.ko` 逆出来的 `xpcs_1g_mode_conf(xmac, speed=3, duplex=1, pcs_mode=2)`
+（`zx279133-mac.c:180`，与厂商 bootloader 打印 `xmac 0 speed set 2 in sgmii(xmac speed 3)` 对上）、
+以及上游 `SERDES_DRIVER.md` 的模式映射。
+
+**但上游全部硬件证据都在 2.5GBASE-X 那条路上**
+（`NPPT_FORWARDING.md` 报 2.38 Gbit/s 实测上限，端点是 ZX279051）。
+在六份上游 hardware-truth / acceptance 文档里，**`sgmii` 只出现一次，
+而且是在厂商符号名 `xpcs_sgmii_mode` 里**。
+
+> **按「第一次跑」设期望值，不要按「已验证」设。**
+> 成不成，看它能不能 ping/ssh —— 不看 `Link is Up`。
+
 ## 5b. 刷完的板子到底答哪个地址（已从镜像实测，不是推论）
 
 这一条被改错过两次，所以写下推导。全部读自
