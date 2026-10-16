@@ -668,7 +668,7 @@ kexec 是 aarch64 静态构建（Alpine 的 kexec-tools 2.0.31），已确认它
    >
    > ```sh
    > # 期望 sgmii
-   > tr -d '\0' < /proc/device-tree/soc/mdio@14f02000/ethernet-phy@5/phy-mode; echo
+   > tr -d '\0' < /proc/device-tree/soc/ethernet@19000000/phy-mode; echo
    > cat /sys/bus/mdio_bus/devices/*/phy_interface
    > ```
    > **两条都该出 `sgmii`。** 出 `2500base-x` ⇒ 你刷的是 sgmii 修复前的 dtb，
@@ -1081,7 +1081,7 @@ dmesg | grep -i -e rtl8226 -e rtl8221 -e realtek
 >
 > ```sh
 > # 期望 sgmii（两条都该是 sgmii）
-> tr -d '\0' < /proc/device-tree/soc/mdio@14f02000/ethernet-phy@5/phy-mode; echo
+> tr -d '\0' < /proc/device-tree/soc/ethernet@19000000/phy-mode; echo
 > cat /sys/bus/mdio_bus/devices/*/phy_interface
 > ```
 >
