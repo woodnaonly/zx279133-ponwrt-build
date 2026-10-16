@@ -653,6 +653,18 @@ announce 用 `INIT_TMPL`（RAM 启动 init），flash 用带 `do_write` 的 `FLA
 * 起 **unbound** 的 dropbear；
 * 用面板 LED 循环闪（这是不需要端口也不需要 reset 的唯一信号）。
 
+**「在、可执行」这一条对地址不够**——`S15trial` 每一处调用都带 `2>/dev/null`，
+少一个能力就是静默失败，现象与「内核没起来」一模一样。所以动词单独查过：
+出货的 `/usr/libexec/ip-full` 自己印着
+
+```
+Usage: ip address {add|change|replace} IFADDR dev IFNAME [ LIFETIME ]
+```
+
+而 `S15trial:38` 是 `ip addr replace $addr dev "$n"` —— **逐字同形**，
+二进制里另有独立的 `replace` 动词表条目。**语法面结案**；
+剩下的是运行时行为（那时 netdev 在不在），那个只能板上答。
+
 时序是要紧的：
 
 | 时刻 | 发生什么 |
