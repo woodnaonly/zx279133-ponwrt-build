@@ -351,7 +351,7 @@ static void device_version(char *out, size_t n)
 		if (out[0])
 			strncat(out, " / Linux ", n - strlen(out) - 1);
 		else
-			snprintf(out, n, "OpenWrt");
+			snprintf(out, n, "OpenWrt / Linux ");
 		strncat(out, rel, n - strlen(out) - 1);
 	}
 	if (!out[0])
@@ -690,16 +690,15 @@ static int jvalue(const char *body, const char *key, char *out, size_t n)
 	const char *p;
 	size_t i = 0;
 
-	snprintf(pat, sizeof(pat), "\"%s\"", key);
+	/* The colon belongs in the search string. A bare "command" matches the *value*
+	 * of operation first - {"operation":"command","command":"echo hi"} - and after
+	 * that value comes a comma, so every verb that carried a command line reached
+	 * zrec-ops with an empty one. Found by running the server, not by reading it. */
+	snprintf(pat, sizeof(pat), "\"%s\":", key);
 	p = strstr(body, pat);
 	if (!p)
 		return 0;
 	p += strlen(pat);
-	while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r')
-		p++;
-	if (*p != ':')
-		return 0;
-	p++;
 	while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r')
 		p++;
 	if (*p != '"') {
