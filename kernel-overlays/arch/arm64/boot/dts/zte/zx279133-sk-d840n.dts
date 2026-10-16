@@ -264,6 +264,26 @@
 };
 
 &nppt {
+	/* zx279133.dtsi says 2500base-x, and that is a lie for this port as we
+	 * have to use it: it makes 2500baseT the only legal mode in phylink's
+	 * supported mask, so `ethtool -s eth0 speed 1000` moves only the PHY's
+	 * copper side while the lane keeps running 2.5G, and the RTL8221B does
+	 * not rate-adapt there. Measured on 2026-10-16 in exactly that state:
+	 * `Link is Up - 1Gbps/Full` and carrier=1 at both ends, but board
+	 * rx_packets stayed 0 and a 20-packet burst changed not one byte of the
+	 * peer's received counters - a link that carries nothing.
+	 *
+	 * 1000BASE-X/SGMII is what this cable actually runs, measured from the
+	 * vendor bootloader on the same jack: its net init prints
+	 * `phy_id:0x5 port:0x4`, `mode_eth_1gbase_x_cfg`,
+	 * `xmac 0 speed set 2 in sgmii(xmac speed 3)`,
+	 * `mac 4 phy status changed: 1000M full-duplex`, then moved 12013 bytes
+	 * by tftp at 1.9 MiB/s. zx279133-mac.c accepts exactly 2500BASEX and
+	 * SGMII and carries the vendor's recovered 1G XPCS bring-up, and
+	 * realtek.c programs the PHY's serdes option from the interface, so this
+	 * one line is the whole fix.
+	 */
+	phy-mode = "sgmii";
 	memory-region = <&bmu_reserved>, <&se_hash_reserved>, <&idm_reserved>;
 	memory-region-names = "bmu", "se-hash", "idm";
 	phy-handle = <&rtl8226b>;
