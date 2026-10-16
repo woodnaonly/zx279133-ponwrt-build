@@ -210,6 +210,25 @@ jobs:
           #   - `scratch`: our last MiB, split out of root. Its presence is also the
           #     marker that this blob is the mainline layout and not the vendor one,
           #     which is how the kexec rounds proved which dtb was live.
+          # The content gate below reads the blob this dtc harness compiled, and it opens
+          # with `if [ -f /tmp/zx279133-sk-d840n.dts.dtb ]; then`. An absent blob therefore
+          # skips the entire block and the step still reports success - a gate that did not
+          # run, on a release whose note claims it did.
+          #
+          # A missing blob only happens when the harness cannot compile ANY board file,
+          # because the sr1010 control goes through the same harness. That is an environment
+          # fault rather than a DTS fault, which is true, and it is still not a licence to
+          # certify a gate that never ran. So make it fatal here, the same way the
+          # main-compatible check above already is.
+          #
+          # Until this existed, the only evidence that the content gate ran in CI was a step
+          # reporting success - which is exactly the shape a skip also produces. run 25 and
+          # run 26 both passed, so the blob was present in practice; nothing in the workflow
+          # guaranteed it.
+          if [ ! -f /tmp/zx279133-sk-d840n.dts.dtb ]; then
+            echo "::error::the dtc harness produced no board blob, so the DTS content gate did not run"
+            exit 1
+          fi
           if [ -f /tmp/zx279133-sk-d840n.dts.dtb ]; then
             dtc -I dtb -O dts -o /tmp/sk-d840n-gate.dts /tmp/zx279133-sk-d840n.dts.dtb
             # dtc writes a string LIST as ONE quoted run with a literal backslash-zero
