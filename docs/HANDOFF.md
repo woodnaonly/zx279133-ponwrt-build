@@ -695,8 +695,11 @@ dw-xpcs、Realtek RTL8226B PHY）在两个将要启动的内核里都在，`phy-
 `-B` 本身**是**合法选项（`svr-runopts.c:87`，含义是「允许空口令登录」）。
 
 **这条不影响任何人**：`S15trial` 的主体包在 `( ... ) &` 里、末尾 `exit 0`，
-立刻返回，procd 接着跑 `S19dropbear`。所以**如果串口上看到 dropbear 报
-「No hostkeys available」，那是我写的死代码，不是板子坏了**，别顺着它查。
+立刻返回，procd 接着跑 `S19dropbear`。所以**如果串口上看到 dropbear 报 `No hostkeys available`，那是我写的死代码，不是板子坏了** ——
+别顺着它查，也**别去给它加 `-R`**：加了它就会抢到 22 端口，随后 `S19dropbear`
+的实例因所有端口都绑不上而 `dropbear_exit("No listening ports available.")`，
+反而丢掉那条已经证明可用的、由 `dropbearkey` 生成正式密钥的路径。
+现在这样每次失败，**等于主动把端口让给 S19dropbear**。
 
 真正起 ssh 的是 `S19dropbear`（`/etc/rc.d/S19dropbear -> ../init.d/dropbear`）：
 它自己用 `dropbearkey` 生成 rsa/ecdsa/ed25519 主机密钥，每个都用 `-r` 传给 dropbear，
@@ -717,6 +720,12 @@ uid 为 0 且没传 `-D` 时 `authorized_keys_filepath()` 直接返回 `/etc/dro
 密码这条路是堵死的（`/etc/board.json` 不存在 ⇒ `50-root-passwd` 什么也不做，
 root 的 shadow 口令字段为空，`svr-authpasswd.c:101` **无条件**拒绝空口令），
 所以**公钥是唯一入口**——这也是它值得单独查一遍的原因。
+
+**`S15trial` 用到的每个外部命令都在镜像里**，已用解析器逐条验过（8/8）：
+`ip`（`/sbin/ip -> /usr/libexec/ip-full`，527,483 B）、`sleep`、`pidof`、`echo`、
+`/usr/sbin/dropbear`、`/usr/libexec/trial-blink`、`/etc/init.d/network`、`/sbin/reboot`。
+镜像里有三个悬空的绝对符号链接 `etc/{localtime,resolv.conf,TZ} -> /tmp/…`，
+那是 OpenWrt 的正常做法（`/tmp` 是 tmpfs，开机生成），**不是缺陷**。
 
 **这一条不用上板查了，已经从两份镜像本身结案：**
 
