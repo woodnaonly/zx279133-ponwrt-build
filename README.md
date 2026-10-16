@@ -8,6 +8,20 @@ SK-D840N ONU: Sanechips ZX279133, 2x Cortex-A53, 512 MiB DDR, 256 MiB SPI-NAND).
 Phase 2 adds an SK-D840N board overlay (own DTS + device profile) once the
 pipeline is green.
 
+## Start here
+
+**[`docs/HANDOFF.md`](docs/HANDOFF.md)** — if you are picking this up rather than
+skimming it, that is the one to read. It states what is verified and what is not,
+the flash order, the rollback command, and the fact that **no runtime evidence
+from a real board exists yet**.
+
+| document | what it holds |
+| --- | --- |
+| [`docs/HANDOFF.md`](docs/HANDOFF.md) | the handover: current state, flash order, rollback, and the verified/unverified split |
+| [`docs/07-sk-d840n-status-20261014.md`](docs/07-sk-d840n-status-20261014.md) | the full work log with the measurements behind every claim |
+| `docs/01`–`docs/06` | flash offset map, recovery probes, and flashing procedure |
+| `pon/` | what the vendor 4.19 PON modules actually contain |
+
 ## Upstreams
 
 | repo | role |
