@@ -484,6 +484,99 @@ SRC=staging/rollback EXPECT='root=0xf00000,0xf100000' sh tools/flash-direct.sh w
 
 ---
 
+## 5a. 走 RAM 启动（trial），不刷机（2026-10-16 补：§5 里原本没有这一步）
+
+§5 讲的是刷机。但**主线能不能跑通这件事，用 RAM 启动就能验，而且不写 flash**——
+`phy-mode` 那一行改动就是为 RAM 启动准备的。这一节是现场的操作序列。
+
+```sh
+cd /mnt/c/ugit/SK-D840N4
+
+# trial 集（run 33）与 flash 集是两个 release，trial 集来自 initramfs job
+sh tools/gettrial.sh initramfs <run>      # 或 flash <run>
+
+# 复制到板上。注意 trial-kx.tgz（kexec 本体）必须一起过去，
+# 那块镜像没有 tftp 客户端，scp 必须用 -O（老协议）。
+scp -O -i ~/.ssh/id_onu staging/trial/* root@192.168.9.1:/tmp/trial/
+
+ssh -i ~/.ssh/id_onu root@192.168.9.1 sh /tmp/trial/trial-kexec.sh
+```
+
+脚本自己会做的事：校验 `sha256sums-trial`（**dtb 除外**，它可能被本地打补丁）、
+`gunzip trial-Image.gz > Image`、带上 `trial-initramfs.cpio.gz` 作 `--initrd`，
+然后
+
+```
+kexec --load --mem-min=0x88000000 --mem-max=0x9b000000 \
+      Image --dtb=trial-dtb.bin --initrd=... \
+      --command-line="root=/dev/ram0 rw console=ttyAMA0,115200 trialtag=<UTC时间戳>"
+```
+
+**`--dtb=trial-dtb.bin` 就是让 `phy-mode="sgmii"` 生效的那一步。** 板上那个
+kexec 是 aarch64 静态构建（Alpine 的 kexec-tools 2.0.31），已确认它认识
+`--dtb`（选项在它公开的 33 个长选项里）——不认的话会静默退回内核自带的 dtb，
+这一行改动就等于没做，而现象是「一切正常但一个帧都不过」。
+
+### 有两棵 `staging/`，别搞混（2026-10-16 实测）
+
+| 谁读 | 读哪一棵 |
+|---|---|
+| RAM 启动（§5a，`staging/trial/*`） | `/mnt/c/ugit/SK-D840N4/staging/trial` |
+| `check-imagelineage.sh` 无参数调用 | **同一棵**（`ROOT=${1:-$WS/staging/trial/flash-rootfs.jffs2}`，`WS=dirname(REPO)`） |
+| `preflight.sh` → `mkgate.sh`（gate round 的载荷） | `/mnt/c/ugit/SK-D840N4/ci-build-repo/staging/trial` |
+
+后两者读的是**不同副本**。今天两份的 flash 文件逐字节相同
+（`flash-uImage` `734d66d243b1`、`flash-dtb.bin` `088edb435e5e`、
+`flash-rootfs.jffs2` `ffee5a8444a1`、`flash-sk-d840n.sh` `34772dd55f19`），
+而且 `ci-build-repo` 那份的 `sha256sums-release` 自己 5/5 过。
+
+**但「今天相同」不等于「被检查过相同」**：只往 `ci-build-repo/staging/`
+重新拉过 flash 集（`preflight` 就是这么做的），而 lineage 门默认看的
+工作区根那份没跟着动，那道门依旧会绿。**真要重拉，两边都要拉**，
+或者把重拉的那一棵显式传给门：
+
+```sh
+SETDIR=ci-build-repo/staging/trial sh tools/check-imagelineage.sh
+```
+
+### ⚠ 这个镜像会自己 reboot，操作窗口很短
+
+`etc/rc.d/S15trial` 在板上做的事（已逐个核过依赖都在且可执行）：
+
+* 把 `192.168.9.1/24` 打在 **`/sys/class/net/*` 里每一个非 `lo` 的 netdev** 上
+  ——所以主线把这个口叫别的名字也没关系；
+* 起 **unbound** 的 dropbear；
+* 用面板 LED 循环闪（这是不需要端口也不需要 reset 的唯一信号）。
+
+时序是要紧的：
+
+| 时刻 | 发生什么 |
+|---|---|
+| 0 – 约 120 秒 | 分配地址的循环只跑 **8 × 15 秒** |
+| **300 秒** | **除非 `/tmp/trial-noreboot` 存在，它会 `reboot -f`**（canary 重启） |
+
+**所以 ssh 进去第一件事：`touch /tmp/trial-noreboot`。** 不 touch 的话，
+你在窗口里还没来得及做什么，镜像自己就没了——而没有串口，
+面板 LED 是当时唯一的信号。
+
+### 判据与读法
+
+**判据是能 ping/ssh，不是 `Link is Up`。** 上一次 carrier 两端都亮着，
+`rx_packets` 一直是 0，20 包的突发也没让对端计数动一个字节。
+
+`/dev/kmsg` 里有三个标记（没有串口时这是唯一证据）：
+
+```
+trial: netdevs=<所有出现的 netdev> addr=192.168.9.1/24
+trial: beacon before reboot
+trial: canary reboot
+```
+
+第一行一次就能把三种不同的「失败」分开：**端口没协商上** / **netdev 名字对不上**
+/ **镜像自己 reboot 了**。离线这边已经排掉的：四个驱动（NPPT MAC、ZX279133 MDIO、
+dw-xpcs、Realtek RTL8226B PHY）在两个将要启动的内核里都在，`phy-handle` 通到
+`ethernet-phy@5`（MDIO 地址 5），S15trial 依赖的每个二进制都在。
+
 ## 5b. 刷完的板子到底答哪个地址（已从镜像实测，不是推论）
 
 这一条被改错过两次，所以写下推导。全部读自
