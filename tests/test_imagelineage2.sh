@@ -16,9 +16,13 @@
 set -u
 cd /mnt/c/ugit/SK-D840N4 || exit 1
 
-TOOL=tools/check-imagelineage.sh
-OVL=ci-build-repo/overlays/target/linux/zte/zx279133/base-files
-TMPL=ci-build-repo/templates
+# Absolute, for the reason in test_imagelineage.sh: the tool cds to $REPO before reading its
+# arguments, so a relative `ci-build-repo/...` resolves one level too deep and every file
+# refuses as "no overlay counterpart - cannot verify" instead of being compared.
+REPO=$(cd "$(dirname "$0")/.." && pwd)
+TOOL=$REPO/tools/check-imagelineage.sh
+OVL=$REPO/overlays/target/linux/zte/zx279133/base-files
+TMPL=$REPO/templates
 # The STALE case is pinned to release 21's own published set, not to whatever the workspace
 # happens to be holding. This suite used to assert "the staged set is stale", which is a
 # statement about the workspace rather than about the tool; it passed for as long as the

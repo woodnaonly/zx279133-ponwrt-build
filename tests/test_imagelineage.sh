@@ -23,8 +23,16 @@
 set -u
 cd /mnt/c/ugit/SK-D840N4 || exit 1
 
-TOOL=tools/check-imagelineage.sh
-OVL=ci-build-repo/overlays/target/linux/zte/zx279133/base-files
+# Both paths are absolute. They used to be relative to the workspace root, which was correct
+# only while the tool still lived there: the shipped tool does `cd "$REPO"` before it reads
+# its arguments, so a relative `ci-build-repo/overlays/...` asks for
+# ci-build-repo/ci-build-repo/overlays/... and does not exist. The gate then refuses with
+# "no overlay counterpart - cannot verify" for every file, and the real verdict - the stale
+# comparison, with the address it would have come up on - never happens. Same defect class as
+# e8f6036, reached from the caller this time.
+REPO=$(cd "$(dirname "$0")/.." && pwd)
+TOOL=$REPO/tools/check-imagelineage.sh
+OVL=$REPO/overlays/target/linux/zte/zx279133/base-files
 # Pinned to release 21's published rootfs, not to whatever is staged. The accept direction
 # is proven against a constructed current directory further down, so neither direction here
 # depends on the state of the workspace.

@@ -17,7 +17,10 @@
 set -u
 cd /mnt/c/ugit/SK-D840N4 || exit 1
 
-PF=tools/preflight.sh
+# The preflight under test is the one in the repository. The workspace root also has a
+# `tools/` directory and it is a fossil copy - predating the 2026-10-16 lineage-argument fix -
+# so pointing at it verified a block that is not the one that ships.
+PF=ci-build-repo/tools/preflight.sh
 pass=0
 ok()  { pass=$((pass+1)); printf 'PASS %s\n' "$1"; }
 bad() { printf 'FAIL %s\n' "$1"; exit 1; }
