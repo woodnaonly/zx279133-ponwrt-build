@@ -809,6 +809,35 @@ curl -sSL https://github.com/woodnaonly/zx279133-ponwrt-build/releases/expanded_
 开机后谁也 ssh 不上去的板子，而所有工具都用 `ssh -o BatchMode=yes`——密码交互早就关了。
 拿到新 set 之后 `check-imagelineage.sh` 必须**三层全过**才动手。
 
+### 这一条作废了：run 39 两半俱全（2026-10-16）
+
+run 33 / 37 / 38 的 initramfs job 都没出产物，所以「先等 flash job」这个说法已经不成立。
+**run 39 是第一个 flash 与 initramfs 同时存在的 run**：
+
+```
+skd840n_flash_39_38896098366
+skd840n_initramfs_39_38896098366
+```
+
+两半钉同一个 run 取回仓库树，rc=0，trial 集清单 4/4 OK，lineage 门**三层全过**
+（第 2 层这次是真的在比 `trial-kexec.sh`，不再是「不在本集」）。内核
+`6.18.38~5fc46cac3bb56a807e0cc536618a96ea-r1`，`flash-dtb.bin` 仍是
+`088edb435e5e782a…`——**dtb 一个字节没变**，`phy-mode="sgmii"` 那条改动仍在。
+
+`trial-Image.gz` 是**内核 + 内嵌 initramfs cpio**，归档 765 个条目。
+其中**没有 `.ko`、没有 `modules.alias`、没有 modprobe/kmod**，
+但有 `lib/modules/6.18.38+/modules.builtin`（441 条）和 `modules.builtin.modinfo`
+（199,230 B）。所以驱动**全部编进内核**，RAM 启动时不需要任何 modprobe——
+`zx279133.ko`、`mdio-zx279133.ko`、`zx279133-lan-conduit.ko`、
+`zx279133-rtl8372n.ko`、`realtek.ko`、`pcs_xpcs.ko`、`phylink.ko`、`libphy.ko`、
+`of_mdio.ko` 都在 `modules.builtin` 里。
+
+**扫描这类镜像时的一条方法论**：initramfs 就嵌在里面，所以「在镜像里命中某个字符串」
+必须先归因到内核还是用户态。边界**不能**用 `find(b"070701")` 找——
+第一个命中是内核解包器自带的错误串（`incorrect cpio method used`、`no cpio magic`），
+用它当边界会把 17 项证据里的 16 项错判成用户态。真边界 0x0115faf8，
+用真 `cpio` 列一遍即可。详见 docs/07 补二十七。
+
 **取件时顺手核一下 tag 指向谁**：`skd840n_initramfs_33_38862392504` 指向 `85f7e7a`，
 而 run 33 的 head 是 `63ff208`（`85f7e7a` 是它的子提交，只动 `docs/`）。
 `Clone sources` 是 clone main，构建跑了 1h08m，期间 main 动了。
