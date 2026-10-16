@@ -52,10 +52,37 @@
 #   JEFFERSON=/path/to/jefferson sh tools/check-imagelineage.sh
 #   ALLOW_UNVERIFIED=1 sh tools/check-imagelineage.sh     # refuse silently? no - warn loudly
 set -u
-cd "$(dirname "$0")/.." 2>/dev/null || cd /mnt/c/ugit/SK-D840N4
-ROOT=${1:-staging/trial/flash-rootfs.jffs2}
-OVL=${2:-ci-build-repo/overlays/target/linux/zte/zx279133/base-files}
-TEMPLATES=${TEMPLATES:-ci-build-repo/templates}
+# Where this repository is, resolved once. The two cd fallbacks used to land in
+# DIFFERENT directories - $REPO and the workspace one level above it - and the
+# three defaults below were relative paths that are only correct in one of them.
+# Measured 2026-10-16, running the documented command with no arguments
+# (`sh tools/check-imagelineage.sh`, HANDOFF.md step 4d):
+#
+#   REFUSE overlay dir ci-build-repo/overlays/.../base-files does not exist
+#   REFUSE beside-image: templates dir ci-build-repo/templates does not exist
+#   REFUSE .../flash-rootfs.jffs2 does not exist
+#
+# All three were false. The set handed in carried the current overlays
+# (lib/upgrade/platform.sh 5118 B, etc/board.d/02_network 2563 B, both byte-equal
+# to this tree) and templates/flash-sk-d840n.sh at 5378 B, byte-equal too. The
+# paths spelled ci-build-repo/... while the first cd had already put us INSIDE
+# ci-build-repo, so they asked for ci-build-repo/ci-build-repo/... ; and there is
+# no ci-build-repo/staging at all, the staged set lives one level up. A refusal
+# whose stated reason is wrong is still a refusal nobody can act on - and the one
+# real finding that run did have (the image has no etc/dropbear/authorized_keys,
+# so it predates that overlay commit) was buried under three invented ones.
+#
+# This is the same mistake as the fourth broken checker in docs/07 (补四), where
+# the too-high overlay root made the comparison SKIP and print OK. That version
+# was worse - a gate that reports success having compared nothing. Fixed here by
+# deriving every default from an absolute $REPO, so it is correct from any cwd.
+REPO=${REPO:-$(cd "$(dirname "$0")/.." 2>/dev/null && pwd)}
+[ -n "$REPO" ] && [ -d "$REPO/tools" ] || REPO=/mnt/c/ugit/SK-D840N4/ci-build-repo
+WS=${WS:-$(dirname "$REPO")}
+cd "$REPO" || exit 1
+ROOT=${1:-$WS/staging/trial/flash-rootfs.jffs2}
+OVL=${2:-$REPO/overlays/target/linux/zte/zx279133/base-files}
+TEMPLATES=${TEMPLATES:-$REPO/templates}
 JEFFERSON=${JEFFERSON:-jefferson}
 
 fail=0
