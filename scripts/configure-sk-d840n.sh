@@ -79,6 +79,25 @@ pin_y PSTORE
 pin_y PSTORE_CONSOLE
 pin_y PSTORE_RAM
 
+# Reading a stalled board needs three things, and this build had none of them:
+#   * MAGIC_SYSRQ - on 2026-10-16 the RAM trial printed "- generating board file -" and
+#     then went fully mute: not one byte back for a break+w/t/l, and a ^C that used to be
+#     echoed by the tty layer stopped being echoed too. Without sysrq there is no way to
+#     tell "console output wedged" from "cpus gone", which is the only question that
+#     decides whether to keep probing or to power-cycle.
+#   * DETECT_HUNG_TASK + SOFTLOCKUP_DETECTOR - the kernel says out loud, 120 s in, which
+#     task is stuck and in which function, instead of leaving us to infer it from the last
+#     line of userspace output.
+#   * IKCONFIG_PROC - /proc/config.gz was absent, so every guess about what this kernel
+#     actually contains had to come from grepping the 28 MB Image.
+# These are bring-up instruments, not features: they cost a little RAM and a taint flag on
+# the hung-task print, and they are what makes the next silent round legible.
+pin_y MAGIC_SYSRQ
+pin_y DETECT_HUNG_TASK
+pin_y SOFTLOCKUP_DETECTOR
+pin_y IKCONFIG
+pin_y IKCONFIG_PROC
+
 # The board hangs at `Waiting for root device /dev/mtdblock7...`, and for a while that looked
 # like the community U-Boot's `ft_fixup_flash-spinand`, because that function does print
 # itself into the boot log and does own a `root=/dev/mtdblock%d rootfstype=%s` template. It
