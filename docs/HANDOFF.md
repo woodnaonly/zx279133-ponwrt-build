@@ -402,6 +402,16 @@ APPLY=1 sh tools/reachcheck.sh
 # 3. 刷之前的最后一道人工闸
 SKIP_BOARD=1 sh tools/preflight.sh
 
+# 2b. 第一次 ssh 成功之后，确认公钥是被**读到**的，而不是碰巧别的路通了。
+#     这是从 dropbear 2025.89 源码推出的唯一硬条件（补五十）：
+#     **/etc/dropbear 这个目录**必须 root 属主、group/other 不可写。
+#     文件本身不用管——/etc/init.d/dropbear 开机会自己 chmod 0600。
+#     在板子上：
+#         stat -c '%U %a' /etc/dropbear
+#     必须是 root，且不是 775/777 一类。真出问题的话 dropbear 日志里只有一行：
+#         /etc/dropbear must be owned by user or root, and not writable by group or others
+#     而现象看上去只是「key 被拒」，很容易误判成公钥不对。
+
 # 4. gate round：只写 mtd2 + mtd3，mtd5 不碰
 MASK=1 FLASH=0 WAIT=10 sh tools/runround.sh
 ```
