@@ -664,6 +664,45 @@ announce 用 `INIT_TMPL`（RAM 启动 init），flash 用带 `do_write` 的 `FLA
 你在窗口里还没来得及做什么，镜像自己就没了——而没有串口，
 面板 LED 是当时唯一的信号。
 
+### kexec 能不能用：已证实，不是假设
+
+试验方法的唯一前提是**正在跑的厂商内核**（不是我们的内核）支持 kexec。
+这一点此前没有证据，现在有了：
+
+- `restore_set/kernel_stock.bin` **没有加密**，它是中兴固件容器
+  （`ZXIC 133 UNI V2.0.0 286632 CM OSGI` / `U-Boot uImage source file for 133 project`），
+  偏移 `0x2d4` 一个 gzip 成员解出 **10,676,232 字节**：
+  `Linux version 4.19.136+ (fanqiang@skyworth) (gcc 5.3.1 20160412 / Buildroot 2017.05)
+  #4 SMP Mon Dec 1 20:09:27 CST 2025`
+- 那个镜像被剥了符号表（`start_kernel`、`init/do_mounts` 都是 0 命中），
+  所以**不能**用「找符号」来判断。要看**只存在于 `CONFIG_KEXEC=y` 的字符串**：
+  - sysctl 表里有 `kexec_load_disabled` / `kexec_crash_size` /
+    `kexec_crash_loaded` / `kexec_loaded`
+  - `kexec_core: Starting new kernel`、`Crash kernel`、
+    `kexec: Could not allocate control_code_buffer`
+
+⇒ **`CONFIG_KEXEC=y`**，且 `kexec_load_disabled` 默认 0（内核层面没禁掉载入）。
+**两个内核槽都成立**（`mtd3_kernel0` 是 2025-12 `fanqiang` 构建、
+`mtd6_kernel1` 是 2024-04 `huangdi` 构建，5/5 证据各一次），
+所以这是平台属性，不是某个构建的运气。
+
+**厂商侧取证这条路开了**：`backups/` 里的中兴 dump 都是同一套容器格式
+（文本头 + 一个 gzip 成员）。`mtd1_boot.bin` 的 gzip@`0xc5330` 里有两个 FDT，
+`0x0` 是 704 B 的 u-boot image source，**`0x2c0` 那个 49,307 B 的才是板级设备树**。
+厂商树用 `soc/gephy_apb@15400000`（中兴自己的 GEPHY），我们用
+`soc/ethernet@19000000`（NPPT），**但两个 MDIO 控制器地址完全相同**
+（`mdio@14f01000`、`mdio@14f02000`）—— 我们把 PHY 挂在 `mdio@14f02000` 的地址 5
+是有依据的，不是猜的。
+
+还有一条要注意：**厂商树没有 `/reserved-memory`**，保留区只有我们这边有。
+所以 kexec 时厂商内核留下的状态没有任何 DT 保护，
+`--mem-max=0x9b000000` 到我们保留区最低那块 `0x9d700000` 之间的
+**39 MiB 就是全部余量**，不要再去动那个窗口。
+
+**触发方式是操作者手动做的**，脚本和 `trial-files/` 里都没有自动触发：
+`trial-files/` 只有 `etc/config/dropbear`、`etc/rc.d/S15trial`、
+`lib/preinit/05_trial_alive`、`usr/libexec/trial-blink` 四个文件。
+
 ### 判据与读法
 
 **判据是能 ping/ssh，不是 `Link is Up`。** 上一次 carrier 两端都亮着，
