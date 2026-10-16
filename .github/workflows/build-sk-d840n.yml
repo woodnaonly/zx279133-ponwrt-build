@@ -162,14 +162,11 @@ jobs:
           done
           grep -q 'INSTALL_BIN) $(PKG_BUILD_DIR)/zrec' openwrt/package/utils/zrec/Makefile || {
             echo "::error::zrec Makefile no longer installs the compiled binary"; exit 1; }
-          if [ "${{ matrix.mode }}" = initramfs ]; then
-            grep -qx 'CONFIG_PACKAGE_zrec=y' openwrt/.config || {
-              echo "::error::initramfs mode does not select zrec" >&2
-              grep -i zrec openwrt/.config || echo "(no zrec line at all)" >&2
-              exit 1; }
-          elif grep -qx 'CONFIG_PACKAGE_zrec=y' openwrt/.config; then
-            echo "::error::flash mode selected zrec"; exit 1
-          fi
+          # No .config check here: this step runs before Configure writes .config at all,
+          # and reading a file that does not exist yet is how the first version of this
+          # gate failed the initramfs job while passing the flash one - the flash branch
+          # asked "is the symbol on?", got a grep failure from a missing file, and took
+          # that as agreement. The selection is asserted in the Configure step.
           # Compile-check zrec with the runner's own gcc, here at two minutes rather
           # than forty: the package builds only after the cross toolchain exists, and
           # a missing include or a warning under -Werror would otherwise be discovered
@@ -356,6 +353,21 @@ jobs:
             "$GITHUB_WORKSPACE/openwrt" \
             "$GITHUB_WORKSPACE/linux-mainline-zte-zxslc-sr1010/linux-$KVER" \
             "${{ matrix.mode }}"
+          # Only now does .config exist, and the mode is what decides the rule: the RAM
+          # image is the recovery image, a released root must not ship a page that can
+          # erase kernel and root. The script asserts the symbol resolved at all; this
+          # asserts it resolved the way this mode asked, which is the half a single
+          # script cannot see.
+          if [ "${{ matrix.mode }}" = initramfs ]; then
+            grep -qx 'CONFIG_PACKAGE_zrec=y' openwrt/.config || {
+              echo "::error::initramfs mode does not select zrec" >&2
+              grep -i zrec openwrt/.config || echo "(no zrec line at all)" >&2
+              exit 1; }
+          elif grep -qx 'CONFIG_PACKAGE_zrec=y' openwrt/.config; then
+            echo "::error::flash mode selected zrec - a released root must not ship a flasher" >&2
+            exit 1
+          fi
+          grep -i zrec openwrt/.config || true
 
       - name: Download packages
         if: steps.pick.outputs.run == 'true'
@@ -493,32 +505,60 @@ jobs:
         if: steps.pick.outputs.run == 'true'
         run: |
           set -e
-          # Check the staged root filesystem, not the package build log: "the package
-          # compiled" and "the file is where the server looks for it" are different
-          # claims, and only the second one decides whether the page loads on the board.
-          R=$( { ls -d openwrt/build_dir/target-*/rootfs-* 2>/dev/null || true; } | head -1)
-          test -n "$R" || {
-            echo "::error::no staged rootfs to inspect"; ls -d openwrt/build_dir/target-*/ 2>&1; exit 1; }
-          echo "rootfs: $R"
+          # Inspect the ipk, because the ipk is what OpenWrt installs into the rootfs:
+          # "the package compiled", "the files sit at the paths the server opens them
+          # by" and "the exec bits survived packaging" are all answered by its
+          # data.tar.gz, and none of them are answered by a build log.
+          #
+          # The staged-rootfs directory is only reported, never required: the first
+          # version of this step globbed build_dir/target-*/rootfs-*, matched nothing in
+          # a flash build, and failed a job 74 minutes deep over a guess at a directory
+          # name. A gate that cannot find its subject is not evidence of absence.
           want="usr/sbin/zrec usr/sbin/zrec-run usr/libexec/zrec-ops usr/libexec/zrec-bringup lib/preinit/85_zrec etc/rc.d/S21zrec www/zrec/index.html"
           noexec="www/zrec/index.html lib/preinit/85_zrec"
+          IPK=$( { find openwrt/bin openwrt/build_dir \( -name 'zrec_*.ipk' -o -name 'zrec-*.ipk' \) 2>/dev/null || true; } | head -1)
+          MAN=$( { ls openwrt/bin/targets/zte/zx279133/manifest 2>/dev/null || true; } | head -1)
+          R=$( { find openwrt/build_dir -maxdepth 3 -type d -name 'rootfs*' 2>/dev/null || true; } | sort | head -1)
+          echo "ipk: ${IPK:-none}  manifest: ${MAN:-none}  staged rootfs: ${R:-none}"
           if [ "${{ matrix.mode }}" = initramfs ]; then
+            test -n "$IPK" || {
+              echo "::error::zrec produced no package, so it cannot be in the RAM image" >&2
+              find openwrt/build_dir -maxdepth 2 -name 'zrec*' 2>/dev/null || true
+              exit 1; }
+            # data.tar.gz is extracted to a file first, and every read of it says -z:
+            # `tar -xOzf ipk data.tar.gz | tar -tv` looks equivalent and is not, because
+            # on a pipe GNU tar does not sniff the gzip stream - it dies with "Archive is
+            # compressed. Use -z option", LIST comes back empty and every file is then
+            # reported missing. Same reason the names are normalised with awk rather than
+            # sed: with -v the member name is the LAST field and still carries its ./
+            # prefix, so a `s|^\./||` on the whole line matches nothing at all. Both
+            # shapes were caught by running the gate against a package built to OpenWrt's
+            # layout, not by reading it.
+            T=$(mktemp -d)
+            tar -xzf "$IPK" -C "$T" data.tar.gz || {
+              echo "::error::$IPK has no data.tar.gz"; tar -tzf "$IPK"; exit 1; }
+            LIST=$(tar -tvzf "$T/data.tar.gz" |
+              awk '{ n = $NF; sub(/^\.\//, "", n); if (n !~ /\/$/) print $1, n }')
+            echo "--- package contents ---"
+            echo "$LIST"
             for f in $want; do
-              test -f "$R/$f" || {
-                echo "::error::$f is not in the RAM image" >&2
-                ls -lR "$R/usr" 2>/dev/null | head -30 >&2
-                exit 1; }
-              case " $noexec " in *" $f "*) continue ;; esac
-              test -x "$R/$f" || { echo "::error::$f lost its exec bit"; exit 1; }
+              echo "$LIST" | grep -q " ${f}\$" || {
+                echo "::error::$f is not in $IPK"; exit 1; }
             done
-            # The page is opened by absolute path inside the binary, so a wrong install
-            # location is a 404 in the browser and nothing in the build log would say so.
-            grep -aq '/www/zrec/index.html' "$R/usr/sbin/zrec" || {
+            for f in $want; do
+              case " $noexec " in *" $f "*) continue ;; esac
+              mode=$(echo "$LIST" | awk -v p="$f" '$2==p {print $1; exit}')
+              case "$mode" in
+              *x*) ;;
+              *) echo "::error::$f is not executable in the package (mode: ${mode:-not listed})"; exit 1 ;;
+              esac
+            done
+            # Unpack for real, then read what the boot depends on.
+            mkdir -p "$T/x"
+            tar -xzf "$T/data.tar.gz" -C "$T/x"
+            grep -aq '/www/zrec/index.html' "$T/x/usr/sbin/zrec" || {
               echo "::error::the compiled zrec does not reference /www/zrec/index.html"; exit 1; }
-            # And this is the entry point that actually runs: a RAM image that cannot
-            # mount a root ends at the failsafe shell and never execs procd, so an
-            # /etc/rc.d script alone would simply not be part of the boot.
-            P=$R/lib/preinit/85_zrec
+            P="$T/x/lib/preinit/85_zrec"
             grep -q 'boot_hook_add failsafe zrec_recovery' "$P" || {
               echo "::error::85_zrec does not register the failsafe hook - nothing would start zrec"; exit 1; }
             grep -q 'boot_hook_add preinit_main zrec_recovery' "$P" || {
@@ -528,16 +568,27 @@ jobs:
             # A preinit file is sourced by the init script: broken syntax there is a
             # board that stops booting, and the failure looks exactly like a bad kernel.
             sh -n "$P"
-            sh -n "$R/usr/libexec/zrec-bringup"
-            echo "recovery service is in the RAM image"
+            sh -n "$T/x/usr/libexec/zrec-bringup"
+            sh -n "$T/x/etc/rc.d/S21zrec"
+            rm -rf "$T"
+            if [ -n "$MAN" ]; then
+              grep -qw zrec "$MAN" || {
+                echo "::error::zrec is packaged but not in the image manifest" >&2
+                head -5 "$MAN"; exit 1; }
+            else
+              echo "::warning::no target manifest to check zrec against"
+            fi
+            echo "recovery service is packaged for the RAM image"
           else
-            for f in $want; do
-              if [ -e "$R/$f" ]; then
-                echo "::error::flash mode root carries $f - zrec belongs to the RAM image only"
-                exit 1
-              fi
-            done
-            echo "flash root carries no recovery service, as intended"
+            if [ -n "$IPK" ]; then
+              echo "::error::flash mode built a zrec package - a released root must not ship a flasher" >&2
+              ls -l "$IPK"
+              exit 1
+            fi
+            if [ -n "$MAN" ] && grep -qw zrec "$MAN"; then
+              echo "::error::the flash rootfs manifest selects zrec"; exit 1
+            fi
+            echo "flash mode produced no zrec, as intended"
           fi
 
       - name: Package flash images
