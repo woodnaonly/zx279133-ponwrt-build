@@ -1020,6 +1020,80 @@ S21zrec     347 B  -rwxr-xr-x   ← CI 打进试镜像的普通文件
 二进制一起 grep）。U-Boot CMDLINE 里的 `trialtag=<ts>` **没有任何用户态读者**——
 它是给 bootloader/回滚脚本那一侧用的，不要在用户态里找它。
 
+### 5e. preinit 会在早期给 `192.168.1.1` 一下又收走（2026-10-17）
+
+`lib/preinit/00_preinit.conf:7-10` 里：
+
+```sh
+pi_ifname=""
+pi_ip="192.168.1.1"
+pi_netmask="255.255.255.0"
+pi_broadcast="192.168.1.255"
+```
+
+`10_indicate_preinit` 的 `preinit_ip()` 里 `pi_ifname` 与 `$ifname` 都空，
+`/etc/board.d/` 又在，于是走 `preinit_config_board`：它自己再跑一遍
+`/bin/board_detect /tmp/board.json`，从 `network.lan` 取出 `eth0`
+（`ports` 为空 → `ports="$device"`，和 §5b 同一个补法），最后
+`preinit_ip_config eth0` → `ip link set eth0 up` +
+**`ip -4 address add 192.168.1.1/24 broadcast 192.168.1.255 dev eth0`**。
+
+所以**正常开机会在 preinit 阶段给 eth0 挂上 `192.168.1.1/24`**，
+到 `/sbin/init` 之前由 `99_10_run_init` 的 `preinit_ip_deconfig`
+（`ip -4 address flush dev eth0` + `ip link set eth0 down`）清掉。
+`ip-full` 两种动词都有：`ip address {save|flush} [ dev IFNAME ] …`
+与 `[ broadcast ADDR ] [ anycast ADDR ]` 都在二进制里。
+
+现场用得上两条：
+
+1. **它是「主线把这个口叫 `eth0`」的正向证据，而且比 netifd 早得多。**
+   `preinit_ip_config` 开头是 `grep -q "$netdev" /proc/net/dev || return`——
+   口不叫 `eth0` 就什么也不做。所以**开机早期某个口上冒出 `192.168.1.1`、
+   随后消失**，说明名字对了。**一直不出现不能反推名字错**：也可能是驱动还没
+   probe 完，或者已经过去了那个窗口。
+2. 那段窗口里，`ping 192.168.1.1` 可能打到**板子**而不是用户自己那台路由
+   （两者同在 `192.168.1.0/24`）。`gatewatch.sh` 不用 `192.168.1.1` 当信号的理由
+   因此**加强**，不是减弱。
+
+> ⚠ **不要把 failsafe 当成一个会自己出现的状态。** `30_failsafe_wait:97-101` 只给三条路：
+> `failsafe=` 在 cmdline 里、**串口 4 秒内按 `f`**、`/tmp/failsafe_button` 存在。
+> 本板 cmdline 是写死的（无 `failsafe=`）。第三条有**两条独立的理由**堵死：
+> dtb 是**故意不给 `reset-gpios`**（`zx279133-sk-d840n.dts:326`），
+> 而 `modules.builtin` 的 441 条里 **`input` / `key` / `button` 一个都没有**
+> —— 内核连 `CONFIG_INPUT` 都没编，任何按键 uevent 都不会发生。
+> （`/etc/rc.button/failsafe` 本身是在的，但由 procd 分发按键 uevent 才有意义。）
+> 那个 0 用同一张表里已知必在的 `bridge.ko`、`dsa_core.ko` 做过阳性对照，各命中 1。
+> **推论：`/etc/rc.button/` 下那五个（`failsafe` `power` `reboot` `reset` `rfkill`）
+> 在这个镜像里全是死代码。**
+> **failsafe 只能靠串口主动进。** 因此「只答 `.1` 不答 `.9`」**不是** failsafe 的签名；
+> 无串口时这个现象要按别的线索查。
+>
+> 顺带记清两条路径各自答哪个地址：串口按 `f` 进去时 deconfig 永不执行
+> （`40_run_failsafe_hook` 阻塞在 `lock -w`，排在后面的 `99_10_run_init` 跑不到），
+> 所以 **flash rootfs 停在 failsafe 时答 `192.168.1.1`**；
+> 而**试镜像**在 failsafe 里是 `85_zrec` 的 `zrec-bringup` 接手，它发的是
+> **`192.168.9.1`**。同一个按键，两种镜像答的地址不一样。
+
+### 5f. 镜像里没有防火墙 —— 对 ssh 是好消息，对安全是事实陈述
+
+`/etc/init.d/firewall` **不存在**，`nft` 二进制不存在，`/etc/config/firewall`
+不存在，`rc.d` 里也没有任何 `*firewall*`。**没有任何入站过滤。**
+
+* 对本任务：**ssh 不可能被规则挡掉**，§5 第 2 步失败时不必再往防火墙方向想。
+* 同样是真的：这块盒子一旦网口可达就没有任何入站过滤。**这是现状陈述，
+  不是本轮要修的缺陷**——这轮的目标是让它可维护；要不要加防火墙是另一个决定。
+* 副作用：`98-sr1010-defaults` 里 `uci -q set firewall.@defaults[0].flow_offloading='1'`
+  写进一个没人读的配置，`-q` 把错误吃掉。无害。
+
+其余开机服务也顺手清了一遍，都没有能挡住 ssh 的：
+
+| 服务 | 状态 |
+|---|---|
+| `S19dnsmasq` | `/etc/config/dhcp`（1,262 B）：`config dhcp lan` → `option interface 'lan'`（dnsmasq 在 br-lan 上发 DHCP）；`config dhcp wan` → **`option ignore '1'`**，所以**缺 wan 接口不会让 dnsmasq 报错退出** |
+| `S96led` | **`/etc/config/leds` 不存在** ⇒ 没有 LED 要点，不会刷错误 |
+| `S50cron` | **`/etc/crontabs/` 是空的** ⇒ 没有定时任务碰网络 |
+| `S10system` / `S98sysntpd` | `/etc/config/system` 不存在是**正常的**，`config_generate` 的 `generate_static_system()` 首次开机会建 |
+
 ---
 
 ## 6. CI 成功之后
