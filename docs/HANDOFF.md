@@ -647,7 +647,7 @@ kexec 是 aarch64 静态构建（Alpine 的 kexec-tools 2.0.31），已确认它
    字节级扫描，仪器阳性对照 `cpus` 在三个文件里各命中 1 次 ⇒ 0 命中是真的 0。
 
    > ⚠ **这一条会骗过 §5 那个三秒判据。** 刷了这个 dtb 的板子，
-   > `cat /sys/class/net/eth0/phy*/driver` **照样是 realtek**（驱动认得这颗 PHY，
+   > `$P/driver` **照样是 realtek**（驱动认得这颗 PHY，
    > §5 的「出现 genphy 就停」那道门**不会响**）。而且按 §5 的推导，
    > `phy-mode="2500base-x"` 会把 `RTL822X_VND1_SERDES_OPTION (0x697a)` 的
    > `GENMASK(5,0)` 写成 **2**（`sgmii` 才是 **0**），
@@ -999,10 +999,38 @@ stat -c '%U %a' /etc/dropbear
 
 ```sh
 # 2026-10-18 更正: 原来这里写「期望 0x001ccf」—— 那个值不对, 见下。
-cat /sys/class/net/eth0/phy*/phy_id      # 期望 0x001cc8xx, 且是下面六个之一
-cat /sys/class/net/eth0/phy*/driver     # 期望 .../drivers/net/phy/realtek, 不是 genphy
+P=/sys/class/net/eth0/phydev           # 名字就是字面量 phydev, 见下面的更正
+ls -l $P/driver | sed 's/.*-> //'     # 期望 realtek, 不是 genphy
+cat $P/phy_id                         # 期望 0x001cc8xx, 且是下面六个之一
+cat $P/phy_interface                  # 期望 sgmii
 dmesg | grep -i -e rtl8226 -e rtl8221 -e realtek
 ```
+
+> **round511–517 核实过的三件事**（原文的写法都不准）：
+>
+> 1. **路径里的名字是字面量 `phydev`，不是 `phy@5`。**
+>    `phy_sysfs_create_links()`（`phy_device.c:1441`）建的是
+>    `sysfs_create_link_nowarn(&dev->dev.kobj, &phydev->mdio.dev.kobj, "phydev")`
+>    —— 网卡 kobj 下**唯一**那个链接名字就叫 `phydev`。
+>    所以旧写法 `phy*/driver` **能命中，纯属 `phydev` 恰好以 `phy` 开头的巧合**，
+>    不是设计出来的写法。PHY 设备自己的 kobj 名是 `eth0:05`
+>    （`PHY_ID_FMT` = `"%s:%02x"`，`phy.h:322`；`phy_device.c:790`）。
+>
+> 2. **`phy_id` 是 8 位十六进制补零**：`sysfs_emit(buf, "0x%.8lx\n", ...)`
+>    （`phy_device.c:569-566`），所以期望值写成 `0x001cc840` 这种 8 位的才对，
+>    看到 `0x1cc840`（6 位）不要当成「读错了」。
+>
+> 3. **`driver` 不是属性文件，`cat` 未必打得开。**
+>    `drivers/base/core.c` 里没有 `DEVICE_ATTR(driver)`（阳性对照：该文件共 9 个
+>    `DEVICE_ATTR`，所以不是 grep 坏了）；`device_add()` 里也只有
+>    `device_set_driver(dev, NULL)`。**我没能定位到创建这个链接的源码位置**
+>    （`core.c` / `bus.c` / `dd.c` 的 `driver_bound()` 里都没有 `"driver"` 的
+>    `sysfs_create_link`），所以**不下结论说它一定是符号链接**。
+>    已知的是它不是属性文件 ⇒ **`ls -l` 看箭头是最稳的写法**，
+>    符号链接、不是链接两种形态都读得出驱动名。
+>    `readlink` / `basename` / `ls` / `cat` / `tr` / `grep` / `hexdump` / `sed`
+>    在 flash rootfs、initramfs、**社区 4.19 rootfs** 三棵用户空间里实测都在
+>    （`od` 没有）。
 
 **`driver` 显示 `genphy` 就是没匹配上。** 因为我们给 PHY 节点**故意不写 `compatible`**
 （§7 第 4 条，为了不覆盖按 ID 的匹配），ID 认不出来时 phylib 会**静默退回 `genphy`** ——
