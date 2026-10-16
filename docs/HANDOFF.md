@@ -558,6 +558,54 @@ sh tools/check-imagelineage.sh staging/trial/flash-rootfs.jffs2   # 从仓库根
 所以测试仍需 `cd` 到工作区根，但**被测的 `tools/` 必须指 `ci-build-repo/tools/`**——
 工作区根那份 `tools/` 是化石，见 docs/07 补二十六。
 
+### 回滚那两个工具要传 `LOCAL=`（2026-10-16 实测）
+
+`tools/mkrollback.sh` 和 `tools/checkrollback.sh` 开头都是 `cd "$(dirname "$0")/.."`,
+然后按**仓库相对路径**去找板子派生的东西：`staging/ctl/mtd2.bin`、`staging/ctl/mtd3.bin`、
+`backups/preflash-*/`、`restore_set/`。这些是从板子上 dump 下来的，clone 里没有；
+本机仓库又嵌在工作区里，于是它们全在**上一层**，工具按仓库相对路径找就是找了个空。
+
+现象不报错，是**静默降级**：`checkrollback.sh` 第 6 节报「没有 pre-flash 快照」算 FAIL，
+第 7 节根本跑不到，读起来像「回滚对不可用」，而回滚对其实好好的。
+`mkrollback.sh` 更直接，`FileNotFoundError` 退出。
+
+两个工具现在都有 `LOCAL=${LOCAL:-.}`（默认就是原来的行为，单 clone 布局不受影响）：
+
+```sh
+LOCAL=/mnt/c/ugit/SK-D840N4 OUT=/mnt/c/ugit/SK-D840N4/staging/rollback \
+  sh ci-build-repo/tools/mkrollback.sh
+LOCAL=/mnt/c/ugit/SK-D840N4 sh ci-build-repo/tools/checkrollback.sh
+```
+
+**不传 `LOCAL` 就是找不到板子数据**，实测 `FileNotFoundError: './staging/ctl/mtd2.bin'`。
+
+### 出货的 `preflight.sh` 在这台机器上停在**第 4b 步**（2026-10-16 实测）
+
+`SKIP_BOARD=1 sh tools/preflight.sh`（从仓库根跑）实测 `rc=1`，最后一行是：
+
+```
+SIM OK - every guard fired when it had to and nothing was erased when it must not be
+need staging/rollback/flash-uImage (sh tools/gettrial.sh flash <run>)
+```
+
+第 4b 步是 `SRC=staging/rollback sh tools/simwrite.sh`——**回滚对的排演**，
+而 `staging/rollback/` 只在工作区根有。第 4a（主line那对）过了，第 4b 过不去，
+于是 4c/4d/5/6/6b/6c 全部**没跑到**。
+
+也就是说：**出货的 `preflight.sh` 是按「单一 clone」写的**——它假定
+`staging/`、`backups/`、`restore_set/` 全在仓库里。woodnaonly 自己的 clone 就是这样，
+所以对他没问题；但这台机器的仓库是嵌在工作区里的子目录，本地状态全在上一层，于是走不通。
+
+**这里有两条路，需要拍板**：
+
+* 把本机的本地状态（`staging/ctl`、`staging/rollback`、`backups/`、`restore_set/`）
+  搬进 `ci-build-repo/`，让机器回到「单一 clone」布局——不动任何出货代码；
+* 或者给 `preflight.sh` 也加 `LOCAL=`，并把它传给 `simwrite` / `preflashbackup` /
+  `mkrollback` / `checkrollback`——改的是出货代码，换的是在两棵树布局下也能跑。
+
+在选之前，**「preflight 离线全过」这句话在这台机器上不可复现**，别拿它当证据。
+
+
 ### ⚠ 这个镜像会自己 reboot，操作窗口很短
 
 `etc/rc.d/S15trial` 在板上做的事（已逐个核过依赖都在且可执行）：
