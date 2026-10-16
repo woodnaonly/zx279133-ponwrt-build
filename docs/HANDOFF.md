@@ -421,6 +421,34 @@ REFUSE in-image/ssh access: etc/dropbear/authorized_keys is not in the image at 
 **mtd5 从头到尾没被任何工具写过。** 这是整个回滚论断的承重墙：
 回滚 = 只把 mtd2/mtd3 写回厂商那一对，root 不用动，mtd5 永不触碰。
 
+> ⚠ **2026-10-18 给这句加了个边界 —— 它只对 gate round 成立。**
+> 两个工具的契约不同，别混：
+>
+> | 工具 | 写 mtd5(root)吗 | 「root 没被写过」 |
+> |---|---|---|
+> | `tools/flash-direct.sh write`（gate round） | **不写**，只写 mtd2+mtd3 | **为真** |
+> | `flash-sk-d840n.sh --write`（完整刷机，跑在 kexec 后的 RAM 系统里） | **写**，而且是第一个写的 | **为假** |
+>
+> `tools/preflashbackup.sh` 的注释「root is deliberately not dumped: mode `write`
+> never touches it」里的 `mode write` 指的也是 `flash-direct.sh`。
+> `backups/` 下只有一个**空的** `live-20261012/`，**mtd5 从来没被 dump 过**。
+>
+> **完整刷机之后要回到刷机前状态，必须把 root 也写回去**，而那份镜像就在本机：
+>
+> ```
+> staging/rootfs.jffs2   11,812,720 B   md5 0fd03a1115374f5335d7fc207b14a849
+> ```
+>
+> （与 `docs/05:110` 的期望一致，本轮实测复核。别用
+> `sk-d840n-openwrt/release/rootfs.jffs2`——那份 589,198 B 是**残缺的**。）
+> 只回滚 mtd2+mtd3 会得到**厂商 4.19 内核 + 本项目 rootfs** 这个从未测过的组合，
+> 而这台机器没有串口。
+>
+> `templates/flash-sk-d840n.sh` 原来在写完之后打印「root 从没被写过、
+> rootfs 回滚不需要也不可能」——**两句在打印的那一刻都是假的**，已改。
+> 但 `staging/trial/` 那份（run 39，sha256 `34772dd5…`）**仍是旧文案**：
+> 要新文案得重跑 CI 取新 flash set。
+
 因此当前跑的用户空间仍是社区镜像，`02_network` 里的 `192.168.9.1`
 **尚未生效**——要等重新构建镜像并写 root 才生效。
 
