@@ -89,6 +89,18 @@ decompiled/** text eol=lf
 overlays/** text eol=lf
 trial-files/** text eol=lf
 
+# tests/ is the rehearsal suite: 39 suites plus the helpers they exec. The blanket *.sh rule
+# above already covers its 46 shell files; the Python ones need a rule of their own, because no
+# broad *.py rule exists here and one was not added on purpose - a new tree argues for its own
+# policy rather than inheriting a guess.
+#
+# This is not cosmetic for this directory in particular. regress_round_backup.sh sweeps
+# staging/diag-20261014/*.sh for CR and fails the whole run on any hit, so on a core.autocrlf
+# Windows checkout the suite would fail on its own hygiene check instead of on the behaviour it
+# exists to check - a failure that teaches the reader to ignore red.
+# Measured on the delivered copy before committing: 104 files, CR total = 0.
+tests/** text eol=lf
+
 # The only two binaries in the repository. Each blob holds ~26k NUL bytes and 86 CR bytes,
 # and a fresh clone reproduces the same 86, so autocrlf has not damaged them and there is no
 # bug to fix here. -text is a lock, not a repair: it stops a future renormalise pass or a

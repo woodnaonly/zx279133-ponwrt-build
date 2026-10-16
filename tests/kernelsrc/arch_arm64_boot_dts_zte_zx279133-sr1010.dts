@@ -1,0 +1,302 @@
+// SPDX-License-Identifier: GPL-2.0-only OR BSD-2-Clause
+/dts-v1/;
+
+#include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/input/input.h>
+#include <dt-bindings/leds/common.h>
+
+#include "zx279133.dtsi"
+
+/ {
+	model = "ZTE ZXSLC SR1010";
+	compatible = "zte,zx279133-sr1010", "zte,zx279133";
+
+	aliases {
+		serial0 = &uart0;
+		watchdog0 = &watchdog0;
+		watchdog1 = &watchdog1;
+	};
+
+	chosen {
+		stdout-path = "serial0:115200n8";
+	};
+
+	memory@80000000 {
+		device_type = "memory";
+		reg = <0x0 0x80000000 0x0 0x20000000>;
+	};
+
+	reserved-memory {
+		#address-cells = <2>;
+		#size-cells = <2>;
+		ranges;
+
+		se_hash_reserved: buffer@9e100000 {
+			reg = <0x0 0x9e100000 0x0 0x1000000>;
+			no-map;
+		};
+
+		idm_reserved: buffer@9d700000 {
+			reg = <0x0 0x9d700000 0x0 0xa00000>;
+			no-map;
+		};
+
+		bmu_reserved: buffer@9f100000 {
+			reg = <0x0 0x9f100000 0x0 0x0f00000>;
+			no-map;
+		};
+	};
+
+	gpio-keys {
+		compatible = "gpio-keys";
+		label = "SR1010 reset button";
+
+		button-reset {
+			debounce-interval = <50>;
+			gpios = <&gpio0 0 GPIO_ACTIVE_LOW>;
+			label = "reset";
+			linux,code = <KEY_RESTART>;
+		};
+	};
+
+	leds {
+		compatible = "gpio-leds";
+
+		led-white {
+			color = <LED_COLOR_ID_WHITE>;
+			default-state = "keep";
+			function = LED_FUNCTION_STATUS;
+			gpios = <&gpio2 0 GPIO_ACTIVE_LOW>;
+			label = "sr1010:white";
+			retain-state-shutdown;
+		};
+
+		led-red {
+			color = <LED_COLOR_ID_RED>;
+			default-state = "keep";
+			function = LED_FUNCTION_STATUS;
+			gpios = <&gpio2 4 GPIO_ACTIVE_LOW>;
+			label = "sr1010:red";
+			retain-state-shutdown;
+		};
+
+		led-wan {
+			default-state = "off";
+			function = LED_FUNCTION_WAN;
+			gpios = <&gpio1 10 GPIO_ACTIVE_LOW>;
+			label = "sr1010:wan";
+			linux,default-trigger = "netdev";
+		};
+
+		led-lan1 {
+			default-state = "off";
+			function = LED_FUNCTION_LAN;
+			function-enumerator = <1>;
+			gpios = <&gpio4 5 GPIO_ACTIVE_LOW>;
+			label = "sr1010:lan1";
+			linux,default-trigger = "netdev";
+		};
+
+		led-lan2 {
+			default-state = "off";
+			function = LED_FUNCTION_LAN;
+			function-enumerator = <2>;
+			gpios = <&gpio4 4 GPIO_ACTIVE_LOW>;
+			label = "sr1010:lan2";
+			linux,default-trigger = "netdev";
+		};
+
+		led-lan3 {
+			default-state = "off";
+			function = LED_FUNCTION_LAN;
+			function-enumerator = <3>;
+			gpios = <&gpio0 13 GPIO_ACTIVE_LOW>;
+			label = "sr1010:lan3";
+			linux,default-trigger = "netdev";
+		};
+
+		led-lan4 {
+			default-state = "off";
+			function = LED_FUNCTION_LAN;
+			function-enumerator = <4>;
+			gpios = <&gpio0 2 GPIO_ACTIVE_LOW>;
+			label = "sr1010:lan4";
+			linux,default-trigger = "netdev";
+		};
+	};
+
+	thermal-zones {
+		soc-thermal {
+			thermal-sensors = <&pvt>;
+		};
+	};
+};
+
+&uart0 {
+	status = "okay";
+};
+
+&usb3 {
+	status = "okay";
+};
+
+&pvt {
+	status = "okay";
+};
+
+&pon_serdes {
+	status = "okay";
+};
+
+&uni_serdes {
+	status = "okay";
+};
+
+&nppt {
+	nvmem-cells = <&factory_mac>;
+	nvmem-cell-names = "mac-address";
+	memory-region = <&bmu_reserved>, <&se_hash_reserved>, <&idm_reserved>;
+	memory-region-names = "bmu", "se-hash", "idm";
+	phy-handle = <&zx279051>;
+	status = "okay";
+
+	lan_cpu: ethernet-lan-cpu {
+		compatible = "zte,zx279133-lan-conduit";
+		/*
+		 * No address of its own: the conduit, the switch ports and the
+		 * bridge keep the WAN address, as the factory firmware does
+		 * (br0, eth0..4 and nbif0 share one MAC there). The hardware writes
+		 * a single source MAC into routed frames, the CPU/WAN MAC of its
+		 * WANID table, and the flow offload refuses a WAN-to-LAN flow
+		 * whose source MAC is another one, so a separate LAN address left
+		 * every download on the software path. factory_lan_mac (tag 0x0101)
+		 * stays available below for a board that wants one.
+		 */
+	};
+
+	switch {
+		compatible = "zte,zx279133-rtl8372n";
+		zte,mdio-handle = <&rtl8372n_smi>;
+		reset-gpios = <&gpio1 1 GPIO_ACTIVE_LOW>;
+
+		ports {
+			#address-cells = <1>;
+			#size-cells = <0>;
+
+			port@4 {
+				reg = <4>;
+				label = "lan4";
+				phy-mode = "internal";
+			};
+
+			port@5 {
+				reg = <5>;
+				label = "lan3";
+				phy-mode = "internal";
+			};
+
+			port@6 {
+				reg = <6>;
+				label = "lan2";
+				phy-mode = "internal";
+			};
+
+			port@7 {
+				reg = <7>;
+				label = "lan1";
+				phy-mode = "internal";
+			};
+
+			port@8 {
+				reg = <8>;
+				ethernet = <&lan_cpu>;
+				phy-mode = "10gbase-r";
+
+				fixed-link {
+					speed = <10000>;
+					full-duplex;
+				};
+			};
+		};
+	};
+};
+
+&mdio0 {
+	status = "okay";
+
+	rtl8372n_smi: switch-controller@1d {
+		compatible = "realtek,rtl8372n";
+		reg = <0x1d>;
+	};
+};
+
+&mdio1 {
+	status = "okay";
+
+	zx279051: ethernet-phy@1 {
+		compatible = "ethernet-phy-id0000.84b9";
+		reg = <1>;
+		max-speed = <2500>;
+		reset-gpios = <&gpio0 1 GPIO_ACTIVE_LOW>;
+		reset-assert-us = <100000>;
+		reset-deassert-us = <100000>;
+	};
+};
+
+&xpcs0 {
+	status = "okay";
+};
+
+&xpcs1 {
+	status = "okay";
+};
+
+&watchdog1 {
+	status = "okay";
+};
+
+&spifc {
+	/*
+	 * 25 MHz was the bring-up value. 50 MHz is the first step up from it; the
+	 * reads have to be checked against the contents read at 25 MHz.
+	 */
+	spi-max-frequency = <50000000>;
+	status = "okay";
+
+	flash@0 {
+		partitions-only;
+		spi-max-frequency = <50000000>;
+		/* Read with four data lines (6Bh); the commands and addresses stay on one. */
+		spi-rx-bus-width = <4>;
+
+		partitions {
+			partition@100000 {
+				nvmem-layout {
+					compatible = "zte,sr1010-tags";
+
+					factory_mac: mac-address {
+					};
+
+					factory_lan_mac: mac-address-lan {
+					};
+				};
+			};
+
+			partition@200000 {
+				/delete-property/ read-only;
+			};
+
+			partition@600000 {
+				/delete-property/ read-only;
+			};
+
+			partition@2f00000 {
+				/delete-property/ read-only;
+			};
+
+			partition@5800000 {
+				/delete-property/ read-only;
+			};
+		};
+	};
+};
