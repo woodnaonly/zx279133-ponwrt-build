@@ -357,11 +357,43 @@ jobs:
           # boot": no PHY driver means the one reachable port never links; no LEDS_GPIO or
           # GPIO driver means the panel beacon that replaces a serial console is dark; and
           # no MAGIC_SYSRQ means a stalled round cannot be told apart from a dead board.
+          # What the failing symbol actually *is* is the whole question, and it has four
+          # different answers that look identical from the outside: =y (it is not, since we
+          # are in the failure branch), =m, an explicit "# ... is not set", or absent from
+          # .config altogether - and the last one means the symbol name does not exist in
+          # this kernel's Kconfig, which defconfig then drops without a word.
+          #
+          # Runs 28/29/30/31 all failed at a step nobody could read back: the run page
+          # carries no step data (its JSON blocks are UI scaffolding), api.github.com
+          # answers 403 from this network, and the logs endpoint 404s. The line printed
+          # here named the symbol but never its state, so the next reader had to go dig.
+          # This changes what is printed and nothing else - the same 13 symbols are still
+          # required to be =y and the step still exits 1. It is not a new gate.
+          dump_config_state() {
+            for k in "$@"; do
+              if grep -qx "CONFIG_$k=y" "$KC"; then
+                printf '    %-34s =y\n' "CONFIG_$k"
+              elif v=$(grep -m1 -E "^(CONFIG_$k=|# CONFIG_$k is not set$)" "$KC"); then
+                printf '    %s\n' "$v"
+              else
+                printf '    %-34s <not mentioned in .config at all>\n' "CONFIG_$k"
+              fi
+            done
+          }
           for s in REALTEK_PHY LEDS_GPIO GPIO_ZX279133 GPIO_SYSFS PSTORE PSTORE_CONSOLE PSTORE_RAM \
                    MAGIC_SYSRQ MAGIC_SYSRQ_SERIAL DETECT_HUNG_TASK SOFTLOCKUP_DETECTOR IKCONFIG IKCONFIG_PROC; do
             grep -qx "CONFIG_$s=y" "$KC" || {
-              echo "CONFIG_$s is not built into the kernel" >&2
-              grep -iE 'CONFIG_(REALTEK|ZX279051|MDIO_ZX|LEDS_GPIO|GPIO_ZX|GPIO_SYSFS)' "$KC" || true
+              echo "::error::CONFIG_$s is not built into the kernel" >&2
+              echo "    config file: $KC" >&2
+              echo "    --- the failing symbol, on its own ---" >&2
+              dump_config_state "$s" >&2
+              echo "    --- every symbol this gate asserts, as it actually stands ---" >&2
+              dump_config_state REALTEK_PHY LEDS_GPIO GPIO_ZX279133 GPIO_SYSFS \
+                PSTORE PSTORE_CONSOLE PSTORE_RAM MAGIC_SYSRQ MAGIC_SYSRQ_SERIAL \
+                DETECT_HUNG_TASK SOFTLOCKUP_DETECTOR IKCONFIG IKCONFIG_PROC \
+                PANIC_TIMEOUT >&2
+              echo "    --- the Realtek / ZX / MDIO family, as before ---" >&2
+              grep -iE 'CONFIG_(REALTEK|ZX279051|MDIO_ZX|LEDS_GPIO|GPIO_ZX|GPIO_SYSFS)' "$KC" >&2 || true
               exit 1
             }
           done
