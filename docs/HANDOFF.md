@@ -166,6 +166,26 @@ run 25 = 38722671878 与本文件记载的锚点一致）。
 抓取用 **curl 不用 urllib**：本机上 curl 每次都拿到页面，urllib 两次都死在
 传输途中（`IncompleteRead` / `RemoteDisconnected`）。脚本内已加重试。
 
+### 2026-10-16 再补：读**失败原因**的路，全都死了
+
+上面第 4 条只答「绿还是红」。红在哪一步，另找过五条路：
+
+| 路 | 结果 |
+|---|---|
+| run 详情页 `/actions/runs/<id>` | 200、208 KB，但里面 5 个 `react-partial.embeddedData` 块**全是 UI 脚手架**（最大 7 KB 的 client-env），**零个 step / output / annotation 字段** |
+| 同上，用 `-C`/`api.github.com` 取 job | 403（共享 NAT 配额） |
+| `/actions/runs/<id>/logs` | **404** |
+| commit 的 checks 页 `/commit/<sha>/checks`（**短 sha 会 404，要完整 sha**） | 200、211 KB，5 个 JSON 块**和 run 页一模一样**，同样没有 check-run 的 `output.title` / `summary` / `annotations` |
+| 页面里裸搜 `annotation` / `summary` / `conclusion` 字样 | **有**（39 / 10 / 25 次），但都在 React 的 hydration 骨架里，不是数据 |
+
+**别再在这上面花时间。** GitHub 的这些页面一律把数据留给前端去 API 取，
+而 API 对我们 403。所以「四连红停在哪一步」这件事，
+**只有能读 CI 日志或 API 的人能给**，本会话给不出来，也不该猜。
+
+替代办法已经用上了：把失败时的信息**由 CI 自己打出来**
+（见 `补五十二`——那道门现在会打印出错符号在合并 `.config` 里的真实状态，
+并用 `::error::` 抛注解）。受益者是那位能读日志的人。
+
 ### 2026-10-16 追加：WSL 里连不上 github.com 了（不是 CI 出问题）
 
 查 run 27 时 `round40-newrun.py` 连续五次 `http=000`、页面 0 字节。
