@@ -92,6 +92,15 @@ pin_y PSTORE_RAM
 #     actually contains had to come from grepping the 28 MB Image.
 # These are bring-up instruments, not features: they cost a little RAM and a taint flag on
 # the hung-task print, and they are what makes the next silent round legible.
+#
+# What is known about whether they arrive: MAGIC_SYSRQ and MAGIC_SYSRQ_SERIAL do (the gate
+# reads =y in the merged .config). DETECT_HUNG_TASK did not, in runs 28/29/30/31, and the
+# reason is still not established - pin_y writes the line into the subtarget fragment, that
+# fragment is the last thing merged, and DEBUG_KERNEL is =y in target/linux/generic, so the
+# two candidate explanations (a dependency this tree turns off, or a merge order that beats
+# the append) are not separable from the file being edited. The gate therefore reports these
+# four instead of blocking on them, and prints the merged line either way; blocking here
+# produced four red runs and no image to test the one thing that actually gates the trial.
 pin_y MAGIC_SYSRQ
 # The break path in the serial core is what makes a TTL line able to reach sysrq at all,
 # and it is MAGIC_SYSRQ_SERIAL that compiles it (Kconfig: "Enable magic SysRq key over
