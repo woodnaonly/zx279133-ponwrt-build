@@ -66,6 +66,13 @@ done
 
 echo
 echo "=== 4. pre-existing suites must still pass ==="
+# Every suite belongs in this list, including one that needs no staging artifact.
+# tests/rehearse_zrec_gate.sh is that case: it rehearses the zrec delivery gate
+# against a synthetic package archive, because the real subject only exists 74
+# minutes into a build. A suite that is never run here is a suite whose behaviour
+# after a change is unknown - the same "a gate nobody reaches" failure this runner
+# was written to catch. Note that step 7 counts this list with grep, so a comment
+# inside the loop body must not contain a .sh filename or the count lies.
 ran=0
 verdicts=0
 for t in $d/test_platform_sh.sh \
@@ -108,7 +115,8 @@ for t in $d/test_platform_sh.sh \
          $d/test_kernel_version_single_source.sh \
          $d/test_workflow_shell_parses.sh \
          $d/test_readme_refs.sh \
-         $d/test_lineage_default_paths.sh; do
+         $d/test_lineage_default_paths.sh \
+         $d/rehearse_zrec_gate.sh; do
 	echo "  --- ${t##*/}"
 	ran=$((ran+1))
 	if sh "$t" >/tmp/reg.out 2>&1; then

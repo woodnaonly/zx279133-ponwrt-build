@@ -1,7 +1,7 @@
 # tests/：本地排演套件（**不接进 CI**）
 
 这 107 个文件是 `tools/` 与 `overlays/` 行为的离线回归：一个 runner
-（`regress_round_backup.sh`）、**40 个套件**、25 个被套件调用的助手脚本、
+（`regress_round_backup.sh`）、**42 个套件**、25 个被套件调用的助手脚本、
 `kernelsrc/`（37 个内核源码副本）和一个夹具校验清单。
 
 每个 `.sh` / `.py` 的文件头都写了同一句话，不是重复，是刻意的——
@@ -17,14 +17,14 @@
 | `test_imagelineage2.sh` | 1 | `FAIL ./fixtures/stale-set/flash-rootfs.jffs2 missing - cannot prove the refusal` |
 | `check_preflight_9c.sh` | 1 | `FAIL refused without an instruction` |
 
-补上夹具再跑，是 **40/40/40、rc_all=0**（这一条也在本机上实跑过，见下）。
+补上夹具再跑，是 **42/42/42、rc_all=0**（这一条也在本机上实跑过，见下）。
 
 三条里前两条把缺的文件名写出来了，第三条没有——它只说「拒绝时没有给出指令」，
 读的人得自己回头看才知道根因是夹具不在。**这是这套件该补的短板，不是可以一笔带过的噪音。**
 
 ```sh
 sh tests/round36-make-fixture.sh      # 拉那个 4 MiB 的 jffs2 和它的两个同伴，并按钉子校验
-sh tests/regress_round_backup.sh     # 之后：40/40/40，rc_all=0
+sh tests/regress_round_backup.sh     # 之后：42/42/42，rc_all=0
 ```
 
 一个不会正确失败的测试，也无法正确地通过——所以这里宁可让它红，也不给它一个
@@ -34,12 +34,17 @@ sh tests/regress_round_backup.sh     # 之后：40/40/40，rc_all=0
 
 | 分类 | 数量 |
 |---|---|
-| 引用真实构建产物 `staging/{rollback,trial,ctl}` | 24 / 40 |
-| 硬编码 `cd /mnt/c/ugit/SK-D840N4` | 38 / 40 |
+| 引用真实构建产物 `staging/{rollback,trial,ctl}` | 25 / 42 |
+| 硬编码 `cd /mnt/c/ugit/SK-D840N4` | 38 / 42 |
 | 两者都有 | 23 |
-| **两者都没有（自包含）** | **0 / 40** |
+| **两者都没有（自包含）** | **2 / 42** |
 
-24 个引用产物的套件里，**0 个**写了产物缺失的处理。唯一在沙箱里实测过的
+2026-10-16 重数过一遍（方法：对 runner 循环里的每个脚本分别 grep 模式
+`staging/(trial|ctl|rollback)` 和 `cd /mnt/c`）。自包含的那两个是
+`test_readme_refs.sh` 和 `rehearse_zrec_gate.sh`——后者是第一个既不引用任何真实产物、
+也不硬编码路径的排演，它自己造十种合成包形状。**所以「0 / 40」当时是对的，现在不是了。**
+
+25 个引用产物的套件里，**0 个**写了产物缺失的处理。唯一在沙箱里实测过的
 （`test_payload_id.sh`，因为只有它不硬编码路径，能安全地放进一个没有产物的目录树），
 产物缺失时是**响亮地红**：exit 1，`FAIL plain run exited 1`。
 
