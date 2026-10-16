@@ -120,12 +120,22 @@ fetch trial-Image.gz
 # it unpacks to, so verifying first means a rejected payload never gets materialised as
 # a 30 MB Image on the box - and the hash that is actually shipped is the one checked.
 if [ -s sha256sums-trial ] && command -v sha256sum >/dev/null 2>&1; then
-	# trial-dtb.bin is excluded on purpose: it is a binary blob, and a property whose
-	# length does not change (e.g. moving the ramoops region) is patched in place on the
-	# PC, which no local build could reproduce without a dtc. Everything else must match.
-	say "checking sha256sums-trial (dtb excepted - it may be patched locally)"
-	grep -v 'trial-dtb.bin' sha256sums-trial > sha256sums-load || die "no sha256sums entries left"
-	sha256sum -c sha256sums-load || die "checksum mismatch - re-copy the trial files"
+	# Two manifest entries are not payloads this script is about to use, and a copy
+	# that carries only what kexec needs must still pass:
+	#   trial-dtb.bin     - a binary blob whose length-preserving patches (e.g. moving the
+	#                       ramoops region) happen on the PC, and no local build could
+	#                       reproduce them without a dtc
+	#   flash-sk-d840n.sh - the flasher; this script never runs it. Excluding it here
+	#                       loses no integrity: it verifies ITSELF against
+	#                       sha256sums-release before it erases anything.
+	# trial-Image.gz is the payload that matters and is always checked.
+	say "checking sha256sums-trial (dtb + flasher excepted - not this script's payload)"
+	grep -v -e 'trial-dtb.bin' -e 'flash-sk-d840n.sh' sha256sums-trial > sha256sums-load \
+		|| die "no sha256sums entries left"
+	grep -q 'trial-Image\.gz' sha256sums-load \
+		|| die "sha256sums-trial does not cover trial-Image.gz - cannot verify the payload"
+	sha256sum -c sha256sums-load \
+		|| die "checksum mismatch, or a file the manifest lists is not in $D - re-copy the trial files"
 	say "dtb is $(wc -c < trial-dtb.bin) bytes, sha $($(command -v sha256sum || echo false) trial-dtb.bin 2>/dev/null | cut -c1-12)"
 fi
 

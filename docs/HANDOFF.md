@@ -583,12 +583,111 @@ kexec 是 aarch64 静态构建（Alpine 的 kexec-tools 2.0.31），已确认它
 | `check-imagelineage.sh` 无参数调用 | 工作区根那棵（`ROOT=${1:-$WS/staging/trial/flash-rootfs.jffs2}`，`WS=dirname(REPO)`） |
 | `preflight.sh` → `mkgate.sh`（gate round 的载荷） | `/mnt/c/ugit/SK-D840N4/ci-build-repo/staging/trial` |
 
-后两者读的是**不同副本**。今天两份的 flash 文件逐字节相同
-（`flash-uImage` `734d66d243b1`、`flash-dtb.bin` `088edb435e5e`、
-`flash-rootfs.jffs2` `ffee5a8444a1`、`flash-sk-d840n.sh` `34772dd55f19`），
-而且 `ci-build-repo` 那份的 `sha256sums-release` 自己 5/5 过。
+后两者读的是**不同副本**。
 
-**但「今天相同」不等于「被检查过相同」**：只往 `ci-build-repo/staging/`
+> ⚠ **2026-10-18：上面那句「今天两份逐字节相同」现在不成立了。**
+> 实测（round494–497）两棵树已经**分叉**，而且不是「一份更新、一份没跟上」，
+> 是**仓库那棵的 flash 半边被换成了一次很旧的 release**：
+
+| 文件 | `ci-build-repo/staging/trial` | 工作区根 `staging/trial` |
+|---|---|---|
+| `*.source` 记的 run | flash = **`skd840n_flash_21_38243906799`** / trial = run 39 | **两半都是 run 33** |
+| `flash-uImage` | 8,105,331 B | 8,142,017 B |
+| `flash-dtb.bin` | 11,916 B | 12,009 B |
+| `flash-sk-d840n.sh` | 3,648 B | 5,378 B |
+| `sha256sums-release` | 331 B | 415 B |
+| `flash-set.tgz` | 24,174,085 B | 24,255,581 B |
+
+**谁干的**：`staging/ciwatch.sh` 是**钉死在某一次 run 上的轮询器**——
+`RUN=38243906799`（run **21**），循环里 `sh tools/gettrial.sh flash "$RUN"`，
+而 `gettrial.sh` 写的正是**相对 CWD 的 `staging/trial/`**。它 2026-10-17 05:10
+把仓库那棵的 flash 半边刷成了 run 21（trial 半边没动，还是 run 39）。
+该脚本**现在没有在跑**，所以那是一次性后果，但**只要有人再起它，同样的事会再发生**。
+
+> 这条否定**不是**靠 `ps -eo` 得来的：每次 `wsl -e` 都起一个临时实例，实例里
+> 只能看见自己的 2 个 `init`，**看不见 Windows 侧的进程**，用它下「没在跑」是推论。
+> 权威判定在 Windows 侧（round499）：
+> `Get-CimInstance Win32_Process` 共 167 个进程，其中 `Name` 匹配
+> `^(wsl|wslhost|bash|sh)\.exe$` 的有 **0** 个，命令行含 `ciwatch` / `gettrial` 的
+> 也有 **0** 个。`Name` 字段在 `CommandLine` 为 null 时仍可读（那 10 个 null 的不算盲区），
+> 而 `ciwatch.sh` 要跑就必须有 `wsl.exe` 或 `bash.exe` —— 所以这半边是**实测**的。
+> 仪器阳性对照：`Get-Process` 对 `explorer|conhost|powershell` 命中 6 个，
+> `Win32_Process` 能列全 167 个；空结果不是因为过滤器坏了。
+
+**由此得到一条操作规则（比这次的具体分叉更重要）**：
+
+> **`staging/` 是 gitignored 的本地树（`.gitignore:9`：「Building that directory is
+> the reader's first job, not the clone's」），它不是一个稳定输入。**
+> **动它之前先读 `staging/trial/*.source`** —— 那是唯一记着「这一份是哪次 release」
+> 的文件，别的都不记。半边换过一次、另一半没换的**混搭状态是可能的**，
+> 而且从文件尺寸上未必看得出来。
+
+**结论：接受现状，不要动它。** 上一轮这个混搭被我挂成待裁决项，现已用证据关闭：
+
+1. 混搭是 `gettrial.sh` 双模式同目录（`D=staging/trial`，`initramfs`/`flash` 各取
+   一个 tgz）+ 三个脚本共同钉 `RUN=38243906799` 取那张别名钉死的分区表，
+   **是有意**的，不是谁覆盖错了；
+2. 它**不出货**（`git ls-files staging` 为空、`git status --porcelain staging` 为空）；
+3. `mkgate.sh` 要的正是 run 21 那份 dtb 里的分区表（`dtbparts.py … root=0xf00000,0xf000000`），
+   **换掉它反而会破坏 gate round**；
+4. 本机要自洽的 flash 集，**工作区根那棵（run 33，9/9）已经在**，不必重拉 run 39。
+
+要改的只有上面那条**人的操作规则**。
+
+**这次分叉已经咬出两个可测的后果（round498–499）**
+
+1. **仓库那棵的 `flash-dtb.bin` 是 sgmii 修复**前**的那份**，不是「旧一点但等价」：
+
+   | 文件 | 字节 | `phy-mode` 字符串实测 |
+   |---|---|---|
+   | `ci-build-repo/staging/trial/flash-dtb.bin` | **11,916** B（md5 `a7dcd188b395`） | offset 8340 = `2500base-x`，`sgmii` **0** 次 |
+   | 工作区根 `staging/trial/flash-dtb.bin` | 12,009 B（md5 `cfbfe187a6a5`） | offset 8340 = **`sgmii`**，`2500base-x` 0 次 |
+   | `ci-build-repo/staging/trial/trial-dtb.bin` | 12,009 B（md5 `cfbfe187a6a5`） | 同上 |
+
+   字节级扫描，仪器阳性对照 `cpus` 在三个文件里各命中 1 次 ⇒ 0 命中是真的 0。
+
+   > ⚠ **这一条会骗过 §5 那个三秒判据。** 按 §5 的推导，`phy-mode="2500base-x"`
+   > 会把 `RTL822X_VND1_SERDES_OPTION (0x697a)` 的 `GENMASK(5,0)` 写成 **2**，
+   > 而 `sgmii` 才是 **0**。所以刷了这个 dtb 的板子，
+   > `cat /sys/class/net/eth0/phy*/driver` **照样是 realtek**（驱动认得这颗 PHY，
+   > §5 的「出现 genphy 就停」那道门**不会响**），而
+   > `cat /sys/bus/mdio_bus/devices/ethernet-phy@5/mmd/30/697a` 的低 6 位会读到 **2**。
+   >
+   > **现场判据因此要补一句：`0x697a` 低 6 位读到 2 ⇒ 你刷的是 sgmii 修复前的 dtb，
+   > 不是驱动或硬件坏了。** 停手，从**工作区根**那棵树重新 stage，别去查驱动。
+   > 只读 2 这一次就足以定性；读到 0 才继续往下走。
+
+2. **混搭状态在 `sha256sum -c` 上是可见的**，不是只有尺寸能看出来：
+
+   ```
+   # ci-build-repo/staging/trial  (flash=run21 / trial=run39)
+   $ sha256sum -c sha256sums-trial
+   trial-Image.gz: OK    trial-dtb.bin: OK    trial-kexec.sh: OK
+   flash-sk-d840n.sh: FAILED          <-- run 39 的清单撞上 run 21 的文件(3,648 B, 10-12 20:52)
+   $ sha256sum -c sha256sums-release   # 4/4 OK  <- flash 半边自洽, 只是旧
+   # 工作区根 staging/trial  (两半都是 run 33)
+   $ sha256sum -c sha256sums-release   # 5/5 OK
+   $ sha256sum -c sha256sums-trial     # 4/4 OK
+   ```
+
+   两个半边**各自**都自洽（run 21 的 4/4、run 39 的 3/3），坏的只有**跨半边**那条边。
+   这也说明 `sha256sums-trial` 里**列着 `flash-sk-d840n.sh`**，而它属于 flash 半边 ——
+   正是 §「免串口流程」里 `trial-kexec.sh` 把该文件从 `sha256sum -c` 排除掉的那一条。
+   **代价要说清楚**：排除之后，`trial-kexec.sh` 也**看不见**这棵树被混搭过
+   （scenario B 实测「缺用不上的文件」rc=0；文件在但版本旧，同样 rc=0）。
+   混搭只能由 stage 的人挡住，`trial-kexec.sh` 挡不住。
+
+3. **这次分叉不会随 git 出货。** `staging/` 被 `.gitignore:9` 忽略，
+   `git ls-files staging` 为空、`git status --porcelain staging` 为空
+   ⇒ 仓库里没有、也不会有这份 dtb，克隆者拿到的 `staging/` 是空的
+   （`.gitignore:8` 原话：Building that directory is the reader's first job）。
+   所以这纯粹是**本机的现场混淆风险**，不是出货缺陷。
+
+顺带一条仍然成立的好消息：run 33 与 run 39 出的是**同一份 dtb**
+（`flash-dtb.bin` 都是 12,009 B / sha256 `088edb435e5e782a…`），
+所以 §5g 关于 `eth0` / `sgmii` / `br-lan` 的结论**不受这次分叉影响**。
+
+**「两份相同」这件事本身也曾是假象**：只往 `ci-build-repo/staging/`
 重新拉过 flash 集（`preflight` 就是这么做的），而 lineage 门默认看的
 工作区根那份没跟着动，那道门依旧会绿。
 
@@ -932,6 +1031,13 @@ dmesg | grep -i -e rtl8226 -e rtl8221 -e realtek
 > `2500base-x` 时写入 **`2`**（`realtek_main.c:1238-1244`）。
 > 若板上存在 mdio-mmd 的 sysfs（`/sys/bus/mdio_bus/devices/ethernet-phy@5/mmd/30/697a`），
 > 读它，低 6 位应是 **0**。这条比「驱动绑上了」更直接——它验的就是修复本身。
+>
+> **读到 2 时不要去查驱动**（round498 实测 `ci-build-repo/staging/trial/flash-dtb.bin`
+> 就是那份 11,916 B 的 `2500base-x` 旧 dtb，见「有两棵 `staging/`」那节）：
+> 2 精确对应 `phy-mode="2500base-x"`，意思是**刷进去的 dtb 是 sgmii 修复之前的那份**。
+> 这种情况下 `driver` 仍会显示 realtek，上面的 genphy 那道门不会响——
+> **只有这一条寄存器读数能抓住它**，所以别跳过。
+> 读到 0 才继续往下走。
 >
 > **这颗芯片的 IEEE ID 在本项目任何记录里都没有出现过**：厂商侧 dmesg 只有
 > `r8226b_phy_probe`、`phy_id:0x5`（那是 **MDIO 地址 5**，不是 IEEE ID）和
