@@ -866,6 +866,28 @@ sh staging/diag-20261014/regress_round_backup.sh   # 应当 41/41 rc_all=0
 于是**照原来那一条命令走完，再从同一个目录做 RAM 启动，会把 `2500base-x` 放回 eth0**，
 也就是实测「carrier 亮着一个帧都不过」的那个配置，而一路上没有任何提示。
 
+### **当前这个坑是填上的（2026-10-17 实测，可以放心走）**
+
+run 39 两半到齐之后量了一遍 `staging/` `backups/` `restore_set/` 里每一个裸 FDT
+（打开 116 个文件，找到 4 个 dtb）：
+
+| 文件 | 大小 | `phy-mode` |
+|---|---|---|
+| `staging/ctl/gate-dtb` | 12,009 B | `sgmii` |
+| `staging/trial/flash-dtb.bin` | 12,009 B | `sgmii` |
+| `staging/trial/trial-dtb.bin` | 12,009 B | `sgmii` |
+| `staging/rollback/flash-dtb.bin`（厂商，回滚目标） | 48,463 B | 无此属性 |
+
+三份自有 dtb **md5 全是 `cfbfe187a6a5a447c41c348848574fa7`**、
+**sha256 前 16 位全是 `088edb435e5e782a`**——**逐字节相同**。
+带 `phy-mode=2500base-x` 的文件：**0 个**。
+
+所以上面那张「12,013 B / `2500base-x`」的表现在只是**历史**。
+`trial-dtb.bin` 已经换成了 sgmii 那一份，**RAM 启动不会再把它放回 eth0**。
+
+上面那条警告本身**仍然留着**：下一次只落地 flash 半时，同一件事会重新 armed，
+而它 armed 的样子没有任何提示。一句 `sha256sum staging/trial/*.bin` 就够。
+
 两个半都落地之后还有两处变化值得知道：
 
 * 两个 dtb 变成同一个文件，`sha256sums-trial` 覆盖目录里每一个 payload；
