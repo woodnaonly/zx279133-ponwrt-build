@@ -505,70 +505,81 @@ jobs:
         if: steps.pick.outputs.run == 'true'
         run: |
           set -e
-          # Inspect the package archive, because the package archive is what gets
-          # installed into the rootfs: "the package compiled", "the files sit at the
-          # paths the server opens them by" and "the exec bits survived packaging" are
-          # all answered by its data.tar.gz, and none of them are answered by a build log.
+          # WHAT THIS STEP IS ALLOWED TO CLAIM, and what it learned the hard way.
           #
-          # The staged-rootfs directory is only reported, never required: the first
-          # version of this step globbed build_dir/target-*/rootfs-*, matched nothing in
-          # a flash build, and failed a job 74 minutes deep over a guess at a directory
-          # name. A gate that cannot find its subject is not evidence of absence.
+          # Round 1 globbed build_dir/target-*/rootfs-*, matched nothing, and failed a job
+          # 74 minutes deep over a guessed directory name. Round 2 read the package
+          # archive as *.ipk; this tree is ImmortalWrt with the apk package manager (a
+          # built trial initramfs carries lib/apk/db/installed and lib/apk/packages/*.list
+          # and no lib/opkg), so it found nothing again. Round 3 found the archive -
+          # openwrt/bin/packages/aarch64_cortex-a53/base/zrec-1-r1.apk - and then died on
+          # `tar -xf` of it, because the apk container is not a tar.
           #
-          # And the extension is matched both ways for the same reason. This tree is
-          # ImmortalWrt with the apk package manager, not opkg - proven from a built
-          # trial initramfs, which carries lib/apk/db/installed and
-          # lib/apk/packages/<pkg>.list and no lib/opkg/anything. A gate written against
-          # *.ipk alone would therefore have found no package in a build that packaged
-          # zrec correctly, which is the guessed-path mistake again, one layer down.
+          # That last one is measured, not assumed: a package pulled from
+          # downloads.openwrt.org/snapshots/packages/x86_64/base/, i.e. written by the same
+          # `apk mkpkg` recipe (include/package-pack.mk:592), starts with the four bytes
+          # 41 44 42 64 ("ADBd") and contains no "ustar", no 1f 8b 08, no xz, zstd, lz4 or
+          # bzip2 magic anywhere in it. GNU tar says "This does not look like a tar
+          # archive". The only tool that reads it is apk itself, and that is not on the
+          # runner. So the archive is reported here and never parsed.
+          #
+          # What IS readable, and is the same bytes, is the tree the packer was handed:
+          # include/package-pack.mk:606 packs `--files $(IDIR)`, IDIR being
+          # build_dir/target-*/zrec-*/ipkg-*/zrec, and that directory is still on disk when
+          # this step runs. Reading it answers presence, install path and mode for exactly
+          # the content that went into the archive. Line 562 of the same file even writes
+          # the package's own file list into $(IDIR)/lib/apk/packages/zrec*.list, so the
+          # packer's claim about what it owns can be compared against the files themselves.
+          # "And it reached the released image" is then carried by the target manifest,
+          # which is generated from the installed package set.
           want="usr/sbin/zrec usr/sbin/zrec-run usr/libexec/zrec-ops usr/libexec/zrec-bringup lib/preinit/85_zrec etc/rc.d/S21zrec www/zrec/index.html"
           noexec="www/zrec/index.html lib/preinit/85_zrec"
           PKG=$( { find openwrt/bin openwrt/build_dir -name 'zrec*' \( -name '*.apk' -o -name '*.ipk' \) 2>/dev/null || true; } | sort | head -1)
           MAN=$( { find openwrt/bin/targets -maxdepth 3 -name '*manifest*' 2>/dev/null || true; } | sort | head -1)
-          R=$( { find openwrt/build_dir -maxdepth 3 -type d -name 'rootfs*' 2>/dev/null || true; } | sort | head -1)
-          echo "package: ${PKG:-none}  manifest: ${MAN:-none}  staged rootfs: ${R:-none}"
+          # IDIR is located by what it contains, not by a name pattern: every package has an
+          # ipkg-<arch> directory, so asking which one holds usr/sbin/zrec is a question the
+          # tree can answer, and a rename of the build directory cannot make this silently
+          # match nothing.
+          ID=""
+          for c in $( { find openwrt/build_dir -type d -name 'ipkg-*' 2>/dev/null || true; } | sort); do
+            for p in "$c" "$c/zrec"; do
+              [ -f "$p/usr/sbin/zrec" ] && ID=$p
+            done
+          done
+          echo "package: ${PKG:-none}  manifest: ${MAN:-none}  packed tree: ${ID:-none}"
           if [ "${{ matrix.mode }}" = initramfs ]; then
-            test -n "$PKG" || {
-              echo "::error::zrec produced no package, so it cannot be in the RAM image" >&2
-              echo "--- anything named zrec under bin/ and build_dir/ ---" >&2
-              find openwrt/build_dir openwrt/bin -maxdepth 4 -name 'zrec*' 2>/dev/null >&2 || true
+            test -n "$ID" || {
+              echo "::error::nothing under build_dir holds usr/sbin/zrec, so zrec was never packed into the RAM image" >&2
+              echo "--- every ipkg-* directory in build_dir ---" >&2
+              find openwrt/build_dir -type d -name 'ipkg-*' 2>/dev/null | head -40 >&2 || true
+              echo "--- anything named zrec anywhere ---" >&2
+              find openwrt/build_dir openwrt/bin -maxdepth 5 -name 'zrec*' 2>/dev/null >&2 || true
               exit 1; }
-            # The outer archive is read with tar -x (auto-detected compression), not -xzf:
-            # the two differ only for a pipe, and naming one format would fail on the
-            # other. Everything under data.tar.* is then read from a real file.
-            T=$(mktemp -d)
-            tar -xf "$PKG" -C "$T" || { echo "::error::$PKG is not a readable package"; exit 1; }
-            echo "--- archive members ---"
-            ls -l "$T"
-            D=$( { ls "$T"/data.tar.* 2>/dev/null || true; } | head -1)
-            test -n "$D" || {
-              echo "::error::$PKG has no data.tar.* member, so nothing of zrec's is in it" >&2
-              tar -tf "$PKG" >&2; exit 1; }
-            # Member names are normalised with awk, not sed: with -v the name is the LAST
-            # field and still carries its ./ prefix, so `s|^\./||` on the whole line
-            # matches nothing at all. Caught by running the gate against a real package.
-            LIST=$(tar -tvf "$D" |
-              awk '{ n = $NF; sub(/^\.\//, "", n); if (n !~ /\/$/) print $1, n }')
-            echo "--- package contents ---"
-            echo "$LIST"
             for f in $want; do
-              echo "$LIST" | grep -q " ${f}\$" || {
-                echo "::error::$f is not in $PKG"; exit 1; }
+              test -f "$ID/$f" || { echo "::error::$f is not in the tree that was packed"; exit 1; }
             done
             for f in $want; do
               case " $noexec " in *" $f "*) continue ;; esac
-              mode=$(echo "$LIST" | awk -v p="$f" '$2==p {print $1; exit}')
-              case "$mode" in
-              *x*) ;;
-              *) echo "::error::$f is not executable in the package (mode: ${mode:-not listed})"; exit 1 ;;
-              esac
+              test -x "$ID/$f" || { echo "::error::$f lost its exec bit ($(ls -l "$ID/$f"))"; exit 1; }
             done
-            # Unpack for real, then read what the boot depends on.
-            mkdir -p "$T/x"
-            tar -xf "$D" -C "$T/x"
-            grep -aq '/www/zrec/index.html' "$T/x/usr/sbin/zrec" || {
+            # The page is opened by absolute path inside the binary, so a wrong install
+            # location is a 404 in the browser and nothing in the build log would say so.
+            grep -aq '/www/zrec/index.html' "$ID/usr/sbin/zrec" || {
               echo "::error::the compiled zrec does not reference /www/zrec/index.html"; exit 1; }
-            P="$T/x/lib/preinit/85_zrec"
+            # The packer's own ownership list has to agree with the files that are on disk,
+            # otherwise "the file was staged" and "the file is in the package" are different
+            # claims again - which is the whole reason this step exists.
+            LST=$( { find "$ID/lib/apk/packages" -maxdepth 1 -name 'zrec*.list' 2>/dev/null || true; } | head -1)
+            test -n "$LST" || {
+              echo "::error::$ID has no lib/apk/packages/zrec*.list, so apk was never told what zrec owns"; exit 1; }
+            for f in $want; do
+              grep -q "^/$f\$" "$LST" || {
+                echo "::error::$f is on disk but not in the package file list $LST"; exit 1; }
+            done
+            # And this is the entry point that actually runs: a RAM image that cannot mount a
+            # root ends at the failsafe shell and never execs procd, so an /etc/rc.d script
+            # alone would simply not be part of the boot.
+            P="$ID/lib/preinit/85_zrec"
             grep -q 'boot_hook_add failsafe zrec_recovery' "$P" || {
               echo "::error::85_zrec does not register the failsafe hook - nothing would start zrec"; exit 1; }
             grep -q 'boot_hook_add preinit_main zrec_recovery' "$P" || {
@@ -578,21 +589,29 @@ jobs:
             # A preinit file is sourced by the init script: broken syntax there is a
             # board that stops booting, and the failure looks exactly like a bad kernel.
             sh -n "$P"
-            sh -n "$T/x/usr/libexec/zrec-bringup"
-            sh -n "$T/x/etc/rc.d/S21zrec"
-            rm -rf "$T"
+            sh -n "$ID/usr/libexec/zrec-bringup"
+            sh -n "$ID/etc/rc.d/S21zrec"
+            # Report the archive without reading it: its name and size are the difference
+            # between "the package was installed into the image set" and "the files were
+            # staged and then skipped by the packer".
+            if [ -n "$PKG" ]; then
+              ls -l "$PKG"
+            else
+              echo "::warning::no zrec package archive was found, even though the packed tree is there"
+            fi
             if [ -n "$MAN" ]; then
               grep -qw zrec "$MAN" || {
-                echo "::error::zrec is packaged but not in the image manifest" >&2
+                echo "::error::zrec is staged but not in the image manifest" >&2
                 head -5 "$MAN"; exit 1; }
+              echo "manifest says the image installs zrec: $(grep -aw zrec "$MAN" | head -1)"
             else
               echo "::warning::no target manifest to check zrec against"
             fi
-            echo "recovery service is packaged for the RAM image"
+            echo "recovery service is staged, listed and packaged for the RAM image"
           else
-            if [ -n "$PKG" ]; then
+            if [ -n "$PKG" ] || [ -n "$ID" ]; then
               echo "::error::flash mode built a zrec package - a released root must not ship a flasher" >&2
-              ls -l "$PKG"
+              echo "package: ${PKG:-none}  packed tree: ${ID:-none}"
               exit 1
             fi
             if [ -n "$MAN" ] && grep -qw zrec "$MAN"; then

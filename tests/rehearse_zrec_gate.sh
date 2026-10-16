@@ -3,10 +3,13 @@
 # 它跟别的套件不一样，不需要 staging/ 里的真实产物——它需要的只是 PyYAML，
 # 加上一个由本脚本自己造的假构建树；真产物要 74 分钟才存在。
 #
-# Rehearse "Gate: the recovery service reached the image" against a fake build
-# tree holding a synthetic package archive. The step's whole job is to read one
-# archive, so each shape it has to cope with is built here and checked both
-# ways; the alternative is a 74-minute build per attempt.
+# Rehearse "Gate: the recovery service reached the image". The gate's whole job
+# is to look at one directory and one file list, so every shape it has to cope
+# with is built here and checked both ways; the alternative is a 74-minute build
+# per attempt. The subject is the packer's input tree (build_dir/target-*/zrec-*/
+# ipkg-*/zrec) plus the lib/apk/packages/zrec*.list the packer writes into it,
+# because the .apk that gets produced is an "ADBd" container that no tool on the
+# runner can open - see the comment on the step itself.
 #
 # Run from anywhere:  sh tests/rehearse_zrec_gate.sh
 set -u
@@ -23,7 +26,6 @@ for c in ${PY_CANDIDATES:-} python3 python /c/Python313/python.exe C:/Python313/
 done
 if [ -z "$PY" ]; then echo "  cannot find a python with PyYAML - refusing to report"; exit 1; fi
 
-# --- the step body, extracted from the workflow, ${{ matrix.mode }} left as $MODE
 "$PY" - "$G" <<'PY'
 import io, sys, yaml
 out = sys.argv[1]
@@ -37,43 +39,44 @@ print("extracted %d lines of step body" % body.count('\n'))
 PY
 GATE=$G/gate.sh
 
-mk_tree() { # case-name ext -> prints the tree root; a package with all seven files
-	local name=$1 ext=${2:-apk}
+want="usr/sbin/zrec usr/sbin/zrec-run usr/libexec/zrec-ops usr/libexec/zrec-bringup lib/preinit/85_zrec etc/rc.d/S21zrec www/zrec/index.html"
+
+mk_tree() { # case-name -> prints the tree root
+	local name=$1
 	local D=$G/$name
-	mkdir -p "$D/data/usr/sbin" "$D/data/usr/libexec" "$D/data/lib/preinit" \
-		"$D/data/etc/rc.d" "$D/data/www/zrec" \
-		"$D/openwrt/bin/packages/aarch64_core/base" "$D/openwrt/bin/targets/zte/zx279133" \
-		"$D/openwrt/build_dir/target-aarch64_glibc"
-	printf '#!/bin/sh\necho ops\n'        > "$D/data/usr/libexec/zrec-ops"
-	printf '#!/bin/sh\necho bringup\n'    > "$D/data/usr/libexec/zrec-bringup"
-	printf '#!/bin/sh\necho run\n'        > "$D/data/usr/sbin/zrec-run"
-	printf '#!/bin/sh\nexit 0\n'          > "$D/data/etc/rc.d/S21zrec"
+	local I=$D/openwrt/build_dir/target-aarch64_cortex_a53/zrec-1/ipkg-aarch64_cortex-a53/zrec
+	mkdir -p "$I/usr/sbin" "$I/usr/libexec" "$I/lib/preinit" "$I/etc/rc.d" "$I/www/zrec" \
+		"$I/lib/apk/packages" \
+		"$D/openwrt/build_dir/target-aarch64_cortex_a53/base-files-1/ipkg-aarch64_cortex-a53/base-files/etc" \
+		"$D/openwrt/bin/packages/aarch64_cortex-a53/base" "$D/openwrt/bin/targets/zte/zx279133"
+	printf '#!/bin/sh\necho ops\n'    > "$I/usr/libexec/zrec-ops"
+	printf '#!/bin/sh\necho bringup\n'> "$I/usr/libexec/zrec-bringup"
+	printf '#!/bin/sh\necho run\n'    > "$I/usr/sbin/zrec-run"
+	printf '#!/bin/sh\nexit 0\n'      > "$I/etc/rc.d/S21zrec"
 	printf 'zrec_recovery() { sh /usr/libexec/zrec-bringup; }\nboot_hook_add preinit_main zrec_recovery\nboot_hook_add failsafe zrec_recovery\n' \
-		> "$D/data/lib/preinit/85_zrec"
-	printf '<html>\xe6\x81\xa2\xe5\xa4\x8d</html>\n' > "$D/data/www/zrec/index.html"
-	# the shipped binary is what the page path is compiled into, so the stand-in has
-	# to carry the string the gate greps for. It starts with a shebang because this
-	# PC's chmod only honours +x on files Git Bash considers executable (a binary
-	# full of NULs stays 644 no matter what you chmod), and the exec bit is exactly
-	# what case 3 has to be able to strip.
-	printf '#!/bin/sh\n# ELF stand-in\n/www/zrec/index.html /usr/libexec/zrec-ops\n' > "$D/data/usr/sbin/zrec"
-	chmod 755 "$D/data/usr/sbin/zrec" "$D/data/usr/libexec/zrec-ops" \
-		"$D/data/usr/libexec/zrec-bringup" "$D/data/usr/sbin/zrec-run" "$D/data/etc/rc.d/S21zrec"
-	chmod 644 "$D/data/lib/preinit/85_zrec" "$D/data/www/zrec/index.html"
-	pack "$D" "$ext"
-	{ echo "zte_zx279133"; echo "zrec - 1.0"; echo "base-files - 29-r30000"; } \
+		> "$I/lib/preinit/85_zrec"
+	printf '<html>\xe6\x81\xa2\xe5\xa4\x8d</html>\n' > "$I/www/zrec/index.html"
+	# A stand-in for the cross-compiled binary. It starts with a shebang because this
+	# PC's chmod only honours +x on files Git Bash treats as executable, and the exec
+	# bit is one of the things this gate is for.
+	printf '#!/bin/sh\n# aarch64 zrec, stripped\n/www/zrec/index.html /usr/libexec/zrec-ops\n' > "$I/usr/sbin/zrec"
+	chmod 755 "$I/usr/sbin/zrec" "$I/usr/libexec/zrec-ops" "$I/usr/libexec/zrec-bringup" \
+		"$I/usr/sbin/zrec-run" "$I/etc/rc.d/S21zrec"
+	chmod 644 "$I/lib/preinit/85_zrec" "$I/www/zrec/index.html"
+	# The decoy proves the locator selects the tree by content: base-files has an
+	# ipkg-* directory too, and must not be mistaken for zrec's.
+	printf 'netifd\n' > "$D/openwrt/build_dir/target-aarch64_cortex_a53/base-files-1/ipkg-aarch64_cortex-a53/base-files/etc/hostname"
+	write_list "$D" "$I"
+	# an opaque "ADBd" archive, exactly like the real one: present, never parsed
+	printf 'ADBd\000\001\002\003garbage-not-a-tar\n' > "$D/openwrt/bin/packages/aarch64_cortex-a53/base/zrec-1-r1.apk"
+	{ echo "zte_zx279133"; echo "zrec - 1-r1"; echo "base-files - 1-r1"; } \
 		> "$D/openwrt/bin/targets/zte/zx279133/manifest"
 	echo "$D"
 }
 
-pack() { # tree-root ext -> rebuild data.tar.gz and the outer archive from what is on disk
-	local D=$1 ext=${2:-apk}
-	local P=$D/openwrt/bin/packages/aarch64_core/base/zrec_1.0_aarch64_core.$ext
-	rm -f "$P" "$D/data.tar.gz"
-	( cd "$D/data" && tar -czf "$D/data.tar.gz" . )
-	printf 'pkgname = zrec\npkgver = 1.0-r1\narch = aarch64_core\n' > "$D/.PKGINFO"
-	( cd "$D" && tar -czf "$P" .PKGINFO data.tar.gz )
-	rm -f "$D/.PKGINFO" "$D/data.tar.gz"
+write_list() { # tree-root idir -> regenerate the packer's own ownership list from disk
+	local I=$2
+	( cd "$I" && find . -type f,l -printf '/%P\n' 2>/dev/null | sort ) > "$I/lib/apk/packages/zrec.list"
 }
 
 pass=0; fail=0
@@ -83,64 +86,74 @@ chk() { # want-rc label actual-rc
 }
 gate() { ( cd "$1" && sh "$GATE" "$2" ); }
 
-echo "=== 1. positive ==="
-A=$(mk_tree pos apk);   gate "$A" initramfs > "$A/log" 2>&1; chk 0 "well-formed .apk, initramfs mode" $?
-grep -q 'recovery service is packaged for the RAM image' "$A/log" \
+echo "=== 1. positive: the packer's tree, its list, the archive, the manifest ==="
+A=$(mk_tree pos); gate "$A" initramfs > "$A/log" 2>&1; chk 0 "everything in place passes" $?
+grep -q 'recovery service is staged, listed and packaged' "$A/log" \
 	&& echo "        and it said so" || echo "        (did not reach its final line)"
+grep -q 'packed tree: openwrt/build_dir/target-aarch64_cortex_a53/zrec-1/ipkg-aarch64_cortex-a53/zrec' "$A/log" \
+	&& echo "        located zrec's tree, not base-files' " || echo "        (locator line: $(head -1 "$A/log"))"
 
-echo "=== 2. the extension is not assumed ==="
-B=$(mk_tree ipk ipk);   gate "$B" initramfs > /dev/null 2>&1; chk 0 "the same package named .ipk is found too" $?
+echo "=== 2. the four defects the gate exists to catch ==="
+B=$(mk_tree notinlist); rm "$B/openwrt/build_dir/target-aarch64_cortex_a53/zrec-1/ipkg-aarch64_cortex-a53/zrec/www/zrec/index.html"
+write_list "$B" "$B/openwrt/build_dir/target-aarch64_cortex_a53/zrec-1/ipkg-aarch64_cortex-a53/zrec"
+gate "$B" initramfs > "$B/log" 2>&1; chk 1 "a wanted file that is simply absent is refused" $?
 
-echo "=== 2b. member names without the ./ prefix, which is the other shape tar can write ==="
-N=$(mk_tree noprefix apk)
-P=$N/openwrt/bin/packages/aarch64_core/base/zrec_1.0_aarch64_core.apk
-printf 'pkgname = zrec\n' > "$N/.PKGINFO"
-( cd "$N/data" && tar -czf "$N/data.tar.gz" usr lib www etc )
-( cd "$N" && rm -f "$P" && tar -czf "$P" .PKGINFO data.tar.gz )
-rm -f "$N/.PKGINFO" "$N/data.tar.gz"
-gate "$N" initramfs > "$N/log" 2>&1; chk 0 "names listed without a ./ prefix are still matched" $?
+C=$(mk_tree listedonly)
+Ci=$C/openwrt/build_dir/target-aarch64_cortex_a53/zrec-1/ipkg-aarch64_cortex-a53/zrec
+rm "$Ci/usr/libexec/zrec-bringup"          # delete the file, leave the list claiming it
+gate "$C" initramfs > "$C/log" 2>&1; chk 1 "a file the list claims but disk does not have is refused" $?
 
-echo "=== 3. negative controls, each one a defect the gate must catch ==="
-C=$(mk_tree nopage apk); rm "$C/data/www/zrec/index.html"; pack "$C" apk
-gate "$C" initramfs > "$C/log" 2>&1; chk 1 "a missing page is refused" $?
-grep -q 'www/zrec/index.html is not in' "$C/log" && echo "        named: $(grep -a -m1 '::error' "$C/log")"
+D=$(mk_tree notlisted); Dd=$D/openwrt/build_dir/target-aarch64_cortex_a53/zrec-1/ipkg-aarch64_cortex-a53/zrec
+mv "$Dd/www/zrec/index.html" "$Dd/www/zrec/page.html"; write_list "$D" "$Dd"
+gate "$D" initramfs > "$D/log" 2>&1; chk 1 "the page at the wrong install path is refused" $?
+grep -q 'is not in the tree that was packed' "$D/log" && echo "        named: $(grep -a -m1 '::error' "$D/log")"
 
-D=$(mk_tree noexecd apk); chmod 644 "$D/data/usr/libexec/zrec-ops"
-if [ -x "$D/data/usr/libexec/zrec-ops" ]; then
-	# Not a passing check, and not a failing one: this PC's chmod cannot clear the
-	# exec bit on a file it considers executable, so the defect this case exists to
-	# provoke cannot be produced here. Reported as NOT RUN rather than quietly green -
-	# a control that never fires and a control that passes look identical otherwise.
-	printf '  ....  %-56s %s\n' "exec-bit control needs a Linux runner" "chmod 644 was a no-op here"
-else
-	pack "$D" apk
-	gate "$D" initramfs > "$D/log" 2>&1; chk 1 "a lost exec bit is refused" $?
-	grep -q 'not executable in the package' "$D/log" && echo "        named: $(grep -a -m1 '::error' "$D/log")"
-fi
-
-E=$(mk_tree noreg apk); printf 'zrec_recovery() { true; }\n' > "$E/data/lib/preinit/85_zrec"; pack "$E" apk
+E=$(mk_tree noreg); printf 'zrec_recovery() { true; }\n' > "$E/openwrt/build_dir/target-aarch64_cortex_a53/zrec-1/ipkg-aarch64_cortex-a53/zrec/lib/preinit/85_zrec"
 gate "$E" initramfs > "$E/log" 2>&1; chk 1 "a preinit file that registers no hook is refused" $?
 
-F=$(mk_tree badpath apk); mv "$F/data/www/zrec/index.html" "$F/data/www/zrec/page.html"; pack "$F" apk
-gate "$F" initramfs > "$F/log" 2>&1; chk 1 "the page at the wrong install path is refused" $?
+F=$(mk_tree nolist); rm "$F/openwrt/build_dir/target-aarch64_cortex_a53/zrec-1/ipkg-aarch64_cortex-a53/zrec/lib/apk/packages/zrec.list"
+gate "$F" initramfs > "$F/log" 2>&1; chk 1 "a package that owns nothing on record is refused" $?
 
-echo "=== 4. the guessed-subject mistakes must not become failures ==="
-H=$(mk_tree nopkg apk); rm -f "$H/openwrt/bin/packages/aarch64_core/base/zrec_1.0_aarch64_core.apk"
-gate "$H" initramfs > "$H/log" 2>&1; chk 1 "no package at all still refuses, and says so" $?
-grep -q 'produced no package' "$H/log" && echo "        named: $(grep -a -m1 '::error' "$H/log")"
+# The exec-bit control has to be produced from the other direction on this PC:
+# chmod 644 cannot clear +x from a file Git Bash thinks is executable, but chmod 755
+# is equally refused for one it does not - so writing the file without a shebang
+# leaves it 644, which is the defect. If the platform ever changes its mind, the
+# control reports itself NOT RUN instead of quietly passing.
+N=$(mk_tree noexecbit)
+Ni=$N/openwrt/build_dir/target-aarch64_cortex_a53/zrec-1/ipkg-aarch64_cortex-a53/zrec
+printf 'ELF\000\001not-a-script-no-shebang\n' > "$Ni/usr/libexec/zrec-ops"
+chmod 755 "$Ni/usr/libexec/zrec-ops" 2>/dev/null
+if [ -x "$Ni/usr/libexec/zrec-ops" ]; then
+	printf '  ....  %-56s %s\n' "exec-bit control needs a Linux runner" "cannot make this file 644 here"
+else
+	gate "$N" initramfs > "$N/log" 2>&1; chk 1 "a lost exec bit is refused" $?
+	grep -q 'lost its exec bit' "$N/log" && echo "        named: $(grep -a -m1 '::error' "$N/log")"
+fi
 
-I=$(mk_tree flashclean apk); rm -f "$I/openwrt/bin/packages/aarch64_core/base/"zrec_* "$I/openwrt/bin/targets/zte/zx279133/manifest"
-gate "$I" flash > "$I/log" 2>&1; chk 0 "flash mode with no zrec package passes" $?
-J=$(mk_tree flashdirty apk); gate "$J" flash > "$J/log" 2>&1; chk 1 "flash mode that built zrec refuses" $?
+echo "=== 3. the guessed-subject mistakes must not turn into a false green or a false red ==="
+H=$(mk_tree nopackedtree)
+rm -rf "$H/openwrt/build_dir/target-aarch64_cortex_a53/zrec-1"
+gate "$H" initramfs > "$H/log" 2>&1; chk 1 "an archive with no staged tree still refuses" $?
+grep -q 'was never packed into the RAM image' "$H/log" && echo "        named: $(grep -a -m1 '::error' "$H/log")"
 
-echo "=== 5. a manifest that is absent is a warning, not a failure ==="
-K=$(mk_tree nomanifest apk); rm -f "$K/openwrt/bin/targets/zte/zx279133/"*manifest*
-gate "$K" initramfs > "$K/log" 2>&1; chk 0 "no manifest found does not sink the gate" $?
-grep -q 'no target manifest' "$K/log" && echo "        and it warned instead"
+I=$(mk_tree nomanifest); rm "$I/openwrt/bin/targets/zte/zx279133/"*manifest*
+gate "$I" initramfs > "$I/log" 2>&1; chk 0 "a missing manifest warns instead of sinking the gate" $?
+grep -q 'no target manifest' "$I/log" && echo "        and it warned instead"
+
+J=$(mk_tree noarchive); rm "$J/openwrt/bin/packages/aarch64_cortex-a53/base/"zrec*
+gate "$J" initramfs > "$J/log" 2>&1; chk 0 "a missing archive is reported, and the tree checks still stand on their own" $?
+grep -q 'no zrec package archive' "$J/log" && echo "        and it warned instead"
+
+echo "=== 4. flash mode, both directions ==="
+K=$(mk_tree flashdirty); gate "$K" flash > "$K/log" 2>&1; chk 1 "flash mode that staged zrec refuses" $?
+L=$(mk_tree flashclean)
+rm -rf "$L/openwrt/build_dir/target-aarch64_cortex_a53/zrec-1" "$L/openwrt/bin/packages/aarch64_cortex-a53/base/"zrec*
+rm -f "$L/openwrt/bin/targets/zte/zx279133/"*manifest*
+gate "$L" flash > "$L/log" 2>&1; chk 0 "flash mode with no zrec anywhere passes" $?
 
 echo
 echo "=== what the positive run reported ==="
-sed -n '1,20p' "$A/log"
+sed -n '1,12p' "$A/log"
 echo
 echo "pass=$pass fail=$fail"
 [ "$fail" -eq 0 ]
