@@ -379,9 +379,12 @@ REFUSE in-image/ssh access: etc/dropbear/authorized_keys is not in the image at 
 
 ### 完全没验证的（需要板子）
 
-* eth0 是否真的 link、插哪个口能通、192.168.9.1 是否应答
+* eth0 **carrier 到底有没有起来**、192.168.9.1 是否应答
 * 分区编号在板上的实际形态（gate round 的目的）
 * PHY 是否真的协商到 2.5G
+
+> 2026-10-17：**「eth0 是不是那个 netdev 的名字」已经不再是未验证项**，
+> 它在**出货件层面**已经确定，理由和证据见 §5g。剩下的只有 carrier/应答。
 
 ### 一条以前列错位置的（2026-10-16 更正）
 
@@ -435,7 +438,16 @@ cd /mnt/c/ugit/SK-D840N4        # WSL；或在 Git Bash 里用 Windows 路径
 #    刷之前板子答 192.168.9.1；**刷完本项目的镜像后也答 192.168.9.1**，
 #    没有任何接口带 192.168.9.2——那是旧社区镜像的拓扑（lan = br-lan over
 #    eth1..eth3，mainline 无驱动；eth0 = wan @ .2）。
-#    192.168.9.1 由 **br-lan over eth0** 承载（推导见 §5b）。
+#
+# 0b. ⚠ **这台机器没有 WAN/uplink 网口。** 前面板是 **4 个 LAN 口 + 光纤 PON**。
+#     厂商镜像把 eth0 叫 `wan` 只是抄了路由器默认值——它本身就是四个 LAN 口之一，
+#     厂商驱动日志说它是 **port 4**（`[eth0] port 4 link up`）。
+#     **主线只驱动这一个口**；另外三个 LAN 口挂在 SoC 内部 "9132" 交换机后面，
+#     mainline 没有驱动。**所以线插在那三个口上永远不会有任何反应。**
+#     不知道该插哪个就**挪一根线看 dmesg**：`port N link up` 的 N 就是厂商编号，
+#     `port 4` 那个才是 eth0。
+#
+#    192.168.9.1 由 **br-lan over eth0** 承载（推导见 §5b；名字的确定性见 §5g）。
 #    ⚠ 2026-10-17 撤回一条更正的更正：这里曾被「更正」成「单数版 ucidef_set_interface
 #      → 不建桥」。**那次更正是错的**，原文本（br-lan over eth0）才是对的。
 #      错在只读了 `02_network` 就去推 `config_generate` 的输出，没读它的函数体；
@@ -449,6 +461,8 @@ cd /mnt/c/ugit/SK-D840N4        # WSL；或在 Git Bash 里用 Windows 路径
 #      带「每个 netdev 都拿地址」这个兜底的 S15trial 只存在于 RAM 启动用的
 #      initramfs，**不在发布镜像里**。若主线把这个口起成别的名字，
 #      RAM 启动仍 ping 得通、刷机后 br-lan 会因为没有真实端口而起不来。
+#    （注：名字这一条现已由 §5g 在产物层面确定，不必再当作风险；但那个「没有
+#      fallback」的结构事实仍在——它只在名字真的变了时才咬人。）
 #    ssh 可能仍然不通：dropbear 被绑在 'lan' 接口上，要靠 reachcheck 解开。
 sh tools/backwatch.sh           # 看网卡有没有 carrier
 
@@ -1093,6 +1107,46 @@ pi_broadcast="192.168.1.255"
 | `S96led` | **`/etc/config/leds` 不存在** ⇒ 没有 LED 要点，不会刷错误 |
 | `S50cron` | **`/etc/crontabs/` 是空的** ⇒ 没有定时任务碰网络 |
 | `S10system` / `S98sysntpd` | `/etc/config/system` 不存在是**正常的**，`config_generate` 的 `generate_static_system()` 首次开机会建 |
+
+### 5g. `eth0` 是**结构上**确定的名字，不是碰运气（2026-10-17，出货件层面）
+
+以前这条列在 §3「完全没验证的」里。它可以拆成两半，**只有一半需要板子**。
+
+**名字这一半：在出货件 `staging/trial/flash-dtb.bin`（12,009 B，
+md5 `cfbfe187a6a5a447c41c348848574fa7`，与 `trial-dtb.bin` 同 md5）上确定。**
+
+| 出货件里的事实 | 值 |
+|---|---|
+| 根 `compatible` | `"skyworth,sk-d840n\0zte,zx279133"` → `board_name` = `skyworth,sk-d840n` |
+| `ethernet@19000000` | `status = "okay"`、`phy-mode = "sgmii"`、`pcs-handle = <0xf>`、`phy-handle = <0x18>` |
+| `ethernet-pcs@1a000000`（xpcs0） | `status = "okay"` |
+| `ethernet-pcs@1b000000`（xpcs1） | `status = "okay"` |
+| `ethernet*` 节点总数 | **3** = 1 个 MAC + 2 个 PCS |
+| `dsa` / `ethernet-switch` / `mdio-switch` / `lan-conduit` / `rtl8372` / `zx279051` | **各 0 次** |
+| `2500base-x` | **0 次**（`sgmii` 1 次 —— 修复确实在产物里） |
+
+搜索有效性用同表里的阳性对照确认过：`phy-handle` ×1、`pcs-handle` ×2、
+`lan-pcs-handle` ×1、`mdio` ×4、`snps,dw-xpcs` ×2。
+
+**为什么这就够：** 整个设备树里**只有一个以太网 MAC 节点、零个 DSA 交换机**。
+netdev 名字是注册顺序里从 `eth%d` 池取的第一个，所以从 SoC 出来的**只能是 `eth0`**。
+`modules.builtin` 里那个 `tag_zx279133_rtl8372n.ko` 虽然**编进了内核**，
+但设备树里 `rtl8372` 出现 0 次 ⇒ **没有节点可绑 ⇒ 永远不 probe ⇒ 不占名字**。
+上游 dtsi 里 13 个 `status` 只有 1 个是 `okay`（`watchdog0`，而 overlay 又把它关了）；
+`nppt`/`xpcs0`/`xpcs1`/`mdio0`/`mdio1`/`pon_serdes`/`uni_serdes` 默认全是 `disabled`，
+全部由 `zx279133-sk-d840n.dts` 显式打开——**少一行 `&xpcs1 { status = "okay"; }`
+就会让 `pcs-handle` 指向一个不会被创建的设备**（dts:339-345 就是干这个的）。
+
+**carrier 这一半仍然只能板上答**：口上有没有 link、PHY 能不能协商、
+`192.168.9.1` 会不会应答。名字对了而 link 不通，是另一个问题，别混。
+
+> ⚠ **本节记录了本项目第五次「拿旧件当活件」的差点。**
+> 同一个构建目录树里还有一份 **11,916 B** 的 dtb，它的 `phy-mode` 是 `2500base-x`——
+> 那是 **sgmii 修复之前**的旧构建（`docs/07` 记的 run 33 那份也是 11,916 B）。
+> 差点据它报一个「出货件 phy-mode 是错的」这种致命缺陷。
+> `/tmp` 里还留着两个**故意埋的诱饵** dtb，一个 13 B 内容是 `a patched dtb`，
+> 一个 19 B 内容是 `not the shipped dtb`——它们就是为拦这类错误而放的。
+> **判断一份 dtb 是不是活件，要先看它在哪、旁边有什么，别只看它反编译出来像什么。**
 
 ---
 
