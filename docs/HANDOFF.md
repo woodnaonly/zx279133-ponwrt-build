@@ -87,13 +87,19 @@ ci-build-repo/tools/gettrial.sh tracked by git: YES（7308548）
 
 ---
 
-## 2b. CI 现状（2026-10-16）
+## 2b. CI 现状（2026-10-16 晚，更新）
 
 | run | id | head | 结论 |
 |---|---|---|---|
-| **25 SK-D840N Build** | 38722671878 | `27bc7a3` | **SUCCESS（75 分钟）** |
-| **26 SK-D840N Build** | 38741408817 | `3478d5c` | **SUCCESS（1 小时 17 分）** |
-| **27 SK-D840N Build** | 38834264406 | `f877861` | 进行中（09:17 启动，约 10:34 结束） |
+| **33 SK-D840N Build** | 38862392504 | `63ff208` | `initramfs` **绿**（run 27 之后第一次）；`flash` 在 Compile |
+| 32 SK-D840N Build | 38860167205 | `5e773e6` | FAILURE —— 1h14m47s，无 flash 标签 |
+| 31 SK-D840N Build | — | `959cae4` | FAILURE |
+| 30 SK-D840N Build | — | `2198240` | FAILURE |
+| 29 SK-D840N Build | — | `6844c8c` | FAILURE |
+| 28 SK-D840N Build | — | `2a26e24` | FAILURE |
+| **27 SK-D840N Build** | 38834264406 | `f877861` | SUCCESS（`5f49fe5`…→tag `skd840n_flash_27`） |
+| **25 SK-D840N Build** | 38722671878 | `27bc7a3` | SUCCESS（75 分钟） |
+| **26 SK-D840N Build** | 38741408817 | `3478d5c` | SUCCESS（1 小时 17 分） |
 | 24 SK-D840N Build | 38711101776 | `9b8a7e2` | SUCCESS |
 | **23 SK-D840N Build** | 38699492510 | `9d768ef` | **FAILURE** |
 | **22 SK-D840N Build** | 38697796513 | `7280b6e` | **FAILURE** |
@@ -107,9 +113,27 @@ ci-build-repo/tools/gettrial.sh tracked by git: YES（7308548）
 `run 26` 由 `3478d5c` 的 push 触发。该提交只改了 release body 文案与对应测试，
 **门步骤与 run 25 相同**——所以这是**同样的门第二次真的跑了，还是全过**。
 
+### run 28–32 五连红的注解（第一次读到原文）
+
+日志仍然读不到（见末尾「三条新坑」），但 **annotations 不用登录就读得到**。run 32
+`initramfs` job 的四条，全文见 `docs/07` 补五十五。两条 error：
+
+```
+error   Assert the kernel really has the PHY driver   Process completed with exit code 1.
+error   Assert the kernel really has the PHY driver   CONFIG_DETECT_HUNG_TASK is not built into the kernel
+```
+
+第二条正是 `5e773e6` 加的那条 `::error`——**诊断在生产里生效了，它点了违规符号的名**。
+第四条 warning `Upload outputs: No files were found with the provided path: flash-uImage …`
+解释了 run 32 为什么没有 flash 标签：构建没走到产出那一步。
+
+`63ff208` 把 `DETECT_HUNG_TASK` 移出 required 之后，run 33 的 `initramfs` 就绿了。
+**门仍然是 required 的那 9 个符号在把关**，`DETECT_HUNG_TASK` 变成无论在不在都发布状态。
+
 > **`COMPLETED` 不等于成功。** 结论在 `state.conclusion` 里，值是带前缀的枚举
 > （`WORKFLOW_RUN_CONCLUSION_SUCCESS`）。我第一版结论脚本拿它和裸的 `SUCCESS` 比，
 > 于是在正确答案上方两行的地方报了 UNKNOWN。读 run 状态时别把两者混为一谈。
+
 
 ### 一处曾经让「step 绿」失去意义的洞（`f877861` 已修）
 
@@ -491,11 +515,25 @@ SRC=staging/rollback EXPECT='root=0xf00000,0xf100000' sh tools/flash-direct.sh w
 
 ## 6. CI 成功之后
 
+**先确认这个 run 真的产出了 flash set**，再动手取：
+
 ```sh
+# 0. tag 在不在？产物是什么？（不需要登录，Windows 侧 curl）
+#    https://github.com/woodnaonly/zx279133-ponwrt-build/releases/expanded_assets/<tag>
+#    initramfs job 只出 trial 集（trial-Image.gz / sk-d840n-initramfs.itb …），
+#    **没有 jffs2**；jffs2 归 flash job。看清楚再取。
+git ls-remote --tags origin | grep skd840n_flash      # 通道二，最省事
+
 sh tools/gettrial.sh flash <新的 run id>     # 会在 scratch 目录逐文件验清单后才落地
-sh tools/check-imagelineage.sh                # 应当三层全过
-sh staging/diag-20261014/regress_round_backup.sh   # 应当 39/39 rc_all=0
+sh tools/check-imagelineage.sh               # 应当三层全过；无参数即可
+sh staging/diag-20261014/regress_round_backup.sh   # 应当 41/41 rc_all=0
 ```
+
+`check-imagelineage.sh` 的**无参数调用曾经是坏的**（2026-10-16 修，`e8f6036`）：
+三个默认值写成相对路径，而它自己先 `cd` 进了仓库，于是每次都先吐三条
+**编造的** REFUSE，把真正的问题埋在下面。`HANDOFF.md` 这一节原来写的
+`sh tools/check-imagelineage.sh` 照抄必然中招。现在默认全部从一个绝对 `$REPO` 派生。
+判定逻辑一个字没动——**只改它打印的理由是真话**。
 
 `gettrial.sh` 有两处容易踩的地方，都已修：
 
@@ -506,7 +544,30 @@ sh staging/diag-20261014/regress_round_backup.sh   # 应当 39/39 rc_all=0
   现在 flash 保留原名，initramfs 存 `sha256sums-initramfs-release`。
 
 新 release 的 `sha256sums-release` 是 **5 项**（含 `flash-sk-d840n.sh`）。
-**这条预判已经兑现**：run 25 的两份都取到了，lineage 门三层全绿。
+**这条预判已经兑现**：run 25 的两份都取到了，lineage 门三层全绿——
+**那是 2026-10-15 的状态，现在不成立了**，见下。
+
+### 2026-10-16 更正：目前**不存在**可刷的 flash set
+
+上面那句「三层全绿」描述的是 run 25 的产物，它**现在已经过期**，而且过期的理由
+正是这道门要抓的东西：
+
+| 产物 | 状态 |
+|---|---|
+| `staging/trial/`（run 25） | 不可刷：`platform.sh` 2172 B、`02_network` 1080 B、`flash-sk-d840n.sh` 3648 B，清单 4 条漏了 `flash-sk-d840n.sh` |
+| `skd840n_flash_27_...`（最后一次绿） | 不可刷：镜像里**没有** `etc/dropbear/authorized_keys`，早于那笔 overlay 提交 |
+| run 28–32 | 全红在那道 PHY 门上，**一次 flash set 都没产出** |
+| run 33 的 `initramfs` | 绿，但只出 trial 集，没有 jffs2 |
+
+所以在 run 33 的 `flash` job 跑完之前，**不要安排刷机**。刷 run 27 会得到一台
+开机后谁也 ssh 不上去的板子，而所有工具都用 `ssh -o BatchMode=yes`——密码交互早就关了。
+拿到新 set 之后 `check-imagelineage.sh` 必须**三层全过**才动手。
+
+**取件时顺手核一下 tag 指向谁**：`skd840n_initramfs_33_38862392504` 指向 `85f7e7a`，
+而 run 33 的 head 是 `63ff208`（`85f7e7a` 是它的子提交，只动 `docs/`）。
+`Clone sources` 是 clone main，构建跑了 1h08m，期间 main 动了。
+**血统核对应以 tag 指向的 commit 为准，不要用 run head。**
+
 
 ---
 
@@ -565,4 +626,34 @@ sh staging/diag-20261014/regress_round_backup.sh   # 应当 39/39 rc_all=0
   要改就得 amend + force push，而「不 force push」是定死的规矩，所以只能留着。
 * **复杂命令一律写脚本文件再 `wsl -d debian -e sh <脚本>`。**
   PowerShell 内联引号会吃掉正则括号、反斜杠、`$(...)`、管道和反引号。
+
+### 2026-10-16 新增的三条通道，和三条新坑
+
+**能读到的（不需要登录）**：
+
+* **step 级**：`<完整 sha>/checks` 页，每步是
+  `<details id="check-step-N" data-conclusion="success|failure">`，
+  svg 的可访问名就是 `This step passed` / `This step failed`。
+  **短 sha 在这条路径上 404，必须给完整 sha。**
+* **注解级**：同一页点 job 旁的 `Open job annotations`，Annotations 区会列出
+  每条 `::error` / `::warning` 的正文。**面板默认收起，收起时只显示
+  「2 errors and 2 warnings」——「看到计数」不等于「读到条目」。**
+* **产物级**：`releases/expanded_assets/<tag>` 直接返回产物清单 HTML。
+
+**仍然读不到的**：完整 step 日志。未登录会话拿不到 `data-log-url`，
+`/actions/runs/<id>/logs` 是 404。
+
+坑：
+
+* **`api.github.com` 的 403 不是"网络不通"，是共享 NAT 的 60/hr 被人用完。**
+  2026-10-16 实测出口 `203.10.99.34`，`core` 恒为 0/60，轮询 10×30 秒没等到窗口。
+  **`rate_limit` 自己返回 200，而 `/jobs` 返回 403——能读到配额表不等于还能用。**
+  这条路是真的关上了，不要按"再等等"处理。
+* **PowerShell 的 `Set-Content -NoNewline` 会把 `git show` 的多行输出压成一行。**
+  `& $git show HEAD:file` 返回的是**字符串数组**，`-NoNewline` 把它们无分隔符地接起来，
+  写出来的 shell 脚本整个是一行。正确写法：
+  `[System.IO.File]::WriteAllText($p, (($lines -join "`n") + "`n"), (New-Object System.Text.UTF8Encoding($false)))`
+* **把 `> /tmp/x.txt` 交给 PowerShell 会变成 `C:\tmp\x.txt`。**
+  重定向必须在 `sh` 脚本**里面**，否则那条命令根本没按预期跑，而 `$LASTEXITCODE`
+  看起来还是 0。复杂命令写脚本文件这条规矩，同样管重定向。
 
