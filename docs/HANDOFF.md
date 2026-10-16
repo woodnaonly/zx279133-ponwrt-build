@@ -708,6 +708,16 @@ dw-xpcs、Realtek RTL8226B PHY）在两个将要启动的内核里都在，`phy-
 uid 为 0 且没传 `-D` 时 `authorized_keys_filepath()` 直接返回 `/etc/dropbear/authorized_keys`。
 不要因为看到 `/root` 空就判 ssh 认证不可能成功。
 
+**那把钥匙是 ed25519，而且是唯一一把** —— 已查证这个构建把 ed25519 编进去了，
+不要再去怀疑它：`Config.in` 是 `default y if !SMALL_FLASH`，我们的
+`Device/skyworth_sk-d840n` 不声明 `small_flash`（全仓库出现 0 次），
+`SMALL_FLASH` 因而不被 select，`Makefile:236-241` 把 `#define DROPBEAR_ED25519 1`
+写进 `localoptions.h`；二进制里也有 `ssh-ed25519` 和服务端公钥认证的日志标记。
+
+密码这条路是堵死的（`/etc/board.json` 不存在 ⇒ `50-root-passwd` 什么也不做，
+root 的 shadow 口令字段为空，`svr-authpasswd.c:101` **无条件**拒绝空口令），
+所以**公钥是唯一入口**——这也是它值得单独查一遍的原因。
+
 **这一条不用上板查了，已经从两份镜像本身结案：**
 
 | 镜像 | `/etc/dropbear` 权限 | 来源 |
