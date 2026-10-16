@@ -527,7 +527,7 @@ sh staging/diag-20261014/regress_round_backup.sh   # 应当 39/39 rc_all=0
 反过来的一次更值得记：`test_imagelineage*` 报的失败**是假的**，
 工具对、被测输入漂了。**一个绑在实时状态上的断言，报错时先怀疑被测对象。**
 
-### 本项目环境上的两个坑
+### 本项目环境上的坑
 
 * **`grep -a` 在 jffs2 上搜不到不构成「不存在」的证据**（节点是 zlib 压缩的），
   必须用 `jefferson`。
@@ -535,3 +535,14 @@ sh staging/diag-20261014/regress_round_backup.sh   # 应当 39/39 rc_all=0
   它按默认编码读 UTF-8，会把字节解码坏并**少报行数**——
   `docs/07-...md` 被它读成 3432 行，实际是 5310 行（现在 5679）。
   用 `wc -l`。
+* **提交消息一律用 Write 工具写文件，再 `git commit -F`，不要用
+  `Out-File -Encoding utf8`。** PS 5.1 的 `Out-File -Encoding utf8` 会写 BOM，
+  git 把它当成消息的第一个字符存进 commit 对象。
+  2026-10-16 的 `2a26e24` 就中招了：message 开头是 `ef bb bf`。
+  **而且它藏得很深**——`git log --oneline` 显示成一个看不见的字符，
+  `git log --format=%s` 读回来首字符又不是 0xFEFF，只有
+  `git cat-file commit <h>` 逐字节看才暴露。
+  要改就得 amend + force push，而「不 force push」是定死的规矩，所以只能留着。
+* **复杂命令一律写脚本文件再 `wsl -d debian -e sh <脚本>`。**
+  PowerShell 内联引号会吃掉正则括号、反斜杠、`$(...)`、管道和反引号。
+
