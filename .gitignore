@@ -36,3 +36,17 @@ tests/fixtures/stale-set/*
 # because the real subject of that gate only exists 74 minutes into a build. All
 # of it is regenerable from the script and none of it is evidence, so it stays out.
 gate-rehearse/
+
+# Board-derived state that the tools read but staging/ does not cover.
+#
+# Measured 2026-10-16 with `git check-ignore`: staging/ is ignored (rule above), backups/ and
+# restore_set/ are NOT. That matters because of the layout question in docs/HANDOFF.md: the
+# shipped tools assume a single clone and look for the pre-flash snapshots and the vendor
+# restore_set/ next to themselves. Acting on that assumption - copying them inside the
+# repository to make preflight walk further - would put 301 MB of board dumps and 268 MB of
+# ZTE firmware one `git add -A` away from a public push. pon/vendor-modules/ above is already
+# refused on exactly this ground, so these two belong beside it rather than in a corner.
+#
+# Reachable without moving anything: mkrollback.sh and checkrollback.sh take LOCAL=<tree>.
+backups/
+restore_set/
