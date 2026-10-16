@@ -1,0 +1,59 @@
+#!/bin/sh
+# Bring up the browser recovery service inside the RAM image.
+#
+# Why this is a keeper loop and not a straight-line script: preinit's last hook
+# (99_10_run_init) calls preinit_ip_deconfig, and netifd is never started here at
+# all - a RAM image with no rootfs to mount ends at the failsafe shell, so
+# /etc/rc.d never runs and nothing else owns the interfaces. Anything configured
+# once is gone again within a second; this loop re-asserts the address, ssh and
+# the server every few seconds for as long as the image lives.
+#
+# Everything runs in the background: a preinit hook that blocks is a board that
+# never finishes booting.
+ZROOT=/tmp/zrec
+ADDR=192.168.9.1/24
+IP=192.168.9.1
+
+[ -x /usr/sbin/zrec ] || exit 0
+mkdir -p "$ZROOT/up" "$ZROOT/bk"
+
+# Idempotent: called from /lib/preinit/85_zrec (both hooks) and from
+# /etc/rc.d/S21zrec, so the second and third calls must not stack loops.
+pidof zrec >/dev/null 2>&1 && exit 0
+
+# S15trial reboots this image five minutes after boot unless the marker exists.
+# A reboot in the middle of an erase is the one failure this tool must not be
+# able to cause, so the marker is set here rather than left to whoever ssh'd in.
+[ -e /tmp/trial-noreboot ] || : >/tmp/trial-noreboot
+
+(
+	nets=''
+	last=''
+	while :; do
+		for d in /sys/class/net/*; do
+			[ -d "$d" ] || continue
+			n=${d#/sys/class/net/}
+			[ "$n" = lo ] && continue
+			ip link set "$n" up 2>/dev/null
+			# replace, not add: after a deconfig the address may be half there
+			ip addr show dev "$n" 2>/dev/null | grep -q "inet $IP/" ||
+				ip addr replace $ADDR dev "$n" 2>/dev/null
+			nets="$nets $n"
+		done
+
+		pidof dropbear >/dev/null 2>&1 || /usr/sbin/dropbear -s -B -p 22
+		pidof zrec >/dev/null 2>&1 || /usr/sbin/zrec 80 >>"$ZROOT/server.log" 2>&1
+
+		if [ "$nets" != "$last" ]; then
+			last="$nets"
+			printf '%s\n' "$IP" >"$ZROOT/addr"
+			printf '%s\n' "$nets" >"$ZROOT/netif"
+			# The serial console is the only channel guaranteed to exist here, so the
+			# address and the netdev list go to it. "netif=NONE" is the honest signal
+			# that this kernel has no usable port yet - which is a different failure
+			# from "the browser could not reach a board that does".
+			echo "zrec: http://$IP/ netif=${nets:-NONE}" >/dev/kmsg 2>/dev/null
+		fi
+		sleep 5
+	done
+) &

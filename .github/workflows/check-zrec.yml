@@ -1,0 +1,204 @@
+name: Check zrec
+
+# Fast gate for the browser recovery service, for the same reason diagnose-config
+# exists: the first real compile of zrec.c is ~40 minutes into a 70-minute build,
+# and the first real load of the page is over a serial console on a board nobody
+# can reach. Both are much too expensive places to find a missing #include, a
+# state key the shell writes but the server never reads, or a broken JSON body.
+#
+# This job never touches OpenWrt. It compiles zrec.c with the runner's own gcc,
+# runs the source-level contract test, and then runs the server for real on
+# x86: it serves the page, answers every /api route, takes an upload, and
+# executes one job through zrec-run -> zrec-ops -> captured output. The flash
+# verbs are not reachable here (no /sys/class/mtd on a runner), so those stay
+# covered by tests/test_zrec_contract.py and by the board round.
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - .github/workflows/check-zrec.yml
+      - overlays/package/utils/zrec/**
+      - tests/test_zrec_contract.py
+
+permissions: write-all
+
+jobs:
+  check:
+    name: compile and smoke
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Source contract
+        run: python3 tests/test_zrec_contract.py
+
+      - name: Compile for the host
+        run: |
+          set -e
+          SRC=overlays/package/utils/zrec/src/zrec.c
+          # -Wextra is the point of doing this on the host: the package build uses
+          # -Wall -Werror, and an implicit declaration (strncasecmp without
+          # <strings.h>, uint16_t without <stdint.h>) is the class of failure that
+          # otherwise only shows up as a red compile step an hour later.
+          gcc -std=gnu11 -O1 -Wall -Wextra -Werror -o /tmp/zrec "$SRC"
+          gcc -std=gnu11 -O1 -Wall -Wextra -Werror -fsyntax-only "$SRC"
+          ls -l /tmp/zrec
+
+      - name: Install the payload where the server expects it
+        run: |
+          set -e
+          sudo mkdir -p /www/zrec /usr/libexec
+          sudo cp overlays/package/utils/zrec/files/www/zrec/index.html /www/zrec/index.html
+          sudo cp overlays/package/utils/zrec/files/usr/libexec/zrec-ops /usr/libexec/zrec-ops
+          sudo cp overlays/package/utils/zrec/files/usr/sbin/zrec-run /usr/sbin/zrec-run
+          sudo chmod 755 /usr/libexec/zrec-ops /usr/sbin/zrec-run
+          # ash is not on a runner; the two scripts are POSIX and this is the
+          # closest thing to running them under the image's shell.
+          for f in /usr/libexec/zrec-ops /usr/sbin/zrec-run; do sh -n "$f"; done
+          # Checked, never executed: zrec-bringup assigns addresses to every netdev it
+          # finds and the preinit file is sourced by the init script. Running either on
+          # a runner would take the runner's own network down, which looks like an
+          # Actions bug and is a board-not-booting bug on the device.
+          for f in overlays/package/utils/zrec/files/usr/libexec/zrec-bringup \
+                   overlays/package/utils/zrec/files/lib/preinit/85_zrec \
+                   overlays/package/utils/zrec/files/etc/rc.d/S21zrec; do
+            sh -n "$f"
+          done
+          grep -q 'boot_hook_add failsafe zrec_recovery' \
+            overlays/package/utils/zrec/files/lib/preinit/85_zrec
+          grep -q 'boot_hook_add preinit_main zrec_recovery' \
+            overlays/package/utils/zrec/files/lib/preinit/85_zrec
+          # Nothing may run at source time in a preinit file - only define and register.
+          test "$(grep -c '^[a-z_]*()' overlays/package/utils/zrec/files/lib/preinit/85_zrec)" = 1
+
+      - name: Shellcheck when present
+        run: |
+          if command -v shellcheck >/dev/null 2>&1; then
+            shellcheck -s sh -e SC1091,SC2039,SC3043 \
+              overlays/package/utils/zrec/files/usr/libexec/zrec-ops \
+              overlays/package/utils/zrec/files/usr/libexec/zrec-bringup \
+              overlays/package/utils/zrec/files/usr/sbin/zrec-run \
+              overlays/package/utils/zrec/files/lib/preinit/85_zrec \
+              overlays/package/utils/zrec/files/etc/rc.d/S21zrec
+          else
+            echo "::warning::shellcheck is not installed on this runner image - skipped"
+          fi
+
+      - name: Smoke the server and one job
+        run: |
+          set -e
+          sudo rm -rf /tmp/zrec
+          sudo /tmp/zrec 8080 >/tmp/zrec-server.log 2>&1 &
+          for i in 1 2 3 4 5 6 7 8 9 10; do
+            curl -sf -o /dev/null http://127.0.0.1:8080/api/task && break
+            sleep 1
+          done
+
+          echo '--- page ---'
+          curl -sf http://127.0.0.1:8080/ | grep -q 'id="installButton"'
+          # Not `curl -I`: that is a HEAD request and this server answers GET and POST
+          # only, so the headers have to come off a real GET.
+          curl -sf -D /tmp/page.head -o /tmp/page.html http://127.0.0.1:8080/
+          tr -d '\r' </tmp/page.head >tmp && mv tmp /tmp/page.head
+          grep -qi '^HTTP/1.1 200 OK' /tmp/page.head
+          grep -qi '^Content-Type: text/html' /tmp/page.head
+          grep -qi '^Content-Length: ' /tmp/page.head
+          cmp /tmp/page.html overlays/package/utils/zrec/files/www/zrec/index.html
+
+          echo '--- every GET route answers valid JSON ---'
+          for r in device storage task reply env; do
+            curl -sf "http://127.0.0.1:8080/api/$r" | python3 -c 'import json,sys; json.load(sys.stdin)'
+            echo "ok /api/$r"
+          done
+          curl -sf http://127.0.0.1:8080/api/device | python3 -c '
+          import json,sys
+          d=json.load(sys.stdin)
+          for k in ("model","ram_bytes","flash_bytes","version","ubi","rebuild","board_data"):
+              assert k in d, k
+          assert d["ubi"] is False and d["rebuild"] is False and d["board_data"]==[]
+          print("device fields:", d)'
+          curl -sf http://127.0.0.1:8080/api/storage | python3 -c '
+          import json,sys
+          s=json.load(sys.stdin)
+          assert "targets" in s and isinstance(s["targets"], list)
+          print("storage:", s)'
+
+          echo '--- unknown API and unknown path ---'
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/api/nope)" = 404
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/index.shtml)" = 404
+
+          echo '--- upload keeps its body, including a header-sized file ---'
+          # 200 KiB of a repeating pattern: the first 8 KiB arrives in the same TCP
+          # segment as the request headers, which is exactly the bytes a server that
+          # only reads the socket after the headers would silently drop.
+          python3 -c 'import os,sys; sys.stdout.buffer.write(bytes(range(256))*800)' >/tmp/up.bin
+          stat -c 'upload is %s bytes' /tmp/up.bin
+          UP=$(curl -sf -X POST --data-binary @/tmp/up.bin http://127.0.0.1:8080/api/upload |
+            python3 -c 'import json,sys; print(json.load(sys.stdin)["upload_id"])')
+          echo "upload_id=$UP"
+          sudo cmp /tmp/up.bin "/tmp/zrec/up/$UP.bin"
+          echo 'byte-exact'
+
+          echo '--- one job end to end (command verb) ---'
+          TASK=$(curl -sf -X POST -H 'Content-Type: application/json' \
+            -d '{"operation":"command","command":"echo zrec-smoke-$((2+3))"}' \
+            http://127.0.0.1:8080/api/task | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')
+          echo "task id=$TASK"
+          for i in $(seq 1 40); do
+            ST=$(curl -sf http://127.0.0.1:8080/api/task)
+            echo "$ST" | python3 -c 'import json,sys; s=json.load(sys.stdin); raise SystemExit(0 if s["state"]=="done" and s["id"]=='"$TASK"' else 1)' && break
+            sleep 1
+          done
+          echo "$ST" | python3 -c '
+          import json,sys
+          s=json.load(sys.stdin)
+          assert s["id"] == '"$TASK"', ("task id moved", s["id"])
+          assert s["state"] == "done", s
+          assert s["code"] == 0, s
+          assert "zrec-smoke-5" in s["output"], s["output"]
+          assert not s["busy"], s
+          print("job output:", repr(s["output"]))'
+
+          echo '--- a bad request is refused, not run ---'
+          test "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
+            -d '{"operation":"teleport"}' http://127.0.0.1:8080/api/task)" = 400
+          test "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
+            -d '{"operation":"flash","target":"kernel"}' http://127.0.0.1:8080/api/task)" = 400
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/api/download/9/0/10)" = 409
+
+          echo '--- UTF-8 survives the JSON escape ---'
+          curl -sf -X POST -o /dev/null -H 'Content-Type: application/json' \
+            -d '{"operation":"command","command":"printf \"恢复\\n\""}' http://127.0.0.1:8080/api/task
+          for i in $(seq 1 20); do
+            OUT=$(curl -sf http://127.0.0.1:8080/api/task)
+            echo "$OUT" | python3 -c 'import json,sys; s=json.load(sys.stdin); raise SystemExit(0 if s["state"]=="done" else 1)' && break
+            sleep 1
+          done
+          echo "$OUT" | python3 -c '
+          import json,sys
+          s=json.load(sys.stdin)
+          assert "恢复" in s["output"], repr(s["output"])
+          print("utf-8 log:", repr(s["output"]))'
+
+          echo '--- cancel does not leave the state machine stuck ---'
+          curl -sf -X POST -o /dev/null -H 'Content-Type: application/json' \
+            -d '{"operation":"command","command":"sleep 30"}' http://127.0.0.1:8080/api/task
+          sleep 2
+          curl -sf -X POST http://127.0.0.1:8080/api/task -H 'Content-Type: application/json' \
+            -d '{"operation":"cancel"}' | python3 -c 'import json,sys; print("cancel:", json.load(sys.stdin)["phase"])'
+          curl -sf http://127.0.0.1:8080/api/task | python3 -c '
+          import json,sys
+          s=json.load(sys.stdin)
+          assert s["state"] == "done" and not s["busy"], s
+          print("busy released")'
+
+          echo '--- zrec-ops refuses what it must, without a board ---'
+          sudo sh /usr/libexec/zrec-ops backup --target=kernel 2>&1 | tee /tmp/no-board
+          grep -qi "no partition labelled" /tmp/no-board
+          sudo sh /usr/libexec/zrec-ops nonsense 2>&1 | grep -qi "unknown operation"
+
+          echo '--- server log ---'
+          tail -20 /tmp/zrec-server.log
+          sudo pkill -f '/tmp/zrec 8080' || true

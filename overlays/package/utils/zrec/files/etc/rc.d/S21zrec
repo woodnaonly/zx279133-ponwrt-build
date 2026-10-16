@@ -1,0 +1,7 @@
+#!/bin/sh
+# Second entry point, for a boot that does reach procd: the RAM image that gets
+# a root mounted, and any future recovery root flashed onto the board. The work
+# is in zrec-bringup, which is idempotent, so this and the preinit hook cannot
+# stack two keeper loops.
+[ -x /usr/libexec/zrec-bringup ] || exit 0
+sh /usr/libexec/zrec-bringup

@@ -1,0 +1,25 @@
+#!/bin/sh
+# Runs exactly one zrec job and publishes how it ended.
+#
+# This wrapper exists because zrec execs /bin/sh with the job arguments and then
+# cannot wait() for it (SIGCHLD is ignored, so no exit status is ever retrievable)
+# and because the job's own pid is what zrec's "is it still running" test reads.
+# So the outcome has to come from the worker itself, through files.
+set -u
+
+ZROOT=/tmp/zrec
+
+[ -n "${1:-}" ] || exit 2
+/usr/libexec/zrec-ops "$@"
+code=$?
+
+printf '%s\n' "$code" >"$ZROOT/code"
+if [ "$code" = 0 ]; then
+	printf 'done\n' >"$ZROOT/phase"
+else
+	printf 'error\n' >"$ZROOT/phase"
+fi
+# state last: the page stops polling when it reads done, so publishing it early
+# would let one poll show the finished job with the previous job's code.
+printf 'done\n' >"$ZROOT/state"
+exit "$code"

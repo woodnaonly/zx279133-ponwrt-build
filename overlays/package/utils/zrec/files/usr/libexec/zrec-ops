@@ -1,0 +1,222 @@
+#!/bin/sh
+# One job for zrec: run an operation against the flash, and write its whole
+# report to stdout (zrec captures that into /tmp/zrec/output and the page shows
+# it verbatim). Progress is published by overwriting one file per key so the
+# polling connection never has to read a partially written state line.
+#
+#   sh zrec-ops <operation> [--target=<label>] [--upload=<file>] [--command=<line>]
+set -u
+
+ZROOT=/tmp/zrec
+OPS_VERSION=1
+
+op=${1:-}
+[ -n "$op" ] || { echo "zrec-ops: no operation"; exit 2; }
+shift
+
+target=''
+upload=''
+command=''
+offset=''
+count=''
+
+for a in "$@"; do
+	case "$a" in
+	--target=*) target=${a#--target=} ;;
+	--upload=*) upload=${a#--upload=} ;;
+	--command=*) command=${a#--command=} ;;
+	--offset=*) offset=${a#--offset=} ;;
+	--size=*) count=${a#--size=} ;;
+	*) echo "zrec-ops: ignoring unknown argument $a" ;;
+	esac
+done
+
+say() {
+	echo "$*"
+	echo "zrec: $*" >/dev/kmsg 2>/dev/null
+}
+
+set_kv() { printf '%s\n' "$2" >"$ZROOT/$1"; }
+
+die() {
+	say "!! $*"
+	exit 1
+}
+
+# A target is always a /proc/mtd label, never an index. Listing order is not
+# physical order on this chip and the index that U-Boot's root=/dev/mtdblock5
+# depends on has already been a source of confusion once.
+mtd_index() {
+	awk -F'"' -v n="$1" '$2==n { s=$1; sub(/^mtd/, "", s); sub(/:.*/, "", s); print s }' \
+		/proc/mtd | head -1
+}
+
+mtd_need() {
+	idx=$(mtd_index "$target")
+	[ -n "$idx" ] || die "no partition labelled '$target' in /proc/mtd"
+	size=$(cat "/sys/class/mtd/mtd$idx/size")
+	erasesize=$(cat "/sys/class/mtd/mtd$idx/erasesize")
+	name=$(cat "/sys/class/mtd/mtd$idx/name")
+}
+
+# MTD_WRITEABLE is 0x400 in /sys/class/mtd/mtdN/flags. boot and "parameter tags"
+# carry read-only in this board's DTS, and an erase there comes back as -EROFS -
+# which was once misread here as "mainline cannot program this chip". Say which
+# partition is protected before touching a single eraseblock.
+mtd_assert_writeable() {
+	hex=$(cat "/sys/class/mtd/mtd$idx/flags")
+	printf '%d\n' "$hex" >/dev/null 2>&1 || die "cannot read flags of mtd$idx ($name)"
+	[ "$((hex & 0x400))" != 0 ] || \
+		die "mtd$idx ($name) is read-only in the device tree - not erasing it"
+}
+
+fbytes() { wc -c <"$1" | tr -d ' '; }
+
+free_in_tmp() {
+	df -k /tmp 2>/dev/null | awk 'NR==2 {print $4 * 1024}'
+}
+
+# /tmp is tmpfs, so an upload is paid for in RAM: 512 MiB of DDR, a 240 MiB root
+# image, and the same image again if a job extracts it. Refuse up front rather
+# than let the OOM killer take the recovery session - and with it the flash job
+# that would have been half-written.
+space_for() {
+	need=${1:-0}
+	avail=$(free_in_tmp)
+	[ -n "$avail" ] || return 0
+	[ "$need" -le "$avail" ] || die "not enough RAM left: need $need bytes, /tmp has $avail"
+}
+
+require_upload() {
+	[ -n "$upload" ] || die "no upload named for this operation"
+	[ -f "$upload" ] || die "upload file is gone: $upload"
+}
+
+# Erase, write, then read the partition back and compare its sha256 against the
+# image. `mtd verify` is deliberately not used: it only re-reads what the driver
+# was just handed, so it confirms a garbage image exactly as happily as a good
+# one - and this image's mtd may not even ship that subcommand. Proof is a hash.
+flash_partition() {
+	src=$1
+	mtd_need
+	mtd_assert_writeable
+	fsize=$(fbytes "$src")
+	[ "$fsize" != 0 ] || die "$src is empty"
+	[ "$fsize" -le "$size" ] || die "$src is $fsize bytes but $name is only $size"
+	blocks=$((fsize / erasesize + 1))
+	say "mtd$idx = $name  size=$size erase=$erasesize  image=$fsize bytes"
+	set_kv phase erase
+	say "erase $name ($((size / 1024 / 1024)) MiB, $((size / erasesize)) eraseblocks)"
+	mtd erase "$target" || die "erase failed on $name"
+	set_kv phase write
+	say "write $name"
+	mtd write "$src" "$target" || die "write failed on $name"
+	set_kv phase verify
+	want=$(sha256sum "$src" | cut -d' ' -f1)
+	# No iflag: busybox dd takes skip/count in units of bs, which is why offset
+	# handling below keeps everything on eraseblock boundaries.
+	got=$(dd if="/dev/mtd$idx" bs="$erasesize" count="$blocks" 2>/dev/null |
+		head -c "$fsize" | sha256sum | cut -d' ' -f1)
+	[ -n "$got" ] || die "$name: readback produced nothing - no /dev/mtd$idx?"
+	[ "$want" = "$got" ] || die "$name: readback sha256 $got != image $want"
+	say "$name OK - readback sha256 $want"
+}
+
+case "$op" in
+flash|write)
+	[ -n "$target" ] || die "no target partition named"
+	require_upload
+	# An uploaded image is a one-use buffer: after it is programmed, delete it,
+	# or the next job (a root image on top of a kernel image) fails on RAM.
+	flash_partition "$upload"
+	rm -f "$upload"
+	say "released $(basename "$upload") from RAM"
+	;;
+
+install)
+	# The one-click path: a flash-set.tgz from CI, which carries the images,
+	# the manifest, and the already-tested flash-sk-d840n.sh that does the
+	# per-partition work in boot-safe order (root first, kernel last).
+	require_upload
+	set_kv phase working
+	rm -rf "$ZROOT/set"
+	mkdir -p "$ZROOT/set"
+	tar xzf "$upload" -C "$ZROOT/set" || die "cannot unpack the uploaded set"
+	cd "$ZROOT/set" || die "cannot enter $ZROOT/set"
+	[ -f sha256sums-release ] || \
+		die "no sha256sums-release in the set - integrity is unverified, refusing"
+	sha256sum -c sha256sums-release || die "checksum mismatch - refusing to program flash"
+	[ -f flash-sk-d840n.sh ] || die "no flash-sk-d840n.sh in the set"
+	space_for $((8192 * 1024))
+	sh ./flash-sk-d840n.sh --write || die "flash-sk-d840n.sh failed"
+	rm -f "$upload"
+	;;
+
+backup)
+	[ -n "$target" ] || die "no target partition named"
+	mtd_need
+	out=$ZROOT/bk/$(printf '%s' "$name" | tr ' /' '_-').bin
+	set_kv phase working
+	if [ -n "$offset" ] || [ -n "$count" ]; then
+		[ -n "$offset" ] && [ -n "$count" ] || die "offset and size must both be given"
+		[ "$((offset % erasesize))" = 0 ] || die "offset $offset is not eraseblock-aligned ($erasesize)"
+		[ "$((count % erasesize))" = 0 ] || die "size $count is not eraseblock-aligned ($erasesize)"
+		bs=$erasesize
+		skip=$((offset / erasesize))
+		blocks=$((count / erasesize))
+		space_for "$count"
+		say "read mtd$idx ($name) offset $offset length $count"
+	else
+		bs=$erasesize
+		skip=0
+		blocks=$((size / erasesize))
+		space_for "$size"
+		say "read mtd$idx ($name), whole partition ($((size / 1024 / 1024)) MiB)"
+	fi
+	rm -f "$out"
+	# conv=noerror,sync: one eraseblock whose ECC cannot be corrected must not make
+	# the whole backup impossible, and sync keeps the offsets stable by padding the
+	# failed block. It pads with NUL, not 0xff, so a backup that hit a bad block is
+	# not a byte-true restore image - the dd report below is the evidence, and the
+	# same fact is what the page's hint text says out loud.
+	dd if="/dev/mtd$idx" of="$out" bs="$bs" skip="$skip" count="$blocks" \
+		conv=noerror,sync 2>"$ZROOT/dd.err" ||
+		say "!! dd reported: $(cat "$ZROOT/dd.err" 2>/dev/null)"
+	if [ -s "$ZROOT/dd.err" ]; then
+		say "!! dd stderr: $(tr '\n' ' ' <"$ZROOT/dd.err")"
+		say "!! the file has padding where a block failed to read"
+	fi
+	[ -s "$out" ] || die "nothing read; check /tmp/zrec/dd.err"
+	got=$(fbytes "$out")
+	[ "$got" != 0 ] || die "backup is empty"
+	set_kv dlsize "$got"
+	set_kv dlpath "$out"
+	set_kv dlname "$(printf '%s' "$name" | tr ' /' '_-')"
+	set_kv dlid "$(cat "$ZROOT/id" 2>/dev/null)"
+	set_kv phase backup-ready
+	say "$out is $got bytes - the page can now download it"
+	;;
+
+command)
+	# The deliberate escape hatch, same as the U-Boot original's `command`
+	# verb: this image only ever runs on the recovery network with no WAN and
+	# no credentials, and a root shell is already its dropbear default.
+	[ -n "$command" ] || die "empty command"
+	set_kv phase working
+	say "sh -c $command"
+	sh -c "$command"
+	rc=$?
+	say "command exited $rc"
+	exit "$rc"
+	;;
+
+reset|boot-production)
+	set_kv phase working
+	say "rebooting"
+	reboot
+	;;
+
+*)
+	die "zrec-ops: unknown operation $op"
+	;;
+esac

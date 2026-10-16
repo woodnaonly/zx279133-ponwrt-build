@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SK-D840N Recovery</title>
+<style>
+:root{color-scheme:light;--blue:#1769aa;--line:#dbe1e8;--muted:#627083}
+*{box-sizing:border-box}body{margin:0;background:#f5f7fa;color:#202a36;font:15px system-ui,sans-serif}
+main{max-width:960px;margin:auto;padding:28px 20px}header,.row{display:flex;gap:12px;align-items:center;flex-wrap:wrap}header{justify-content:space-between}
+h1{font-size:26px;margin:0}h2{font-size:20px;margin:0 0 18px}h3{font-size:16px;margin:0 0 12px}
+.info{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;margin:22px 0;padding:20px;background:white;border:1px solid var(--line);border-radius:10px}
+.info span{display:block;color:var(--muted);margin-bottom:6px}.info strong{overflow-wrap:anywhere;font-size:16px}
+nav{display:flex;gap:8px;margin:20px 0}button{border:1px solid var(--line);border-radius:7px;background:white;color:inherit;font:inherit;padding:9px 15px;cursor:pointer}
+button.primary,nav button.active{background:var(--blue);border-color:var(--blue);color:white}button.danger{border-color:#b42318;color:#b42318}
+button:disabled,input:disabled,select:disabled{opacity:.5;cursor:default}.panel,.status{background:white;border:1px solid var(--line);border-radius:10px;padding:22px;margin-bottom:16px}
+input,select{font:inherit;padding:10px;border:1px solid #aeb9c7;border-radius:6px;max-width:100%;background:white;min-width:0}input[type=file]{flex:1}
+label{display:block;margin-bottom:8px}.wide{width:100%}.stack{display:grid;gap:16px}.muted{color:var(--muted)}.actions{margin-top:18px}
+progress{width:100%;height:14px;accent-color:var(--blue)}pre{white-space:pre-wrap;word-break:break-word;max-height:280px;overflow:auto;font:13px/1.5 ui-monospace,monospace;margin:14px 0 0}
+#output{max-height:340px}#state{font-weight:600}#transfer{font-variant-numeric:tabular-nums;color:var(--muted)}.status .row{justify-content:space-between}
+details{border-top:1px solid var(--line);padding-top:18px;margin-top:18px}summary{cursor:pointer;font-weight:600;margin-bottom:16px}
+hr{border:0;border-top:1px solid var(--line);margin:26px 0}[hidden]{display:none!important}@media(max-width:650px){.info{grid-template-columns:1fr 1fr}.row input{width:100%}main{padding:18px 12px}}
+footer{text-align:center;padding:12px 0 4px}footer a{color:var(--blue)}
+</style>
+</head>
+<body><main>
+<header><h1 data-t="title">SK-D840N Recovery</h1><button id="language">简体中文</button></header>
+<div class="info">
+<div><span data-t="model">Model</span><strong id="model">—</strong></div>
+<div><span>RAM / Flash</span><strong id="memory">—</strong></div>
+<div><span data-t="version">Version</span><strong id="version">—</strong></div>
+</div>
+<nav><button data-tab="flash" class="active" data-t="flash">Flash</button><button data-tab="backup" data-t="backup">Backup</button><button data-tab="advanced" data-t="advanced">Advanced</button></nav>
+<section class="panel" id="flash">
+<h2 data-t="install">Install system</h2>
+<label for="setFile">flash-set.tgz</label>
+<p class="muted" data-t="installHint">Takes the release set: kernel, dtb and root image plus its sha256 manifest. The manifest is checked before anything is erased, and the partitions are programmed root first, kernel last.</p>
+<div class="row"><input id="setFile" type="file" accept=".tgz,.tar.gz"><button id="installButton" class="primary" data-t="uploadFlash">Upload and flash</button></div>
+<hr>
+<h2 data-t="partitionWrite">Write one partition</h2>
+<label for="writeTarget" data-t="target">Target</label>
+<select id="writeTarget" class="wide"></select>
+<p class="muted" data-t="writeHint">Erases the whole partition, programs the uploaded file, then reads it back and compares the hash. Read-only partitions are not offered.</p>
+<div class="row"><input id="partitionImage" type="file"><button id="writeButton" class="danger" data-t="uploadWrite">Upload and write</button></div>
+<div class="row actions"><button data-action="boot-production" data-t="bootSystem">Boot system</button><button data-action="reset" data-t="reboot">Reboot</button></div>
+</section>
+<section class="panel" id="backup" hidden>
+<h2 data-t="backup">Backup</h2>
+<label for="backupTarget" data-t="target">Target</label><select id="backupTarget" class="wide"></select>
+<p id="backupHint" class="muted"></p>
+<button id="backupButton" class="primary" data-t="download">Download backup</button>
+</section>
+<section class="panel" id="advanced" hidden>
+<h2 data-t="advanced">Advanced</h2>
+<h3 data-t="partitionTable">Partitions</h3>
+<pre id="parts">—</pre>
+<details><summary data-t="deviceInfo">This boot</summary><pre id="env">—</pre></details>
+<details><summary data-t="console">Command console</summary>
+<div class="row"><input id="command" class="wide" placeholder="cat /proc/mtd"><button id="commandButton" data-t="execute">Run</button></div>
+<p class="muted" data-t="consoleHint">Runs as root in the recovery image. The output lands in the log pane below.</p>
+</details>
+</section>
+<section class="status"><div class="row"><span id="state">—</span><button id="cancel" hidden data-t="cancel">Cancel transfer</button></div>
+<progress id="progress" max="100" value="0" hidden></progress><div id="transfer"></div><pre id="output"></pre></section>
+<footer><a href="https://github.com/woodnaonly/zx279133-ponwrt-build" target="_blank" rel="noopener noreferrer">zx279133-ponwrt-build</a></footer>
+</main>
+<script>
+'use strict';
+const words={
+zh:{title:'SK-D840N 恢复',model:'机型',version:'版本',flash:'刷机',backup:'备份',advanced:'高级',target:'目标',
+install:'刷写系统',installHint:'使用发布包：内核、dtb 与根文件系统镜像，连同 sha256 校验清单。擦除之前会先核对清单，分区写入顺序为“先根、最后内核”。',
+uploadFlash:'上传并刷写',partitionWrite:'分区写入',writeHint:'会擦除整个分区并写入所选文件，随后读回并比对哈希。只读分区不会出现在列表中。',
+uploadWrite:'上传并写入',bootSystem:'启动系统',reboot:'重启',download:'下载备份',
+partitionTable:'分区列表',deviceInfo:'本次启动信息',console:'命令控制台',execute:'执行',
+consoleHint:'以 root 身份在恢复镜像里运行，输出显示在下方日志区。',
+cancel:'取消传输',idle:'就绪',upload:'上传中',downloadPhase:'下载中',queued:'等待执行',working:'正在处理',
+done:'完成',error:'操作失败',erase:'擦除中',ready:'上传完成','backup-ready':'备份已就绪',verify:'校验中',write:'写入中',
+waiting:'等待设备响应',busy:'设备正在处理其他操作',choose:'请选择文件',failed:'请求失败',cancelled:'传输已取消',
+whole:'整片 Flash',readOnly:'只读',writeable:'可写',mtdHint:'MTD 备份为物理主数据；读取失败的擦除块以 0 填充，NAND OOB 不包含在文件中。',
+confirmFlash:'将擦除并写入分区',confirmInstall:'将擦除并写入 kernel、dtb 和 root 三个分区，当前系统会被覆盖。确定继续吗？',
+flashTooLarge:'文件超过分区容量',taskChanged:'设备任务已变化，请刷新页面',network:'连接中断，请检查设备状态'},
+en:{title:'SK-D840N Recovery',model:'Model',version:'Version',flash:'Flash',backup:'Backup',advanced:'Advanced',target:'Target',
+install:'Install system',installHint:'Takes the release set: kernel, dtb and root image plus its sha256 manifest. The manifest is checked before anything is erased, and the partitions are programmed root first, kernel last.',
+uploadFlash:'Upload and flash',partitionWrite:'Write one partition',writeHint:'Erases the whole partition, programs the uploaded file, then reads it back and compares the hash. Read-only partitions are not offered.',
+uploadWrite:'Upload and write',bootSystem:'Boot system',reboot:'Reboot',download:'Download backup',
+partitionTable:'Partitions',deviceInfo:'This boot',console:'Command console',execute:'Run',
+consoleHint:'Runs as root in the recovery image. The output lands in the log pane below.',
+cancel:'Cancel transfer',idle:'Ready',upload:'Uploading',downloadPhase:'Downloading',queued:'Queued',working:'Working',
+done:'Complete',error:'Operation failed',erase:'Erasing',ready:'Upload complete','backup-ready':'Backup ready',verify:'Verifying',write:'Writing',
+waiting:'Waiting for device',busy:'Device is busy',choose:'Select a file',failed:'Request failed',cancelled:'Transfer cancelled',
+whole:'Entire Flash',readOnly:'read-only',writeable:'writeable',mtdHint:'MTD backup is physical main-area data; eraseblocks that fail to read are padded with zeros. NAND OOB is excluded.',
+confirmFlash:'This erases and rewrites partition',confirmInstall:'This erases and rewrites kernel, dtb and root. The running system will be replaced. Continue?',
+flashTooLarge:'File is larger than the partition',taskChanged:'Device task changed; refresh the page',network:'Connection lost; check device status'}
+};
+let language=(navigator.language||'').toLowerCase().startsWith('zh')?'zh':'en', localBusy=false, remoteBusy=true, activeXHR=null, targets=[], selectedTab='flash', rebooting=false;
+const el=id=>document.getElementById(id), t=key=>words[language][key]||key, text=(id,value)=>{el(id).textContent=value};
+function applyLanguage(){
+ document.documentElement.lang=language==='zh'?'zh-CN':'en';
+ document.querySelectorAll('[data-t]').forEach(e=>e.textContent=t(e.dataset.t));
+ text('language',language==='zh'?'English':'简体中文');catalog();
+}
+function bytes(n){return n>=1048576?(n/1048576).toFixed(1)+' MiB':n>=1024?(n/1024).toFixed(1)+' KiB':n+' B'}
+function controls(){
+ document.querySelectorAll('button,input,select').forEach(e=>{e.disabled=localBusy||remoteBusy});
+ el('cancel').disabled=false;el('cancel').hidden=!activeXHR;
+}
+function tab(name){selectedTab=name;['flash','backup','advanced'].forEach(n=>{el(n).hidden=n!==name;document.querySelector('[data-tab="'+n+'"]').classList.toggle('active',n===name)})}
+function hint(){const v=targets[Number(el('backupTarget').value)];text('backupHint',v?t('mtdHint'):'')}
+function catalog(){
+ for(const id of ['backupTarget','writeTarget']){
+  const previous=el(id).value;el(id).replaceChildren();
+  targets.forEach((v,i)=>{
+   if(id==='writeTarget'&&(v.whole||v.ro))return;
+   const option=document.createElement('option');option.value=String(i);
+   option.textContent=(v.whole?t('whole'):v.name)+' · '+v.kind.toUpperCase()+' · '+bytes(v.size)+(v.ro?' · '+t('readOnly'):'');
+   el(id).appendChild(option);
+  });
+  if([...el(id).options].some(o=>o.value===previous))el(id).value=previous;
+ }
+ // The index is shown but never used to address anything: /proc/mtd order is not
+ // physical order on this chip, so every operation goes by label.
+ text('parts',targets.map(v=>('mtd'+String(v.idx)).padEnd(6)+(v.name+'').padEnd(16)+bytes(v.size).padStart(10)+'  '+(v.ro?t('readOnly'):t('writeable'))).join('\n'));
+ hint();
+}
+async function request(url,options){
+ const r=await fetch(url,{cache:'no-store',...options});
+ const value=await r.json();
+ if(!r.ok)throw new Error(r.status===409?t('busy'):value.error||t('failed'));
+ return value;
+}
+async function refresh(){
+ const [d,s]=await Promise.all([request('/api/device'),request('/api/storage')]);targets=s.targets||[];
+ text('model',d.model);text('memory',bytes(d.ram_bytes)+' / '+bytes(d.flash_bytes));text('version',d.version);
+ catalog();
+ try{const e=await request('/api/env');text('env','addr    '+(e.addr||'—')+'\nnetif   '+(e.netif||'—')+'\ncmdline '+(e.cmdline||'—'))}catch(err){}
+}
+function status(s){remoteBusy=s.busy;text('state',t(s.phase==='download'?'downloadPhase':s.phase));text('output',s.output||'');controls()}
+async function waitTask(id){
+ let misses=0;
+ for(;;){
+  await new Promise(resolve=>setTimeout(resolve,700));
+  let s;
+  try{s=await request('/api/task');misses=0}catch(e){text('state',t('waiting'));if(rebooting&&++misses>=3)return {};continue}
+  if(s.id!==id)throw new Error(t('taskChanged'));
+  status(s);
+  if(s.state==='done'){if(s.code)throw new Error(s.output||t('failed'));return s}
+ }
+}
+async function task(payload){
+ const s=await request('/api/task',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+ return waitTask(s.id);
+}
+function transfer(url,body,responseType,progressBase=0,progressTotal=0){
+ return new Promise((resolve,reject)=>{
+  const xhr=new XMLHttpRequest();activeXHR=xhr;controls();
+  const started=performance.now();el('progress').hidden=false;el('progress').value=0;
+  xhr.open(body?'POST':'GET',url);xhr.responseType=responseType;
+  const onprogress=e=>{
+   const loaded=progressBase+e.loaded;const total=progressTotal||(e.lengthComputable?e.total:0);const seconds=Math.max(.01,(performance.now()-started)/1000);
+   el('progress').value=total?100*loaded/total:0;
+   text('transfer',bytes(loaded)+(total?' / '+bytes(total)+' · '+Math.floor(100*loaded/total)+'%':'')+' · '+bytes(e.loaded/seconds)+'/s');
+  };
+  (body?xhr.upload:xhr).onprogress=onprogress;
+  xhr.onload=()=>{activeXHR=null;controls();if(xhr.status!==200){reject(new Error(xhr.status===409?t('busy'):t('failed')));return}resolve(xhr.response)};
+  xhr.onerror=()=>{activeXHR=null;controls();reject(new Error(t('network')))};
+  xhr.onabort=()=>{activeXHR=null;controls();reject(new Error(t('cancelled')))};
+  xhr.send(body||null);
+ });
+}
+async function uploadFile(input,url='/api/upload'){
+ const file=input.files[0];if(!file)throw new Error(t('choose'));
+ text('state',t('upload'));
+ const s=await transfer(url,file,'json');
+ return s.upload_id;
+}
+async function upload(id){return uploadFile(el(id))}
+async function run(fn){
+ if(localBusy||remoteBusy)return;
+ localBusy=true;rebooting=false;text('output','');text('transfer','');el('progress').hidden=true;controls();
+ try{await fn();if(!rebooting){text('state',t('done'));await refresh()}}
+ catch(e){rebooting=false;text('state',t('error'));text('output',e.message)}
+ finally{
+  localBusy=false;
+  try{remoteBusy=(await request('/api/task')).busy}catch(e){remoteBusy=true}
+  controls();
+ }
+}
+document.querySelectorAll('[data-tab]').forEach(b=>b.onclick=()=>tab(b.dataset.tab));
+el('language').onclick=()=>{
+ language=language==='zh'?'en':'zh';applyLanguage();
+};
+el('cancel').onclick=()=>activeXHR?.abort();
+el('backupTarget').onchange=hint;
+el('installButton').onclick=()=>run(async()=>{
+ const file=el('setFile').files[0];if(!file)throw new Error(t('choose'));
+ if(!confirm(t('confirmInstall')))return;
+ await task({operation:'install',upload_id:await upload('setFile')});
+});
+el('writeButton').onclick=()=>run(async()=>{
+ const v=targets[Number(el('writeTarget').value)];if(!v)throw new Error(t('failed'));
+ const file=el('partitionImage').files[0];if(!file)throw new Error(t('choose'));
+ if(file.size>v.size)throw new Error(t('flashTooLarge'));
+ if(!confirm(t('confirmFlash')+' '+v.name+' ('+bytes(v.size)+'), '+bytes(file.size)+' '+t('uploadWrite')))return;
+ await task({operation:'flash',kind:v.kind,target:v.name,upload_id:await upload('partitionImage')});
+});
+el('backupButton').onclick=()=>run(async()=>{
+ const v=targets[Number(el('backupTarget').value)];if(!v)throw new Error(t('failed'));
+ const s=await task({operation:'backup',kind:v.kind,target:v.name});
+ text('state',t('downloadPhase'));
+ const parts=[];const total=s.download_size;const segment=4*1024*1024;
+ for(let offset=0;offset<total;offset+=segment){
+  const length=Math.min(segment,total-offset);
+  parts.push(await transfer('/api/download/'+s.download_id+'/'+offset+'/'+length,null,'blob',offset,total));
+ }
+ const blob=new Blob(parts,{type:'application/octet-stream'});
+ const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=v.name.replace(/\s+/g,'-')+'-main.bin';
+ a.click();setTimeout(()=>URL.revokeObjectURL(a.href),10000);
+});
+el('commandButton').onclick=()=>run(()=>task({operation:'command',command:el('command').value}));
+document.querySelectorAll('[data-action]').forEach(b=>b.onclick=()=>run(async()=>{rebooting=true;await task({operation:b.dataset.action})}));
+async function monitor(){
+ if(rebooting)return;
+ if(!localBusy){try{status(await request('/api/task'))}catch(e){remoteBusy=true;text('state',t('waiting'));controls()}}
+ setTimeout(monitor,1500);
+}
+applyLanguage();controls();refresh().then(()=>monitor()).catch(e=>{text('output',e.message);monitor()});
+</script></body></html>

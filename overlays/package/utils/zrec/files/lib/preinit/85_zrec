@@ -1,0 +1,17 @@
+#!/bin/sh
+# Files in /lib/preinit are SOURCED by the init script, so this one may only
+# define a function and register it. Nothing at source time, and nothing that
+# blocks: a syntax error here or a foreground command is a board that never
+# finishes booting, with no console to say so.
+#
+# Registered on two hooks because which one runs depends on how the boot goes.
+# preinit_main covers a RAM image that gets somewhere; failsafe covers the one
+# that cannot find a rootfs to mount - and that is precisely the case this
+# service exists for. /etc/rc.d is not enough on its own: the failsafe path
+# never execs procd, so rc.d scripts are simply not part of that boot.
+zrec_recovery() {
+	sh /usr/libexec/zrec-bringup
+}
+
+boot_hook_add preinit_main zrec_recovery
+boot_hook_add failsafe zrec_recovery

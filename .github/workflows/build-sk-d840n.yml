@@ -146,6 +146,39 @@ jobs:
             chmod 755 openwrt/files/etc/rc.d/* openwrt/files/usr/libexec/* 2>/dev/null || true
             ls -l openwrt/files/etc/rc.d/ openwrt/files/usr/libexec/ openwrt/files/lib/preinit/
           fi
+          # zrec reaches the image as a package rather than a files/ overlay, because
+          # it has to be compiled. Assert the overlay landed before defconfig gets a
+          # chance to drop the symbol in silence - the same lesson this file has
+          # already had to write down twice - and assert the mode rule with it: the
+          # RAM image is the recovery image, and a released root must not ship a page
+          # that can erase kernel and root.
+          test -f openwrt/package/utils/zrec/Makefile || {
+            echo "::error::overlays/package/utils/zrec did not reach openwrt/package/utils/zrec"; exit 1; }
+          for f in src/zrec.c files/usr/sbin/zrec-run files/usr/libexec/zrec-ops \
+                   files/usr/libexec/zrec-bringup files/lib/preinit/85_zrec \
+                   files/etc/rc.d/S21zrec files/www/zrec/index.html; do
+            test -f "overlays/package/utils/zrec/$f" || {
+              echo "::error::zrec overlay is missing $f"; exit 1; }
+          done
+          grep -q 'INSTALL_BIN) $(PKG_BUILD_DIR)/zrec' openwrt/package/utils/zrec/Makefile || {
+            echo "::error::zrec Makefile no longer installs the compiled binary"; exit 1; }
+          if [ "${{ matrix.mode }}" = initramfs ]; then
+            grep -qx 'CONFIG_PACKAGE_zrec=y' openwrt/.config || {
+              echo "::error::initramfs mode does not select zrec" >&2
+              grep -i zrec openwrt/.config || echo "(no zrec line at all)" >&2
+              exit 1; }
+          elif grep -qx 'CONFIG_PACKAGE_zrec=y' openwrt/.config; then
+            echo "::error::flash mode selected zrec"; exit 1
+          fi
+          # Compile-check zrec with the runner's own gcc, here at two minutes rather
+          # than forty: the package builds only after the cross toolchain exists, and
+          # a missing include or a warning under -Werror would otherwise be discovered
+          # at the end of the one hour this pipeline costs per attempt.
+          # check-zrec.yml goes further and runs the server; this line only makes sure
+          # a red build here is not a typo in a header.
+          gcc -std=gnu11 -O1 -Wall -Wextra -Werror -fsyntax-only \
+            openwrt/package/utils/zrec/src/zrec.c
+          echo "zrec compiles clean against host gcc"
           # syntax gate, run before spending an hour on it.  A bare `dtc` call is
           # *not* what the kernel does: scripts/Makefile.lib preprocesses DTS with
           # cpp first.  Try both, and use cnjn's own (known-good) board file as the
@@ -455,6 +488,57 @@ jobs:
             echo "UM19A1HISW is not in the built kernel" >&2
             ls -l "$SPI" 2>/dev/null || echo "no $SPI" >&2
             exit 1; }
+
+      - name: "Gate: the recovery service reached the image"
+        if: steps.pick.outputs.run == 'true'
+        run: |
+          set -e
+          # Check the staged root filesystem, not the package build log: "the package
+          # compiled" and "the file is where the server looks for it" are different
+          # claims, and only the second one decides whether the page loads on the board.
+          R=$( { ls -d openwrt/build_dir/target-*/rootfs-* 2>/dev/null || true; } | head -1)
+          test -n "$R" || {
+            echo "::error::no staged rootfs to inspect"; ls -d openwrt/build_dir/target-*/ 2>&1; exit 1; }
+          echo "rootfs: $R"
+          want="usr/sbin/zrec usr/sbin/zrec-run usr/libexec/zrec-ops usr/libexec/zrec-bringup lib/preinit/85_zrec etc/rc.d/S21zrec www/zrec/index.html"
+          noexec="www/zrec/index.html lib/preinit/85_zrec"
+          if [ "${{ matrix.mode }}" = initramfs ]; then
+            for f in $want; do
+              test -f "$R/$f" || {
+                echo "::error::$f is not in the RAM image" >&2
+                ls -lR "$R/usr" 2>/dev/null | head -30 >&2
+                exit 1; }
+              case " $noexec " in *" $f "*) continue ;; esac
+              test -x "$R/$f" || { echo "::error::$f lost its exec bit"; exit 1; }
+            done
+            # The page is opened by absolute path inside the binary, so a wrong install
+            # location is a 404 in the browser and nothing in the build log would say so.
+            grep -aq '/www/zrec/index.html' "$R/usr/sbin/zrec" || {
+              echo "::error::the compiled zrec does not reference /www/zrec/index.html"; exit 1; }
+            # And this is the entry point that actually runs: a RAM image that cannot
+            # mount a root ends at the failsafe shell and never execs procd, so an
+            # /etc/rc.d script alone would simply not be part of the boot.
+            P=$R/lib/preinit/85_zrec
+            grep -q 'boot_hook_add failsafe zrec_recovery' "$P" || {
+              echo "::error::85_zrec does not register the failsafe hook - nothing would start zrec"; exit 1; }
+            grep -q 'boot_hook_add preinit_main zrec_recovery' "$P" || {
+              echo "::error::85_zrec does not register preinit_main"; exit 1; }
+            grep -q 'zrec-bringup' "$P" || {
+              echo "::error::85_zrec no longer calls zrec-bringup"; exit 1; }
+            # A preinit file is sourced by the init script: broken syntax there is a
+            # board that stops booting, and the failure looks exactly like a bad kernel.
+            sh -n "$P"
+            sh -n "$R/usr/libexec/zrec-bringup"
+            echo "recovery service is in the RAM image"
+          else
+            for f in $want; do
+              if [ -e "$R/$f" ]; then
+                echo "::error::flash mode root carries $f - zrec belongs to the RAM image only"
+                exit 1
+              fi
+            done
+            echo "flash root carries no recovery service, as intended"
+          fi
 
       - name: Package flash images
         if: steps.pick.outputs.run == 'true' && matrix.mode == 'flash'

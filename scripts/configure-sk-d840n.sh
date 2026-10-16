@@ -244,7 +244,33 @@ elif [ "$MODE" != initramfs ]; then
 	echo "unknown mode: $MODE" >&2; exit 1
 fi
 
+# zrec - the browser upload+flash service - belongs in the RAM image and nowhere
+# else. It is the answer to "I want to push an image and have it programmed", at
+# the stage this board lets us control (there is no rebuildable U-Boot for
+# ZX279133), and it is only reachable on the test network of an image that is
+# already running from RAM. A flashed root must not carry a page that can erase
+# kernel and root, so the symbol is pinned off outside initramfs mode.
+if [ "$MODE" = initramfs ]; then
+	printf 'CONFIG_PACKAGE_zrec=y\n' >>.config
+else
+	printf '# CONFIG_PACKAGE_zrec is not set\n' >>.config
+fi
+
 make defconfig
+
+# The same rule that this file already states twice: a config line for a symbol
+# that does not exist is dropped by defconfig in silence. Assert the outcome.
+if [ "$MODE" = initramfs ]; then
+	grep -qx 'CONFIG_PACKAGE_zrec=y' .config || {
+		echo "CONFIG_PACKAGE_zrec did not survive defconfig - is package/utils/zrec/Makefile in the tree?" >&2
+		ls -d package/utils/zrec 2>/dev/null || echo "package/utils/zrec is NOT in the tree" >&2
+		echo "--- what defconfig knows about zrec ---" >&2
+		grep -i 'zrec' .config || echo "(nothing at all)" >&2
+		exit 1; }
+elif grep -q '^CONFIG_PACKAGE_zrec=y' .config; then
+	echo "flash mode selected zrec - the released root must not ship a flasher" >&2
+	exit 1
+fi
 
 echo "== resolved selection =="
 grep -E 'CONFIG_TARGET_zte|CONFIG_EXTERNAL_KERNEL_TREE|CONFIG_TARGET_ROOTFS' .config || true
