@@ -22,13 +22,14 @@
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
+#include <time.h>
+#include <unistd.h>
+#include <netinet/in.h>
 #include <sys/file.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/time.h>
 #include <sys/types.h>
-#include <netinet/in.h>
-#include <unistd.h>
 
 #define ZROOT		"/tmp/zrec"
 #define PAGE		"/www/zrec/index.html"
