@@ -88,21 +88,33 @@ if [ "$gates_ok" -eq 0 ]; then ok "every gate named 'Gate ...' runs in a flash b
 else bad "a gate would be skipped in a flash build" "see above"; fi
 
 echo
-echo "=== 3. and the reverse: a flash-only gate must NOT silently run in initramfs mode ==="
+echo "=== 3. and the reverse: a gate that only makes sense for a flash build must not run in initramfs mode ==="
+# WHY THE RULE IS NOT "every Gate step carries matrix.mode == 'flash'".
+#
+# That was the rule here until 2026-10-16, and it was wrong. It flagged
+# "Gate: the recovery service reached the image" (159a036) because the step
+# carries no matrix.mode condition - and the correct fix was NOT to add one.
+# That step's own body branches on the mode:
+#
+#   if [ "${{ matrix.mode }}" = initramfs ]; then   # zrec MUST be in the RAM image
+#   else                                             # zrec must NOT be in the flash root
+#
+# Restricting it to matrix.mode == 'flash' would have deleted both halves: the
+# RAM-image checks AND the flash-side "flash root carries no recovery service,
+# as intended". So the invariant this section actually protects is narrower and
+# more honest: a gate may fire in initramfs mode if it either stays away on its
+# own, or decides for itself which mode it is in. What it may not do is fire in
+# initramfs mode while checking flash-only things with no idea which mode it is.
+#
+# The classifier is exercised on four synthetic steps before it is allowed to
+# rule on the real workflow. Without that, "no leaks" and "the classifier is
+# broken" look identical - which is how this section came to be wrong in the
+# first place.
 python3 - "$WF" <<'PY'
 import sys, re, yaml
-d = yaml.safe_load(open(sys.argv[1]))
-job = d['jobs']['build']
-ctx = {'run': 'true', 'inputs': {'mode': 'both', 'clean_cache': 'false'}, 'matrix': {'mode': 'initramfs'}}
-ctx['success'] = lambda: True
-ctx['failure'] = lambda: False
-ctx['cancelled'] = lambda: False
-leaked = []
-for s in job['steps']:
-    name = s.get('name', s.get('uses', '?'))
-    cond = s.get('if')
-    if cond is None or 'Gate' not in name:
-        continue
+
+
+def cond_true(cond, ctx):
     c = re.sub(r'!(?!=)', ' not ', cond)
     c = c.replace('&&', ' and ').replace('||', ' or ')
     c = (c.replace('steps.pick.outputs.run', "run")
@@ -110,15 +122,71 @@ for s in job['steps']:
              .replace('inputs.mode', "inputs['mode']")
              .replace('inputs.clean_cache', "inputs['clean_cache']"))
     try:
-        if eval(c, ctx):
-            leaked.append(name)
+        return bool(eval(c, ctx))
     except Exception:
-        pass
-print("  flash-only gates that also fire in initramfs mode:", leaked or "none")
+        return False
+
+
+def leaks(step, ctx):
+    """(is this a problem, why) for one step, evaluated in initramfs mode."""
+    name = step.get('name', step.get('uses', '?'))
+    cond = step.get('if')
+    if cond is None or 'Gate' not in name:
+        return False, 'not a gate, or no condition to leak'
+    if not cond_true(cond, ctx):
+        return False, 'stays away from initramfs mode on its own'
+    if 'matrix.mode' in (step.get('run') or ''):
+        return False, 'its body branches on matrix.mode, so it knows which mode it is in'
+    return True, 'fires in initramfs mode with no idea it is not a flash build'
+
+
+# --- the classifier's own test, before it is trusted with the real workflow
+CTX = {'run': 'true', 'inputs': {'mode': 'both', 'clean_cache': 'false'},
+       'matrix': {'mode': 'initramfs'}}
+CTX['success'] = lambda: True
+CTX['failure'] = lambda: False
+CTX['cancelled'] = lambda: False
+BRANCHING = 'if [ "${{ matrix.mode }}" = initramfs ]; then\n  true\nelse\n  true\nfi\n'
+synthetic = [
+    ('a gate with no mode logic at all must be flagged',
+     {'name': 'Gate: bare', 'if': "steps.pick.outputs.run == 'true'"}, True),
+    ('a gate restricted to flash must not be flagged',
+     {'name': 'Gate: flash only', 'if': "steps.pick.outputs.run == 'true' && matrix.mode == 'flash'"}, False),
+    ('a gate that branches on the mode itself must not be flagged',
+     {'name': 'Gate: both modes', 'if': "steps.pick.outputs.run == 'true'", 'run': BRANCHING}, False),
+    ('a non-gate step is not this section business',
+     {'name': 'Package flash images', 'if': "steps.pick.outputs.run == 'true'"}, False),
+]
+bad = 0
+for what, step, want in synthetic:
+    got, why = leaks(step, CTX)
+    mark = 'ok  ' if got == want else 'FAIL'
+    if got != want:
+        bad += 1
+    print(f"  {mark} self-test: {what}  [{why}]")
+if bad:
+    print(f"  the classifier disagrees with itself on {bad} synthetic case(s) - refusing to rule on the workflow")
+    sys.exit(2)
+
+d = yaml.safe_load(open(sys.argv[1]))
+job = d['jobs']['build']
+leaked = []
+for s in job['steps']:
+    is_bad, why = leaks(s, CTX)
+    name = s.get('name', s.get('uses', '?'))
+    if is_bad:
+        leaked.append(name)
+        print(f"  LEAK  {name}: {why}")
+    elif 'Gate' in name and cond_true(s.get('if') or '', CTX):
+        print(f"  ok    {name}: {why}")
+print("  gates that fire in initramfs mode without deciding which mode they are in:",
+      leaked or "none")
 sys.exit(1 if leaked else 0)
 PY
-if [ $? -eq 0 ]; then ok "flash-only gates stay flash-only" ""
-else bad "a flash-only gate leaks into initramfs mode" ""; fi
+rc=$?
+if [ $rc -eq 0 ]; then ok "no gate checks flash-only things while unaware it is not a flash build" ""
+elif [ $rc -eq 2 ]; then bad "the classifier failed its own self-test" "see above"
+else bad "a gate leaks into initramfs mode" ""; fi
 
 echo
 echo "=== 4. the dtb content gate is not a named step - confirm its assertions are really here ==="
