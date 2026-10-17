@@ -119,7 +119,8 @@ for t in $d/test_platform_sh.sh \
          $d/test_workflow_shell_parses.sh \
          $d/test_readme_refs.sh \
          $d/test_lineage_default_paths.sh \
-         $d/rehearse_zrec_gate.sh; do
+         $d/rehearse_zrec_gate.sh \
+         $d/test_itbcheck_parsers.sh; do
 	echo "  --- ${t##*/}"
 	ran=$((ran+1))
 	if sh "$t" >/tmp/reg.out 2>&1; then

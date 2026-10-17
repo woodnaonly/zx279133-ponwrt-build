@@ -48,6 +48,8 @@ sh tests/regress_round_backup.sh     # 之后：42/42/42，rc_all=0
 `lib/apk/packages/zrec*.list`，十二种形状，含一个用 chmod 的另一个方向造出来的
 exec 位缺陷。**所以「0 / 40」当时是对的，现在不是了。**
 
+**2026-10-18 又加了一个自包含的：`test_itbcheck_parsers.sh`（套件）/ `test_itbcheck_parsers.py`（本体），测的是 `tools/itbcheck.py`。** 它不需要任何夹具——FIT、gzip 成员、newc 归档都在内存里现造，所以它既不引用 `staging/`，也不 `cd /mnt/c/...`，在本机直接 `sh tests/test_itbcheck_parsers.sh` 就是 13/13。上表那些数字是 2026-10-16 那次量的，**已经过期**（`git ls-files tests` 现在 112 个），这里没有替你重新量其余分类：分类方法（对 runner 循环里的每个脚本分别 grep `staging/(trial|ctl|rollback)` 和 `cd /mnt/c`）量的对象是那个循环列出的套件，不是我随手 glob 到的文件，所以要用它自己的方法重数。
+
 25 个引用产物的套件里，**0 个**写了产物缺失的处理。唯一在沙箱里实测过的
 （`test_payload_id.sh`，因为只有它不硬编码路径，能安全地放进一个没有产物的目录树），
 产物缺失时是**响亮地红**：exit 1，`FAIL plain run exited 1`。
