@@ -187,7 +187,8 @@ static int zx279133_uni_serdes_power_on(struct phy *phy)
 			goto err_disable_clocks;
 	}
 
-	dev_info(priv->dev, "Uni SerDes 10G profile ready, status %#x/%#x\n",
+	dev_info(priv->dev, "Uni SerDes %s profile ready, status %#x/%#x\n",
+		 priv->submode == PHY_INTERFACE_MODE_SGMII ? "1G" : "10G",
 		 readl(priv->serdes + ZX279133_UNI_SERDES_PLL_STATUS),
 		 readl(priv->serdes + ZX279133_UNI_SERDES_RX_STATUS));
 	priv->powered = true;
