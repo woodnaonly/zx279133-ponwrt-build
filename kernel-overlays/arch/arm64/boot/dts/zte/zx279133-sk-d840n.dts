@@ -279,11 +279,51 @@
 	 * `xmac 0 speed set 2 in sgmii(xmac speed 3)`,
 	 * `mac 4 phy status changed: 1000M full-duplex`, then moved 12013 bytes
 	 * by tftp at 1.9 MiB/s. zx279133-mac.c accepts exactly 2500BASEX and
-	 * SGMII and carries the vendor's recovered 1G XPCS bring-up, and
-	 * realtek.c programs the PHY's serdes option from the interface, so this
-	 * one line is the whole fix.
+	 * SGMII and carries the vendor's recovered 1G XPCS bring-up.
+	 *
+	 * It was NOT the whole fix, and that is measured too (2026-10-17): with
+	 * phy-mode="sgmii" the mask is right at last (`Supported link modes:
+	 * 10/100/1000baseT`, `Link partner advertised ... 1000baseT/Full`) and the
+	 * port still moves nothing - rx_packets 0, no RX counter in ethtool -S at
+	 * all while xmac_tx_good_frames counts 12 frames into the lane, IRQ
+	 * `22: 0 0 GICv3 33 Level 19000000.ethernet`, and the peer's ReceivedBytes
+	 * unmoved across six pings whose ARP stayed Incomplete. The same power
+	 * cycle had U-Boot print `uni serdes init succeed` and pull 11,440,284
+	 * bytes before bootm, so the leftovers are not what was missing either:
+	 * mainline's own bring-up configures the other pair.
 	 */
 	phy-mode = "sgmii";
+
+	/* This is the second half, and it is a claim about a binding, not a
+	 * profile. zx279133-main.c takes exactly one PHY (`devm_phy_get(dev,
+	 * "serdes")`, :429) and exactly one PCS (`of_parse_phandle(..., "pcs-handle", 0)`,
+	 * :434), while zx279133.dtsi spells "serdes" as <&pon_serdes>, "lan-serdes"
+	 * as <&uni_serdes>, pcs-handle as <&xpcs1> and the LAN-side PCS as
+	 * zte,lan-pcs-handle = <&xpcs0>. Repo-wide the only consumer of
+	 * "lan-serdes" and zte,lan-pcs-handle is drivers/net/dsa/zx279133-rtl8372n.c
+	 * (:7756, :7785) - the external switch this board does not have. So on this
+	 * board the two properties the LAN driver reads name the PON pair, and
+	 * nothing ever calls the UNI serdes: U-Boot's bring-up for this jack is
+	 * `mode_eth_1gbase_x_cfg` + `uni serdes init succeed` + `xmac 0 speed set 2
+	 * in sgmii`, i.e. xpcs0 + uni_serdes, and `/proc/pon/outer_phy` on the stock
+	 * system says `xmac0: phy_RTL8226`.
+	 *
+	 * Re-aim the slots the driver actually reads. Expected and still informative
+	 * either way: phy-zx279133-uni-serdes.c's set_mode() only accepts
+	 * USXGMII/10GBASE-R, so it will answer -EOPNOTSUPP for sgmii and
+	 * power_on() (its 10G profile) will not run. That makes the UNI lane stay
+	 * exactly as U-Boot left it and, critically, stops mainline reprogramming
+	 * pon_serdes/xpcs1 underneath it. Frames appearing = mainline's PON-side
+	 * programming was the thing breaking the lane, and the remaining work is a
+	 * measured 1000BASE-X profile for uni_serdes (from the captured
+	 * 0x16100000 block, not from the 10G array). Frames still absent = the lane
+	 * needs more than leaving it alone, and with CONFIG_DEVMEM now pinned the
+	 * same absolute addresses read under mainline (`md`-for-`dd`) say which bits
+	 * differ from the traffic-proven values, instead of another guess.
+	 */
+	phys = <&uni_serdes>;
+	phy-names = "serdes";
+	pcs-handle = <&xpcs0>;
 	memory-region = <&bmu_reserved>, <&se_hash_reserved>, <&idm_reserved>;
 	memory-region-names = "bmu", "se-hash", "idm";
 	phy-handle = <&rtl8226b>;
