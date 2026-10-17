@@ -17,6 +17,9 @@ SERVER = (PKG / "src/zrec.c").read_text(encoding="utf-8")
 OPS = (PKG / "files/usr/libexec/zrec-ops").read_text(encoding="utf-8")
 RUNNER = (PKG / "files/usr/sbin/zrec-run").read_text(encoding="utf-8")
 BRINGUP = (PKG / "files/usr/libexec/zrec-bringup").read_text(encoding="utf-8")
+# Statement-order checks below must not be fooled by the header comments, which
+# describe the very commands being ordered.
+BRINGUP_CODE = "\n".join(l for l in BRINGUP.splitlines() if not l.lstrip().startswith("#"))
 PREINIT = (PKG / "files/lib/preinit/85_zrec").read_text(encoding="utf-8")
 BOOT = (PKG / "files/etc/rc.d/S21zrec").read_text(encoding="utf-8")
 PAGE = (PKG / "files/www/zrec/index.html").read_text(encoding="utf-8")
@@ -77,6 +80,34 @@ check("zrec-bringup is idempotent (a preinit hook plus rc.d must not stack loops
       "pidof zrec" in BRINGUP)
 check("rc.d entry delegates to bringup instead of duplicating it",
       "zrec-bringup" in BOOT and "/usr/sbin/zrec " not in BOOT)
+
+# run39 board rounds: the loop's serial console went mute about five seconds into
+# the boot - the moment the first version of this loop ran - and it had already
+# called `ip link set eth0 up`, which is also the command that took a healthy
+# `Link is Up 1Gbps` back down one second later. Three properties are now part
+# of the contract: leave a record before anything that can kill the console, put
+# the address on before forcing a link, and force a link only after the driver
+# has had its own chance at it and only where sysfs says there is no carrier.
+bc = BRINGUP_CODE.splitlines()
+link_at = [i for i, l in enumerate(bc) if "ip link set" in l]
+guarded = [i for i in link_at
+           if any("$force" in bc[j] for j in range(max(0, i - 4), i))
+           and any("carrier" in bc[j] for j in range(max(0, i - 3), i))]
+check("every ip link set is behind both the grace and a carrier read",
+      bool(link_at) and guarded == link_at,
+      "%d/%d guarded" % (len(guarded), len(link_at)))
+addr_at = BRINGUP_CODE.find('"$ZROOT/addr"')
+ip_at = min(BRINGUP_CODE.find("ip addr "), BRINGUP_CODE.find("ip link set"))
+check("zrec-bringup publishes its evidence before it touches a netdev",
+      0 <= addr_at < ip_at, "addr@%d first ip@%d" % (addr_at, ip_at))
+up_at = BRINGUP_CODE.find("/proc/uptime")
+check("the link grace is measured from uptime, not from a loop counter",
+      0 <= up_at < BRINGUP_CODE.find("ip link set"), "uptime@%d" % up_at)
+# The netdev list is rebuilt per iteration; the first version appended to a
+# list that was only cleared before the loop, so $ZROOT/netif ended up as
+# " eth0 eth1 eth0 eth1 eth0 eth1" and the change guard never fired.
+check("zrec-bringup rescans instead of accumulating the netdev list",
+      BRINGUP.count("scan") >= 3 and "last=\"$nets $car\"" in BRINGUP)
 
 # /lib/preinit files are sourced by the init script: a top-level command there
 # runs during the boot, and a blocking one is a board that never finishes.

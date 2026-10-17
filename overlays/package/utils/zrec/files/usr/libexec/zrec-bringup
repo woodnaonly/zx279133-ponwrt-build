@@ -8,6 +8,20 @@
 # once is gone again within a second; this loop re-asserts the address, ssh and
 # the server every few seconds for as long as the image lives.
 #
+# Three rules come from the run39 board rounds, where the serial console went
+# mute about five seconds into every boot - right when the first version of this
+# loop ran - and left no record of what it had done:
+#   * publish the evidence before touching anything, so a loop that dies to its
+#     own next command still leaves a story behind;
+#   * an address goes on before a link is opened, because a configured address
+#     does not need carrier but a forced link does;
+#   * leave the links to the driver for the first 20 seconds. Its own `Link is
+#     Up 1Gbps` lands near 7.6 s, and the userspace `ip link set up` that
+#     pre-empted or re-issued it is the common factor in both the mute console
+#     and the `Link is Down` one second later. After the grace the command
+#     returns, because a failsafe boot has eth0 NO-CARRIER and stays
+#     unreachable forever without it.
+#
 # Everything runs in the background: a preinit hook that blocks is a board that
 # never finishes booting.
 ZROOT=/tmp/zrec
@@ -26,34 +40,66 @@ pidof zrec >/dev/null 2>&1 && exit 0
 # able to cause, so the marker is set here rather than left to whoever ssh'd in.
 [ -e /tmp/trial-noreboot ] || : >/tmp/trial-noreboot
 
-(
+# nets = the netdevs this loop owns, car = one "eth0=1" per netdev: 1 with
+# carrier, 0 without, ? when the driver will not say. Reading sysfs instead of
+# asking for a link is also what keeps this script from being the thing that
+# disturbs it. Both are rebuilt from scratch on every scan; the first version
+# appended to lists that were only cleared before the loop, so netif became
+# " eth0 eth1 eth0 eth1" and the change guard below never quieted down.
+scan() {
 	nets=''
+	car=''
+	for d in /sys/class/net/*; do
+		[ -d "$d" ] || continue
+		n=${d#/sys/class/net/}
+		[ "$n" = lo ] && continue
+		k=$(cat "$d/carrier" 2>/dev/null)
+		nets="$nets $n"
+		car="$car $n=${k:-?}"
+	done
+}
+
+(
 	last=''
+	scan
+	printf '%s\n' "$IP" >"$ZROOT/addr"
+	printf '%s\n' "$nets" >"$ZROOT/netif"
+	printf '%s\n' "$car" >"$ZROOT/carrier"
 	while :; do
+		# The serial console is the only channel guaranteed to exist here, so the
+		# address and the netdev list go to it. "netif=NONE" is the honest signal
+		# that this kernel has no usable port yet - which is a different failure
+		# from "the browser could not reach a board that does". carrier rides in
+		# the same line because "a port exists but has no link" is a third
+		# failure, and the run39 rounds could not tell the three apart.
+		if [ "$nets $car" != "$last" ]; then
+			last="$nets $car"
+			echo "zrec: http://$IP/ netif=${nets:-NONE}${car}" >/dev/kmsg 2>/dev/null
+		fi
+
+		up=0
+		read -r up _ </proc/uptime 2>/dev/null || up=0
+		up=${up%%.*}
+		[ -n "$up" ] || up=0
+		force=''
+		[ "$up" -ge 20 ] && force=1
+
 		for d in /sys/class/net/*; do
 			[ -d "$d" ] || continue
 			n=${d#/sys/class/net/}
 			[ "$n" = lo ] && continue
-			ip link set "$n" up 2>/dev/null
 			# replace, not add: after a deconfig the address may be half there
 			ip addr show dev "$n" 2>/dev/null | grep -q "inet $IP/" ||
 				ip addr replace "$ADDR" dev "$n" 2>/dev/null
-			nets="$nets $n"
+			if [ -n "$force" ] && [ "$(cat "$d/carrier" 2>/dev/null)" != 1 ]; then
+				ip link set "$n" up 2>/dev/null
+			fi
 		done
 
 		pidof dropbear >/dev/null 2>&1 || /usr/sbin/dropbear -s -B -p 22
 		pidof zrec >/dev/null 2>&1 || /usr/sbin/zrec 80 >>"$ZROOT/server.log" 2>&1
 
-		if [ "$nets" != "$last" ]; then
-			last="$nets"
-			printf '%s\n' "$IP" >"$ZROOT/addr"
-			printf '%s\n' "$nets" >"$ZROOT/netif"
-			# The serial console is the only channel guaranteed to exist here, so the
-			# address and the netdev list go to it. "netif=NONE" is the honest signal
-			# that this kernel has no usable port yet - which is a different failure
-			# from "the browser could not reach a board that does".
-			echo "zrec: http://$IP/ netif=${nets:-NONE}" >/dev/kmsg 2>/dev/null
-		fi
 		sleep 5
+		scan
 	done
 ) &
