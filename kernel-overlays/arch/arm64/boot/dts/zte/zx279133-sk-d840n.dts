@@ -293,6 +293,12 @@
 	 * mainline's own bring-up configures the other pair.
 	 */
 	phy-mode = "sgmii";
+	/* Which of nppt's two MAC windows carries this port. The vendor bootloader says
+	 * `xmac0 is used` on this jack, and np_133.ko addresses the windows as
+	 * 0x140000 + id * 0x40000 (id=1 is the base every constant in zx279133-mac.c was
+	 * written against), so this port is id 0. See docs 补五十四.
+	 */
+	zte,xmac-id = <0>;
 
 	/* This is the second half, and it is a claim about a binding, not a
 	 * profile. zx279133-main.c takes exactly one PHY (`devm_phy_get(dev,
