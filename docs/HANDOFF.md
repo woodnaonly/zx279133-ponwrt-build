@@ -457,7 +457,21 @@ REFUSE in-image/ssh access: etc/dropbear/authorized_keys is not in the image at 
 ## 5. 板子接上之后，按这个顺序
 
 前置：CI 成功 → 取新 flash set（见 §6）。
-**`staging/trial/` 现在那份是 run 25 的产物，三层全绿，按工具标准可以刷。**
+
+> ⚠ **2026-10-17 撤回这一行**。这里曾经写着
+> 「**`staging/trial/` 现在那份是 run 25 的产物，三层全绿，按工具标准可以刷**」——
+> **那是错的**，而且错在最要紧的位置（流程第一行）。实测（round494–499、round539–541）：
+>
+> - `ci-build-repo/staging/trial/` 的 flash 半边是 **run 21**，
+>   它的 `flash-dtb.bin` 是 **11,916 B 的 `phy-mode="2500base-x"` 旧件**
+>   （工作区根那份才是 12,009 B 的 `sgmii`）；两者**不是「一份更新、一份没跟上」**。
+> - 工作区根那棵是 **run 33**，不是 run 25。
+> - 而 run 40/41 的 dtb 清单值都是 `088edb435e5e782a…`，即**出货件那份 sgmii dtb**。
+>
+> **⇒ 要刷就刷 `skd840n_flash_41_38972288244`**（run 41 的 flash 半边，
+> 与 `initramfs_41` 同一个 run id `38972288244`，两处模板修复都已出货且逐字节相同）。
+> **不要用 `ci-build-repo/staging/trial/` 那半边。**
+> 详见「有两棵 `staging/`，别搞混」那节。
 
 ```sh
 cd /mnt/c/ugit/SK-D840N4        # WSL；或在 Git Bash 里用 Windows 路径
@@ -472,8 +486,8 @@ cd /mnt/c/ugit/SK-D840N4        # WSL；或在 Git Bash 里用 Windows 路径
 #     厂商驱动日志说它是 **port 4**（`[eth0] port 4 link up`）。
 #     **主线只驱动这一个口**；另外三个 LAN 口挂在 SoC 内部 "9132" 交换机后面，
 #     mainline 没有驱动。**所以线插在那三个口上永远不会有任何反应。**
-#     不知道该插哪个就**挪一根线看 dmesg**：`port N link up` 的 N 就是厂商编号，
-#     `port 4` 那个才是 eth0。
+#     ⚠ 厂商镜像里「不知道该插哪个就**挪一根线看 dmesg**：`port N link up`」是
+#     **厂商专用**的办法（那个字符串主线不打印）。**主线看板子的 carrier 用 0c 那三行。**
 #
 #    192.168.9.1 由 **br-lan over eth0** 承载（推导见 §5b；名字的确定性见 §5g）。
 #    ⚠ 2026-10-17 撤回一条更正的更正：这里曾被「更正」成「单数版 ucidef_set_interface
@@ -563,8 +577,9 @@ SRC=staging/rollback EXPECT='root=0xf00000,0xf100000' sh tools/flash-direct.sh w
 ```sh
 cd /mnt/c/ugit/SK-D840N4
 
-# trial 集（run 33）与 flash 集是两个 release，trial 集来自 initramfs job
-sh tools/gettrial.sh initramfs <run>      # 或 flash <run>
+# trial 集与 flash 集是**两个 release**，trial 集来自 initramfs job。
+# 要跟 flash 半边出自同一次构建，就用同一个 run 号（本轮是 41）：
+sh tools/gettrial.sh initramfs 41         # 或 flash 41
 
 # 复制到板上。注意 trial-kx.tgz（kexec 本体）必须一起过去，
 # 那块镜像没有 tftp 客户端，scp 必须用 -O（老协议）。
@@ -573,9 +588,21 @@ scp -O -i ~/.ssh/id_onu staging/trial/* root@192.168.9.1:/tmp/trial/
 ssh -i ~/.ssh/id_onu root@192.168.9.1 sh /tmp/trial/trial-kexec.sh
 ```
 
-脚本自己会做的事：校验 `sha256sums-trial`（**dtb 除外**，它可能被本地打补丁）、
-`gunzip trial-Image.gz > Image`、带上 `trial-initramfs.cpio.gz` 作 `--initrd`，
-然后
+脚本自己会做的事：**从 `sha256sums-trial` 里排除两条再校验**——
+`trial-dtb.bin`（可能被本地打补丁）与 **`flash-sk-d840n.sh`**（它属于 flash 半边，
+这份清单是 initramfs job 写的；脚本从不运行它，而刷写脚本在擦任何东西之前
+自己会校验 `sha256sums-release`，所以排除它不丢完整性），
+并**正向要求清单必须覆盖 `trial-Image.gz`**，否则明确拒绝；
+然后 `gunzip trial-Image.gz > Image`、带上 `trial-initramfs.cpio.gz` 作 `--initrd`，
+
+> ⚠ **2026-10-17 更正**：这里原来写的是「校验 `sha256sums-trial`（**dtb 除外**）」——
+> 那是**旧出货件**的行为。旧件只排除 dtb 一条，于是「只带够 kexec 所需文件的
+> 那一次拷贝」会因为一个用不上的文件缺失而被拒，而 `sha256sum -c` 对缺文件
+> 报 `FAILED open or read`，那句 "checksum mismatch" **把原因指向错误的方向**。
+> 修复已随 run 41 出货（`trial-kexec.sh` 8,294 B / `b322856dc67d…`，
+> 与 `templates/` 那份逐字节相同），第 133 行现在是
+> `grep -v -e 'trial-dtb.bin' -e 'flash-sk-d840n.sh' sha256sums-trial`。
+> **手上若还是 run 39/40 的那份（7,675 B / `91478d93…`），它照常会执行旧逻辑。**
 
 ```
 kexec --load --mem-min=0x88000000 --mem-max=0x9b000000 \
