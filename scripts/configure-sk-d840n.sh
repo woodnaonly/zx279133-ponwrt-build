@@ -114,6 +114,24 @@ pin_y SOFTLOCKUP_DETECTOR
 pin_y IKCONFIG
 pin_y IKCONFIG_PROC
 
+# Reading MMIO from the board is the only way to compare a lane that works with a lane that
+# does not, and on 2026-10-17 that comparison was impossible: /proc/config.gz (the symbol
+# pinned just above is what made it readable) says "# CONFIG_DEVMEM is not set", so
+# `mknod /dev/mem c 1 1` creates the node and `open()` still fails with ENXIO. The same
+# round proved the initramfs has no `devmem` and no `od` applet, and that the nppt driver
+# implements no ethtool register dump ("Cannot get register dump: Not supported"), so there
+# was no path at all to a register value from inside Linux. CONFIG_STRICT_DEVMEM is off in
+# this tree, so turning DEVMEM on leaves /dev/mem reads of MMIO allowed.
+#
+# Why this is pinned rather than reached by a default: every register reading this session
+# that changed a conclusion came from U-Boot's `md`, i.e. from the one environment that had
+# no way to be scriptable, reproducible or diffable. The driver-level claim under test now is
+# that nppt programs the PON serdes/XPCS pair while this board's LAN lane is the UNI pair
+# (main.c:429/434 take only "serdes" and "pcs-handle"; "lan-serdes"/zte,lan-pcs-handle are
+# consumed only by the rtl8372n switch driver this board does not have) - and proving or
+# disproving that from the running kernel needs /dev/mem.
+pin_y DEVMEM
+
 # CONFIG_PANIC_TIMEOUT=1 (cnjn's generic config) means a panic prints and then reboots one
 # second later. Measured 2026-10-16: a ^C that killed /init in the RAM trial came back as a
 # clean-looking U-Boot banner ~30 s later with nothing left to read, because the panic text

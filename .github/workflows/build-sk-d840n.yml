@@ -435,7 +435,7 @@ jobs:
           # actually blocks the trial went untested, because no kit was ever produced.
           # The pin is still attempted; only the blocking is dropped, and the state is
           # published either way, so nothing is being hidden.
-          required="REALTEK_PHY LEDS_GPIO GPIO_ZX279133 GPIO_SYSFS PSTORE PSTORE_CONSOLE PSTORE_RAM MAGIC_SYSRQ MAGIC_SYSRQ_SERIAL"
+          required="REALTEK_PHY LEDS_GPIO GPIO_ZX279133 GPIO_SYSFS PSTORE PSTORE_CONSOLE PSTORE_RAM MAGIC_SYSRQ MAGIC_SYSRQ_SERIAL DEVMEM"
           reported="DETECT_HUNG_TASK SOFTLOCKUP_DETECTOR IKCONFIG IKCONFIG_PROC"
           for s in $required; do
             grep -qx "CONFIG_$s=y" "$KC" || {
