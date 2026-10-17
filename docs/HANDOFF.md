@@ -1112,8 +1112,15 @@ dmesg | grep -i -e rtl8226 -e rtl8221 -e realtek
 > cat $P/phy_interface
 > ```
 >
-> 第一条是 DT 原值，路径由 `zx279133.dtsi:359` 的 `mdio1: mdio@14f02000`
-> 与 dts 里的 `rtl8226b: ethernet-phy@5` 推出来；
+> 第一条是 DT 原值。⚠ **round555 更正**：原文说这条路径「由 `zx279133.dtsi:359`
+> 的 `mdio1: mdio@14f02000` 与 dts 里的 `rtl8226b: ethernet-phy@5` 推出来」——
+> **那个推导会得到 `/soc/mdio@14f02000/ethernet-phy@5`，正是 round542 判错的那条**，
+> 和它正上方那条命令自相矛盾。正确的是 `phy-mode` 在 **MAC 节点**上：
+> `zx279133.dtsi:462` 的 `nppt: ethernet@19000000`，`phy-mode = "sgmii"` 在 dts:286、落在 `&nppt` 块内
+> （同一段还有 `memory-region` / `phy-handle = <&rtl8226b>` / `status = "okay"`）；dts:333 的
+> `rtl8226b: ethernet-phy@5` 在 `&mdio1` 下，**只有 `reg` 与 `max-speed`，不带 `phy-mode`**——
+> 符合 DT binding（`phy-mode` 是 MAC 属性）。这条不是推导出来的，是 round542–544 手工遍历
+> **出货 dtb 的 FDT 结构**确认的。
 > 第二条是 `phy_device.c:582` 的 `DEVICE_ATTR_RO(phy_interface)`，
 > 内容为 `phy_modes(phydev->interface)`。`tr`/`cat` 都在出货 rootfs 里（实测）。
 >
@@ -1154,8 +1161,14 @@ dmesg | grep -i -e rtl8226 -e rtl8221 -e realtek
 >
 > **这两条读数各自的核实级别不一样，别当成一样（round533–537）**：
 > - `phy_interface` 不会被协商改掉：`phydev->interface` 在 `phy_device.c` 里
->   **只有一个赋值点**（`:1841`，在 `phy_attach_direct()` 里），其余三处是读；
->   `phy_modify_interface` 在该文件里**根本不存在**。
+>   **只有一个赋值点**（`:1841`，在 `phy_attach_direct()` 里，该函数从 `:1752` 起），
+>   其余三处是读；而 `phy_attach_direct()` 在本文件只有**一个**调用点
+>   （`:1234`，在 `phy_connect_direct()` 里）——都在连接路径上，不在链路协商路径上
+>   （对照：`phy_change_link`/`ch_status` 在同一文件里 6 处）。
+>   ⚠ round556 撤回这里原先引的 `phy_modify_interface`：**那个符号在我本地
+>   全部源码里一处都不存在**（`modify_interface` 全树 0 命中，
+>   对照 `phydev` 708 处），拿它的缺席当证据是空论证。真正的证据是上面
+>   那条写入链，详见 docs/07 对应小节。
 >   它是「驱动连接时向 DT 要到了什么」的一次性镜像，**来源层面已核实**。
 > - `/proc/device-tree/.../phy-mode` 在**产物层面**已核实：
 >   出货 dtb 的 offset 8340 就是 `sgmii`（run 41 的 `trial-dtb.bin` 刚又核一遍）。
