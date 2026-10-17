@@ -669,7 +669,7 @@ kexec 是 aarch64 静态构建（Alpine 的 kexec-tools 2.0.31），已确认它
    > ```sh
    > # 期望 sgmii
    > tr -d '\0' < /proc/device-tree/soc/ethernet@19000000/phy-mode; echo
-   > cat /sys/bus/mdio_bus/devices/*/phy_interface
+   > cat $P/phy_interface
    > ```
    > **两条都该出 `sgmii`。** 出 `2500base-x` ⇒ 你刷的是 sgmii 修复前的 dtb，
    > **不是驱动或硬件坏了**：停手，从**工作区根**那棵树重新 stage，别去查驱动。
@@ -1082,7 +1082,7 @@ dmesg | grep -i -e rtl8226 -e rtl8221 -e realtek
 > ```sh
 > # 期望 sgmii（两条都该是 sgmii）
 > tr -d '\0' < /proc/device-tree/soc/ethernet@19000000/phy-mode; echo
-> cat /sys/bus/mdio_bus/devices/*/phy_interface
+> cat $P/phy_interface
 > ```
 >
 > 第一条是 DT 原值，路径由 `zx279133.dtsi:359` 的 `mdio1: mdio@14f02000`
@@ -1090,18 +1090,33 @@ dmesg | grep -i -e rtl8226 -e rtl8221 -e realtek
 > 第二条是 `phy_device.c:582` 的 `DEVICE_ATTR_RO(phy_interface)`，
 > 内容为 `phy_modes(phydev->interface)`。`tr`/`cat` 都在出货 rootfs 里（实测）。
 >
-> ⚠ **`0x697a` 读不了，这条是本轮更正掉的**（round501–510）。原先这里写的是
-> `cat /sys/bus/mdio_bus/devices/ethernet-phy@5/mmd/30/697a`，
-> **两处都是错的**：
-> **文件不存在**——MDIO core 在新内核里已经合并成单个
-> `drivers/net/mdio.c`（`drivers/net/Makefile:22` = `obj-$(CONFIG_MDIO) += mdio.o`），
-> `mdio-mmd.c` 这个文件在 torvalds/linux 和 cnjn 树里**都是 404**（同目录
-> `Makefile`/`Kconfig` 都 200，所以不是路径走错、也不是限流）；
-> `drivers/net/mdio.c` 里**没有任何 debugfs 注册、没有任何 sysfs 文件**，
-> 旧的 `/sys/kernel/debug/mdio_bus/<bus>/mmd/<dev>` 那套接口随文件一起没了。
-> **设备名也不对**——`PHY_ID_FMT` 是 `"%s:%02x"`（`include/linux/phy.h:322`），
-> PHY 在 sysfs 里叫 `eth0:05` 这种形式，不是 `ethernet-phy@5`，所以只能 glob。
+> ⚠ **`0x697a` 读不了，这条是 round501–510 更正掉的。** 原先这里写的是
+> `cat /sys/bus/mdio_bus/devices/ethernet-phy@5/mmd/30/697a`，**两处都是错的**：
+> **设备名不对**——`PHY_ID_FMT` 是 `"%s:%02x"`（`include/linux/phy.h:322`），
+> PHY 在 sysfs 里叫 `eth0:05` 这种形式，不是 `ethernet-phy@5`；
+> **而且没有 `mmd/<dev>/<reg>` 这样的文件**——`mdio-mmd.c` 在 torvalds/linux
+> 与 cnjn 树里**都是 404**（同目录 `Makefile`/`Kconfig` 都 200，
+> 所以不是路径走错、也不是限流），旧的
+> `/sys/kernel/debug/mdio_bus/<bus>/mmd/<dev>` 那套接口随文件一起没了。
 > **寄存器级分析本身仍然成立**（那是从 `realtek_main.c` 推出来的），只是读不出来。
+>
+> ⚠ **这段证据里有一处误引，round546–548 更正**：
+> 我曾写「MDIO core 已合并成单个 `drivers/net/mdio.c`
+> （`drivers/net/Makefile:22`），该文件里没有任何 debugfs 注册、任何 sysfs 文件」。
+> **`drivers/net/mdio.c` 不是 MDIO 总线核心**——它的文件头写着
+> *`mdio.c: Generic support for MDIO-compatible transceivers`*（Solarflare 2006-2009），
+> 全部内容是 `mdio45_*` / `mdio_mii_ioctl` 这类**遗留 C45 辅助代码**
+> （12,232 B / 426 行）。拿它下那个结论是**拿错了文件**。
+> 仍然成立的是枚举证据（`mdio-mmd.c` 两棵树都 404，同目录对照都 200）；
+> 但**「用户空间读不到任意 MMD 寄存器」目前是推断，不是已核实的源码事实**——
+> MDIO 总线核心本身我在本树里没找到（`drivers/net/mdio/` 35 项里没有
+> `mdio_bus.c`/`mdio_device.c`，`drivers/net/` 顶层 33 个文件里也没有）。
+>
+> **正因为查不到总线名与 class 名，判据才改走 `$P/phy_interface`**
+> （`P=/sys/class/net/eth0/phydev`）：那条路径**只需要**
+> `phy_sysfs_create_links()`（`phy_device.c:1441-1454`）证明的那个
+> 名字就叫 `phydev` 的符号链接，**不依赖总线名、class 名或 PHY 设备名**。
+
 >
 > **出 `2500base-x` 时不要去查驱动**（round498 实测
 > `ci-build-repo/staging/trial/flash-dtb.bin` 就是那份 11,916 B 的旧 dtb，
