@@ -435,8 +435,21 @@ jobs:
           # actually blocks the trial went untested, because no kit was ever produced.
           # The pin is still attempted; only the blocking is dropped, and the state is
           # published either way, so nothing is being hidden.
-          required="REALTEK_PHY LEDS_GPIO GPIO_ZX279133 GPIO_SYSFS PSTORE PSTORE_CONSOLE PSTORE_RAM MAGIC_SYSRQ MAGIC_SYSRQ_SERIAL DEVMEM"
-          reported="DETECT_HUNG_TASK SOFTLOCKUP_DETECTOR IKCONFIG IKCONFIG_PROC"
+          #
+          # DEVMEM joins that list for the same reason, measured on runs 42 and 43: the
+          # symbol was pinned, pin_y's own grep on the seed passed (Configure got that
+          # far both times), and the merged .config still had no CONFIG_DEVMEM=y. Two
+          # runs of every artefact - PHY kit and zrec kit alike - died on an instrument
+          # nobody has yet shown how to switch on. The seed/merged pair is printed on
+          # every run below so the next reader gets the answer without another round:
+          # if the seed says =y and the merge says otherwise, the question is which of
+          # the three config-* fragments is last, not whether the pin ran.
+          required="REALTEK_PHY LEDS_GPIO GPIO_ZX279133 GPIO_SYSFS PSTORE PSTORE_CONSOLE PSTORE_RAM MAGIC_SYSRQ MAGIC_SYSRQ_SERIAL"
+          reported="DEVMEM DETECT_HUNG_TASK SOFTLOCKUP_DETECTOR IKCONFIG IKCONFIG_PROC"
+          SEED=$( { ls openwrt/target/linux/zte/zx279133/config-* 2>/dev/null || true; } | head -1 )
+          echo "kernel config seed: ${SEED:-none}"
+          echo "    seed:   $( { grep -E '^(CONFIG_DEVMEM=|# CONFIG_DEVMEM is not set$)' "$SEED" 2>/dev/null || echo 'DEVMEM not mentioned in the seed'; } )"
+          echo "    merged: $( { grep -E '^(CONFIG_DEVMEM=|# CONFIG_DEVMEM is not set$)' "$KC" 2>/dev/null || echo 'DEVMEM not mentioned in the merged config'; } )"
           for s in $required; do
             grep -qx "CONFIG_$s=y" "$KC" || {
               echo "::error::CONFIG_$s is not built into the kernel" >&2
