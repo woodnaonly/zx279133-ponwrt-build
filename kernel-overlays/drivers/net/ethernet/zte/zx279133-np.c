@@ -2123,12 +2123,14 @@ static void zx279133_sdet_prepare(struct zx279133_eth *eth)
 	eth->sdet_saved[0] = readl(eth->base + ZX279133_SDET_FRAME_CFG);
 	eth->sdet_saved[1] = readl(eth->base + ZX279133_SDET_DOWN_FRAME_CFG);
 
-	writel((eth->sdet_saved[0] & GENMASK(31, 28)) |
-	       ZX279133_SDET_UP_MAX_LEN << ZX279133_SDET_UP_MAX_SHIFT |
+	/* Whole-word write, as in the bootloader: the max field is bits 31:16, so the old
+	 * "preserve GENMASK(31,28) of the previous value" was re-inserting the top nibble of the
+	 * very field being set. See ZX279133_SDET_UP_MAX_LEN for where these numbers come from.
+	 */
+	writel(ZX279133_SDET_UP_MAX_LEN << ZX279133_SDET_UP_MAX_SHIFT |
 	       ZX279133_SDET_UP_MIN_LEN,
 	       eth->base + ZX279133_SDET_FRAME_CFG);
-	writel((eth->sdet_saved[1] & GENMASK(31, 30)) |
-	       ZX279133_SDET_DOWN_MAX_LEN << ZX279133_SDET_DOWN_MAX_SHIFT |
+	writel(ZX279133_SDET_DOWN_MAX_LEN << ZX279133_SDET_DOWN_MAX_SHIFT |
 	       ZX279133_SDET_DOWN_MIN_LEN,
 	       eth->base + ZX279133_SDET_DOWN_FRAME_CFG);
 	eth->sdet_prepared = true;

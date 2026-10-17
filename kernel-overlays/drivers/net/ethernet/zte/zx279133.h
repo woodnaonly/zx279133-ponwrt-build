@@ -225,11 +225,25 @@
 
 #define ZX279133_SDET_FRAME_CFG		0x2040
 #define ZX279133_SDET_DOWN_FRAME_CFG	0x2044
-#define ZX279133_SDET_UP_MAX_LEN	2048
+/*
+ * Max/min frame length for the two directions, one 16-bit max field at bits 31:16 and the min in
+ * the low bits. The numbers are the ones the U-Boot in this board's flash writes, at
+ * backups/mtd1_boot.bin:0x57a84 - `mov x0,#0x2040 ; movk x0,#0x1900,lsl #16 ; mov w1,#0xc ;
+ * movk w1,#0xfa0,lsl #16 ; str w1,[x0]` and then 0x3e80<<16|0xc to +4, i.e. 0x0fa0000c and
+ * 0x3e80000c - and that bootloader pulled 11,440,284 bytes through this lane. The vendor module
+ * agrees on the width: sdet_set_up_maxframe_length() rejects anything outside 0x88..0x3f76
+ * (136..16246), which is only reachable if the field is 16 bits, and U-Boot's 16000 sits just
+ * under that ceiling.
+ *
+ * The previous values here (2048 with the upstream field at shift 14) put 512 in bits 31:16 for
+ * the upstream direction, and the read-modify-write that "preserved" GENMASK(31,28) of the old
+ * word was preserving the top nibble of this same field - both artefacts of the wrong shift.
+ */
+#define ZX279133_SDET_UP_MAX_LEN	4000
 #define ZX279133_SDET_UP_MIN_LEN	12
-#define ZX279133_SDET_DOWN_MAX_LEN	2048
+#define ZX279133_SDET_DOWN_MAX_LEN	16000
 #define ZX279133_SDET_DOWN_MIN_LEN	12
-#define ZX279133_SDET_UP_MAX_SHIFT	14
+#define ZX279133_SDET_UP_MAX_SHIFT	16
 #define ZX279133_SDET_DOWN_MAX_SHIFT	16
 
 #define ZX279133_SMCT_SEL_CFG0		0xc000
