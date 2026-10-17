@@ -472,6 +472,22 @@ REFUSE in-image/ssh access: etc/dropbear/authorized_keys is not in the image at 
 > 与 `initramfs_41` 同一个 run id `38972288244`，两处模板修复都已出货且逐字节相同）。
 > **不要用 `ci-build-repo/staging/trial/` 那半边。**
 > 详见「有两棵 `staging/`，别搞混」那节。
+>
+> **取件：`flash-sk-d840n.sh` 不在 release 的资源列表里**（round559 实测）。
+> `skd840n_flash_41_38972288244` 上是 **7 个** asset：`flash-dtb.bin` /
+> `flash-rootfs.jffs2` / `flash-set.tgz` / `flash-sysupgrade.bin` / `flash-uImage` /
+> `sha256sums` / `sha256sums-release`——**刷写脚本不在其中**。
+>
+> 这是设计不是丢件：`build-sk-d840n.yml:1052-1063` 的 release `files:` 列表里本来就没有它，
+> 它随 `flash-set.tgz` 发布（tarball 内 6 个成员，含该脚本与覆盖全部 5 项的 `sha256sums-release`）。
+> **拿件只有两条正路**：`sh tools/gettrial.sh flash 41`
+> （`gettrial.sh:108` 先 `tar xzf` 解到暂存区、按清单校验、全过才落位），
+> 或自己 `tar xzf flash-set.tgz`。
+>
+> ⚠ **别拿 release 上单独那份 `sha256sums-release` 去核一个手工拼的目录**：
+> 它点名 5 个文件，而 `flash-sk-d840n.sh` 不是独立 asset，`sha256sum -c` 会报
+> `flash-sk-d840n.sh: FAILED open or read`。**那不是文件损坏**——
+> 清单的作用域是 tarball 的内容。这条在本机实测复现过（round559）。
 
 ```sh
 cd /mnt/c/ugit/SK-D840N4        # WSL；或在 Git Bash 里用 Windows 路径
