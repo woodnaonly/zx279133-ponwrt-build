@@ -455,7 +455,18 @@ static inline u32 zx279133_idm_tx_done_reg(unsigned int queue)
 #define ZX279133_XMAC_EEE_TIMER_OFF	0x0350
 #define ZX279133_XMAC_TX_CTRL	0x0000
 #define ZX279133_XMAC_RX_CTRL	0x0010
-#define ZX279133_XMAC_RX_IPC	BIT(9)
+/*
+ * Bit number corrected against two artifacts that both carry traffic on this SoC, which is the
+ * only reason to be sure: the vendor module's xamc_init_conf() builds w4 = 0xc6 | 0x3e80<<16 for
+ * XMAC+0x10 (and both the 10G and the 1G lane go through it), and the U-Boot image that is
+ * actually in this board's flash does the same at backups/mtd1_boot.bin:0x594e8 - there
+ * `mov w1, #0xc6 ; movk w1, #0x3e80, lsl #16 ; str w1, [x4, x0]` with x0 = 0x19140010, i.e.
+ * XMAC0+0x10, in the routine that also writes +0x00 = 0x00010000, +0x20 = 0x80000001 and
+ * +0x280 = 2. So the receiver's initial image has bit 6 set and bit 9 clear; the 0x86 base below
+ * plus this bit is exactly that 0xc6. The RX enable itself is a separate RMW of bit 0
+ * (xmac_rx_enable() in both artifacts), which is why this bit was not already obvious.
+ */
+#define ZX279133_XMAC_RX_IPC	BIT(6)
 #define ZX279133_XMAC_FRAME_CFG	0x0020
 #define ZX279133_XMAC_MODE_CFG	0x0280
 #define ZX279133_XMAC_DUPLEX	0x0500
