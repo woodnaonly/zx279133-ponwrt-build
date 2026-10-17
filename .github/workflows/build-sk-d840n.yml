@@ -136,6 +136,43 @@ jobs:
           if [ "$CRCOUNT" != 0 ]; then
             echo "::error::02_network carries $CRCOUNT CR byte(s) - it is a shell script and CRLF breaks its continuation"; exit 1
           fi
+          # CONFIG_DEVMEM, and why the earlier attempts at it went nowhere.
+          #
+          # Without /dev/mem the trial kernel gives no way to read a register: mknod succeeds,
+          # open() returns ENXIO, `ethtool -d eth0` is "Not supported", and the busybox in the
+          # RAM image has no devmem applet. That makes U-Boot the only register view, and U-Boot
+          # is gone the moment Linux is running - so a boot that links but moves nothing can only
+          # be scored from the outside, which is exactly the state runs 42-45 were left in.
+          #
+          # Runs 42/43 pinned the symbol and the merged .config still had none, and the reason is
+          # now read straight out of the two fragments the clone carries:
+          #   target/linux/generic/config-6.18:1404      # CONFIG_DEVMEM is not set
+          #   target/linux/zte/zx279133/config-6.18:285  # CONFIG_DEVMEM is not set
+          # OpenWrt concatenates generic -> target -> subtarget and kconfig keeps the last
+          # statement for a symbol, so editing anything but the subtarget fragment cannot win.
+          # The subtarget file is 17 KB of deliberate choices, so it is edited in place rather
+          # than replaced by an overlay copy of it.
+          #
+          # STRICT_DEVMEM is already off in generic, so =y here means full /dev/mem, and
+          # CONFIG_IO_STRICT_DEVMEM=y is inert behind it. This is asserted before the build
+          # because a broken edit here is cheap now and costs a whole round later; the merged
+          # result is still only reported after compile, so an instrument that fails to switch
+          # on never withholds a kit that works.
+          DEVMEM_OFF='# CONFIG_DEVMEM is not set'
+          for f in openwrt/target/linux/zte/config-6.18 \
+                   openwrt/target/linux/zte/zx279133/config-6.18; do
+            if [ -f "$f" ]; then
+              sed -i "s|^${DEVMEM_OFF}\$|CONFIG_DEVMEM=y|" "$f"
+              if grep -qxF "$DEVMEM_OFF" "$f"; then
+                echo "::error::$f still disables CONFIG_DEVMEM after the edit"; exit 1
+              fi
+              echo "  $f -> $(grep -cx 'CONFIG_DEVMEM=y' "$f") CONFIG_DEVMEM=y line(s)"
+            fi
+          done
+          SUBCFG=openwrt/target/linux/zte/zx279133/config-6.18
+          if [ ! -f "$SUBCFG" ] || ! grep -qx 'CONFIG_DEVMEM=y' "$SUBCFG"; then
+            echo "::error::no CONFIG_DEVMEM=y in $SUBCFG, the fragment merged last - the clone's layout changed"; exit 1
+          fi
           # trial-files are RAM-image scaffolding only: a released flashed rootfs
           # must not carry a script that reboots the board five minutes after boot.
           # They make the trial readable from one wire - an address on every netdev
