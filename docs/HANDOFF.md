@@ -1508,8 +1508,29 @@ sh tools/gettrial.sh flash     <新的 run id>   # 会在 scratch 目录逐文�
 sh tools/gettrial.sh initramfs <同一个 run id>  # ← 这一行原来漏了，见下
 sh tools/check-imagelineage.sh staging/trial/flash-rootfs.jffs2   # 三层全过；**必须显式传**，
                                                              # 无参数会去看工作区根那棵（补二十六）
-sh staging/diag-20261014/regress_round_backup.sh   # 应当 41/41 rc_all=0
+sh staging/diag-20261014/round167-run-regression.sh   # 见下面那条更正
 ```
+
+> ⚠ **2026-10-17 更正这一段的两处**：
+>
+> 1. **跑回归要用 `round167-run-regression.sh`，不是
+>    `regress_round_backup.sh`。** 后者在两处都存在，而**版本不同**：
+>    `ci-build-repo/tests/regress_round_backup.sh`（9,709 B，决定成败的那个，
+>    `round167` 内部调的就是它）与 `staging/diag-20261014/regress_round_backup.sh`
+>    （8,908 B，另一份）。引用了后者等于跑了**不是权威的那份**。
+> 2. **「41/41」这个数是错的，且它不是任何脚本断言的**——
+>    两个脚本里 `41` 与 `42` 各 **0 处**命中（阳性对照：`round167` 里的 `41`
+>    只出现在临时文件名 `/tmp/reg41.txt`）。实测当前是 **42 套件**：
+>    `suites listed in the loop: 42 / suites actually run: 42 / verdicts recorded: 42`、
+>    `rc_all=0`、`FAIL markers: 0`、`regression exit=0`。
+>    **套件数是量出来的，不是脚本保证的** —— 以后它变了要重新量，别照抄。
+>
+> 另外 `sh tools/gettrial.sh` 会写到**当前 CWD 下的 `staging/trial/`**
+> （`gettrial.sh:18` 是 `D=staging/trial`，相对路径）。两棵 `tools/gettrial.sh`
+> **逐字节相同**（7,142 B / md5 `a5f8ed8397`），所以**内容一样、落地位置不同**：
+> §5 让你 `cd /mnt/c/ugit/SK-D840N4`，落的正是**工作区根**那棵（自洽的那棵）。
+> 若你改成在 `ci-build-repo/` 里跑，落的就会是**仓库那棵**——
+> 它的 flash 半边是 run 21 的旧件（见「有两棵 `staging/`」那节）。
 
 **两个模式都要跑，而且要钉同一个 run。** `flash` 模式只更新 flash 那半，
 同目录里那半 trial 文件**原封不动**——2026-10-16 实测踩到过：
