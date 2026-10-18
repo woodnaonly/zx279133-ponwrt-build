@@ -1005,6 +1005,25 @@ enum zx279133_ethtool_stat {
 	ZX279133_STAT_SOPC_RR5,
 	ZX279133_STAT_SOPC_TO_SMAC5,
 	ZX279133_STAT_SOPC_REQ_SMAC5,
+	/*
+	 * Raw words of the MAC this device is configured to use, and of the nppt block that
+	 * is the only thing which moved when U-Boot carried 11.4 MB across jack 4. They exist
+	 * because nothing else on this board can read them: the shipped root has no devmem and
+	 * no od, /dev/mem read() of MMIO returns EFAULT, and no software reset ever returned to
+	 * the U-Boot banner, so Linux's own register state is otherwise unobservable. The answer
+	 * wanted is narrow and binary - is TX_CTRL/RX_CTRL bit 0 (the enable that
+	 * zx279133_xmac_set_enabled() writes) actually set while the netdev counts transmit?
+	 */
+	ZX279133_STAT_DBG_TX_CTRL,
+	ZX279133_STAT_DBG_RX_CTRL,
+	ZX279133_STAT_DBG_FRAME_CFG,
+	ZX279133_STAT_DBG_MODE_CFG,
+	ZX279133_STAT_DBG_DUPLEX,
+	ZX279133_STAT_DBG_MISC_CFG,
+	ZX279133_STAT_DBG_NPPT_100000,
+	ZX279133_STAT_DBG_NPPT_100004,
+	ZX279133_STAT_DBG_NPPT_100008,
+	ZX279133_STAT_DBG_SOPC_DUPLEX,
 	ZX279133_STAT_IDM_TX_DONE,
 	ZX279133_STAT_TX_PENDING,
 	ZX279133_STAT_TX_DOORBELL_WRITES,
@@ -1076,6 +1095,16 @@ static const char zx279133_gstrings_stats[ZX279133_STAT_COUNT][ETH_GSTRING_LEN] 
 	"sopc_rr5",
 	"sopc_to_smac5",
 	"sopc_req_smac5",
+	"dbg_tx_ctrl",
+	"dbg_rx_ctrl",
+	"dbg_frame_cfg",
+	"dbg_mode_cfg",
+	"dbg_duplex",
+	"dbg_misc_cfg",
+	"dbg_nppt_100000",
+	"dbg_nppt_100004",
+	"dbg_nppt_100008",
+	"dbg_sopc_duplex",
 	"idm_tx_done",
 	"tx_pending",
 	"tx_doorbell_writes",
@@ -1203,6 +1232,22 @@ static void zx279133_get_ethtool_stats(struct net_device *ndev,
 		zx279133_hw_stat(eth, ZX279133_SOPC_TO_SMAC5);
 	data[ZX279133_STAT_SOPC_REQ_SMAC5] =
 		zx279133_hw_stat(eth, ZX279133_SOPC_REQ_SMAC5);
+	data[ZX279133_STAT_DBG_TX_CTRL] =
+		zx279133_hw_stat(eth, eth->xmac_base + ZX279133_XMAC_TX_CTRL);
+	data[ZX279133_STAT_DBG_RX_CTRL] =
+		zx279133_hw_stat(eth, eth->xmac_base + ZX279133_XMAC_RX_CTRL);
+	data[ZX279133_STAT_DBG_FRAME_CFG] =
+		zx279133_hw_stat(eth, eth->xmac_base + ZX279133_XMAC_FRAME_CFG);
+	data[ZX279133_STAT_DBG_MODE_CFG] =
+		zx279133_hw_stat(eth, eth->xmac_base + ZX279133_XMAC_MODE_CFG);
+	data[ZX279133_STAT_DBG_DUPLEX] =
+		zx279133_hw_stat(eth, eth->xmac_base + ZX279133_XMAC_DUPLEX);
+	data[ZX279133_STAT_DBG_MISC_CFG] =
+		zx279133_hw_stat(eth, eth->xmac_base + ZX279133_XMAC_MISC_CFG);
+	data[ZX279133_STAT_DBG_NPPT_100000] = zx279133_hw_stat(eth, 0x100000);
+	data[ZX279133_STAT_DBG_NPPT_100004] = zx279133_hw_stat(eth, 0x100004);
+	data[ZX279133_STAT_DBG_NPPT_100008] = zx279133_hw_stat(eth, 0x100008);
+	data[ZX279133_STAT_DBG_SOPC_DUPLEX] = zx279133_hw_stat(eth, 0x343f0);
 	spin_lock_bh(&eth->tx_lock);
 	data[ZX279133_STAT_IDM_TX_DONE] =
 		eth->tx_prepared && READ_ONCE(eth->hardware_prepared) ?
