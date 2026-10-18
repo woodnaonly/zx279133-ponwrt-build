@@ -291,8 +291,19 @@ jobs:
               # random. The run page's own HTML does carry the annotations, so `curl` of it shows
               # what dtc said. Run 56 cost 75 minutes of guessing because the gate printed its
               # reason where nobody watching from here could read it.
-              DTCERR=$(grep -m1 -E 'Error|FATAL|error:' /tmp/zx279133-sk-d840n.dts.dtc-native.log 2>/dev/null | head -c 220)
-              echo "::error::zx279133-sk-d840n.dts does not compile while sr1010.dts does: ${DTCERR:-no dtc message captured}"
+              #
+              # Take the message from the attempt that got FURTHEST, not the first one. Runs 56-60
+              # all reported `...dts:46.1-9 syntax error`, which is dtc's native preprocessor
+              # stopping at the first `#include` - it fails that way for every board file, sr1010
+              # included, and says nothing about our bug. The real one (`393.2-18 Properties must
+              # precede subnodes`) was only in the cpp+dtc log, two lines below, inside a collapsed
+              # group that the log viewer virtualises away. Reading it cost this whole detour.
+              B=zx279133-sk-d840n.dts
+              for L in "/tmp/$B.dtc-cpp.log" /tmp/cpp.log "/tmp/$B.dtc-native.log"; do
+                DTCERR=$(grep -m1 -E 'Error|FATAL|error:' "$L" 2>/dev/null | head -c 220)
+                [ -n "$DTCERR" ] && break
+              done
+              echo "::error::zx279133-sk-d840n.dts does not compile while sr1010.dts does: ${DTCERR:-no dtc message captured in /tmp/$B.dtc-cpp.log, /tmp/cpp.log or /tmp/$B.dtc-native.log}"
               exit 1
             fi
           fi
