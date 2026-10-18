@@ -240,19 +240,29 @@ jobs:
           ls -l "$PFX/dt-bindings/gpio/gpio.h" || echo "MISSING dt-bindings/gpio/gpio.h"
           gate() {
             f=$1
-            echo "::group::DTS gate: $(basename "$f")"
-            if dtc -q -I dts -O dtb -o "/tmp/$(basename "$f").dtb" \
-                 -i "$DTS" -i "$PFX" -i "$KT/include" "$f"; then
+            b=$(basename "$f")
+            echo "::group::DTS gate: $b"
+            # dtc's stderr has to reach the log. Run 56 lost 5 minutes to a gate that said only
+            # "does not compile while sr1010.dts does" and left the actual `Error at line ...`
+            # invisible, because a failing `if dtc ...; then` sent dtc's diagnostics to a stderr
+            # this step never showed. Capture both attempts to files and print them on the way out
+            # - whichever branch fails, the reason must be on screen.
+            if dtc -q -I dts -O dtb -o "/tmp/$b.dtb" \
+                 -i "$DTS" -i "$PFX" -i "$KT/include" "$f" 2>"/tmp/$b.dtc-native.log"; then
+              [ -s "/tmp/$b.dtc-native.log" ] && { echo "dtc native (warnings):"; cat "/tmp/$b.dtc-native.log"; }
               echo "PASS (dtc native preprocessor)"; echo "::endgroup::"; return 0
             fi
+            echo "dtc native FAILED, its stderr:"
+            sed 's/^/  /' "/tmp/$b.dtc-native.log"
             cpp -nostdinc -x assembler-with-cpp -D__DTS__ -fdirectives-only \
                 -I "$DTS" -I "$PFX" -I "$KT/include" "$f" -o /tmp/pp.dts 2>/tmp/cpp.log
             rc=$?
-            if [ $rc -eq 0 ] && dtc -q -I dts -O dtb -o "/tmp/$(basename "$f").dtb" \
-                 -i "$PFX" -i "$KT/include" /tmp/pp.dts; then
+            if [ $rc -eq 0 ] && dtc -q -I dts -O dtb -o "/tmp/$b.dtb" \
+                 -i "$PFX" -i "$KT/include" /tmp/pp.dts 2>"/tmp/$b.dtc-cpp.log"; then
               echo "PASS (cpp + dtc, the kernel way)"; echo "::endgroup::"; return 0
             fi
             echo "cpp rc=$rc log:"; cat /tmp/cpp.log
+            [ $rc -eq 0 ] && { echo "dtc on the preprocessed file FAILED, its stderr:"; sed 's/^/  /' "/tmp/$b.dtc-cpp.log"; }
             echo "::endgroup::"; return 1
           }
           ours=0; ctl=0
