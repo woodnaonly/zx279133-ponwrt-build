@@ -158,6 +158,8 @@ static int zx279133_uni_serdes_reset_pulse(struct zx279133_uni_serdes *priv)
 static int zx279133_uni_serdes_power_on(struct phy *phy)
 {
 	struct zx279133_uni_serdes *priv = phy_get_drvdata(phy);
+	unsigned int i, mismatch = 0;
+	const char *how;
 	u32 status;
 	int ret;
 
@@ -170,6 +172,48 @@ static int zx279133_uni_serdes_power_on(struct phy *phy)
 	ret = clk_bulk_prepare_enable(ARRAY_SIZE(priv->clocks), priv->clocks);
 	if (ret)
 		goto out_unlock;
+
+	if (priv->submode == PHY_INTERFACE_MODE_SGMII) {
+		/* Inherit: no reset pulse, no image write, no rate registers.
+		 *
+		 * Measured twice, once per power cycle. Under U-Boot, the lane that moved
+		 * 11,465,012 bytes through jack 4 read back the same 49 words at 0x16100000
+		 * immediately before and immediately after that transfer - so the state that
+		 * carries traffic is this block's power-on state, which U-Boot does not rewrite.
+		 * Every mainline bring-up that does rewrite it has lost the lane: writing
+		 * zx279133_uni_10g_profile (which is the *PON* SerDes' image, 21/49 against the
+		 * board's own file) linked the PHY but returned not one frame (rx_packets 0,
+		 * xmac_tx_good_frames 12); writing the measured file after a reset pulse (run 51,
+		 * 20:14) did not even link the PHY: "Link detected: no", supported 10baseT only,
+		 * tx_packets 0, ARP FAILED, while U-Boot had carried 11 MB minutes earlier in the
+		 * same cycle. The bring-up that can be right is the one that leaves this block
+		 * alone - so the only thing done here is to make sure the enable bit is set, and
+		 * to report what the block says about itself. If a cold boot with nothing before
+		 * it needs more than that, these two values are what the next round will read.
+		 */
+		status = readl(priv->serdes + ZX279133_UNI_SERDES_MODE_CTRL);
+		how = status & ZX279133_UNI_SERDES_ENABLE ? "already" : "set";
+		if (!(status & ZX279133_UNI_SERDES_ENABLE))
+			writel(status | ZX279133_UNI_SERDES_ENABLE,
+			       priv->serdes + ZX279133_UNI_SERDES_MODE_CTRL);
+		/* Count, do not correct: whether the block came up in the image the working lane
+		 * was measured in is the single question this round can answer, and the answer has
+		 * to be in the log because nothing else on this board can read it back later.
+		 */
+		for (i = 0; i < ZX279133_UNI_SERDES_PROFILE_WORDS; i++)
+			if (readl(priv->serdes + i * 4) != zx279133_uni_1g_profile[i])
+				mismatch++;
+
+		dev_info(priv->dev,
+			 "Uni SerDes 1G inherited: mode %#x %s, image differs in %u/%d word(s), status %#x/%#x\n",
+			 readl(priv->serdes + ZX279133_UNI_SERDES_MODE_CTRL), how, mismatch,
+			 ZX279133_UNI_SERDES_PROFILE_WORDS,
+			 readl(priv->serdes + ZX279133_UNI_SERDES_PLL_STATUS),
+			 readl(priv->serdes + ZX279133_UNI_SERDES_RX_STATUS));
+		priv->powered = true;
+		ret = 0;
+		goto out_unlock;
+	}
 
 	ret = zx279133_uni_serdes_reset_pulse(priv);
 	if (ret)
@@ -198,8 +242,8 @@ static int zx279133_uni_serdes_power_on(struct phy *phy)
 			goto err_disable_clocks;
 	}
 
-	dev_info(priv->dev, "Uni SerDes %s profile ready, status %#x/%#x\n",
-		 priv->submode == PHY_INTERFACE_MODE_SGMII ? "1G" : "10G",
+	dev_info(priv->dev, "Uni SerDes 10G profile written: mode %#x, status %#x/%#x\n",
+		 readl(priv->serdes + ZX279133_UNI_SERDES_MODE_CTRL),
 		 readl(priv->serdes + ZX279133_UNI_SERDES_PLL_STATUS),
 		 readl(priv->serdes + ZX279133_UNI_SERDES_RX_STATUS));
 	priv->powered = true;
@@ -221,6 +265,14 @@ static int zx279133_uni_serdes_power_off(struct phy *phy)
 	struct zx279133_uni_serdes *priv = phy_get_drvdata(phy);
 
 	mutex_lock(&priv->lock);
+	if (priv->submode == PHY_INTERFACE_MODE_SGMII) {
+		/* An ifdown must not tear down a lane the bootloader just carried 11 MB through:
+		 * clearing the enable bit and gating the clock here is how an inherited SerDes
+		 * gets lost between one command and the next.
+		 */
+		mutex_unlock(&priv->lock);
+		return 0;
+	}
 	if (priv->powered) {
 		writel(readl(priv->serdes + ZX279133_UNI_SERDES_MODE_CTRL) &
 		       ~ZX279133_UNI_SERDES_ENABLE,
