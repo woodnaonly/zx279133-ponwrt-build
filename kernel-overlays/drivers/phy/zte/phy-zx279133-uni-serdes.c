@@ -4,6 +4,8 @@
  *
  * The SR1010 LAN CPU uplink uses XMAC0 work mode 5: Uni SerDes mode 1
  * (the vendor 10G Ethernet profile) followed by XPCS0 USXGMII mode 0.
+ * SK-D840N's panel jack 4 uses the same block as 1000BASE-X/SGMII, with the
+ * image measured out of that lane while it was carrying gigabit traffic.
  * This provider owns only the internal Uni SerDes block; XMAC0/XPCS0 and
  * the RTL8372N switch are separate consumers.
  */
@@ -64,29 +66,38 @@ static_assert(ARRAY_SIZE(zx279133_uni_10g_profile) ==
 	      ZX279133_UNI_SERDES_PROFILE_WORDS);
 
 /*
- * Vendor uni_mode_eth_1gbase_x_cfg(), the 1000BASE-X image the same SerDes uses when the MAC on
- * the other end is running SGMII. Recovered from the board's own vendor module, not from a
- * datasheet: np_133.ko carries the function as a symbol (.text+0x9574) and its body is a run of
- * mov/movk pairs stored at uni_serdes_base + 0x00..0xc0, so the image is the store list.
+ * The 1000BASE-X / SGMII image for this lane, read out of the board rather than transcribed.
  *
- * The extraction is checked against the 10G sibling above - feeding uni_mode_eth_10gbase_r_cfg()
- * through the same walk reproduces 48 of its 49 words. The one that does not match (word 6:
- * 0x00ff8000 here, 0x0b016000 there, while the 1G function writes 0x0b016100 at that offset) is
- * a difference between this module and whatever the array above was transcribed from, and is
- * recorded in ci-build-repo/docs/07-sk-d840n-status-20261014.md rather than quietly normalised.
+ * Provenance: staging/ctl/serial.log 19:01:32, `md 0x16100000 0x31` - 49 words, taken in the same
+ * power cycle in which U-Boot moved Bytes transferred = 11465012 through panel jack 4 at 1G
+ * (`5 serdes option is 0` / `xmac0 is used` / `mac 1 phy status changed: 1000M full-duplex`). The
+ * identical file read back at 18:57:5x, before that transfer, so it is the state the working lane
+ * actually lives in, not something the download itself produced.
+ *
+ * This replaces a version recovered from np_133.ko's uni_mode_eth_1gbase_x_cfg() store list. That
+ * array agrees with the board on only 21 of these 49 words, and its leading words
+ * (0xe0000004 0x4fa840a3 0x013e860f 0x0210c073) are the *PON* SerDes image: the same four words
+ * are what the board holds at 0x16000000 (pon_serdes), where the working XG-PON lane is configured
+ * and scores 31/49 against that array. In other words the extracted "UNI 1G" profile was the wrong
+ * block's file, and power_on() was overwriting a lane that worked with an image taken from the
+ * lane that carries the PON. Nothing about `phy-mode = "sgmii"` could fix that.
+ *
+ * `userdes init_change 0 0` (U-Boot's own mode command, MODE_SGMII per its help) was run at the end
+ * of the same round and produced a third file that matches neither array (14/49 against both), so
+ * it is not the bring-up this board uses and is deliberately not the source here.
  */
 static const u32 zx279133_uni_1g_profile[] = {
-	0xe0000004, 0x4fa840a3, 0x013e860f, 0x0210c073,
-	0x00000048, 0x00000000, 0x0b016100, 0x00238620,
-	0x80000000, 0x00050000, 0x0c633830, 0x00000007,
-	0x00000020, 0x00002000, 0x00000000, 0x00ff0000,
-	0xc5a85100, 0x00000000, 0x01045b2a, 0x66002200,
-	0x34000003, 0x00000100, 0x00000080, 0x00000000,
-	0x200554a8, 0x00648091, 0x01000000, 0x00003700,
-	0xa9004000, 0x10640002, 0x000000da, 0xf20000c8,
+	0xc0000004, 0x50a840a7, 0x012e064f, 0x1fd0c093,
+	0x00000044, 0x00000000, 0x00f00000, 0x00230120,
+	0x00000000, 0x00020000, 0x0c633930, 0x00000007,
+	0x00000020, 0x00000000, 0x00000000, 0x00000000,
+	0x05a85400, 0x00000000, 0x8f000b6a, 0x60002200,
+	0x00000003, 0x00000001, 0x00000080, 0x00000000,
+	0x200554a8, 0x3df48091, 0x01000000, 0xc0003700,
+	0xa9004000, 0x10108000, 0x000000da, 0x800000c8,
 	0x10371037, 0x01000200, 0x00020001, 0x10000000,
-	0x0000001c, 0x8000c000, 0x000000ff, 0x55555500,
-	0x55555555, 0x00555555, 0x30000818, 0x40002000,
+	0x00004000, 0x0000e000, 0x000000ff, 0x33333300,
+	0x33333333, 0x00333333, 0x20000818, 0x0000201c,
 	0x0000000c, 0x01000000, 0x00000080, 0x00010000,
 	0x00000000,
 };
