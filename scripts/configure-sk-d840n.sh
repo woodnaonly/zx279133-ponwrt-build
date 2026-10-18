@@ -162,7 +162,25 @@ grep -qx "$sym=0" "$KCFG" || { echo "could not pin $sym=0 in $KCFG" >&2; exit 1;
 # target's generic one, or in the profile copy under configs/. Which one is irrelevant to the
 # sed and vital to the assertion afterwards: a leftover mtdblock7 anywhere in the tree boots
 # a board that waits forever, and the two cases look identical from outside.
-CMDLINE='console=ttyAMA0,115200n8 root=/dev/mtdblock5 rootfstype=jffs2 ro rootwait'
+# Why the two clock flags are in the built-in line, and why they cannot be put anywhere else:
+# the cold-boot log of this board reads (the 21:27 boot in staging/ctl/serial.log)
+#   [    0.232717] zx279133-eth 19000000.ethernet: WAN netdev and LAN child devices registered
+#   [    0.235546] clk: Disabling unused clocks
+#   [    0.235606] PM: genpd: Disabling unused power domains
+# and `clk_disable_unused` is a late_initcall: it reaps every clock the bootloader left enabled
+# that no driver has *requested* by then. This lane's nppt/PPU/SerDes clocks are only taken
+# inside its bring-up, which runs when the netdev is opened - seconds later in a RAM round (our
+# `ip link set eth0 up`), and later still on a flashed boot. So the reap lands exactly between
+# "driver registered" and "lane wanted", and what it can take away is the datapath U-Boot moved
+# 11 MB through. It also matches the one shape we have measured from inside a booted kernel:
+# run 50 counted `xmac_tx_good_frames 12` with not one RX descriptor - the MAC's clock claimed,
+# the packet path's not.
+#
+# env `bootargs` cannot carry these flags: CONFIG_CMDLINE_FORCE=y means the bootloader's line
+# never reaches the kernel (measured 2026-10-18 - `setenv bootargs ... clk_ignore_unused`, then
+# `printenv bootargs` shows it and the kernel still prints the built-in one). So the only place
+# this board's flags can live is here.
+CMDLINE='console=ttyAMA0,115200n8 root=/dev/mtdblock5 rootfstype=jffs2 ro rootwait clk_ignore_unused pd_ignore_unused'
 hits=$(grep -rl --include='config-*' '^CONFIG_CMDLINE=' target/linux/ 2>/dev/null || true)
 [ -n "$hits" ] || { echo "no CONFIG_CMDLINE= in any target/linux/**/config-* - where does the built-in cmdline come from?" >&2; exit 1; }
 for f in $hits; do

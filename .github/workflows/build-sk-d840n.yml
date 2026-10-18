@@ -159,7 +159,15 @@ jobs:
           # result is still only reported after compile, so an instrument that fails to switch
           # on never withholds a kit that works.
           DEVMEM_OFF='# CONFIG_DEVMEM is not set'
-          for f in openwrt/target/linux/zte/config-6.18 \
+          # Three fragments, not two. Run 51 is the evidence: the subtarget was pinned, the pin
+          # asserted green, and the *shipped kernel* still carried `# CONFIG_DEVMEM is not set` -
+          # read straight out of the IKCFG_ST block inside the built Image (gunzip
+          # staging/trial/trial-Image.gz; the gzip between IKCFG_ST and IKCFG_ED is the whole
+          # .config), which needs no board and no job log. So "generic -> target -> subtarget,
+          # last one wins" was not the rule, and the only edit that cannot lose is the one that
+          # leaves no fragment saying "not set" anywhere under target/linux.
+          for f in openwrt/target/linux/generic/config-6.18 \
+                   openwrt/target/linux/zte/config-6.18 \
                    openwrt/target/linux/zte/zx279133/config-6.18; do
             if [ -f "$f" ]; then
               sed -i "s|^${DEVMEM_OFF}\$|CONFIG_DEVMEM=y|" "$f"
@@ -169,6 +177,12 @@ jobs:
               echo "  $f -> $(grep -cx 'CONFIG_DEVMEM=y' "$f") CONFIG_DEVMEM=y line(s)"
             fi
           done
+          LEFT=$(grep -rl -x "$DEVMEM_OFF" openwrt/target/linux/generic/config-6.18 \
+                 openwrt/target/linux/zte/config-6.18 openwrt/target/linux/zte/zx279133/config-6.18 2>/dev/null || true)
+          if [ -n "$LEFT" ]; then
+            echo "::error::a fragment still disables CONFIG_DEVMEM, and whichever one merges last wins: $LEFT"
+            exit 1
+          fi
           SUBCFG=openwrt/target/linux/zte/zx279133/config-6.18
           if [ ! -f "$SUBCFG" ] || ! grep -qx 'CONFIG_DEVMEM=y' "$SUBCFG"; then
             echo "::error::no CONFIG_DEVMEM=y in $SUBCFG, the fragment merged last - the clone's layout changed"; exit 1
@@ -518,7 +532,7 @@ jobs:
           # rather than in the file that was edited. Searching the kernel *binary* for the old
           # string would not work: cnjn appends every board dtb to Image, and SR1010's own dtb
           # legitimately carries mtdblock7.
-          grep -qx 'CONFIG_CMDLINE="console=ttyAMA0,115200n8 root=/dev/mtdblock5 rootfstype=jffs2 ro rootwait"' "$KC" || {
+          grep -qx 'CONFIG_CMDLINE="console=ttyAMA0,115200n8 root=/dev/mtdblock5 rootfstype=jffs2 ro rootwait clk_ignore_unused pd_ignore_unused"' "$KC" || {
             echo "CONFIG_CMDLINE is not the pinned cmdline" >&2
             grep -iE '^CONFIG_CMDLINE' "$KC" || echo "no CONFIG_CMDLINE at all" >&2
             exit 1; }
