@@ -272,7 +272,15 @@ jobs:
             if [ $ctl -ne 0 ]; then
               echo "::warning::dtc gate harness cannot compile any board file - skipping gate"
             else
-              echo "::error::zx279133-sk-d840n.dts does not compile while sr1010.dts does"
+              # The reason goes into an ANNOTATION, not only into the log. Reading an Actions log
+              # needs a logged-in session (both /logs endpoints answer 404 anonymously, measured
+              # 2026-10-19 00:11), while this PC can only reach GitHub as the anonymous shared-exit
+              # client - api.github.com is over quota and the browser session drops connections at
+              # random. The run page's own HTML does carry the annotations, so `curl` of it shows
+              # what dtc said. Run 56 cost 75 minutes of guessing because the gate printed its
+              # reason where nobody watching from here could read it.
+              DTCERR=$(grep -m1 -E 'Error|FATAL|error:' /tmp/zx279133-sk-d840n.dts.dtc-native.log 2>/dev/null | head -c 220)
+              echo "::error::zx279133-sk-d840n.dts does not compile while sr1010.dts does: ${DTCERR:-no dtc message captured}"
               exit 1
             fi
           fi
