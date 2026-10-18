@@ -93,8 +93,8 @@ echo
 echo "=== 3. the SK-D840N dts still says what it must ==="
 grep -q 'phy-handle = <&rtl8226b>' "$DTS" && bad "&nppt points at rtl8226b again - attaching it runs phy_init_hw() over the PHY U-Boot configured" \
 	|| ok "&nppt references no PHY"
-grep -q '/delete-property/ phy-handle;' "$DTS" && ok "and it deletes any phy-handle the SoC include brings" \
-	|| bad "&nppt does not delete phy-handle"
+grep -q '/delete-property/ phy-handle;' "$DTS" && bad "&nppt deletes phy-handle again - run 56 died in the DTS gate over deleting a property the base node never had" \
+	|| ok "&nppt uses no delete-property (the SoC include has no phy-handle on nppt: upstream-read/zx279133.dtsi:462)"
 grep -A3 'fixed-link {' "$DTS" | grep -q 'speed = <1000>' && ok "the fixed link is 1000 as the vendor lane runs it" \
 	|| bad "the fixed-link child lost its 1000 Mb/s"
 grep -q 'rtl8226b: ethernet-phy@5 {' "$DTS" && ok "the rtl8226b node is still at address 5" || bad "the PHY node moved"

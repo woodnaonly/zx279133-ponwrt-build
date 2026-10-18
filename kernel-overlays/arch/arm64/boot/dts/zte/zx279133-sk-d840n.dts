@@ -332,11 +332,19 @@
 	pcs-handle = <&xpcs0>;
 	memory-region = <&bmu_reserved>, <&se_hash_reserved>, <&idm_reserved>;
 	memory-region-names = "bmu", "se-hash", "idm";
-	/* The SoC include may still hand this port a PHY; a fixed link has to be the
-	 * whole story, so delete it here rather than trust that zx279133.dtsi never
-	 * set one. dtc allows deleting an absent property.
+	/* No /delete-property/ phy-handle here, and that is a measured choice, not an oversight:
+	 * the base node has no such property to delete. Read from upstream-read/zx279133.dtsi:462
+	 * (nppt: ethernet@19000000) on 2026-10-19, the SoC include gives this node
+	 * `compatible`, `reg`, `reg-names = "nppt", "pps"`, `interrupts`/`interrupt-names`,
+	 * `pcs-handle = <&xpcs1>`, `zte,lan-pcs-handle = <&xpcs0>`,
+	 * `phy-names = "serdes", "lan-serdes"` and `status = "disabled"` - and no `phy-handle`.
+	 * The only `phy-handle` this port ever had was the one this file itself wrote, and that
+	 * line is gone. Deleting a property that does not exist is also what run 56 died on
+	 * (4m 29s into the DTS gate, "does not compile while sr1010.dts does"), so the guard lives
+	 * where it can be checked instead: the CI content gate asserts against the compiled blob
+	 * that this node has `fixed-link` and has no `phy-handle`, which fails loudly if a future
+	 * SoC include ever starts handing this port a PHY.
 	 */
-	/delete-property/ phy-handle;
 	/* fixed-link, and it is the PHY half of the inherit decision the uni_serdes
 	 * driver made in run 52. Measured 2026-10-18 22:20 (run 53, the round after
 	 * the lane was finally left alone):
