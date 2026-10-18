@@ -166,6 +166,18 @@ jobs:
           # .config), which needs no board and no job log. So "generic -> target -> subtarget,
           # last one wins" was not the rule, and the only edit that cannot lose is the one that
           # leaves no fragment saying "not set" anywhere under target/linux.
+          #
+          # And that was still not the rule either. The fourth read of this symbol went to
+          # include/kernel-defaults.mk and found it: Kernel/Configure/Default first runs
+          # `$(LINUX_CONF_CMD) > .config.target` (that is the fragment merge), then APPENDS
+          # every `CONFIG_KERNEL_*` line of the build-root .config to the same file with the
+          # prefix stripped, then kconfig.pl merges it. `config KERNEL_DEVMEM` in config/
+          # Config-kernel.in has no default, so defconfig writes `# CONFIG_KERNEL_DEVMEM is
+          # not set`, and the awk turns that into a trailing `# CONFIG_DEVMEM is not set` that
+          # outranks every fragment. These sed edits are what the seed carries, and they are
+          # kept because they are true; the edit that wins is pin_y_build KERNEL_DEVMEM in
+          # scripts/configure-sk-d840n.sh, and the check that settles it is the merged state
+          # printed after the compile, never the seed.
           for f in openwrt/target/linux/generic/config-6.18 \
                    openwrt/target/linux/zte/config-6.18 \
                    openwrt/target/linux/zte/zx279133/config-6.18; do
@@ -534,7 +546,7 @@ jobs:
           # if the seed says =y and the merge says otherwise, the question is which of
           # the three config-* fragments is last, not whether the pin ran.
           required="REALTEK_PHY LEDS_GPIO GPIO_ZX279133 GPIO_SYSFS PSTORE PSTORE_CONSOLE PSTORE_RAM MAGIC_SYSRQ MAGIC_SYSRQ_SERIAL"
-          reported="DEVMEM DETECT_HUNG_TASK SOFTLOCKUP_DETECTOR IKCONFIG IKCONFIG_PROC"
+          reported="DEVMEM STRICT_DEVMEM IO_STRICT_DEVMEM DETECT_HUNG_TASK SOFTLOCKUP_DETECTOR IKCONFIG IKCONFIG_PROC"
           SEED=$( { ls openwrt/target/linux/zte/zx279133/config-* 2>/dev/null || true; } | head -1 )
           echo "kernel config seed: ${SEED:-none}"
           echo "    seed:   $( { grep -E '^(CONFIG_DEVMEM=|# CONFIG_DEVMEM is not set$)' "$SEED" 2>/dev/null || echo 'DEVMEM not mentioned in the seed'; } )"

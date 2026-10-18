@@ -308,6 +308,50 @@ elif grep -q '^CONFIG_PACKAGE_zrec=y' .config; then
 	exit 1
 fi
 
+# CONFIG_DEVMEM lost three rounds, and the winner is not the fragment merge. Read out of
+# include/kernel-defaults.mk, define Kernel/Configure/Default:
+#
+#   $(LINUX_CONF_CMD) > $(LINUX_DIR)/.config.target
+#   awk '/^(#[[:space:]]+)?CONFIG_KERNEL/{sub("CONFIG_KERNEL_","CONFIG_");print}' \
+#	$(TOPDIR)/.config >> $(LINUX_DIR)/.config.target
+#   $(SCRIPT_DIR)/kconfig.pl 'm+' '+' $(LINUX_DIR)/.config.target /dev/null \
+#	$(LINUX_DIR)/.config.override > $(LINUX_DIR)/.config.set
+#
+# Every CONFIG_KERNEL_* line of the build-root .config is re-emitted with the prefix
+# stripped and appended to .config.target - after generic/target/subtarget, because
+# LINUX_CONF_CMD wrote those first. An appended "# CONFIG_DEVMEM is not set" therefore
+# beats whatever the fragments pin, which is why three seed-side asserts went green while
+# the shipped Image kept saying "is not set" in its own IKCFG_ST block. config/
+# Config-kernel.in declares `config KERNEL_DEVMEM` with no default, so defconfig writes
+# the "is not set" form here unless it is switched on in the file the awk reads: the
+# build-root .config, after `make defconfig`. The neighbouring ZTE board's own build-root
+# config (upstream-read/an7581.config:435) says `CONFIG_KERNEL_DEVMEM=y` - the community
+# reached /dev/mem through this symbol, not through a fragment.
+pin_y_build() {
+	sym=CONFIG_$1
+	if grep -q "^$sym=" .config; then
+		sed -i "s|^$sym=.*|$sym=y|" .config
+	elif grep -q "^# $sym is not set\$" .config; then
+		sed -i "s|^# $sym is not set\$|$sym=y|" .config
+	else
+		printf '%s=y\n' "$sym" >>.config
+	fi
+	grep -qx "$sym=y" .config || {
+		echo "could not pin $sym=y in the build-root .config" >&2
+		grep -n "$sym" .config || echo "	$sym does not appear there at all" >&2
+		exit 1; }
+}
+pin_y_build KERNEL_DEVMEM
+# The applet as well: kernel /dev/mem with no `devmem` in busybox still means mknod + dd,
+# which reads one register per invocation. Only pin it if defconfig knows the symbol -
+# appending a line for a symbol that is not there would assert green and ship nothing, and
+# the only proof that counts is `devmem` answering on the board.
+if grep -qE '^(# )?CONFIG_BUSYBOX_CONFIG_DEVMEM' .config; then
+	pin_y_build BUSYBOX_CONFIG_DEVMEM
+else
+	echo "note: no CONFIG_BUSYBOX_CONFIG_DEVMEM in the build-root config; the RAM image keeps mknod+dd" >&2
+fi
+
 echo "== resolved selection =="
 grep -E 'CONFIG_TARGET_zte|CONFIG_EXTERNAL_KERNEL_TREE|CONFIG_TARGET_ROOTFS' .config || true
 grep -q 'CONFIG_TARGET_zte_zx279133_DEVICE_skyworth_sk-d840n=y' .config || {
