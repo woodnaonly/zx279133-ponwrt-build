@@ -332,7 +332,49 @@
 	pcs-handle = <&xpcs0>;
 	memory-region = <&bmu_reserved>, <&se_hash_reserved>, <&idm_reserved>;
 	memory-region-names = "bmu", "se-hash", "idm";
-	phy-handle = <&rtl8226b>;
+	/* The SoC include may still hand this port a PHY; a fixed link has to be the
+	 * whole story, so delete it here rather than trust that zx279133.dtsi never
+	 * set one. dtc allows deleting an absent property.
+	 */
+	/delete-property/ phy-handle;
+	/* fixed-link, and it is the PHY half of the inherit decision the uni_serdes
+	 * driver made in run 52. Measured 2026-10-18 22:20 (run 53, the round after
+	 * the lane was finally left alone):
+	 *   [    4.230596] ... Uni SerDes 1G inherited: mode 0x1 already, image differs in 0/49 word(s)
+	 *   [    4.258513] ... eth0: PHY [14f02000.mdio:05] driver [RTL8221B-VB-CG 2.5Gbps PHY (C22)] (irq=POLL)
+	 *   [    4.259470] ... eth0: configuring for phy/sgmii link mode
+	 *   ethtool: Supported link modes: 10baseT/Half 10baseT/Full | Link detected: no
+	 *   rx_packets 0 in all four readings, and tx_packets 0 as well.
+	 * So the SoC half of the lane is now provably byte-identical to the state that
+	 * moved 11 MB through this jack in U-Boot, and the port is still silent. What
+	 * is *not* inherited is the other end of the SerDes: attaching the PHY runs
+	 * phy_attach_direct() -> phy_init_hw(), which soft-resets the RTL8226B and
+	 * replays realtek's config_init over C22 extended registers, and the mask that
+	 * came back is the tell - a PHY U-Boot had running at 1000M/full on this very
+	 * jack reports 10baseT only, i.e. it was left in a mode none of the recovered
+	 * tables describe. Link down also means phylink never reaches mac_link_up(),
+	 * which is why tx fell to 0 where run 50 counted xmac_tx_good_frames 12.
+	 *
+	 * A fixed link removes the whole PHY state machine: phylink_parse_mode() sees
+	 * this child node and sets MLO_AN_FIXED, phylink_expects_phy() then answers
+	 * false, phylink_fwnode_phy_connect() returns before phy_attach_direct(), and
+	 * phy_init_hw() has no other caller on a boot that never suspends. Not one
+	 * MDIO read or write reaches the chip, so it keeps exactly what U-Boot left -
+	 * including the copper-side auto-negotiation with the peer, which is what the
+	 * 11 MB download already proved works. phy-handle must NOT come back beside
+	 * this node: the rtl8226b node stays in &mdio1 as the record of what is at
+	 * address 5, and of_mdiobus still reads its ID, but nothing may attach it.
+	 *
+	 * What still runs is mainline's own zx279133_xmac_sgmii_init() and
+	 * zx279133_wan_port_bringup() from mac_link_up(), so this round separates the
+	 * last two causes: frames both ways = the PHY re-init was what killed the
+	 * lane; TX-only again = the MAC bring-up is the second thing that has to
+	 * inherit.
+	 */
+	fixed-link {
+		speed = <1000>;
+		full-duplex;
+	};
 	/* No MAC source yet: SR1010 reads it from an nvmem-layout over its own
 	 * "tags" partition, whose zte,sr1010-tags parser does not describe this
 	 * unit's "parameter tags" layout. With neither nvmem-cells nor a literal

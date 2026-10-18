@@ -72,7 +72,7 @@ printf '%s\n' "$blk" | grep -q 'max-speed = <2500>' && ok "max-speed 2500 as the
 	|| bad "max-speed is not 2500"
 
 echo
-echo "=== claim 3: the compiled dtb really points eth0's phy-handle at reg=5 ==="
+echo "=== claim 3: the compiled dtb really describes the PHY at reg=5 and attaches nothing ==="
 python3 staging/diag-20261014/fdt2dts.py staging/ctl/gate-dtb >/tmp/t27_dts 2>/dev/null
 python3 - <<'PY'
 import re
@@ -82,7 +82,8 @@ def node(h):
     return m.group(1) if m else ''
 eth = node('ethernet@19000000')
 phy = node('ethernet-phy@5')
-print('  eth0 node has .phy-handle:', 'phy-handle' in eth)
+print('  eth0 node has .phy-handle:', 'phy-handle' in eth, '(must be False - MLO_AN_FIXED)')
+print('  eth0 node has .fixed-link:', 'fixed-link' in eth)
 print('  phy node reg:', re.search(r'reg = <([^>]*)>', phy).group(1) if 'reg = ' in phy else 'ABSENT')
 print('  phy node has compatible:', 'compatible' in phy)
 PY

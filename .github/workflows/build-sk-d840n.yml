@@ -354,6 +354,26 @@ jobs:
                  'status = "okay"' 'ethernet@[0-9a-f]+ \{' || rc=1
             need "ethernet node binds the nppt driver" \
                  'compatible = "zte,zx279133-nppt"' 'ethernet@[0-9a-f]+ \{' || rc=1
+            # The link is fixed. node_block stops at the first `};`, which is now the
+            # fixed-link child's own brace, and that still covers every property of the
+            # ethernet node because dtc's flattener writes a node's properties before it
+            # writes any child - so `status = "okay"` above and a hypothetical stray
+            # `phy-handle` below are both inside the block it returns. Both halves are
+            # asserted against the compiled blob because the board has repeatedly
+            # disagreed with the DTS: phylink reaches MLO_AN_FIXED only through a
+            # `fixed-link` child of THIS node, and while MLO_AN_FIXED is set a stray
+            # `phy-handle` is dead text - but the day someone re-adds one beside a
+            # reverted phy-mode, phy_attach_direct() -> phy_init_hw() soft-resets the
+            # RTL8226B out of the configuration U-Boot left, and the lane goes silent
+            # again with no hint in the file. Say it in the gate, not in a comment.
+            need "ethernet node declares a fixed link" \
+                 'fixed-link' 'ethernet@19000000 \{' || rc=1
+            if node_block 'ethernet@19000000 \{' | grep -q 'phy-handle'; then
+              echo "::error::the compiled nppt node carries phy-handle beside fixed-link"
+              node_block 'ethernet@19000000 \{' | sed 's/^/      /'
+              exit 1
+            fi
+            echo "ok   compiled nppt has no phy-handle for phylib to attach"
             need "mdio bus is enabled" \
                  'status = "okay"' 'mdio@[0-9a-f]+ \{' || rc=1
             # "enabled" alone is not a discriminating check: the vendor dtb also
@@ -1092,6 +1112,12 @@ jobs:
               内核里编进的是 **`CONFIG_REALTEK_PHY=y`**（CI 的 PHY 门查的就是这个），
               **不是** `CONFIG_ZX279051_PHY`：已构建内核里没有任何独立的 `zx279051` token，
               只有 `tzx279051` 这种内核字符串表 tail-merge 的残渣。
+              这一版**并不 attach 那颗 PHY**：`ethernet@19000000` 里放的是
+              `fixed-link { speed = <1000>; full-duplex; }`，并且 `/delete-property/ phy-handle`。
+              依据是 run 53 的实测：SoC 侧的 SerDes 已经逐字继承（`image differs in 0/49 word(s)`），
+              而 phylib 一 attach 就走 `phy_init_hw()`——软复位 RTL8226B 并重跑 realtek 的
+              config_init——之后 `ethtool` 只报 `10baseT`、`Link detected: no`，收发计数全是 0。
+              铜线侧的自协商由 PHY 自己做：同一颗芯片、同一根线，U-Boot 用它拉过 11 MB。
               `02_network` 把 lan 绑在 eth0 上，地址固定 192.168.9.1。
               **关于 PON，修正一句旧说法**：内核不是上游 torvalds/linux，而是
               `CONFIG_EXTERNAL_KERNEL_TREE` 指向的 prepared ZX279133 树

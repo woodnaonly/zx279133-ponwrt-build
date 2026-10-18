@@ -9,11 +9,14 @@
 # chain is:
 #
 #   /soc/ethernet@19000000 (zte,zx279133-nppt, okay)
-#       .phy-handle = 0x18
+#       .fixed-link { speed = 1000, full-duplex }   and NO phy-handle
 #   /soc/mdio@14f02000/ethernet-phy@5
 #       .reg = 5, .max-speed = 2500, and NO compatible
-#       -> phylib has to match the chip by PHY ID, which means
-#          drivers/net/phy/realtek.c must be in the kernel
+#       -> described, never attached: MLO_AN_FIXED makes phylink_expects_phy() answer
+#          false, so phy_attach_direct()/phy_init_hw() never run and the RTL8226B keeps
+#          the configuration the vendor bootloader left. Measured 2026-10-18 (run 53):
+#          with the SerDes inherited byte-for-byte (0/49 words differ), attaching this
+#          PHY was what left the port reporting `10baseT` only and no link at all.
 #
 # The "no compatible" is deliberate and was a real bug once: SR1010's node says
 # "ethernet-phy-id0000.84b9" (the ZX279051 ID), and a compatible on a PHY node
@@ -48,18 +51,20 @@ node() { awk -v n="$1" '$0 ~ "NODE " n"$" {f=1;print;next} f&&/NODE /{exit} f{pr
 NP=$(node '/soc/ethernet@19000000')
 [ -n "$NP" ] || bad "no nppt node in $DTB"
 echo "$NP" | grep -q '6f 6b 61 79' && ok "nppt status = okay" || bad "nppt is not enabled"
-echo "$NP" | grep -q 'phy-handle' || bad "nppt has no phy-handle in the compiled dtb"
-# Compare the byte strings as fdtwalk prints them, not as bare hex: the property line
-# reads ".phy-handle = 00 00 00 18" and the node line reads ".phandle  = 00 00 00 18",
-# so stripping the spaces on one side only is how this check failed the first time.
-phraw=$(echo "$NP" | grep 'phy-handle' | sed 's/^.*= *//; s/ *$//')
-ok "nppt phy-handle = [$phraw]"
+echo "$NP" | grep -q 'phy-handle' && bad "nppt gained a phy-handle - phylib would attach and phy_init_hw() would soft-reset the PHY U-Boot configured" \
+	|| ok "nppt has no phy-handle, so nothing can attach the PHY"
+# The fixed link is the other half: phylink only reaches MLO_AN_FIXED through a
+# `fixed-link` child of the *ethernet* node, and a `fixed-link` left on the PHY node
+# instead would make of_mdiobus register a pseudo-PHY while phylink still runs the
+# real one's state machine. Read the bytes as fdtwalk prints them, not as bare hex.
+echo "$NP" | grep -q 'fixed-link' && ok "nppt declares a fixed link" \
+	|| bad "nppt has no fixed-link child - phylink would manage the PHY"
 
 PHY=$(node '/soc/mdio@14f02000/ethernet-phy@5')
 [ -n "$PHY" ] || bad "no ethernet-phy@5 node in the compiled dtb"
-echo "$PHY" | grep -q '00 00 00 05' && ok "the PHY is at MDIO address 5" || bad "PHY reg is not 5"
-echo "$PHY" | grep -q "phandle.*= *$phraw\$" && ok "and its phandle is the one nppt references" \
-	|| bad "the phandle does not match (nppt wants [$phraw])"
+echo "$PHY" | grep -q '00 00 00 05' && ok "the PHY is still described at MDIO address 5" || bad "PHY reg is not 5"
+echo "$PHY" | grep -q 'fixed-link' && bad "the PHY node carries a fixed-link child - the link belongs to the MAC node" \
+	|| ok "and the PHY node itself stays plain"
 if echo "$PHY" | grep -q '\.compatible'; then
 	bad "the PHY node grew a compatible - that overrides ID matching and binds the wrong driver"
 else
@@ -86,7 +91,12 @@ rm -rf "$tmp"
 
 echo
 echo "=== 3. the SK-D840N dts still says what it must ==="
-grep -q 'phy-handle = <&rtl8226b>' "$DTS" && ok "&nppt points at rtl8226b" || bad "&nppt lost its phy-handle"
+grep -q 'phy-handle = <&rtl8226b>' "$DTS" && bad "&nppt points at rtl8226b again - attaching it runs phy_init_hw() over the PHY U-Boot configured" \
+	|| ok "&nppt references no PHY"
+grep -q '/delete-property/ phy-handle;' "$DTS" && ok "and it deletes any phy-handle the SoC include brings" \
+	|| bad "&nppt does not delete phy-handle"
+grep -A3 'fixed-link {' "$DTS" | grep -q 'speed = <1000>' && ok "the fixed link is 1000 as the vendor lane runs it" \
+	|| bad "the fixed-link child lost its 1000 Mb/s"
 grep -q 'rtl8226b: ethernet-phy@5 {' "$DTS" && ok "the rtl8226b node is still at address 5" || bad "the PHY node moved"
 # The block between the label and its closing brace must not gain a compatible.
 blk=$(awk '/rtl8226b: ethernet-phy@5 \{/,/^\t\};/' "$DTS")
