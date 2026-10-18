@@ -1052,7 +1052,16 @@ int zx279133_wan_port_bringup(struct zx279133_eth *eth)
 	ret = zx279133_spa_indirect_write(eth, 0, 0, reg);
 	if (ret)
 		return ret;
-	ret = zx279133_spa_indirect_write(eth, 0, 10, 0x01f4000c);
+	/*
+	 * addr10 is read from the board, not from the factory system. In the power cycle where
+	 * U-Boot moved 11,465,012 bytes through panel jack 4, the SPA indirect read of this entry
+	 * returned 0x0fffc00c on every memory tried (0, 4, 5 and 6 - 19:02:07, 19:02:29, 19:02:52
+	 * and 19:03:15 in staging/ctl/serial.log), while the value transcribed from the factory's
+	 * WAN state was 0x01f4000c. The field differs in bits 31:20 - 0xfff against 0x1f4 - which
+	 * is a length-shaped difference, and this driver's RX path is the one thing that has never
+	 * worked on this board (rx_packets 0 with xmac_tx_good_frames 12).
+	 */
+	ret = zx279133_spa_indirect_write(eth, 0, 10, 0x0fffc00c);
 	if (ret)
 		return ret;
 
@@ -1065,26 +1074,34 @@ int zx279133_wan_port_bringup(struct zx279133_eth *eth)
 		return ret;
 
 	/*
-	 * PPU port 6's final factory WAN state: MF attribute
-	 * 0x148e0000 = iswanport | ppuinit | onumode | isolate |
-	 * smac_learn | bit 26 (observed live on the factory system).
+	 * PPU port 6 on THIS board is panel jack 4, and the SPA memory of the memory-6 entry that
+	 * carries its traffic was read while it was doing so: entries 1, 13, 17, 18 and 19 are all
+	 * zero there (19:03:10 to 19:03:26, `mw 0x19008054 0x0860000N` then `md 0x19008058 0x2`),
+	 * and entry 10 is 0x0fffc00c like every other memory. The values that used to be written
+	 * here (0x0000088f, 0x00008008, 0x0e014400, 0x000001f1, 0x148e0000 - iswanport | ppuinit |
+	 * onumode | isolate | smac_learn | bit 26) were transcribed from the factory system's WAN
+	 * port, which on that box faced the PON with an external switch behind it. Marking the LAN
+	 * lane as a WAN port is a plausible reason a frame that reaches the XMAC is dropped before
+	 * it ever reaches a ring, and it is the one hypothesis here that has a measured counter-
+	 * value instead of an argument. Writing the measured zero is preferred over deleting the
+	 * write, because a cold boot does not guarantee those entries hold anything in particular.
 	 */
-	ret = zx279133_spa_indirect_write(eth, 6, 1, 0x0000088f);
+	ret = zx279133_spa_indirect_write(eth, 6, 1, 0);
 	if (ret)
 		return ret;
-	ret = zx279133_spa_indirect_write(eth, 6, 10, 0x01f4000c);
+	ret = zx279133_spa_indirect_write(eth, 6, 10, 0x0fffc00c);
 	if (ret)
 		return ret;
-	ret = zx279133_spa_indirect_write(eth, 6, 13, 0x00008008);
+	ret = zx279133_spa_indirect_write(eth, 6, 13, 0);
 	if (ret)
 		return ret;
-	ret = zx279133_spa_indirect_write(eth, 6, 17, 0x0e014400);
+	ret = zx279133_spa_indirect_write(eth, 6, 17, 0);
 	if (ret)
 		return ret;
-	ret = zx279133_spa_indirect_write(eth, 6, 18, 0x000001f1);
+	ret = zx279133_spa_indirect_write(eth, 6, 18, 0);
 	if (ret)
 		return ret;
-	ret = zx279133_spa_indirect_write(eth, 6, 19, 0x148e0000);
+	ret = zx279133_spa_indirect_write(eth, 6, 19, 0);
 	if (ret)
 		return ret;
 	{
@@ -1107,9 +1124,14 @@ int zx279133_wan_port_bringup(struct zx279133_eth *eth)
 	if (ret)
 		return ret;
 
-	/* spa_set_down_port_config(6): NPPT 0x8000 bits [11:6]. */
+	/* spa_set_down_port_config(6) as the board holds it while carrying traffic: NPPT 0x8000
+	 * read 0x68000000 at 19:01:24, which is bits 30, 29 and 27 set with bits [11:6] all zero.
+	 * So this lane has no down-port number in that field at all, and the auto path (bit 27) is
+	 * left on - the opposite of writing 6 << 6 and clearing it. Only the two fields that were
+	 * measured are touched; the rest of the word is whatever the boot established.
+	 */
 	reg = readl(eth->base + ZX279133_SPA_IPV6_CRC_MODE);
-	writel((reg & ~(GENMASK(11, 6) | BIT(27))) | 6 << 6,
+	writel((reg & ~GENMASK(11, 6)) | BIT(27),
 	       eth->base + ZX279133_SPA_IPV6_CRC_MODE);
 
 	/*
@@ -1119,10 +1141,18 @@ int zx279133_wan_port_bringup(struct zx279133_eth *eth)
 	 * zero, so the port helper writes value 6 (not 0x106) into the
 	 * NPPT 0x10 field; the enable helper sets bit 3 and the OAM
 	 * helpers set bits [19:15].
+	 *
+	 * Measured against that: the same register read 0x00004146 in the power cycle that proved
+	 * the lane (19:01:20 inside the `md 0x19000000 0x10` row, and again on its own at
+	 * 19:03:29 after the SPA cycle - unchanged), which has
+	 * bit 8 SET, bit 3 CLEAR and bits [19:15] CLEAR. The old mask cleared bit 8 and set all of
+	 * 3, 15, 16, 17, 18 and 19, so every one of those five differences is an unmeasured guess
+	 * that this board's working state contradicts - and enabling the OAM paths on a port whose
+	 * traffic is ordinary Ethernet is precisely how received frames get claimed by something
+	 * other than the host ring. Written as the measured word, because the value is not a
+	 * permission to keep whatever the boot left there: it is a specific observed state.
 	 */
-	reg = readl(eth->base + 0x10);
-	reg = (reg & ~0x107) | 0x006 | BIT(3) | GENMASK(19, 15);
-	writel(reg, eth->base + 0x10);
+	writel(0x00004146, eth->base + 0x10);
 
 	return 0;
 }
