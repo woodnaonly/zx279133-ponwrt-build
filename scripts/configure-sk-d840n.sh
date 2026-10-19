@@ -302,6 +302,15 @@ fi
 # Unlike zrec it cannot touch flash, so the released root can carry it.
 printf 'CONFIG_PACKAGE_rdreg=y\n' >>.config
 
+# mdread is the other half of the same observability gap. eth0 runs fixed-link, so phylib never
+# attaches the RTL8226B at mdio1 address 5 and SIOCGMIIREG has no phydev to ask; and the only way
+# back into U-Boot is a power cut, which resets the PHY, so the bootloader can show the chip's
+# state *before* Linux but never after. The traffic-proven reference already exists
+# (staging/ctl/traffic-proven-phy-uboot.txt, read with `mii 45read`); this is what produces the
+# other side of that diff. Has to be pinned before `make defconfig`, which is where the rdreg
+# comment above learned that a symbol defconfig has not been shown is dropped without a word.
+printf 'CONFIG_PACKAGE_mdread=y\n' >>.config
+
 make defconfig
 
 # The same rule that this file already states twice: a config line for a symbol
@@ -324,6 +333,12 @@ grep -qx 'CONFIG_PACKAGE_rdreg=y' .config || {
 	echo "CONFIG_PACKAGE_rdreg did not survive defconfig - is package/utils/rdreg/Makefile in the tree?" >&2
 	ls -d package/utils/rdreg 2>/dev/null || echo "package/utils/rdreg is NOT in the tree" >&2
 	grep -i 'rdreg' .config || echo "(nothing at all)" >&2
+	exit 1; }
+
+grep -qx 'CONFIG_PACKAGE_mdread=y' .config || {
+	echo "CONFIG_PACKAGE_mdread did not survive defconfig - is package/utils/mdread/Makefile in the tree?" >&2
+	ls -d package/utils/mdread 2>/dev/null || echo "package/utils/mdread is NOT in the tree" >&2
+	grep -i 'mdread' .config || echo "(nothing at all)" >&2
 	exit 1; }
 
 # CONFIG_DEVMEM lost three rounds, and the winner is not the fragment merge. Read out of

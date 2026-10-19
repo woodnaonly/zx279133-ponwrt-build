@@ -221,6 +221,10 @@ jobs:
             echo "::error::overlays/package/utils/rdreg did not reach openwrt/package/utils/rdreg"; exit 1; }
           test -f openwrt/package/utils/rdreg/src/rdreg.c || {
             echo "::error::rdreg overlay is missing src/rdreg.c"; exit 1; }
+          test -f openwrt/package/utils/mdread/Makefile || {
+            echo "::error::overlays/package/utils/mdread did not reach openwrt/package/utils/mdread"; exit 1; }
+          test -f openwrt/package/utils/mdread/src/mdread.c || {
+            echo "::error::mdread overlay is missing src/mdread.c"; exit 1; }
           for f in src/zrec.c files/usr/sbin/zrec-run files/usr/libexec/zrec-ops \
                    files/usr/libexec/zrec-bringup files/lib/preinit/85_zrec \
                    files/etc/rc.d/S21zrec files/www/zrec/index.html; do
