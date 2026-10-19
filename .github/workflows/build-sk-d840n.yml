@@ -512,9 +512,17 @@ jobs:
         # % first, then #, and no newline can survive into the message.
         run: |
           set -o pipefail
-          if make -j"$(nproc)"; then exit 0; fi
-          make -j1 V=s 2>&1 | tee ../compile-v1.log
-          rc=$?
+          # `|| rc=$?` on both makes, not on neither. The default shell for a `run:` block is
+          # `bash --noprofile --norc -eo pipefail`, and `-e` ends the step at the first failing
+          # simple command - so the previous shape (`make ... | tee log` then `rc=$?`) never ran
+          # its own next line, and runs 63 through 66 died with nothing but GitHub's own
+          # "Process completed with exit code 2". An 80-minute build that cannot say which file
+          # broke is the thing this step exists to prevent, so every status has to be captured in
+          # a form `-e` is obliged to leave alone.
+          rc=0
+          make -j"$(nproc)" || rc=$?
+          if [ "$rc" = 0 ]; then exit 0; fi
+          make -j1 V=s 2>&1 | tee ../compile-v1.log || rc=$?
           if [ "$rc" != 0 ]; then
             grep -nE "error:|Error [0-9]+\$|No such file|command not found|undefined reference|make.*\*\*\*" \
               ../compile-v1.log | tail -n 12 |
@@ -1125,6 +1133,7 @@ jobs:
           path: |
             openwrt/logs
             openwrt/.config
+            compile-v1.log
           if-no-files-found: ignore
 
       - name: Upload outputs

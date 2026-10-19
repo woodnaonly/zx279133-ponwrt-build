@@ -366,10 +366,14 @@
 	 * A fixed link removes the whole PHY state machine: phylink_parse_mode() sees
 	 * this child node and sets MLO_AN_FIXED, phylink_expects_phy() then answers
 	 * false, phylink_fwnode_phy_connect() returns before phy_attach_direct(), and
-	 * phy_init_hw() has no other caller on a boot that never suspends. Not one
-	 * MDIO read or write reaches the chip, so it keeps exactly what U-Boot left -
-	 * including the copper-side auto-negotiation with the peer, which is what the
-	 * 11 MB download already proved works. phy-handle must NOT come back beside
+	 * phy_init_hw() has no other caller on a boot that never suspends. So no
+	 * *write* reaches the chip - no soft reset, no config_init replay - and it keeps
+	 * exactly what U-Boot left, including the copper-side auto-negotiation with the
+	 * peer, which is what the 11 MB download already proved works. Reads are a
+	 * different matter and this sentence used to deny them: of_mdiobus still
+	 * instantiates 14f02000.mdio:05, binds RTL8221B-VB-CG, and phy_probe() calls
+	 * .probe and .get_features on that bus, which is how the line above at
+	 * 4.258513s could name the driver at all. phy-handle must NOT come back beside
 	 * this node: the rtl8226b node stays in &mdio1 as the record of what is at
 	 * address 5, and of_mdiobus still reads its ID, but nothing may attach it.
 	 *
