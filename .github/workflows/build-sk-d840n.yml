@@ -217,6 +217,10 @@ jobs:
           # that can erase kernel and root.
           test -f openwrt/package/utils/zrec/Makefile || {
             echo "::error::overlays/package/utils/zrec did not reach openwrt/package/utils/zrec"; exit 1; }
+          test -f openwrt/package/utils/rdreg/Makefile || {
+            echo "::error::overlays/package/utils/rdreg did not reach openwrt/package/utils/rdreg"; exit 1; }
+          test -f openwrt/package/utils/rdreg/src/rdreg.c || {
+            echo "::error::rdreg overlay is missing src/rdreg.c"; exit 1; }
           for f in src/zrec.c files/usr/sbin/zrec-run files/usr/libexec/zrec-ops \
                    files/usr/libexec/zrec-bringup files/lib/preinit/85_zrec \
                    files/etc/rc.d/S21zrec files/www/zrec/index.html; do

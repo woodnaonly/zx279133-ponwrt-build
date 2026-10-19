@@ -292,6 +292,16 @@ else
 	printf '# CONFIG_PACKAGE_zrec is not set\n' >>.config
 fi
 
+# rdreg belongs in both images. It is the register reader the driver's ethtool -S list cannot
+# replace: /dev/mem read() answers EFAULT for MMIO on this SoC, `hexdump -s` gets the same
+# EFAULT, and the shipped busybox has no devmem applet (measured 2026-10-19 on the run-62
+# failsafe shell: "devmem: applet not found", `grep -c devmem /bin/busybox` = 0). Until now the
+# only in-kernel view of a register was the ~13 addresses a build happens to name in
+# netdev.c's stat table, so every new address cost a 70-minute build. mmap is what makes it
+# work, and that is also why this is a package rather than a shell recipe.
+# Unlike zrec it cannot touch flash, so the released root can carry it.
+printf 'CONFIG_PACKAGE_rdreg=y\n' >>.config
+
 make defconfig
 
 # The same rule that this file already states twice: a config line for a symbol
@@ -307,6 +317,14 @@ elif grep -q '^CONFIG_PACKAGE_zrec=y' .config; then
 	echo "flash mode selected zrec - the released root must not ship a flasher" >&2
 	exit 1
 fi
+
+# Same assertion, same reason: a symbol defconfig does not know is dropped without a word, and
+# the build that costs 70 minutes is the one that finds out.
+grep -qx 'CONFIG_PACKAGE_rdreg=y' .config || {
+	echo "CONFIG_PACKAGE_rdreg did not survive defconfig - is package/utils/rdreg/Makefile in the tree?" >&2
+	ls -d package/utils/rdreg 2>/dev/null || echo "package/utils/rdreg is NOT in the tree" >&2
+	grep -i 'rdreg' .config || echo "(nothing at all)" >&2
+	exit 1; }
 
 # CONFIG_DEVMEM lost three rounds, and the winner is not the fragment merge. Read out of
 # include/kernel-defaults.mk, define Kernel/Configure/Default:
