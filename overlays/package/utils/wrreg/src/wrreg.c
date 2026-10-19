@@ -82,11 +82,15 @@ int main(int argc, char **argv)
 	}
 
 	map += (addr & (page - 1)) / 4;
-	fprintf(stderr, "wrreg: %#010x was %#010x, writing %#010x\n", addr, *map, value);
+	/* Cast, not luck. addr and value are unsigned long, which on this LP64 target is 64 bits,
+	 * so "%#010x" under -Wall -Werror is a format error rather than a cosmetic choice. What
+	 * actually guarantees the value fits is the range check above. */
+	fprintf(stderr, "wrreg: %#010x was %#010x, writing %#010x\n",
+		(unsigned)addr, *map, (unsigned)value);
 	*map = (uint32_t)value;
 	/* Read it straight back: some of these registers are write-gated and accept nothing,
 	 * and "I wrote it" is not the same statement as "it is set". */
-	fprintf(stderr, "wrreg: %#010x now %#010x\n", addr, *map);
+	fprintf(stderr, "wrreg: %#010x now %#010x\n", (unsigned)addr, *map);
 
 	munmap((void *)(map - (addr & (page - 1)) / 4), page);
 	close(fd);

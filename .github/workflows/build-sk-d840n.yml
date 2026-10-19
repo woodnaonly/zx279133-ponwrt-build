@@ -504,7 +504,26 @@ jobs:
         id: compile
         if: steps.pick.outputs.run == 'true'
         working-directory: openwrt
-        run: make -j"$(nproc)" || make -j1 V=s
+        # The serial retry is what names the failing file, so it is the pass worth keeping.
+        # It is tee'd and its diagnostics are re-emitted as ::error:: lines because a workflow log
+        # is 403 without a token on this machine - and a build that costs 80 minutes and returns
+        # "Process completed with exit code 2" over the only channel that can be read anonymously
+        # (check-run annotations) is an 80-minute guess. Escaping follows the workflow-command rules:
+        # % first, then #, and no newline can survive into the message.
+        run: |
+          set -o pipefail
+          if make -j"$(nproc)"; then exit 0; fi
+          make -j1 V=s 2>&1 | tee ../compile-v1.log
+          rc=$?
+          if [ "$rc" != 0 ]; then
+            grep -nE "error:|Error [0-9]+\$|No such file|command not found|undefined reference|make.*\*\*\*" \
+              ../compile-v1.log | tail -n 12 |
+            while IFS= read -r line; do
+              echo "::error::$(printf '%s' "$line" | sed -e 's/%/%25/g' -e 's/#/%23/g' | tr -d '\r')"
+            done
+            echo "::error::compile rc=$rc; last 6 lines: $(tail -n 6 ../compile-v1.log | tr '\n' ' ' | sed -e 's/%/%25/g' -e 's/#/%23/g')"
+          fi
+          exit "$rc"
 
       - name: Assert the kernel really has the PHY driver
         if: steps.pick.outputs.run == 'true'
