@@ -12,7 +12,7 @@ define Package/wrreg
   SECTION:=utils
   CATEGORY:=Utilities
   TITLE:=Write one ZX279133 network register word through mmap of /dev/mem
-  DEPENDS:=@TARGET_zte_zx279133 +KERNEL_DEVMEM +rdreg
+  DEPENDS:=@TARGET_zte_zx279133 +rdreg
 endef
 
 define Package/wrreg/description

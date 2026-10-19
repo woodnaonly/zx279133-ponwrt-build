@@ -14,7 +14,7 @@ define Package/mdread
   SECTION:=utils
   CATEGORY:=Utilities
   TITLE:=Read an MDIO register through the ZX279133 controller
-  DEPENDS:=@TARGET_zte_zx279133 +KERNEL_DEVMEM
+  DEPENDS:=@TARGET_zte_zx279133
 endef
 
 define Package/mdread/description

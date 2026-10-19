@@ -10,11 +10,21 @@ include $(INCLUDE_DIR)/package.mk
 
 # Scoped to this subtarget for the same reason as every other overlay here: the addresses it
 # is used against are ZX279133's.
+#
+# DEPENDS carries `@TARGET_...` alone and deliberately NO `+KERNEL_DEVMEM`, and run 67 is what
+# taught that the hard way: a `+` entry names a *package*, while KERNEL_DEVMEM is a kernel config
+# symbol, so it went verbatim into the generated control (the annotation lists the package as
+# `rdreg-1-r1[KERNEL_DEVMEM]`) and `package/install` died on it - `bash: line 1: IDIR_base-files:
+# command not found`, `make[2]: *** [package/Makefile:100: package/install] Error 4` - in every
+# image that selected one of these three packages, which is the whole reason runs 63-67 never
+# produced a kit. zrec is the control: same tree, same target selector, no `+KERNEL_*` entry,
+# builds. /dev/mem being enabled is already guaranteed the honest way, by
+# scripts/configure-sk-d840n.sh running `pin_y_build KERNEL_DEVMEM`.
 define Package/rdreg
   SECTION:=utils
   CATEGORY:=Utilities
   TITLE:=Read a ZX279133 register word through mmap of /dev/mem
-  DEPENDS:=@TARGET_zte_zx279133 +KERNEL_DEVMEM
+  DEPENDS:=@TARGET_zte_zx279133
 endef
 
 define Package/rdreg/description
