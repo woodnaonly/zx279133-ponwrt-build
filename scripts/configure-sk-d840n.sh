@@ -311,6 +311,16 @@ printf 'CONFIG_PACKAGE_rdreg=y\n' >>.config
 # comment above learned that a symbol defconfig has not been shown is dropped without a word.
 printf 'CONFIG_PACKAGE_mdread=y\n' >>.config
 
+# wrreg is what turns the next hypothesis into a five-minute test instead of an eighty-minute
+# build plus a ten-minute window. The live candidate is the direct SPA block: U-Boot's snapshot
+# from the cycle that moved 11,464,708 bytes holds nppt+0x8000=0x68000000, +0x8014=0x06111113,
+# +0x8018=0x01111111, all three zero before that transfer, and zx279133-np.c never writes that
+# block at all - it only uses the indirect CMD/STATUS/DATA triple. If mainline leaves them zero,
+# the answer is one writel, and the way to learn that before spending a build is to write those
+# words from the console and watch this PC's byte counter move. The write is fenced to the
+# network blocks; see the comment in src/wrreg.c.
+printf 'CONFIG_PACKAGE_wrreg=y\n' >>.config
+
 make defconfig
 
 # The same rule that this file already states twice: a config line for a symbol
@@ -339,6 +349,12 @@ grep -qx 'CONFIG_PACKAGE_mdread=y' .config || {
 	echo "CONFIG_PACKAGE_mdread did not survive defconfig - is package/utils/mdread/Makefile in the tree?" >&2
 	ls -d package/utils/mdread 2>/dev/null || echo "package/utils/mdread is NOT in the tree" >&2
 	grep -i 'mdread' .config || echo "(nothing at all)" >&2
+	exit 1; }
+
+grep -qx 'CONFIG_PACKAGE_wrreg=y' .config || {
+	echo "CONFIG_PACKAGE_wrreg did not survive defconfig - is package/utils/wrreg/Makefile in the tree?" >&2
+	ls -d package/utils/wrreg 2>/dev/null || echo "package/utils/wrreg is NOT in the tree" >&2
+	grep -i 'wrreg' .config || echo "(nothing at all)" >&2
 	exit 1; }
 
 # CONFIG_DEVMEM lost three rounds, and the winner is not the fragment merge. Read out of
