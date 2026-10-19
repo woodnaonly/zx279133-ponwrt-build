@@ -337,9 +337,19 @@ static netdev_tx_t zx279133_start_xmit_common(struct sk_buff *skb,
 	}
 	tx_port = ndev != hw_ndev ? ZX279133_LAN_TX_PORT : zx279133_tx_port;
 
-	dma = dma_map_single(eth->dev, skb->data, skb->len, DMA_TO_DEVICE);
-	if (dma_mapping_error(eth->dev, dma))
-		goto drop;
+	if (eth->np_pool_mem) {
+		if (skb->len > ZX279133_NP_POOL_TX_STRIDE) {
+			eth->tx_pool_oversize++;
+			zx279133_stats_tx_dropped(eth, ndev);
+			dev_kfree_skb_any(skb);
+			return NETDEV_TX_OK;
+		}
+		dma = 0;
+	} else {
+		dma = dma_map_single(eth->dev, skb->data, skb->len, DMA_TO_DEVICE);
+		if (dma_mapping_error(eth->dev, dma))
+			goto drop;
+	}
 
 	spin_lock_bh(&eth->tx_lock);
 	if (unlikely(tx->pending >= ZX279133_IDM_TX_DEPTH - 1))
@@ -349,7 +359,8 @@ static netdev_tx_t zx279133_start_xmit_common(struct sk_buff *skb,
 		txq_trans_update(ndev, txq);
 		zx279133_idm_tx_flush_queue_locked(eth, queue);
 		spin_unlock_bh(&eth->tx_lock);
-		dma_unmap_single(eth->dev, dma, skb->len, DMA_TO_DEVICE);
+		if (dma)
+			dma_unmap_single(eth->dev, dma, skb->len, DMA_TO_DEVICE);
 		zx279133_stats_tx_dropped(eth, ndev);
 		dev_kfree_skb_any(skb);
 		return NETDEV_TX_OK;
@@ -360,7 +371,20 @@ static netdev_tx_t zx279133_start_xmit_common(struct sk_buff *skb,
 		ZX279133_IDM_TX_DEPTH + producer;
 	slot = &tx->slots[producer];
 	memset(desc, 0, sizeof(*desc));
-	desc->address = cpu_to_le32(lower_32_bits(dma));
+	if (eth->np_pool_mem) {
+		u32 idx = queue * ZX279133_NP_POOL_TX_SLOTS +
+			  (producer & (ZX279133_NP_POOL_TX_SLOTS - 1));
+		u32 off = ZX279133_NP_POOL_TX_OFF +
+			  idx * ZX279133_NP_POOL_TX_STRIDE;
+
+		memcpy_toio(eth->np_pool_mem + off, skb->data, skb->len);
+		wmb();
+		eth->tx_pool_bounces++;
+		eth->tx_pool_last_addr = eth->np_pool_base + off;
+		desc->address = cpu_to_le32(lower_32_bits(eth->np_pool_base + off));
+	} else {
+		desc->address = cpu_to_le32(lower_32_bits(dma));
+	}
 	{
 		u32 length_flags = (skb->len << 1) |
 				   (zx279133_tx_selector & 0xff) << 24 |
@@ -381,7 +405,7 @@ static netdev_tx_t zx279133_start_xmit_common(struct sk_buff *skb,
 	slot->ndev = ndev;
 	slot->dma = dma;
 	slot->len = skb->len;
-	slot->dma_mapped = true;
+	slot->dma_mapped = !eth->np_pool_mem;
 	if (hw_csum)
 		eth->tx_hw_csum_packets++;
 	else if (sw_csum)
@@ -1036,6 +1060,9 @@ enum zx279133_ethtool_stat {
 	ZX279133_STAT_DBG_NPPT_100004,
 	ZX279133_STAT_DBG_NPPT_100008,
 	ZX279133_STAT_DBG_SOPC_DUPLEX,
+	ZX279133_STAT_TX_POOL_BOUNCES,
+	ZX279133_STAT_TX_POOL_OVERSIZE,
+	ZX279133_STAT_TX_POOL_LAST_ADDR,
 	ZX279133_STAT_IDM_TX_DONE,
 	ZX279133_STAT_TX_PENDING,
 	ZX279133_STAT_TX_DOORBELL_WRITES,
@@ -1117,6 +1144,9 @@ static const char zx279133_gstrings_stats[ZX279133_STAT_COUNT][ETH_GSTRING_LEN] 
 	"dbg_nppt_100004",
 	"dbg_nppt_100008",
 	"dbg_sopc_duplex",
+	"tx_pool_bounces",
+	"tx_pool_oversize",
+	"tx_pool_last_addr",
 	"idm_tx_done",
 	"tx_pending",
 	"tx_doorbell_writes",
@@ -1260,6 +1290,9 @@ static void zx279133_get_ethtool_stats(struct net_device *ndev,
 	data[ZX279133_STAT_DBG_NPPT_100004] = zx279133_hw_stat(eth, 0x100004);
 	data[ZX279133_STAT_DBG_NPPT_100008] = zx279133_hw_stat(eth, 0x100008);
 	data[ZX279133_STAT_DBG_SOPC_DUPLEX] = zx279133_hw_stat(eth, 0x343f0);
+	data[ZX279133_STAT_TX_POOL_BOUNCES] = eth->tx_pool_bounces;
+	data[ZX279133_STAT_TX_POOL_OVERSIZE] = eth->tx_pool_oversize;
+	data[ZX279133_STAT_TX_POOL_LAST_ADDR] = eth->tx_pool_last_addr;
 	spin_lock_bh(&eth->tx_lock);
 	data[ZX279133_STAT_IDM_TX_DONE] =
 		eth->tx_prepared && READ_ONCE(eth->hardware_prepared) ?

@@ -330,6 +330,14 @@
 	phys = <&uni_serdes>;
 	phy-names = "serdes";
 	pcs-handle = <&xpcs0>;
+	/* The NP's own memory. Not a guess and not a leftover: in the one U-Boot session
+	 * that carried 11,471,728 bytes across this jack while this PC counted +469,482 of
+	 * them, every address handed to the NP - TX ring 0xb0008000, RX ring 0xb0028000,
+	 * RX buffers from 0xb00e8000, and the TX payload buffer 0xb0328000 named by each
+	 * descriptor - was inside 0xb0000000..0xb0400000. It is 256 MiB above the top of
+	 * the CPU's DRAM, so no allocator here can ever hand the driver such an address. */
+	zte,np-pool-base = <0xb0000000>;
+	zte,np-pool-size = <0x400000>;
 	memory-region = <&bmu_reserved>, <&se_hash_reserved>, <&idm_reserved>;
 	memory-region-names = "bmu", "se-hash", "idm";
 	/* No /delete-property/ phy-handle here, and that is a measured choice, not an oversight:

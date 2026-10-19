@@ -453,6 +453,22 @@ extern unsigned int zx279133_tx_word4_bit23;
 #define ZX279133_IDM_TX_CONTROL		0x00400000
 
 /*
+ * The NP's own memory. Every address U-Boot handed it while this PC counted
+ * 11,471,728 bytes of tftp - rings and payload alike - was inside
+ * 0xb0000000..0xb0400000 (U-Boot's TX slot read "b0328000 0f80005c ..."), and
+ * the vendor's idm_net_lan_tx_direct() memmoves each frame into such a buffer
+ * before ringing the doorbell. Mainline instead names page_pool and
+ * dma_map_single addresses: the descriptor is consumed (the completion word
+ * moves) and no frame ever reaches the MAC. So transmit bounces through here.
+ */
+#define ZX279133_NP_POOL_TX_OFF		0x328000
+#define ZX279133_NP_POOL_TX_SLOTS	64
+#define ZX279133_NP_POOL_TX_STRIDE	0x940
+#define ZX279133_NP_POOL_TX_SIZE	(ZX279133_CPU_TX_QUEUES * \
+					 ZX279133_NP_POOL_TX_SLOTS * \
+					 ZX279133_NP_POOL_TX_STRIDE)
+
+/*
  * Vendor kernel globals (kernel-2b5.elf rodata/BSS):
  * uIDM_RX_QUEUE_DESC_DEPTH = 2048, uIDM_RX_CFG_DEPTH = 1,
  * uNPPT_IDM_DESC_MODE = 0, uIDM_TX_CFG_DEPTH = 0 (no writer found).
@@ -721,6 +737,9 @@ struct zx279133_eth {
 	phys_addr_t idm_base;
 	phys_addr_t idm_size;
 	void __iomem *idm_mem;
+	phys_addr_t np_pool_base;
+	phys_addr_t np_pool_size;
+	void __iomem *np_pool_mem;
 	struct page_pool *rx_page_pool;
 	struct page_pool *lan_rx_page_pool;
 	struct xdp_rxq_info xdp_rxq[ZX279133_CPU_RX_QUEUES];
@@ -789,6 +808,9 @@ struct zx279133_eth {
 	u64 tx_timeouts;
 	u64 tx_timeout_recoveries;
 	u64 tx_timeout_stalls;
+	u64 tx_pool_bounces;
+	u64 tx_pool_oversize;
+	u64 tx_pool_last_addr;
 	u64 tx_hw_csum_packets;
 	u64 tx_sw_csum_packets;
 	atomic64_t rx_irq_count;

@@ -362,6 +362,38 @@ static int zx279133_eth_probe(struct platform_device *pdev)
 	if (!eth->idm_mem)
 		return dev_err_probe(dev, -ENOMEM,
 				     "failed to map IDM reserved memory\n");
+
+	/*
+	 * The NP's own memory, named by the board because it is not RAM the kernel owns:
+	 * 0xb0000000 sits 256 MiB above the top of this device's 512 MiB at 0xa0000000, so
+	 * there is no linear map for it and no DMA allocator hands out addresses in it.
+	 * Whether the CPU can write it at all is the question this round is built on, so
+	 * probe it once here and let the boot log answer.
+	 */
+	{
+		u32 base, size;
+
+		if (of_property_read_u32(dev->of_node, "zte,np-pool-base", &base) ||
+		    of_property_read_u32(dev->of_node, "zte,np-pool-size", &size)) {
+			dev_info(dev, "no NP pool described, transmitting by DMA address\n");
+		} else if (size < ZX279133_NP_POOL_TX_OFF + ZX279133_NP_POOL_TX_SIZE) {
+			return dev_err_probe(dev, -EINVAL, "NP pool is too small\n");
+		} else {
+			eth->np_pool_base = base;
+			eth->np_pool_size = size;
+			eth->np_pool_mem = devm_ioremap_wc(dev, base, size);
+			if (!eth->np_pool_mem)
+				return dev_err_probe(dev, -ENOMEM,
+						     "failed to map NP pool\n");
+			writel(0x5a5a0001,
+			       eth->np_pool_mem + ZX279133_NP_POOL_TX_OFF);
+			if (readl(eth->np_pool_mem + ZX279133_NP_POOL_TX_OFF) !=
+			    0x5a5a0001)
+				dev_warn(dev, "NP pool at 0x%lx is not CPU-writable\n",
+					 (unsigned long)base);
+		}
+	}
+
 	eth->pon_route = syscon_regmap_lookup_by_phandle(dev->of_node,
 							 "zte,pon-route");
 	if (IS_ERR(eth->pon_route))
