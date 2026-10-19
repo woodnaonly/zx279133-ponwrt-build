@@ -43,11 +43,19 @@ LX_ROW = re.compile(r"^(\d+)\.([0-9a-fA-F]{4}) = ([0-9a-fA-F]{4})")
 
 
 def read_text(path):
-    """Same decoder lanediff.py uses: the relay logs bytes, and serial data is latin-1 by
-    convention with NULs from the adapter's padding."""
+    """Same bytes lanediff.py sees, but with the line terminators collapsed.
+
+    U-Boot's output arrives over this relay as `\\r\\r\\n` (measured in staging/ctl/serial.log:
+    `addr_45: 0x5, devad_45: 0x1e, reg_45: 0x0\\r\\r\\n21FC\\r\\r\\n`). `str.splitlines()` treats a
+    lone \\r as a terminator, so the value line and its header would be separated by an empty row -
+    and `mii 45read` puts the value on the line AFTER the header, so a next-line parser would find
+    nothing and report "ZERO rows, broken reader" about a send that worked. One physical line has to
+    be one entry here.
+    """
     with open(path, "rb") as f:
         raw = f.read()
-    return raw.decode("latin-1", errors="replace").replace("\x00", "")
+    text = raw.decode("latin-1", errors="replace").replace("\x00", "")
+    return re.sub(r"\r[\r\n]*", "\n", text)
 
 
 def uboot_side(text):
