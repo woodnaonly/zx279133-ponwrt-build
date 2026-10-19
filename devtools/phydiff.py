@@ -91,6 +91,14 @@ def main():
     if lx is None:
         print("phydiff: no LC-PHY2BEGIN - Linux never got far enough to read the chip back.")
         return 2
+    # Both halves have to come from the same boot. Diffing this round's Linux rows against an older
+    # round's U-Boot rows still prints a tidy table of SAMEs, and a match that spans a power cycle is
+    # worth nothing - which is precisely the mistake 补七十七 had to take back out of the record.
+    ub_at, lx_at = text.rfind("LC-UBPHY-BEGIN"), text.rfind("LC-PHY2BEGIN")
+    if lx_at < ub_at:
+        print("phydiff: the newest LC-PHY2BEGIN sits BEFORE the newest LC-UBPHY-BEGIN - these two "
+              "halves are from different boots, so any diff between them is meaningless. Refusing.")
+        return 2
     for name, side in (("U-Boot (mii 45read)", ub), ("Linux (mdread)", lx)):
         if not side:
             print("phydiff: %s produced ZERO rows. Treat that as a broken reader, not as an answer: "
@@ -98,7 +106,8 @@ def main():
                   "`mii read` returns FFFF for all 32 registers including the PHY ID)." % name)
             return 2
 
-    changed = same = 0
+    changed = same = missing = 0
+    rc = 0
     print("== RTL8226B, U-Boot (before bootm) vs Linux (after), one power cycle ==")
     for key in sorted(REGS):
         d, r = key
@@ -108,21 +117,30 @@ def main():
             print("  %2d.%04x  ub %-6s lin %-6s  %s missing - cannot diff one half"
                   % (d, r, "-" if u is None else "%04x" % u,
                      "-" if l is None else "%04x" % l, miss))
+            missing += 1
             continue
         tag = "SAME" if u == l else "DIFFER"
         changed += l != u
         same += l == u
         print("  %2d.%04x  ub %04x  lin %04x  %s   %s" % (d, r, u, l, tag, REGS[key]))
 
-    print("phydiff: %d same, %d differ over %d registers" % (same, changed, len(REGS)))
-    if changed:
+    print("phydiff: %d same, %d differ, %d not diffable over %d registers"
+          % (same, changed, missing, len(REGS)))
+    if missing:
+        # One DIFFER among seven rows where five could not be compared is not an answer; it is half a
+        # round. Saying "not enough" is the only honest output, and the fix is to re-send the missing
+        # half rather than to interpret what is left.
+        print("  -> INCONCLUSIVE: %d of %d rows have only one side. Re-run the missing reads in the "
+              "same boot before drawing a conclusion." % (missing, len(REGS)))
+        rc = 1
+    elif changed:
         print("  -> Linux reconfigured the chip. The patch-window rows (devad 31) say whether the "
               "DSP download survived; if they differ, a fixed link alone cannot bring this lane up "
               "and the PHY bring-up has to be reproduced in the driver.")
     else:
         print("  -> the chip is byte-identical to what the working U-Boot lane left, so phylib is "
               "NOT reprogramming it and the divergence is upstream of the PHY (nppt/SPA side).")
-    return 0
+    return rc
 
 
 if __name__ == "__main__":
