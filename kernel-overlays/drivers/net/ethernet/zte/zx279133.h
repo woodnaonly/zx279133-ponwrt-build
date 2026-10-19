@@ -463,8 +463,57 @@ static inline u32 zx279133_idm_tx_done_reg(unsigned int queue)
  * in sgmii"), so the window is per-device, not a constant.
  */
 #define ZX279133_XMAC_BASE(id)	(0x140000 + (id) * 0x40000)
-#define ZX279133_XMAC_SOPC_READY_OFF	0x1c2a8
-#define ZX279133_XMAC_SOPC_SEND_OFF	0x1c2c4
+/*
+ * The SOPC handshake is an array in nppt's global 0x34000 block, not a register inside the MAC
+ * window. Read out of the vendor module (pon/vendor-modules/np_133.ko, .text 0x1ae20):
+ * xmac_init_by_work_mode(id, work_mode) runs xpcs_init, xmac_reset, the work-mode conf, then
+ * xmac_set_duplex_mode(id, 1), xmac_set_sopc_duplex_mode(id, 1), __const_udelay(0x418958),
+ * `str 1, [nppt + 0x34000 + (((idx + 0xb0) & 0x1ff) << 2)]`, xmac_tx_rx_enable(id). So the publish
+ * is a write of 1 into that array, and xmac_sopc_send_enable() (.text 0x1ac70) shows the entry
+ * twelve words earlier is a ready flag whose bit 0 gates the publish:
+ * `nppt + 0x34000 + (((idx + 0xa9) & 0x1ff) << 2)`.
+ *
+ * THE PUBLISH HYPOTHESIS IS DEAD - measured on this board 2026-10-19 (docs 补八十三). This U-Boot's
+ * own loop (backups/mtd1_boot.bin:0x58670) polls nppt+0x34000+(idx+0xa5)*4 bit 0 for idx 0..6 and
+ * writes 1 to nppt+0x34000+(idx+0xac)*4, i.e. the entries 0x342b0..0x342c8, and in one power cycle
+ * `md 0x190342a0 0x10` read all eight of those as 1 **at the prompt, before any net command**, with
+ * 0x342ac (the ready word the SMAC6 routine at :0x585a8 polls) at 0 both before and after an
+ * 11,464,708-byte tftp that this PC counted arriving. So the grant was never missing, and the
+ * mis-aimed strobe below (nppt+0x15c2c4, which reads 0 in both states) is wrong but harmless.
+ *
+ * What the same round did find is that the block mainline drives is not the block that counts:
+ *   nppt+0x1900c0f0 (SMCT_DONE)  0 -> 0x000101f4 across that transfer, so mainline's smct_done 24
+ *     was a real count of 24 frames reaching the SMCT;
+ *   nppt+0x19142070/0x191420b0 (this driver's xmac_tx_frames / tx_good) stayed 0 through the same
+ *     transfer, so `xmac_tx_frames: 0` proved nothing - a dead gauge, not a stopped MAC;
+ *   the whole XMAC0 image (0x19140000/0x10/0x20, +0x280, +0x500, +0x3400) reads 0 in the working
+ *     state, in a second power cycle, exactly as the older traffic-proven dump has it.
+ * And the only region that is *empty* before bring-up and *full* after is the SOPC block:
+ *   0x340b8=0x00120018, 0x340bc=0x0014001A, 0x340c0=0x00130019, 0x340c8/0xd0/0xd4=0x00010000,
+ *   0x340cc=0x00870087, 0x34130=0x00120012, 0x34134=0x00140014, 0x34138=0x00130013 - all 0 at the
+ *   prompt. Mainline's only contact with it is three hw_stat reads, which under mainline return the
+ *   BL2/POST defaults (0x340bc 0x00050009, 0x34108 0x00020012, 0x34134 0x00050004), never a
+ *   programmed mapping. nppt+0x340b8 bit 4 has a name in the vendor module - greg_sopc_auto_gate_en_set()
+ *   (.text 0xcd94) does `w1 = ldr [base+0xb8]; w1 &= ~0x10; w1 |= (val & 1) << 4; str`, reached from
+ *   set_sopc_auto_gate_en() (.text 0x5b5f8) via register id 0x36 - and the traffic value 0x0018 has
+ *   that bit set. That, not the publish, is where the next change belongs.
+ */
+#define ZX279133_SOPC_BASE			0x34000
+#define ZX279133_SOPC_XMAC_READY(idx)		\
+	(ZX279133_SOPC_BASE + ((((idx) + 0xa9) & 0x1ff) << 2))
+#define ZX279133_SOPC_XMAC_SEND(idx)		\
+	(ZX279133_SOPC_BASE + ((((idx) + 0xb0) & 0x1ff) << 2))
+/*
+ * nppt+0x343f0 holds one bit per XMAC at BIT(4 + id): xmac_set_sopc_duplex_mode() (.text 0x1ac08)
+ * rejects id > 1, computes `1 << (id + 4)` and BICs that bit when its value argument is 1, ORs it
+ * otherwise - and xmac_init_by_work_mode() leaves w1 = 1 over from the xmac_set_duplex_mode(id, 1)
+ * call immediately before, so for XMAC0 the vendor CLEARS BIT(4). zx279133-mac.c instead clears
+ * BIT(5) whenever duplex is full, which is that function's id-1 action applied to a board whose
+ * port is id 0: it edits the other MAC's bit and leaves this port's alone. Whether that is harmless
+ * depends on the reset default of 0x343f0, which the same read answers (mainline measures 0).
+ */
+#define ZX279133_XMAC_SOPC_READY_OFF		0x1c2a8
+#define ZX279133_XMAC_SOPC_SEND_OFF		0x1c2c4
 #define ZX279133_XMAC_EEE_CTRL_OFF	0x0340
 #define ZX279133_XMAC_EEE_TIMER_OFF	0x0350
 #define ZX279133_XMAC_TX_CTRL	0x0000
