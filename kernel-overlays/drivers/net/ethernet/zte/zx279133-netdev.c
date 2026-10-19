@@ -8,6 +8,7 @@
 #include <linux/if_vlan.h>
 #include <linux/io.h>
 #include <linux/ip.h>
+#include <linux/module.h>
 #include <linux/netdevice.h>
 #include <linux/phy.h>
 #include <linux/phylink.h>
@@ -22,6 +23,12 @@
 
 #include "zx279133.h"
 #include "zx279133-lan.h"
+
+/* Settable so one kit can sweep every candidate port number from the console; 6 is the value this
+ * board measures, and the default therefore changes no behaviour of its own. */
+unsigned int zx279133_tx_port = 6;
+module_param(zx279133_tx_port, uint, 0644);
+MODULE_PARM_DESC(zx279133_tx_port, "SMAC number a TX descriptor names as its egress port");
 
 static int zx279133_shared_idm_prepare(struct zx279133_eth *eth)
 {

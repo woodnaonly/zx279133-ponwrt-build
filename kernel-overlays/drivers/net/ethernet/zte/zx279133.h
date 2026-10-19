@@ -22,7 +22,16 @@
 
 /* Validated WAN/LAN hardware constants. */
 #define ZX279133_IDM_CPU_TX_FIRST	1
-#define zx279133_tx_port		6
+/*
+ * The egress port a TX descriptor names, in SMAC numbers. 6 is what this board measures, and it is
+ * now runtime-settable because it is the last un-swept candidate for the one thing that is still
+ * unexplained: mainline's frames are counted downstream of the descriptor - nppt+0x1900c0f0 went
+ * 0x00000009 -> 0x0000001b across 24 pings at 18:02:xx, and the SerDes is not in loss of signal
+ * (0x161000e4 = 0x100019fc, bit 0 clear, read from inside the running kernel) - while this PC sees
+ * not one of them. So the drop is between the counter that moves and the wire that does not, and
+ * this field is what selects the MAC on that path.
+ */
+extern unsigned int zx279133_tx_port;
 #define ZX279133_LAN_TX_PORT		5
 #define ZX279133_LAN_RX_QUEUE_COUNT	8
 #define ZX279133_LAN_TRANSPORT_VID_MIN	59
