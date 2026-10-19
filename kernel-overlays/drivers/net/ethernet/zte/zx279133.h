@@ -465,44 +465,58 @@ static inline u32 zx279133_idm_tx_done_reg(unsigned int queue)
 #define ZX279133_XMAC_BASE(id)	(0x140000 + (id) * 0x40000)
 /*
  * The SOPC handshake is an array in nppt's global 0x34000 block, not a register inside the MAC
- * window. Read out of the vendor module (pon/vendor-modules/np_133.ko, .text 0x1ae20):
- * xmac_init_by_work_mode(id, work_mode) runs xpcs_init, xmac_reset, the work-mode conf, then
- * xmac_set_duplex_mode(id, 1), xmac_set_sopc_duplex_mode(id, 1), __const_udelay(0x418958),
- * `str 1, [nppt + 0x34000 + (((idx + 0xb0) & 0x1ff) << 2)]`, xmac_tx_rx_enable(id). So the publish
- * is a write of 1 into that array, and xmac_sopc_send_enable() (.text 0x1ac70) shows the entry
- * twelve words earlier is a ready flag whose bit 0 gates the publish:
- * `nppt + 0x34000 + (((idx + 0xa9) & 0x1ff) << 2)`.
+ * window. Two artifacts that both carry traffic on this SoC name it, and their index arithmetic is
+ * one model, not two: reading the entries as SMAC numbers s, ready(s) = 0x34000+(0xa5+s)*4 and
+ * send(s) = 0x34000+(0xac+s)*4 - seven words apart.
+ *   - pon/vendor-modules/np_133.ko, xmac_sopc_send_enable() (.text 0x1ac70) polls
+ *     `nppt+0x34000+((idx+0xa9)<<2)` bit 0 (retrying forever through __const_udelay(0x418958)),
+ *     then writes 1 to `nppt+0x34000+((idx+0xb0)<<2)`, and prints "sopc send enable, mac = %x" with
+ *     idx+4 - so its argument is s-4 and it is SMAC6 when idx is 2. xmac_init_by_work_mode()
+ *     (.text 0x1ae20) ends the same way: xmac_set_duplex_mode, xmac_set_sopc_duplex_mode,
+ *     __const_udelay(0x418958), `str 1` into that send entry, xmac_tx_rx_enable(id).
+ *   - this board's own U-Boot has both the generic and the SMAC6 form. backups/mtd1_boot.bin:0x5865c
+ *     computes ready = (m+0xa5) and send = (m+0xac) for m checked `cmp #3, b.hi` - the SMAC0..3
+ *     rows - and prints "read SOPC_CLR_OVER_READY_SMAC = 0x%x, mac = 0x%x" (0xa0b9f). :0x585a8
+ *     hard-codes x23 = 0x190342ac = ready(6), polls bit 0 ten times with a 0x3e8 delay, then
+ *     `mov x0,#0x42c8; mov w1,#1; str w1,[x0]` = send(6), printing "read SOPC_CLR_OVER_READY_SMAC6"
+ *     (0xa0b47) and "write SOPC_SEND_EN_CFG_SMAC6" (0xa0b81). So this port is SMAC6, and the two
+ *     forms agree on the same two words.
  *
- * THE PUBLISH HYPOTHESIS IS DEAD - measured on this board 2026-10-19 (docs 补八十三). This U-Boot's
- * own loop (backups/mtd1_boot.bin:0x58670) polls nppt+0x34000+(idx+0xa5)*4 bit 0 for idx 0..6 and
- * writes 1 to nppt+0x34000+(idx+0xac)*4, i.e. the entries 0x342b0..0x342c8, and in one power cycle
- * `md 0x190342a0 0x10` read all eight of those as 1 **at the prompt, before any net command**, with
- * 0x342ac (the ready word the SMAC6 routine at :0x585a8 polls) at 0 both before and after an
- * 11,464,708-byte tftp that this PC counted arriving. So the grant was never missing, and the
- * mis-aimed strobe below (nppt+0x15c2c4, which reads 0 in both states) is wrong but harmless.
+ * THE PUBLISH HYPOTHESIS IS DEAD, and the reason is now sharper than the measurement that killed it.
+ * Measured on this board 2026-10-19 (docs 补八十三): `md 0x190342a0 0x10` read send(0..6) =
+ * 0x342b0..0x342c8 all as 1 at the prompt before any net command, ready(6) = 0x342ac as 0, and both
+ * unchanged after an 11,464,708-byte tftp this PC counted arriving. 1 is that array's reset default,
+ * which its name says outright (SOPC_SEND_EN_*CFG*), so the vendor's `str 1` re-asserts an enable
+ * that is already set and a steady-state read of it witnesses nothing - for or against.
  *
- * What the same round did find is that the block mainline drives is not the block that counts:
+ * WHAT NO SOFTWARE WRITES. staging/sopcscan.py resolves store addresses by constant propagation
+ * over all 2 MiB of backups/mtd1_boot.bin (controls: it reports the stores at 0x58614 and 0x586c8,
+ * and reports nothing for a bogus window) and U-Boot touches exactly three words of the 0x34000
+ * block: send(6) = 0x342c8 with 1, 0x343c4 (CRC padding) with 0, and 0x343f0 (the per-XMAC duplex
+ * bits) by read-modify-write at eight sites. It never writes 0x340b8..0x340d4 or 0x34130..0x34138 -
+ * the words that sit at 0 at an idle prompt and hold values after traffic. Those are therefore
+ * hardware-updated status, and reading them as configuration was a mistake of mine: 0x340b8 =
+ * 0x00120018 is a pair of 16-bit counters (18 and 24), NOT "nppt+0x340b8 bit 4 set", so the
+ * alignment I claimed against greg_sopc_auto_gate_en_set()'s BIT(4) (.text 0xcd94, reached from
+ * set_sopc_auto_gate_en() .text 0x5b5f8 via register id 0x36) is coincidence, and that function is
+ * the only evidence left that 0x340b8 has a control half at all.
+ *
+ * What the same round did establish about the datapath:
  *   nppt+0x1900c0f0 (SMCT_DONE)  0 -> 0x000101f4 across that transfer, so mainline's smct_done 24
  *     was a real count of 24 frames reaching the SMCT;
  *   nppt+0x19142070/0x191420b0 (this driver's xmac_tx_frames / tx_good) stayed 0 through the same
  *     transfer, so `xmac_tx_frames: 0` proved nothing - a dead gauge, not a stopped MAC;
  *   the whole XMAC0 image (0x19140000/0x10/0x20, +0x280, +0x500, +0x3400) reads 0 in the working
  *     state, in a second power cycle, exactly as the older traffic-proven dump has it.
- * And the only region that is *empty* before bring-up and *full* after is the SOPC block:
- *   0x340b8=0x00120018, 0x340bc=0x0014001A, 0x340c0=0x00130019, 0x340c8/0xd0/0xd4=0x00010000,
- *   0x340cc=0x00870087, 0x34130=0x00120012, 0x34134=0x00140014, 0x34138=0x00130013 - all 0 at the
- *   prompt. Mainline's only contact with it is three hw_stat reads, which under mainline return the
- *   BL2/POST defaults (0x340bc 0x00050009, 0x34108 0x00020012, 0x34134 0x00050004), never a
- *   programmed mapping. nppt+0x340b8 bit 4 has a name in the vendor module - greg_sopc_auto_gate_en_set()
- *   (.text 0xcd94) does `w1 = ldr [base+0xb8]; w1 &= ~0x10; w1 |= (val & 1) << 4; str`, reached from
- *   set_sopc_auto_gate_en() (.text 0x5b5f8) via register id 0x36 - and the traffic value 0x0018 has
- *   that bit set. That, not the publish, is where the next change belongs.
+ * Mainline's strobe target, `eth->xmac_base + 0x1c2c4` = nppt+0x15c2c4, is inside the MAC window and
+ * is written by no working image on this board - wrong page and (0xb1 = 0xac+5) the wrong SMAC. It
+ * reads 0 in both states, so the mis-aim is harmless; correcting it is not by itself a fix.
  */
 #define ZX279133_SOPC_BASE			0x34000
-#define ZX279133_SOPC_XMAC_READY(idx)		\
-	(ZX279133_SOPC_BASE + ((((idx) + 0xa9) & 0x1ff) << 2))
-#define ZX279133_SOPC_XMAC_SEND(idx)		\
-	(ZX279133_SOPC_BASE + ((((idx) + 0xb0) & 0x1ff) << 2))
+#define ZX279133_SOPC_SMAC_READY(s)		\
+	(ZX279133_SOPC_BASE + ((((s) + 0xa5) & 0x1ff) << 2))
+#define ZX279133_SOPC_SMAC_SEND(s)		\
+	(ZX279133_SOPC_BASE + ((((s) + 0xac) & 0x1ff) << 2))
 /*
  * nppt+0x343f0 holds one bit per XMAC at BIT(4 + id): xmac_set_sopc_duplex_mode() (.text 0x1ac08)
  * rejects id > 1, computes `1 << (id + 4)` and BICs that bit when its value argument is 1, ORs it
