@@ -44,7 +44,23 @@ extern unsigned int zx279133_tx_port;
 #define ZX279133_DATAPATH_USER_LAN	BIT(1)
 #define zx279133_tx_selector		0x0f
 #define zx279133_tx_pon_control		0x08000000
-#define zx279133_tx_word4_bit23		0
+/*
+ * BIT(23) of the TX length word. The vendor's own LAN transmit path sets it: idm_net_lan_tx_direct()
+ * in pon/vendor-modules/np_133.ko builds the 24-byte descriptor on the stack at x29+0x6c..0x83, and
+ * at .text 0x119e8 it stores `mov w0, #-0x80` (byte 0x80) into x29+0x6e - the third byte of the word
+ * that lands at descriptor+4 (`str w0, [x19, #4]` at 0x11b20), i.e. bits 16..23 of length_flags, so
+ * bit 23 is 1 in every frame the vendor transmits on this port. Measured on the same instruction, the
+ * same function puts `(len << 1)` with bfi #1,#0xe in bits 1..14 and `0x0f` in byte 3 - both of which
+ * this driver already reproduces - and it does NOT put a port number in this word at all.
+ *
+ * It is a parameter, defaulting to the vendor's 1, because 0 is what every kit since the beginning
+ * has sent and the lane has never egressed one frame: `xmac_tx_frames 0` while the queue's done
+ * counter tracked the submissions 1:1 (run 69, 18:02 and 20:26 - nppt+0x192800b0 went 0x01 -> 0x13
+ * across exactly the 18 frames of a 24-ping burst, at which point the sweep of tx_port 0..7 had
+ * already shown the port field is not the cause). So this bit is the last field of the descriptor
+ * that is known to differ from the artifact that carries traffic.
+ */
+extern unsigned int zx279133_tx_word4_bit23;
 #define zx279133_tx_hw_csum		1
 #define zx279133_idm_cfg_bit24		0
 

@@ -30,6 +30,11 @@ unsigned int zx279133_tx_port = 6;
 module_param(zx279133_tx_port, uint, 0644);
 MODULE_PARM_DESC(zx279133_tx_port, "SMAC number a TX descriptor names as its egress port");
 
+/* 1 is what the vendor's own LAN transmit path sends; 0 is what every kit before this one sent. */
+unsigned int zx279133_tx_word4_bit23 = 1;
+module_param(zx279133_tx_word4_bit23, uint, 0644);
+MODULE_PARM_DESC(zx279133_tx_word4_bit23, "set BIT(23) of the TX length word, as the vendor module does");
+
 static int zx279133_shared_idm_prepare(struct zx279133_eth *eth)
 {
 	int ret;
