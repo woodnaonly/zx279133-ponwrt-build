@@ -33,6 +33,12 @@ for _cand in (SNAPSHOT, "../" + SNAPSHOT):
 
 # Traffic-proven MMIO reference. Keys are absolute addresses, values the word U-Boot printed in
 # a snapshot taken right after `Bytes transferred = 11464708`.
+#
+# Provenance correction (docs 补七十八): these three SPA words were first framed as "0 before the
+# transfer, non-zero after". That is false - all 35 reads of 0x19008000 ever logged say 68000000,
+# and warmcmp's cold column equals its traffic column. They are boot-early config that neither
+# U-Boot's code nor mainline writes at runtime, so this row is now a check on one question only:
+# did Linux change something nobody programs?
 MMIO_REF = {
     0x19008000: 0x68000000,
     0x19008014: 0x06111113,
@@ -48,7 +54,11 @@ MMIO_REF = {
 # not a configuration word, so comparing it against a *different* transfer would report a
 # difference that means nothing. Only the SPA trio is held to a hard match, and that is exactly
 # the block hypothesis 2 is about.
+#
+# 0x19000000 is demoted for a second, concrete reason: the snapshot file says 000000aa while every
+# live U-Boot read of it in serial.log says 000000ff, so the reference itself is not settled there.
 MMIO_SOFT = {0x19000000, 0x190000BC, 0x1900C0F0, 0x190340BC, 0x1902C054, 0x19002438}
+SPA_TRIO = (0x19008000, 0x19008014, 0x19008018)
 
 # Only these rows are compared: they are the ones tools/lanecheck.sh actually asks mdread for.
 # The snapshot also holds `1.0011` and a stray `48.20f3` (devad 0x30, from the round that
@@ -175,6 +185,21 @@ def main():
         if got != want:
             rc = 1
         print("  %#010x  ref %08x  board %08x  %s" % (addr, want, got, tag))
+
+    # The one decision this round has to make on the spot, in the few minutes of window left after
+    # the read: tools/spapoke.sh writes 68000000/06111113/01111111 into these three words. If Linux
+    # already reads them back at exactly those values the poke cannot change anything, and spending
+    # the window on it would cost the only other measurement still open (mdread's PHY rows).
+    trio = [(a, mmio.get(a), MMIO_REF[a]) for a in SPA_TRIO]
+    if all(got == want for _, got, want in trio):
+        print("steer: the SPA trio already equals the proven state -> spapoke.sh would be a no-op, "
+              "skip it and spend the rest of the window on the mdread rows")
+    elif any(got is None for _, got, _ in trio):
+        print("steer: SPA trio not fully read -> no A/B on an unread baseline; re-send rdreg first")
+    else:
+        print("steer: SPA trio differs (%s) -> Linux changed a block nobody programs; run "
+              "tools/spapoke.sh while the window lasts"
+              % ", ".join("%#x %08x!=%08x" % (a, got, want) for a, got, want in trio if got != want))
 
     print("lanediff: %s" % ("every compared word matches the traffic-proven state"
                             if rc == 0 else
