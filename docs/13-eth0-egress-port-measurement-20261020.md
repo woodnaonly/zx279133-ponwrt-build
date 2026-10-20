@@ -184,3 +184,16 @@ cspd / sbin/httpd 里到处是 `echo g_wfwdlatency_flag=1 > /proc/tm/shell`、`e
 以及 `switch.ko` 的 ioctl 面（`cspd` 用 `si_sw_do_ioctl`/`si_eth_upmode_set` 走 `/dev/switch_dev`——
 本机 `/dev` 里根本没有那些节点，社区镜像没建，route B 时是我 mknod 出来的）。
 `/proc/tm/shell` 这条路可以直接排除，省下以后再来试的时间。
+git -C ci-build-repo add docs/13-eth0-egress-port-measurement-20261020.md && git -C ci-build-repo commit -q -m "docs(13): the tm shell refuses even a real serial tty - route D cannot use /proc/tm/shell" && git -C ci-build-repo log --oneline -1
+
+## 10. 22:32 追加：串口真 tty 也照样 `operation forbid`
+
+为判"是不是只许本机 tty"，用 TTL 控制台（`root@OpenWrt:~#`，真 tty，先确认 `forbid_telnet_ctrl_tm_shell`
+= enabled(0)）写同一个口子：`echo help > /proc/tm/shell` 和 `echo g_mode_detect_flag=1 > /proc/tm/shell`
+—— 两条都在 dmesg 回 `operation forbid`，而 shell 自己退出码仍是 0（`HELP-RC=0`/`VAR-RC=0`），
+所以**不能拿 `$?` 当写成功的判据**，要看 dmesg。写完把闸门恢复成 disabled(1)。
+
+⇒ `/proc/tm/shell` 从 ssh 与从串口都进不去，里面应该还有一个没点亮的内部开关
+（同族嫌疑名字：`low_power_debug_set_int_mask`、`g_netdebug_mod_tab`、`netdebug`，**未证**）。
+route D 到此只剩两条：`/proc/pon/{tm,switch}_debug/*` 那族单项 setter（`sw_upmode_set` 实测可写可回显），
+和 `switch.ko` 的 `/dev/switch_dev` ioctl（需要 mknod，route B 已验证建节点可行）。
