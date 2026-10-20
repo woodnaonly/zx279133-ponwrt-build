@@ -172,6 +172,27 @@ G1 之前**不 build、不 push、不动板子**。G1 若差集为空，停下�
 
 **回退**：RAM 镜像重启即回 4.19；flash 未动。
 
+**2026-10-21 的两处修正（执行前必读）**：
+
+1. **"mainline 有 nf_tables" 这句话当时是错的**：这棵树/这个 feed 的
+   `CONFIG_NETFILTER` 关着，镜像里也没有 nft、没有 iptables（连 busybox 的
+   iptables applet 都没有），feed 的 nftables 包还依赖一个这个分支里不存在的
+   kmod 包。⇒ NAT 的内核半边和用户态半边都要补：run97 把 netfilter 全部编进
+   内核，用户态用 `overlays/package/network/utils/nftables/Makefile`。
+   **符号名按本树写**：masquerade 是 `CONFIG_NFT_MASQ`；counter 表达式没有
+   自己的符号（`nft_counter.o` 在 `nf_tables-objs` 里）。详见 **docs/21**。
+2. **"上游网线由机主插到 eth2 对应的 RJ45" 这一句现在没有第二根线可插**：
+   板上只有 PC↔UNI2（我们的 `lan2`）一根。⇒ 两条路并存：
+   - **真两口**：机主插第二根线（插哪只都行，板子自己认：`S26nat` 搜
+     `lan3`→`lan1`→`lan4`，60 s 一轮的 watcher 认出后插的线）；
+   - **单线（本轮走这条）**：PC 当上游（Windows ICS，Wi-Fi 出、有线回，自带
+     DHCP 和 NAT），板子的 WAN = PC 所在口（`/etc/labwan = pc`），板子的 LAN =
+     其余三口 + 板子自己造的客户端（`S27labclient`：veth 对 + 网络命名空间）。
+     DHCP 服务器 / DHCP 客户端 / 桥 / 路由 / NAT / DNS / 上网全部可验，
+     **只有"两口各插一根线"这个物理形态仍然要一根线**。
+   另外：这版镜像的 `/etc/config/network` 是 **JSON**，改配置要走镜像自己的
+   helper（`board_config_update` + `ucidef_set_interface`），`uci set` 不保证被接受。
+
 ---
 
 ### 4.4 W4：刷机 / 回退（只在 G2+G3 都通过后）
