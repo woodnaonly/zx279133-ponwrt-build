@@ -1847,3 +1847,29 @@ path 型字符串，本机只缺 `/var/tmp/*` 这类运行时产物。期间 `om
 ⇒ WAN 的两条实路（都要动 flash 或动配置，**等机主点头**）：
 **A 整机回厂商固件**（`restore_set/` boot/kernel/dtb/param/root 五件套齐全，光猫与注册一并回来）；
 **B 在现系统上起 vendor app server**（compat/库/节点已验证可用，剩下是与 netifd/firewall 共存和那套 XML 配置库）。
+
+---
+
+## 2026-10-20 21:51–22:16：把 wan 改成 dhcp 之后，实测说这条路上没有门
+
+接上节的 A/B 两条路。机主这段时间没回话，我先做了**只动配置、可回退**的那一半，然后用厂商 TM 窗口把它测死了：
+
+1. **做了**：`network.wan.proto='dhcp'`（原来 eth0 是静态 192.168.9.2/24），`lan` 不动。
+   21:51 提交 → 21:57 那次冷启动自然生效：`udhcpc -i eth0` 在广播 discover，无租约时不冒出假默认路由，
+   ssh/LuCI/br-lan 一切照常。回滚参照 `backups/network-pre-wan-20261020-215059.txt`（33 行原文）。
+   `tools/verify_router.sh` 修掉两个假阴性（Windows ARP 是 `d0-45-…` 全横线、回复行是 `TTL=64` 大写；
+   root 无密码时控制台是 `root@OpenWrt:~#` 而不是 `login:`）之后：**5/5 PASS，`ROUTER IS USABLE`**，
+   22:00/22:14 两次冷启动都算过。
+2. **测出来**：CPU 从 eth0 发出的帧全落到 `smac1`（lan 侧）；`xmac0/xmac1/rgmii/pon0/pon1` 一个都不动。
+   idle 窗口 smac1=24、flood 窗口 smac1=73，lan 单播对照组同样只动 smac1 ⇒ 仪表有效、零是真零。
+   详见 `docs/13-eth0-egress-port-measurement-20261020.md`（含我自己第一次误读 `smac2/smac3=31` 的更正）。
+3. **顺带纠正两件事**：
+   - 21:49 那次 route-B 拆除是假的——这镜像没有 `pkill`/`arp` applet，`/bin/pc` 和 `gpon_omci`
+     一直活到 21:55:10 才用 `killall -9` 干掉。之前"已验证可用"的观测本身不受影响，但那段窗口不干净。
+   - `/proc/pon/outer_phy` = `xmac0: phy_RTL8226`，且 `rlt8226b.ko` **本来就装着** ⇒ eth0 认出口在 xmac0，
+     缺的不是 PHY 驱动，是"把出口端口从默认 smac1 改到 xmac0"那层配置（厂商那边在 app/`wan_bridge` 里）。
+4. **架好了无人值守仪器**：`tools/eth0jackwatch.sh 240` 每 10 s 记 eth0 的 rx/tx、`carrier`、
+   `sky_outerphy_state` 到 `staging/ctl/eth0-jackwatch.log`。**机主只要把网线换到别的 RJ45**，
+   xmac0 到底收不收得到帧就会自动留在日志里，不用有人守着。
+5. **还是要机主**：(a) 光纤插没插、光猫注册灯态；(b) 四个 RJ45 里哪个是 eth0（换线即可，仪器会答）；
+   (c) 要不要走 A（整机回厂商固件，写 flash）；(d) root 至今没密码，ssh 只认公钥。
