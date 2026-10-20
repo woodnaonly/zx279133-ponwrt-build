@@ -382,3 +382,116 @@ runs after the NP is started, not in anything inherited from U-Boot.
 A scanner bug found on the way, recorded because it hid a real register: the store pattern
 `(?:w\d+|x\d+)` does not match `wzr`/`xzr`, so on the first run `idm_init`'s `str wzr, [x0, #0xbc]`
 was invisible and `+0xbc` did not appear at all. Writing zero is still a bring-up write.
+
+## 4f. U-Boot's traffic-proven IDM image, recovered from this morning's log
+
+`tools/idmband.sh` ran 10:54:15-10:55:42 and its own log records `traffic=yes` (it answered
+`host 192.168.9.25 is alive` twice, before and after the reads), so the 26 `md` replies it typed into
+`staging/ctl/serial.log` are a reference image of a state that really carries frames. They were never
+parsed at the time - `idmband.sh` only prints "parse serial.log for 1928*" - so the image was sitting
+in the log unexamined while §4e was being written. Re-slicing the log by the `=== >>> HH:MM:SS sent:`
+banners and taking only the 10:53-10:58 window gives, word by word:
+
+| word | U-Boot (proven) | running mainline (flashed run 61, 15:48) | vendor Linux |
+| --- | --- | --- | --- |
+| `+0x00` | `01ff0007` | - | RMW |
+| `+0x04` | `b0008000` | - | **never written** |
+| `+0x08` | `b0028000` | DRAM (`rx_descs_dma`) | **never written** |
+| `+0x0c` | `04000000` | `04000000` (kit 75) | RUNTIME |
+| `+0x10` | `00000020` | `00000080` | RUNTIME (128) |
+| `+0x14..34` | `00010001` | `00800080` | - |
+| `+0x38` | `00001000` | `0000c350` | - |
+| `+0x40` | `07ffffff` | `07ff0000` (wrote `07ffffff`) | `07ffffff` |
+| `+0x44` | `07ffffff` | `0000f00f` (run 61's split) | `071ffbfb` |
+| `+0x48/4c/50` | `0` / `0` / `0` | `00ff0000` / `0` / `0x0f00` | `00200000` / `00400000` / `00800404` |
+| `+0x54..60` | `06060606 00060606 07070707 07070707` | same | same |
+| `+0x6c` | `00000800` | `000007c1` | - |
+| `+0x70` | `000003e8` | `000007ff` | depth-1 |
+| `+0x100` | `00000001` (10:55) / `00000020` (10:51) | - | ring doorbell |
+| `+0x104/108` | `b0000000` / `b0004000` | DRAM pool | DRAM pool |
+| `+0x10c/110` | `00000100` / `00000100` | `00001000` / `00001000` | `(bytes>>12-1)<<21\|0x100` |
+| `+0x114` | `00000400` | - | - |
+| `+0x120/124` | `000003af` / `00000040` | `000007a0` / `00000000` | `+0x124 = 0x80` |
+| `+0x140/144` | `01111111` / `11111111` | - | - |
+| `+0x40c` | `001ffc00` | `00003d00` | - |
+| `+0x5c0` | `00000067` | `00000007` | RUNTIME (7) |
+
+Three consequences, in the order that changes what to build:
+
+1. **`+0x44` has two proven values and kits 76+ took the wrong one by construction.** The bootloader
+   that carries traffic on this board routes *every* source to IRQ line 0 (`0x07ffffff`, and lines
+   1..3 are all zero). The vendor's Linux driver routes `0x071ffbfb` to line 0 and spreads the rest
+   over lines 1..3 - which is the word `§3`/`§4b` copied into the driver, and the difference is only
+   explainable by the vendor having requested three more IRQ lines. Mainline requests one. So if kits
+   78/80 still show the `19000000.ethernet` count at 0, the next value to try is U-Boot's
+   `0x07ffffff`, and it needs no new theory - it is measured, on this board, in a state that worked.
+2. **The ring-base question can be re-opened with data, not reasoning.** U-Boot's descriptor rings sit
+   at `b0008000`/`b0028000` and its buffer/free rings at `b0000000`/`b0004000` - inside the NP window.
+   #39 closed docs/10's "put the rings in the NP window" on the grounds that the *vendor Linux* buffer
+   pool is CPU DRAM (`0x80b23000`), which is true but is about `+0x104/+0x108`, while the descriptor
+   bases `+0x04/+0x08` are written by neither Linux driver and keep whatever U-Boot left. So the
+   working vendor combination is: descriptor rings in the NP window (inherited), buffer pool in DRAM
+   (programmed). Mainline is the only one of the three that points the *descriptor* rings at DRAM, and
+   it is the only one that never receives. This is now a recorded asymmetry rather than a conclusion.
+3. **Most configuration words disagree between the two working references, so they are not the
+   blocker.** `+0x10`, `+0x14..34`, `+0x38`, `+0x6c`, `+0x70`, `+0x40c`, `+0x5c0` all differ between
+   U-Boot's image and the vendor Linux driver's writes, and both of those carry traffic - which is
+   exactly why §4e's method (look for words *neither* reference leaves unwritten) is the one worth
+   spending a kit on, and why mainline's own values for those words cannot be scored as a regression.
+
+Caveat recorded so nobody re-reads this table as a reset-default list: `+0x100` changed between the
+10:51 and 10:55 reads of the same boot (`0x20` then `0x01`), and `+0x120`/`+0x90` differ between
+U-Boot and Linux by amounts typical of counters, so the live words in this table are observations,
+not configuration. The `+0x2c8` value in U-Boot is still not measured - docs/09's entry for it comes
+from a static reading of the blob - which is why `tools/rxproof.sh` now types
+`md.l 0x192802c8 2`, `md.l 0x19280490 2` and `md.l 0x19280040 4` in the same window it uses to boot
+a kit.
+
+## 4g. Cold-hand-over reads at 16:01 (tools/ubidm.sh): what U-Boot really leaves, and two corrections
+
+The 16:00 smart-plug cut gave a cold boot, `tools/ubidm.sh` caught the prompt at probe 15, typed five
+`md.l` reads, then `run bootcmd` - the board resumed normally (serial shows the flashed mainline
+reaching `eth0: Link is Up` at 16:03), so nothing about the flash state changed.
+
+| word | U-Boot, cold, 16:01 | U-Boot, after `ping`, 10:54 | running mainline, 15:48 |
+| --- | --- | --- | --- |
+| `+0x00` | `03c30007` | `01ff0007` | - |
+| `+0x04` | `00000000` | `b0008000` | DRAM |
+| `+0x08` | `00000000` | `b0028000` | DRAM |
+| `+0x0c` | `04000000` | `04000000` | `04000000` |
+| `+0x40` | `07ffffff` | `07ffffff` | `07ff0000` (wrote `07ffffff`) |
+| `+0x44` | `07ffffff` | `07ffffff` | `0000f00f` |
+| `+0x100..108` | `0 / 0 / 0` | `1 / b0000000 / b0004000` | - |
+| `+0x10c` | `fffffe00` | `00000100` | `00001000` |
+| `+0x2c8` | `00112233` | (not read) | `00112233` |
+| `+0x2cc` | `06304922` | (not read) | `06304922` |
+| `+0x490` | `00000000` | (not read) | `00000000` |
+
+**Correction 1 - §4f's ring-base asymmetry is gone.** The NP-window ring addresses in this morning's
+table were not handed over by the bootloader at all: they appear only in a boot where U-Boot's own
+network stack ran (`ping`, `tftpboot`), and a cold hand-over leaves `+0x04`, `+0x08`, `+0x104`,
+`+0x108` at **zero**. So "U-Boot puts the descriptor rings in the NP window and mainline is the only
+one that points them at DRAM" was reading an activity artefact, and #39's refutation of docs/10 stands
+on better grounds than §4f gave it. What replaces it is a sharper question: the vendor Linux driver
+never writes `+0x04/+0x08` either, and a *normal* flash boot hands those words over as 0, so under the
+working vendor driver the NP runs with descriptor-ring base registers at 0 - which means 0 is not
+"unset" for those words, it is a value with meaning (most plausibly "use the address the NP firmware
+chose itself"). Mainline writing a real DRAM address there is therefore not obviously equivalent, and
+it is the one remaining structural difference between mainline and the driver that works. It is testable
+in one kit (`writel(0, idm + 0x0004); writel(0, idm + 0x0008)`) but only after kit 80, since it changes
+the same datapath.
+
+**Correction 2 - docs/09's static claim that the bootloader programs `+0x2c8` is wrong, and kit 80 is
+now the only thing that ever sets it.** Cold hand-over reads `0x00112233`, i.e. bits[29:24] = 0x00 -
+byte for byte what the running mainline reads. So nothing in this board's boot chain ever writes the
+field, and `0x00112233 / 0x06304922` is the block's reset signature (an incrementing pattern in
+neighbouring words, not data). That makes the vendor's `and 0xc0ffffff / orr 0x12000000` the only
+writer the field has ever had on this device, which is exactly the kind of divergence that has been
+productive here - and it rules out the "mainline erases what U-Boot set" class of bug for this word,
+because U-Boot sets nothing.
+
+`+0x490 = 0` is likewise a reset default rather than something mainline inherited, so kit 79's
+`writel(0, idm + 0x0490)` is confirmed to be parity, not a test. `+0x40/+0x44 = 07ffffff / 07ffffff`
+at cold hand-over confirms §4f's point 1: the state that carries traffic has every source unmasked and
+every source on line 0, so if kit 78/80's interrupt count stays 0 the routing value to try next is
+`0x07ffffff`, with no new theory required.
