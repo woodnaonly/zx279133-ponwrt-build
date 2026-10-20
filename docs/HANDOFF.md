@@ -1796,3 +1796,27 @@ skd840n_initramfs_39_38896098366
   重定向必须在 `sh` 脚本**里面**，否则那条命令根本没按预期跑，而 `$LASTEXITCODE`
   看起来还是 0。复杂命令写脚本文件这条规矩，同样管重定向。
 
+
+---
+
+## 2026-10-20 21:13 起：设备状态 = 已刷好并验证可用（详见 `docs/12-jffs2-dirent-repair-restored-router-20261020.md`）
+
+一句话：**flash 里这套 4.19 + 社区 root 现在连续三次纯冷启动都干净，LAN 双向带流量，`ssh root@192.168.9.1` 能进，LuCI 200。**
+不需要擦任何分区，也不需要串口了——快通道是网络，串口只留给启动期证据。
+
+接手前要知道的三件事：
+
+1. **root 曾经被两套 jffs2 写坏**（mainline 写的名字，4.19 解析成"不是目录"，`/etc/preinit` 死在 `/dev/null`）。
+   修法只有一种有效：**新 inode**（`tools/ubram.sh` 起 RAM，再 `tools/reflush_root.sh`）。写新 dirent（改名往返）
+   实测无效，别再试。判据是 `tools/boot419score.sh` 里那两个计数，不是最后一行日志。
+2. **`root` 已经有完整备份**：`backups/root-20261020-2045.bin.gz`（gzip 11,347,306 B，md5 `6954ef8a026697ee1903bc1431e6353a`，
+   板端/PC 端一致）+ `backups/config-20261020-2100.tgz`（`sysupgrade -b`，md5 `2b63f7984bb5fd7d2c6c52b4d23b0a31`）。
+   所以"擦 root 不可逆"这个前提已经不成立；干净镜像回退包仍在 `staging/reflash-root/`。
+3. **WAN 还没有，而且这不是配置能解决的。** `pon` 有光（`rx los =0 rx data in`）、`ifconfig pon up` 后 `carrier=1`，
+   但 `RX/TX=0`；`/etc/config/network` 里没有任何 interface 引用 pon；全盘搜下来这套社区 root **只有 PON 内核模块、
+   没有任何 OMCI/注册用户态**，`/usr/data` 是空的。厂商那份用户态在 stock `kernel0/kernel1` 的 FIT initrd 里，
+   而 10-09 那次 `nand erase 0xf00000 0x0f100000` 已经把 kernel1 覆盖掉、我们当时只 dump 了 k0 的头 2 MiB——
+   所以它不在盘上，要 WAN 就得自己把注册链路做出来（见 [[pon-stack]]）。
+   想马上当普通路由器用的替代方案：把 `wan` 改 `proto dhcp` 并把 `eth0` 接到上游——这是改配置，等机主点头再做。
+
+另外：智能插座断电实测落在 **:09/:24/:39/:54**（约 15.1 分钟一次），不是整刻钟；武装 `tools/armu4.sh` 要跨过预测秒。
