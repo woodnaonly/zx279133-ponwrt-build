@@ -1186,11 +1186,29 @@ static int zx279133_9132_port_init(struct zx279133_eth *eth)
 #define ZX279133_9132_UNI_PHY_FIRST	0x0a
 #define ZX279133_9132_UNI_PHY_LAST	0x0d
 
+/*
+ * BMSR's link bit is latched: it has to be read twice, and the first read
+ * clears the latch.  Returns 1 for link, 0 for no link, -1 for "the PHY did
+ * not answer".
+ */
+static int zx279133_9132_phy_link(struct mii_bus *bus, int addr)
+{
+	int bmsr;
+
+	mdiobus_read(bus, addr, MII_BMSR);
+	bmsr = mdiobus_read(bus, addr, MII_BMSR);
+
+	return (bmsr < 0) ? -1 : !!(bmsr & BMSR_LSTATUS);
+}
+
 static void zx279133_9132_phy_enable(struct zx279133_eth *eth)
 {
 	struct device_node *np;
 	struct mii_bus *bus;
+	u16 found_addr[ZX279133_9132_UNI_PHY_LAST -
+			ZX279133_9132_UNI_PHY_FIRST + 1];
 	int addr, found = 0;
+	u32 i;
 
 	np = of_parse_phandle(eth->dev->of_node, "zx279133,uni-phy-bus", 0);
 	if (!np) {
@@ -1208,7 +1226,7 @@ static void zx279133_9132_phy_enable(struct zx279133_eth *eth)
 
 	for (addr = ZX279133_9132_UNI_PHY_FIRST;
 	     addr <= ZX279133_9132_UNI_PHY_LAST; addr++) {
-		int id1, id2, bmcr, bmsr, link = -1;
+		int id1, id2, bmcr, bmcr_rb, link;
 
 		id1 = mdiobus_read(bus, addr, MII_PHYSID1);
 		id2 = mdiobus_read(bus, addr, MII_PHYSID2);
@@ -1232,25 +1250,76 @@ static void zx279133_9132_phy_enable(struct zx279133_eth *eth)
 		mdiobus_write(bus, addr, MII_BMCR, (u16)bmcr);
 
 		/*
-		 * The link bit lives in BMSR, not in a vendor "LMSR": Linux
-		 * has no MII_LMSR (0x1a is MII_RESV2).  BMSR's link bit is
-		 * latched, so it has to be read twice.
+		 * Read the control register back.  A write that does not land
+		 * and a PHY that stays powered down look the same from the
+		 * outside, and only the read-back tells them apart - and this
+		 * word is the only place the write can be seen at all.
 		 */
-		mdiobus_read(bus, addr, MII_BMSR);
-		bmsr = mdiobus_read(bus, addr, MII_BMSR);
-		link = (bmsr < 0) ? -1 : !!(bmsr & BMSR_LSTATUS);
+		bmcr_rb = mdiobus_read(bus, addr, MII_BMCR);
+		if (bmcr_rb < 0)
+			bmcr_rb = -1;
 
-		found++;
-		dev_info(eth->dev,
-			 "9132 UNI PHY %02x: id %04x:%04x, BMCR %04x, link %d\n",
-			 addr, id1, id2, bmcr, link);
+		link = zx279133_9132_phy_link(bus, addr);
+
+		found_addr[found++] = addr;
+		if (bmcr_rb < 0)
+			dev_info(eth->dev,
+				 "9132 UNI PHY %02x: id %04x:%04x, BMCR %04x, read-back failed (%d), link %d\n",
+				 addr, id1, id2, bmcr & 0xffff, bmcr_rb, link);
+		else
+			dev_info(eth->dev,
+				 "9132 UNI PHY %02x: id %04x:%04x, BMCR %04x->%04x, link %d\n",
+				 addr, id1, id2, bmcr & 0xffff, (u16)bmcr_rb, link);
 	}
 
-	if (!found)
+	if (!found) {
 		dev_err(eth->dev,
 			"no 9132 UNI PHY answered on %02x..%02x\n",
 			ZX279133_9132_UNI_PHY_FIRST,
 			ZX279133_9132_UNI_PHY_LAST);
+		return;
+	}
+
+	/*
+	 * The copper side needs a moment to negotiate, and a PHY that was
+	 * just powered up reports "no link" for a while even with the cable
+	 * in.  One early read would call a slow port a dead one, so read the
+	 * link again after the settle - this is the reading that says which
+	 * of the four jacks the test PC is actually plugged into.
+	 */
+	msleep(1000);
+	for (i = 0; i < (u32)found; i++)
+		dev_info(eth->dev, "9132 UNI PHY %02x: link after settle %d\n",
+			 found_addr[i], zx279133_9132_phy_link(bus, found_addr[i]));
+}
+
+/*
+ * The 9132's per-port enable word: SPA indirect address 0 of a PPU port's
+ * memory.  docs/15 lists it as the first difference between the vendor's
+ * switch.ko and mainline - "port enable, written when the netdev is opened" -
+ * and mainline has never written it.
+ *
+ * This round only reads it.  A read has no side effects and says what the
+ * bootloader left behind, and a word that reads back as something else than
+ * what was written is the one thing that distinguishes "the write never
+ * reached the chip" from "the chip was never told anything" - the two look
+ * identical from the outside.
+ */
+static void zx279133_9132_port_enable_read(struct zx279133_eth *eth)
+{
+	u32 ppu, val;
+	int ret;
+
+	for (ppu = 0; ppu <= 5; ppu++) {
+		ret = zx279133_spa_indirect_read(eth, ppu, 0, &val);
+		if (ret) {
+			dev_info(eth->dev,
+				 "9132 PPU %u enable word: read failed (%d)\n",
+				 ppu, ret);
+			continue;
+		}
+		dev_info(eth->dev, "9132 PPU %u enable word %08x\n", ppu, val);
+	}
 }
 
 /*
@@ -2765,6 +2834,12 @@ int zx279133_np_prepare(struct zx279133_eth *eth)
 	 * enabled after the chip itself has been programmed.
 	 */
 	zx279133_9132_phy_enable(eth);
+	/*
+	 * And what the chip says about its own ports, read back.  This is a
+	 * read, not a write: the point is to see the enable word the
+	 * bootloader left before anything here changes it.
+	 */
+	zx279133_9132_port_enable_read(eth);
 
 	return 0;
 

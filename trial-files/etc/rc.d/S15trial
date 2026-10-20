@@ -48,6 +48,19 @@
 	done
 	echo "trial: netdevs=$n addr=$addr" >/dev/kmsg
 
+	# The evidence this round is for, in one place: the 9132's port words
+	# and enable word, its four internal PHYs (id, BMCR, link before and
+	# after the settle), the Uni SerDes profile the bootloader left, and
+	# the XPCS0 status word.  The kernel prints all of it into the same
+	# console the serial relay keeps, but only if somebody asks - and
+	# "ask" here means one grep into kmsg, which survives in dmesg even if
+	# the image is pulled out of the board's memory.
+	{
+		echo "trial: evidence"
+		dmesg | grep -E '9132|Uni SerDes|XMAC0|XPCS0|lan-cpu|conduit|Link is'
+		echo "trial: evidence end"
+	} >/dev/kmsg 2>&1
+
 	(
 		sleep 300
 		# touch /tmp/trial-noreboot from ssh to keep the image running

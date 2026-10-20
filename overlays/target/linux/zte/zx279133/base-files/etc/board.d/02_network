@@ -39,7 +39,17 @@ skyworth,sk-d840n)
 	#     so that address cannot be told apart from the LAN's gateway by anything that pings it
 	# 192.168.9.1 is the address the installed vendor image already uses for its lan bridge, so
 	# this also keeps the rollback target and the flashed system on one address.
-	ucidef_set_interface "lan" device "eth0" protocol "static" \
+	#
+	# Which netdev carries the LAN depends on whether the 9132's CPU port lane came up.
+	# "lan-cpu0" is the conduit the switch driver registers on the NPPT's XMAC0 lane: it
+	# is the only path to the 9132's four UNI jacks, which are the physical LAN ports of
+	# this board.  eth0 is the NPPT's own port, which is jack 4 - the external RTL8226.
+	# The address goes on the conduit when it exists and on eth0 when it does not, so an
+	# image whose lane did not come up still has an address and still answers, instead of
+	# coming up with none at all.
+	lan_dev=eth0
+	[ -e /sys/class/net/lan-cpu0 ] && lan_dev=lan-cpu0
+	ucidef_set_interface "lan" device "$lan_dev" protocol "static" \
 		ipaddr "192.168.9.1" netmask "255.255.255.0"
 	;;
 *)
