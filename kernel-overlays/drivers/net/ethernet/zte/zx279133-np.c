@@ -984,6 +984,156 @@ static int zx279133_mf_port_ppuinit(struct zx279133_eth *eth)
 }
 
 /*
+ * 9132 UNI switch ports (SK-D840N).
+ *
+ * Provenance: docs/15-switchko-init-diff-20261020.md.  Everything below was
+ * read out of the vendor modules, not guessed:
+ *
+ *   - the 9132 is programmed through the SPA indirect window, and the vendor's
+ *     np_133.ko encodes the command exactly the way this file already does
+ *     (addr | (mem_id << 20) | (op << 27)), so zx279133_spa_indirect_write()
+ *     is the same hammer the vendor uses;
+ *   - the per-port attribute word is SPA indirect address 19 (0x013) of a PPU
+ *     port's memory - the same address zx279133_mf_port_attr_set() below
+ *     already writes;
+ *   - the bit positions come from np_133.ko's port_attr_def_*_set() helpers,
+ *     which read that word, patch one bit of it and write it back.  They are
+ *     listed in docs/15 §5.  Where this file and the MF names collide (bit 18
+ *     is "ppuinit" to the MF block and "input VLAN check" to the switch API;
+ *     bit 28 is "smac_learn" and "DA lookup") they are the same bit - the
+ *     vendor's switch.ko init and np.ko's np_init_done both set it, and the
+ *     live values 0x148e0000 (WAN) and 0x1c8c2800 (LAN vport) both carry it.
+ *
+ * The 9132's four UNI ports are PPU ports 1..4 and the external RTL8226 is
+ * PPU port 5: np_133.ko's sw_port_change_to_chip_port() maps switch port p to
+ * p+1, and the live board confirms switch port 4 is the outer PHY
+ * ("outerphy_mode=5,outerphy_name=phy_RTL8226") while the 9132's own MACs
+ * are switch ports 0..3.  PPU port 0 is the CPU port.
+ *
+ * The vendor's switch.ko init (sw_init_switch, switch.ko 0x2e74) does this
+ * to every port; this is the part of it that belongs to the 9132's ports:
+ *
+ *   sw_init_port_isolate    isolate enable 0 for all 64 ports
+ *   sw_init_mac_lookup_ctrl SA learn 1, DA lookup 1, MAC-limit-full 0
+ *   sw_init_flood_ctrl      broadcast and multicast flood enabled
+ *   sw_init_port_route_mode route mode 0
+ *   sw_set_default_vlan_check_ctrl  input VLAN check enabled
+ *
+ * Port *enable* is not an SPA register in the vendor: zxic_api_sw_port_set_
+ * port_enable() goes through np_133.ko's smac_set_port_enable(), which
+ * drives the port's internal PHY over MDIO.  That part needs the PHY side and
+ * is not attempted here.
+ */
+#define ZX279133_9132_UNI_PPU_FIRST	1
+#define ZX279133_9132_UNI_PPU_LAST	4
+#define ZX279133_9132_OUTERPHY_PPU	5
+
+/* Per-port attribute word: SPA indirect address 19 of a PPU port. */
+#define ZX279133_PPU_ATTR_REG		19
+#define ZX279133_PPU_ATTR_ROUTE_MODE	BIT(13)
+#define ZX279133_PPU_ATTR_IN_VLAN_CHK	BIT(18)
+#define ZX279133_PPU_ATTR_BRD_FLOOD	BIT(25)
+#define ZX279133_PPU_ATTR_MUL_FLOOD	BIT(26)
+#define ZX279133_PPU_ATTR_ISOLATE_EN	BIT(27)
+#define ZX279133_PPU_ATTR_DA_LOOKUP	BIT(28)
+#define ZX279133_PPU_ATTR_MAC_LIMIT	BIT(29)
+#define ZX279133_PPU_ATTR_SA_LEARN	BIT(31)
+
+/*
+ * PVID: np_133.ko's spa_port_attr_table entry 14 is the default VLAN priority
+ * (address 1, bits 27..25) and entry 16 is the upstream untagged SVID
+ * (address 2, bits 29..18).  The 9132's UNI port N carries the transport VID
+ * of the LAN vport that owns it, so the port's untagged SVID is that VID.
+ */
+#define ZX279133_PPU_PVID_PRI_REG	1
+#define ZX279133_PPU_PVID_PRI_SHIFT	25
+#define ZX279133_PPU_PVID_VID_REG	2
+#define ZX279133_PPU_PVID_VID_SHIFT	18
+
+static int zx279133_spa_field_update(struct zx279133_eth *eth, u32 mem_id,
+				     u32 addr, u32 mask, u32 shift, u32 value)
+{
+	u32 cur;
+	int ret;
+
+	ret = zx279133_spa_indirect_read(eth, mem_id, addr, &cur);
+	if (ret)
+		return ret;
+	cur = (cur & ~(mask << shift)) | ((value & mask) << shift);
+
+	return zx279133_spa_indirect_write(eth, mem_id, addr, cur);
+}
+
+static int zx279133_9132_port_attr(struct zx279133_eth *eth, u32 ppu, u32 set,
+				   u32 clear)
+{
+	u32 attr;
+	int ret;
+
+	ret = zx279133_spa_indirect_read(eth, ppu, ZX279133_PPU_ATTR_REG, &attr);
+	if (ret)
+		return ret;
+	attr = (attr & ~clear) | set;
+
+	return zx279133_spa_indirect_write(eth, ppu, ZX279133_PPU_ATTR_REG, attr);
+}
+
+/*
+ * Bring up the 9132's UNI ports.  PPU port p carries the LAN vport of the
+ * same index (ZX279133_LAN_TRANSPORT_VID_MIN + (p - 1)), which is the VID
+ * the CPU puts on a frame to reach that physical port.
+ */
+static int zx279133_9132_port_init(struct zx279133_eth *eth)
+{
+	u32 ppu, vid;
+	int ret;
+
+	for (ppu = ZX279133_9132_UNI_PPU_FIRST; ppu <= ZX279133_9132_UNI_PPU_LAST;
+	     ppu++) {
+		vid = ZX279133_LAN_TRANSPORT_VID_MIN + (ppu -
+			ZX279133_9132_UNI_PPU_FIRST);
+
+		/*
+		 * switch.ko's sw_init_port_isolate / sw_init_mac_lookup_ctrl /
+		 * sw_init_flood_ctrl / sw_init_port_route_mode /
+		 * sw_set_default_vlan_check_ctrl, for this port.
+		 */
+		ret = zx279133_9132_port_attr(eth, ppu,
+					      ZX279133_PPU_ATTR_SA_LEARN |
+					      ZX279133_PPU_ATTR_DA_LOOKUP |
+					      ZX279133_PPU_ATTR_BRD_FLOOD |
+					      ZX279133_PPU_ATTR_MUL_FLOOD |
+					      ZX279133_PPU_ATTR_IN_VLAN_CHK,
+					      ZX279133_PPU_ATTR_ISOLATE_EN |
+					      ZX279133_PPU_ATTR_MAC_LIMIT |
+					      ZX279133_PPU_ATTR_ROUTE_MODE);
+		if (ret)
+			return ret;
+
+		/* tm_port_pvid_set(): default VLAN priority and untag SVID. */
+		ret = zx279133_spa_field_update(eth, ppu,
+						ZX279133_PPU_PVID_PRI_REG, 0x7,
+						ZX279133_PPU_PVID_PRI_SHIFT, 0);
+		if (ret)
+			return ret;
+		ret = zx279133_spa_field_update(eth, ppu,
+						ZX279133_PPU_PVID_VID_REG, 0xfff,
+						ZX279133_PPU_PVID_VID_SHIFT, vid);
+		if (ret)
+			return ret;
+	}
+
+	dev_info(eth->dev,
+		 "9132 UNI ports %u..%u up (transport VIDs %u..%u)\n",
+		 ZX279133_9132_UNI_PPU_FIRST, ZX279133_9132_UNI_PPU_LAST,
+		 ZX279133_LAN_TRANSPORT_VID_MIN,
+		 ZX279133_LAN_TRANSPORT_VID_MIN +
+		 (ZX279133_9132_UNI_PPU_LAST - ZX279133_9132_UNI_PPU_FIRST));
+
+	return 0;
+}
+
+/*
  * WAN port bring-up recovered from np.ko tm_sw_lan_up_pon_set(): when the
  * switch-side WAN port (5, PPU memory id 6) comes up the vendor driver
  * copies the CPU port's SPA start-PC attribute tables (1/3/4 at memory
@@ -2477,6 +2627,16 @@ int zx279133_np_prepare(struct zx279133_eth *eth)
 	if (ret)
 		goto err_route_off;
 	ret = zx279133_lan_port_bringup(eth);
+	if (ret)
+		goto err_route_off;
+	/*
+	 * The 9132's own UNI ports (PPU 1..4) are the physical LAN jacks on
+	 * SK-D840N; see the 9132 block above and docs/15.  The external
+	 * RTL8226 (jack 4) is PPU 5 and is left alone here: it is the
+	 * SoC's own LAN-side port and the vendor 4.19 does not carry a byte
+	 * on it either (docs/07 supplement 94).
+	 */
+	ret = zx279133_9132_port_init(eth);
 	if (ret)
 		goto err_route_off;
 

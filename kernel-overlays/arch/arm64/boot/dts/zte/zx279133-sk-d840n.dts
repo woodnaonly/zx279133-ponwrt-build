@@ -4,9 +4,11 @@
 //
 // Facts taken from this unit, not guessed:
 //   - SPI-NAND hangs off the SFC at 0x10d0f000 (live: /sys/.../10d0f000.spifc/spi_master/spi1/spi1.0)
-//   - partition map is the community U-Boot one (env at boot+0x180000):
+//   - partition map is derived from the community/vendor U-Boot one (env at boot+0x180000):
 //       boot 2048k@0x0 kernel 8192k@0x200000 dtb 1024k@0xa00000
-//       "parameter tags" 4096k@0xb00000 root 246784k@0xf00000
+//       "parameter tags" 4096k@0xb00000 root+scratch 246784k@0xf00000
+//     This DTS splits that last 246784k (= 241 MiB) into root 240 MiB at 0xf00000 and
+//     scratch 1 MiB at 0xff00000 (the vendor 4.19 table keeps it as one 241 MiB root).
 //     The /dev/mtdN numbering is pinned by the mtd1..mtd6 aliases below, not counted off
 //     node order, so it survives a kernel-config change: boot=1 kernel=2 dtb=3
 //     "parameter tags"=4 root=5 scratch=6, and mtd0 is the SPI-NAND master if
@@ -14,9 +16,10 @@
 //     (`root` must stay index 5 - the installed U-Boot bootargs hard-code
 //      root=/dev/mtdblock5 - *and* must start at 0xf00000, because that is where the
 //      system that does the flashing puts its own `root`: the vendor 4.19 table is
-//      whole/boot/kernel/dtb/param/root@0xf00000 (241 MiB), and /sbin/mtd on it can
-//      only erase and write a whole partition by label. An image that satisfied one
-//      constraint but not the other boots as a VFS panic with no serial to read.)
+//      whole/boot/kernel/dtb/param/root@0xf00000 (one 241 MiB root), and /sbin/mtd
+//      on it can only erase and write a whole partition by label. An image that
+//      satisfied one constraint but not the other boots as a VFS panic with no
+//      serial to read.)
 //   - console is the PL011-compatible zte,zx279133-uart at 0x10d0d000, 115200n8
 //   - memory is 512 MiB at 0x80000000 (stock DTB: reg = <0x0 0x80000000 0x0 0x20000000>)
 //
@@ -24,12 +27,15 @@
 // re-probed on this unit before the image is ever flashed):
 //   * Only the RTL8226 port below is reachable in mainline. The four GE LAN ports
 //     sit behind the SoC-internal "9132" UNI switch, which the vendor drives
-//     without phylib or DSA at all - the running system shows it:
-//     /dev/ethdriver + "ethdrv_dev_ioctl brdev_set.port_id 1, name eth1" for
-//     eth0..eth3, and /sys/bus/mdio_bus/devices is empty. There is no mainline
-//     equivalent, so SR1010's RTL8372N DSA node is dropped and the LAN-side
+//     without phylib or DSA at all: switch.ko writes the port/VLAN tables directly
+//     at module init. The /dev/ethdriver ioctl is an 8-byte stub, NOT a config
+//     interface (docs/07 补九十七); do not use it as the bring-up path. There is no
+//     mainline equivalent, so SR1010's RTL8372N DSA node is dropped and the LAN-side
 //     zte,zx279133-lan-conduit child is left out too (it is the CPU port of an
 //     external switch this board does not have).
+//     mainline registers eth0 but never moves traffic through it; the vendor 4.19
+//     also sends 0 bytes on this jack (docs/07 补九十四). Only U-Boot has moved
+//     traffic (11 MB) - so jack 4 is optional, not the bring-up gate.
 //     This unit has **no WAN/uplink jack at all** - the front panel is 4x LAN plus
 //     the fibre PON - so eth0 (NPPT + RTL8226) is one of those four LAN jacks, and
 //     the running image only calls it `wan` because the community config came from
