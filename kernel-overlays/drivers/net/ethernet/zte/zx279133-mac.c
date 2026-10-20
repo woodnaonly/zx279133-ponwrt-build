@@ -28,7 +28,7 @@ zx279133_mac_select_pcs(struct phylink_config *config,
 
 void zx279133_xmac_set_enabled(struct zx279133_eth *eth, bool enabled)
 {
-	void __iomem *xmac = eth->base + eth->xmac_base;
+	void __iomem *xmac = eth->base + ZX279133_XMAC1_BASE;
 	u32 value;
 
 	value = readl(xmac + ZX279133_XMAC_RX_CTRL);
@@ -410,7 +410,7 @@ static u32 zx279133_xmac_speed_code(int speed)
 static void zx279133_xmac_program(struct zx279133_eth *eth, u32 speed_code,
 				  int duplex)
 {
-	void __iomem *xmac = eth->base + eth->xmac_base;
+	void __iomem *xmac = eth->base + ZX279133_XMAC1_BASE;
 	u32 value;
 
 	writel(0x00010000, xmac + ZX279133_XMAC_TX_CTRL);
@@ -444,7 +444,7 @@ static void zx279133_xmac_program(struct zx279133_eth *eth, u32 speed_code,
 static void zx279133_xmac_set_pause(struct zx279133_eth *eth,
 				    bool tx_pause, bool rx_pause)
 {
-	void __iomem *xmac = eth->base + eth->xmac_base;
+	void __iomem *xmac = eth->base + ZX279133_XMAC1_BASE;
 	u32 flow;
 
 	flow = readl(xmac + ZX279133_XMAC_FLOW_CTRL);
@@ -471,12 +471,12 @@ static void zx279133_xmac_reset(struct zx279133_eth *eth)
 	void __iomem *reset = eth->base + ZX279133_SYS_SOFT_RESET;
 	u32 value;
 
-	/* smac_reset(): preserve the shared reset word and pulse this MAC only. */
+	/* smac_reset(): preserve the shared reset word and pulse XMAC1 only. */
 	value = readl(reset);
-	writel(value & ~eth->xmac_reset_mask, reset);
+	writel(value & ~ZX279133_XMAC_RESET_MASK, reset);
 	/* Vendor smac_reset(): __const_udelay(1718000) ~= 1.718 ms. */
 	usleep_range(1718, 1818);
-	writel(value | eth->xmac_reset_mask, reset);
+	writel(value | ZX279133_XMAC_RESET_MASK, reset);
 }
 
 static int zx279133_xmac_2500basex_init(struct zx279133_eth *eth)
@@ -486,7 +486,7 @@ static int zx279133_xmac_2500basex_init(struct zx279133_eth *eth)
 
 	/* xmac_init_by_work_mode(4): reset/configure, then publish SOPC. */
 	zx279133_xmac_set_enabled(eth, false);
-	writel(0, eth->base + eth->xmac_sopc_send);
+	writel(0, eth->base + ZX279133_XMAC1_SOPC_SEND_ENABLE);
 
 	ret = zx279133_xpcs_init(eth);
 	if (ret)
@@ -504,7 +504,7 @@ static int zx279133_xmac_2500basex_init(struct zx279133_eth *eth)
 	writel(value & ~ZX279133_XMAC1_SOPC_DUPLEX_MASK,
 	       eth->base + 0x343f0);
 	usleep_range(4295, 4395);
-	writel(1, eth->base + eth->xmac_sopc_send);
+	writel(1, eth->base + ZX279133_XMAC1_SOPC_SEND_ENABLE);
 	zx279133_xmac_set_enabled(eth, true);
 
 	return 0;
@@ -523,7 +523,7 @@ static int zx279133_xmac_sgmii_init(struct zx279133_eth *eth, int speed,
 
 	/* xmac_init_by_work_mode(3): reset/configure, then publish SOPC enable. */
 	zx279133_xmac_set_enabled(eth, false);
-	writel(0, eth->base + eth->xmac_sopc_send);
+	writel(0, eth->base + ZX279133_XMAC1_SOPC_SEND_ENABLE);
 	zx279133_xmac_reset(eth);
 
 	ret = zx279133_xpcs_sgmii_quirk(eth);
@@ -545,13 +545,13 @@ static int zx279133_xmac_sgmii_init(struct zx279133_eth *eth, int speed,
 		       eth->base + 0x343f0);
 	/* Vendor xmac_init_by_work_mode(): __const_udelay(4295000). */
 	usleep_range(4295, 4395);
-	writel(1, eth->base + eth->xmac_sopc_send);
+	writel(1, eth->base + ZX279133_XMAC1_SOPC_SEND_ENABLE);
 	zx279133_xmac_set_enabled(eth, true);
 	/* Re-apply after XMAC/SOPC; C45 AN bits are otherwise lost. */
 	ret = zx279133_xpcs_apply_sgmii_vend2(eth, duplex);
 	if (ret) {
 		zx279133_xmac_set_enabled(eth, false);
-		writel(0, eth->base + eth->xmac_sopc_send);
+		writel(0, eth->base + ZX279133_XMAC1_SOPC_SEND_ENABLE);
 		return ret;
 	}
 
@@ -644,15 +644,14 @@ static void zx279133_mac_disable_tx_lpi(struct phylink_config *config)
 					       phylink_config);
 	u32 val;
 
-	/* EEE image recovered from factory xmac_eee_conf(1, enable), applied to this
-	 * device's own MAC window. */
+	/* XMAC1 programming recovered from factory xmac_eee_conf(1, enable). */
 	mutex_lock(&eth->xmac_lock);
-	val = readl(eth->base + eth->xmac_base + ZX279133_XMAC_EEE_CTRL_OFF);
+	val = readl(eth->base + ZX279133_XMAC1_EEE_CTRL);
 	writel(val & ~ZX279133_XMAC_EEE_ENABLE_MASK,
-	       eth->base + eth->xmac_base + ZX279133_XMAC_EEE_CTRL_OFF);
-	writel(readl(eth->base + eth->xmac_base + ZX279133_XMAC_EEE_TIMER_OFF) &
+	       eth->base + ZX279133_XMAC1_EEE_CTRL);
+	writel(readl(eth->base + ZX279133_XMAC1_EEE_TIMER) &
 	       ~ZX279133_XMAC_EEE_TIMER_ENABLE,
-	       eth->base + eth->xmac_base + ZX279133_XMAC_EEE_TIMER_OFF);
+	       eth->base + ZX279133_XMAC1_EEE_TIMER);
 	mutex_unlock(&eth->xmac_lock);
 }
 
@@ -667,12 +666,12 @@ static int zx279133_mac_enable_tx_lpi(struct phylink_config *config, u32 timer,
 		return -EINVAL;
 
 	mutex_lock(&eth->xmac_lock);
-	val = readl(eth->base + eth->xmac_base + ZX279133_XMAC_EEE_CTRL_OFF);
+	val = readl(eth->base + ZX279133_XMAC1_EEE_CTRL);
 	writel(val | ZX279133_XMAC_EEE_ENABLE_MASK,
-	       eth->base + eth->xmac_base + ZX279133_XMAC_EEE_CTRL_OFF);
+	       eth->base + ZX279133_XMAC1_EEE_CTRL);
 	writel(FIELD_PREP(ZX279133_XMAC_EEE_TIMER_MASK, timer) |
 	       ZX279133_XMAC_EEE_TIMER_ENABLE,
-	       eth->base + eth->xmac_base + ZX279133_XMAC_EEE_TIMER_OFF);
+	       eth->base + ZX279133_XMAC1_EEE_TIMER);
 	mutex_unlock(&eth->xmac_lock);
 	return 0;
 }

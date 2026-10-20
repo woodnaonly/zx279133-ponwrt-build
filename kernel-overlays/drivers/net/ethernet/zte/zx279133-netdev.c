@@ -8,7 +8,6 @@
 #include <linux/if_vlan.h>
 #include <linux/io.h>
 #include <linux/ip.h>
-#include <linux/module.h>
 #include <linux/netdevice.h>
 #include <linux/phy.h>
 #include <linux/phylink.h>
@@ -23,17 +22,6 @@
 
 #include "zx279133.h"
 #include "zx279133-lan.h"
-
-/* Settable so one kit can sweep every candidate port number from the console; 6 is the value this
- * board measures, and the default therefore changes no behaviour of its own. */
-unsigned int zx279133_tx_port = 6;
-module_param(zx279133_tx_port, uint, 0644);
-MODULE_PARM_DESC(zx279133_tx_port, "SMAC number a TX descriptor names as its egress port");
-
-/* 1 is what the vendor's own LAN transmit path sends; 0 is what every kit before this one sent. */
-unsigned int zx279133_tx_word4_bit23 = 1;
-module_param(zx279133_tx_word4_bit23, uint, 0644);
-MODULE_PARM_DESC(zx279133_tx_word4_bit23, "set BIT(23) of the TX length word, as the vendor module does");
 
 static int zx279133_shared_idm_prepare(struct zx279133_eth *eth)
 {
@@ -232,6 +220,47 @@ out_unlock:
 	return ret;
 }
 
+static void zx279133_xmac_close(struct zx279133_eth *eth, u32 base, u32 ctrl)
+{
+	void __iomem *reg = eth->base + base + ctrl;
+
+	writel(readl(reg) & ~ZX279133_XMAC_ENABLE, reg);
+}
+
+/*
+ * Leave the NPPT quiet for whatever runs next. Nothing else stops it on
+ * reboot or kexec: the LAN switch keeps its share of the datapath until it
+ * is removed, so frames still arriving would be written by DMA into memory
+ * that a kexec'ed kernel already uses. Close both MACs so that nothing more
+ * comes in, then stop the interrupts and the IDM descriptor fetches, and
+ * leave the rest as it is: undoing the whole setup here with
+ * zx279133_hardware_unprepare() was followed by a reset of the board about
+ * a second later, every time.
+ */
+void zx279133_shutdown(struct zx279133_eth *eth)
+{
+	mutex_lock(&eth->datapath_lock);
+	if (eth->hardware_prepared) {
+		mutex_lock(&eth->xmac_lock);
+		zx279133_xmac_close(eth, ZX279133_XMAC0_BASE,
+				    ZX279133_XMAC_RX_CTRL);
+		zx279133_xmac_close(eth, ZX279133_XMAC1_BASE,
+				    ZX279133_XMAC_RX_CTRL);
+		mutex_unlock(&eth->xmac_lock);
+		zx279133_shared_rx_stop(eth);
+		zx279133_shared_tx_pause(eth);
+		mutex_lock(&eth->xmac_lock);
+		zx279133_xmac_close(eth, ZX279133_XMAC0_BASE,
+				    ZX279133_XMAC_TX_CTRL);
+		zx279133_xmac_close(eth, ZX279133_XMAC1_BASE,
+				    ZX279133_XMAC_TX_CTRL);
+		mutex_unlock(&eth->xmac_lock);
+		zx279133_route_set(eth, false);
+		zx279133_idm_tx_deactivate(eth);
+	}
+	mutex_unlock(&eth->datapath_lock);
+}
+
 static int zx279133_stop(struct net_device *ndev)
 {
 	struct zx279133_eth *eth = netdev_priv(ndev);
@@ -337,19 +366,9 @@ static netdev_tx_t zx279133_start_xmit_common(struct sk_buff *skb,
 	}
 	tx_port = ndev != hw_ndev ? ZX279133_LAN_TX_PORT : zx279133_tx_port;
 
-	if (eth->np_pool_mem) {
-		if (skb->len > ZX279133_NP_POOL_TX_STRIDE) {
-			eth->tx_pool_oversize++;
-			zx279133_stats_tx_dropped(eth, ndev);
-			dev_kfree_skb_any(skb);
-			return NETDEV_TX_OK;
-		}
-		dma = 0;
-	} else {
-		dma = dma_map_single(eth->dev, skb->data, skb->len, DMA_TO_DEVICE);
-		if (dma_mapping_error(eth->dev, dma))
-			goto drop;
-	}
+	dma = dma_map_single(eth->dev, skb->data, skb->len, DMA_TO_DEVICE);
+	if (dma_mapping_error(eth->dev, dma))
+		goto drop;
 
 	spin_lock_bh(&eth->tx_lock);
 	if (unlikely(tx->pending >= ZX279133_IDM_TX_DEPTH - 1))
@@ -359,8 +378,7 @@ static netdev_tx_t zx279133_start_xmit_common(struct sk_buff *skb,
 		txq_trans_update(ndev, txq);
 		zx279133_idm_tx_flush_queue_locked(eth, queue);
 		spin_unlock_bh(&eth->tx_lock);
-		if (dma)
-			dma_unmap_single(eth->dev, dma, skb->len, DMA_TO_DEVICE);
+		dma_unmap_single(eth->dev, dma, skb->len, DMA_TO_DEVICE);
 		zx279133_stats_tx_dropped(eth, ndev);
 		dev_kfree_skb_any(skb);
 		return NETDEV_TX_OK;
@@ -371,20 +389,7 @@ static netdev_tx_t zx279133_start_xmit_common(struct sk_buff *skb,
 		ZX279133_IDM_TX_DEPTH + producer;
 	slot = &tx->slots[producer];
 	memset(desc, 0, sizeof(*desc));
-	if (eth->np_pool_mem) {
-		u32 idx = queue * ZX279133_NP_POOL_TX_SLOTS +
-			  (producer & (ZX279133_NP_POOL_TX_SLOTS - 1));
-		u32 off = ZX279133_NP_POOL_TX_OFF +
-			  idx * ZX279133_NP_POOL_TX_STRIDE;
-
-		memcpy_toio(eth->np_pool_mem + off, skb->data, skb->len);
-		wmb();
-		eth->tx_pool_bounces++;
-		eth->tx_pool_last_addr = eth->np_pool_base + off;
-		desc->address = cpu_to_le32(lower_32_bits(eth->np_pool_base + off));
-	} else {
-		desc->address = cpu_to_le32(lower_32_bits(dma));
-	}
+	desc->address = cpu_to_le32(lower_32_bits(dma));
 	{
 		u32 length_flags = (skb->len << 1) |
 				   (zx279133_tx_selector & 0xff) << 24 |
@@ -405,7 +410,7 @@ static netdev_tx_t zx279133_start_xmit_common(struct sk_buff *skb,
 	slot->ndev = ndev;
 	slot->dma = dma;
 	slot->len = skb->len;
-	slot->dma_mapped = !eth->np_pool_mem;
+	slot->dma_mapped = true;
 	if (hw_csum)
 		eth->tx_hw_csum_packets++;
 	else if (sw_csum)
@@ -1041,28 +1046,6 @@ enum zx279133_ethtool_stat {
 	ZX279133_STAT_SOPC_RR5,
 	ZX279133_STAT_SOPC_TO_SMAC5,
 	ZX279133_STAT_SOPC_REQ_SMAC5,
-	/*
-	 * Raw words of the MAC this device is configured to use, and of the nppt block that
-	 * is the only thing which moved when U-Boot carried 11.4 MB across jack 4. They exist
-	 * because nothing else on this board can read them: the shipped root has no devmem and
-	 * no od, /dev/mem read() of MMIO returns EFAULT, and no software reset ever returned to
-	 * the U-Boot banner, so Linux's own register state is otherwise unobservable. The answer
-	 * wanted is narrow and binary - is TX_CTRL/RX_CTRL bit 0 (the enable that
-	 * zx279133_xmac_set_enabled() writes) actually set while the netdev counts transmit?
-	 */
-	ZX279133_STAT_DBG_TX_CTRL,
-	ZX279133_STAT_DBG_RX_CTRL,
-	ZX279133_STAT_DBG_FRAME_CFG,
-	ZX279133_STAT_DBG_MODE_CFG,
-	ZX279133_STAT_DBG_DUPLEX,
-	ZX279133_STAT_DBG_MISC_CFG,
-	ZX279133_STAT_DBG_NPPT_100000,
-	ZX279133_STAT_DBG_NPPT_100004,
-	ZX279133_STAT_DBG_NPPT_100008,
-	ZX279133_STAT_DBG_SOPC_DUPLEX,
-	ZX279133_STAT_TX_POOL_BOUNCES,
-	ZX279133_STAT_TX_POOL_OVERSIZE,
-	ZX279133_STAT_TX_POOL_LAST_ADDR,
 	ZX279133_STAT_IDM_TX_DONE,
 	ZX279133_STAT_TX_PENDING,
 	ZX279133_STAT_TX_DOORBELL_WRITES,
@@ -1134,19 +1117,6 @@ static const char zx279133_gstrings_stats[ZX279133_STAT_COUNT][ETH_GSTRING_LEN] 
 	"sopc_rr5",
 	"sopc_to_smac5",
 	"sopc_req_smac5",
-	"dbg_tx_ctrl",
-	"dbg_rx_ctrl",
-	"dbg_frame_cfg",
-	"dbg_mode_cfg",
-	"dbg_duplex",
-	"dbg_misc_cfg",
-	"dbg_nppt_100000",
-	"dbg_nppt_100004",
-	"dbg_nppt_100008",
-	"dbg_sopc_duplex",
-	"tx_pool_bounces",
-	"tx_pool_oversize",
-	"tx_pool_last_addr",
 	"idm_tx_done",
 	"tx_pending",
 	"tx_doorbell_writes",
@@ -1255,15 +1225,15 @@ static void zx279133_get_ethtool_stats(struct net_device *ndev,
 	data[ZX279133_STAT_TX_DROPPED] = sw_stats.tx_dropped;
 	data[ZX279133_STAT_RX_LENGTH] = sw_stats.rx_length_errors;
 	data[ZX279133_STAT_XMAC_TX_FRAMES] =
-		zx279133_hw_stat(eth, eth->xmac_base +
+		zx279133_hw_stat(eth, ZX279133_XMAC1_BASE +
 				 ZX279133_XMAC_STAT_TX_FRAMES);
 	data[ZX279133_STAT_XMAC_TX_GOOD] =
-		zx279133_hw_stat(eth, eth->xmac_base +
+		zx279133_hw_stat(eth, ZX279133_XMAC1_BASE +
 				 ZX279133_XMAC_STAT_TX_GOOD);
 	data[ZX279133_STAT_SOPC_READY] =
-		zx279133_hw_stat(eth, eth->xmac_sopc_ready);
+		zx279133_hw_stat(eth, ZX279133_XMAC1_SOPC_READY);
 	data[ZX279133_STAT_SOPC_SEND] =
-		zx279133_hw_stat(eth, eth->xmac_sopc_send);
+		zx279133_hw_stat(eth, ZX279133_XMAC1_SOPC_SEND_ENABLE);
 	data[ZX279133_STAT_NPPT_XMAC_ERR] =
 		zx279133_hw_stat(eth, ZX279133_NPPT_XMAC_ERR);
 	data[ZX279133_STAT_SMCT_DONE] =
@@ -1274,25 +1244,6 @@ static void zx279133_get_ethtool_stats(struct net_device *ndev,
 		zx279133_hw_stat(eth, ZX279133_SOPC_TO_SMAC5);
 	data[ZX279133_STAT_SOPC_REQ_SMAC5] =
 		zx279133_hw_stat(eth, ZX279133_SOPC_REQ_SMAC5);
-	data[ZX279133_STAT_DBG_TX_CTRL] =
-		zx279133_hw_stat(eth, eth->xmac_base + ZX279133_XMAC_TX_CTRL);
-	data[ZX279133_STAT_DBG_RX_CTRL] =
-		zx279133_hw_stat(eth, eth->xmac_base + ZX279133_XMAC_RX_CTRL);
-	data[ZX279133_STAT_DBG_FRAME_CFG] =
-		zx279133_hw_stat(eth, eth->xmac_base + ZX279133_XMAC_FRAME_CFG);
-	data[ZX279133_STAT_DBG_MODE_CFG] =
-		zx279133_hw_stat(eth, eth->xmac_base + ZX279133_XMAC_MODE_CFG);
-	data[ZX279133_STAT_DBG_DUPLEX] =
-		zx279133_hw_stat(eth, eth->xmac_base + ZX279133_XMAC_DUPLEX);
-	data[ZX279133_STAT_DBG_MISC_CFG] =
-		zx279133_hw_stat(eth, eth->xmac_base + ZX279133_XMAC_MISC_CFG);
-	data[ZX279133_STAT_DBG_NPPT_100000] = zx279133_hw_stat(eth, 0x100000);
-	data[ZX279133_STAT_DBG_NPPT_100004] = zx279133_hw_stat(eth, 0x100004);
-	data[ZX279133_STAT_DBG_NPPT_100008] = zx279133_hw_stat(eth, 0x100008);
-	data[ZX279133_STAT_DBG_SOPC_DUPLEX] = zx279133_hw_stat(eth, 0x343f0);
-	data[ZX279133_STAT_TX_POOL_BOUNCES] = eth->tx_pool_bounces;
-	data[ZX279133_STAT_TX_POOL_OVERSIZE] = eth->tx_pool_oversize;
-	data[ZX279133_STAT_TX_POOL_LAST_ADDR] = eth->tx_pool_last_addr;
 	spin_lock_bh(&eth->tx_lock);
 	data[ZX279133_STAT_IDM_TX_DONE] =
 		eth->tx_prepared && READ_ONCE(eth->hardware_prepared) ?
@@ -1652,9 +1603,30 @@ const struct ethtool_ops zx279133_ethtool_ops = {
 /*
  * RX admission is owned by the fixed NPPT/PPU port-flow image, not an XMAC
  * address filter. It delivers broadcast, foreign unicast, and arbitrary
- * multicast frames to IDM, so there is no hardware filter for ndo_set_rx_mode
- * to update and IFF_UNICAST_FLT must remain clear.
+ * multicast frames to IDM, so IFF_UNICAST_FLT must remain clear. The unicast
+ * list still matters to the flow offload: only frames sent to an ONU MAC slot
+ * are forwarded in hardware, so ndo_set_rx_mode copies the list there. It
+ * runs under the address list spinlock, so the slots are written from a work
+ * item that can take datapath_lock.
  */
+void zx279133_rx_mode_work(struct work_struct *work)
+{
+	struct zx279133_eth *eth = container_of(work, struct zx279133_eth,
+						rx_mode_work);
+
+	mutex_lock(&eth->datapath_lock);
+	if (eth->hardware_prepared)
+		zx279133_program_spa_uc_macs(eth);
+	mutex_unlock(&eth->datapath_lock);
+}
+
+static void zx279133_set_rx_mode(struct net_device *ndev)
+{
+	struct zx279133_eth *eth = netdev_priv(ndev);
+
+	schedule_work(&eth->rx_mode_work);
+}
+
 static int zx279133_setup_tc(struct net_device *ndev,
 			    enum tc_setup_type type, void *type_data)
 {
@@ -1676,6 +1648,7 @@ const struct net_device_ops zx279133_netdev_ops = {
 	.ndo_start_xmit		= zx279133_start_xmit,
 	.ndo_tx_timeout		= zx279133_tx_timeout,
 	.ndo_set_mac_address	= zx279133_set_mac_address,
+	.ndo_set_rx_mode	= zx279133_set_rx_mode,
 	.ndo_validate_addr	= eth_validate_addr,
 	.ndo_change_mtu		= zx279133_change_mtu,
 	.ndo_get_stats64	= zx279133_get_stats64,
@@ -2019,6 +1992,13 @@ static int zx279133_lan_get_rxfh_fields(struct zx279133_lan_service *service,
 					      fields);
 }
 
+static int zx279133_lan_port_wan_set(struct zx279133_lan_service *service,
+				     u16 vid, bool wan)
+{
+	return zx279133_lan_vport_wan_set(zx279133_lan_service_to_eth(service),
+					  vid, wan);
+}
+
 const struct zx279133_lan_service_ops zx279133_lan_service_ops = {
 	.get_rxfh = zx279133_lan_get_rxfh,
 	.set_rxfh = zx279133_lan_set_rxfh,
@@ -2041,4 +2021,5 @@ const struct zx279133_lan_service_ops zx279133_lan_service_ops = {
 	.netdev_get_stats64 = zx279133_lan_netdev_get_stats64,
 	.netdev_change_mtu = zx279133_lan_netdev_change_mtu,
 	.netdev_setup_tc = zx279133_lan_netdev_setup_tc,
+	.port_wan_set = zx279133_lan_port_wan_set,
 };

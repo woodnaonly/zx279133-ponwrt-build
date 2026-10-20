@@ -22,16 +22,7 @@
 
 /* Validated WAN/LAN hardware constants. */
 #define ZX279133_IDM_CPU_TX_FIRST	1
-/*
- * The egress port a TX descriptor names, in SMAC numbers. 6 is what this board measures, and it is
- * now runtime-settable because it is the last un-swept candidate for the one thing that is still
- * unexplained: mainline's frames are counted downstream of the descriptor - nppt+0x1900c0f0 went
- * 0x00000009 -> 0x0000001b across 24 pings at 18:02:xx, and the SerDes is not in loss of signal
- * (0x161000e4 = 0x100019fc, bit 0 clear, read from inside the running kernel) - while this PC sees
- * not one of them. So the drop is between the counter that moves and the wire that does not, and
- * this field is what selects the MAC on that path.
- */
-extern unsigned int zx279133_tx_port;
+#define zx279133_tx_port		6
 #define ZX279133_LAN_TX_PORT		5
 #define ZX279133_LAN_RX_QUEUE_COUNT	8
 #define ZX279133_LAN_TRANSPORT_VID_MIN	59
@@ -44,23 +35,7 @@ extern unsigned int zx279133_tx_port;
 #define ZX279133_DATAPATH_USER_LAN	BIT(1)
 #define zx279133_tx_selector		0x0f
 #define zx279133_tx_pon_control		0x08000000
-/*
- * BIT(23) of the TX length word. The vendor's own LAN transmit path sets it: idm_net_lan_tx_direct()
- * in pon/vendor-modules/np_133.ko builds the 24-byte descriptor on the stack at x29+0x6c..0x83, and
- * at .text 0x119e8 it stores `mov w0, #-0x80` (byte 0x80) into x29+0x6e - the third byte of the word
- * that lands at descriptor+4 (`str w0, [x19, #4]` at 0x11b20), i.e. bits 16..23 of length_flags, so
- * bit 23 is 1 in every frame the vendor transmits on this port. Measured on the same instruction, the
- * same function puts `(len << 1)` with bfi #1,#0xe in bits 1..14 and `0x0f` in byte 3 - both of which
- * this driver already reproduces - and it does NOT put a port number in this word at all.
- *
- * It is a parameter, defaulting to the vendor's 1, because 0 is what every kit since the beginning
- * has sent and the lane has never egressed one frame: `xmac_tx_frames 0` while the queue's done
- * counter tracked the submissions 1:1 (run 69, 18:02 and 20:26 - nppt+0x192800b0 went 0x01 -> 0x13
- * across exactly the 18 frames of a 24-ping burst, at which point the sweep of tx_port 0..7 had
- * already shown the port field is not the cause). So this bit is the last field of the descriptor
- * that is known to differ from the artifact that carries traffic.
- */
-extern unsigned int zx279133_tx_word4_bit23;
+#define zx279133_tx_word4_bit23		0
 #define zx279133_tx_hw_csum		1
 #define zx279133_idm_cfg_bit24		0
 
@@ -250,25 +225,11 @@ extern unsigned int zx279133_tx_word4_bit23;
 
 #define ZX279133_SDET_FRAME_CFG		0x2040
 #define ZX279133_SDET_DOWN_FRAME_CFG	0x2044
-/*
- * Max/min frame length for the two directions, one 16-bit max field at bits 31:16 and the min in
- * the low bits. The numbers are the ones the U-Boot in this board's flash writes, at
- * backups/mtd1_boot.bin:0x57a84 - `mov x0,#0x2040 ; movk x0,#0x1900,lsl #16 ; mov w1,#0xc ;
- * movk w1,#0xfa0,lsl #16 ; str w1,[x0]` and then 0x3e80<<16|0xc to +4, i.e. 0x0fa0000c and
- * 0x3e80000c - and that bootloader pulled 11,440,284 bytes through this lane. The vendor module
- * agrees on the width: sdet_set_up_maxframe_length() rejects anything outside 0x88..0x3f76
- * (136..16246), which is only reachable if the field is 16 bits, and U-Boot's 16000 sits just
- * under that ceiling.
- *
- * The previous values here (2048 with the upstream field at shift 14) put 512 in bits 31:16 for
- * the upstream direction, and the read-modify-write that "preserved" GENMASK(31,28) of the old
- * word was preserving the top nibble of this same field - both artefacts of the wrong shift.
- */
-#define ZX279133_SDET_UP_MAX_LEN	4000
+#define ZX279133_SDET_UP_MAX_LEN	2048
 #define ZX279133_SDET_UP_MIN_LEN	12
-#define ZX279133_SDET_DOWN_MAX_LEN	16000
+#define ZX279133_SDET_DOWN_MAX_LEN	2048
 #define ZX279133_SDET_DOWN_MIN_LEN	12
-#define ZX279133_SDET_UP_MAX_SHIFT	16
+#define ZX279133_SDET_UP_MAX_SHIFT	14
 #define ZX279133_SDET_DOWN_MAX_SHIFT	16
 
 #define ZX279133_SMCT_SEL_CFG0		0xc000
@@ -322,10 +283,20 @@ extern unsigned int zx279133_tx_word4_bit23;
 #define ZX279133_SPA_MAC_LO_VALUE	0x7fff
 #define ZX279133_SPA_MAC_LO_MASK	GENMASK(15, 0)
 #define ZX279133_SPA_ONU_COUNT		16
+/*
+ * Registers 0..7 hold the MAC addresses the WAN accepts; 8..15 are the
+ * factory's per-WAN local MACs (sw_mac_add_cpu_macaddress()), a different
+ * table.
+ */
+#define ZX279133_SPA_ONU_MAC_SLOTS	8
 #define ZX279133_SPA_TRAP_DMAC_COUNT	4
 #define ZX279133_WANID_COUNT		32
 #define ZX279133_WANID_CPU_MAC_COUNT	2
 #define ZX279133_WANID_L3_MTU		1996
+/* WANID bit 4 selects the downstream (WAN-to-LAN) half of the table. */
+#define ZX279133_WANID_DOWNSTREAM	BIT(4)
+#define ZX279133_WANID_PPPOE_PUSH	1
+#define ZX279133_WANID_PPPOE_POP	2
 #define ZX279133_GLB_OAM_EN		0x10
 #define ZX279133_GLB_OAM_MASK		GENMASK(19, 14)
 #define ZX279133_GLB_OAM_VALUE		0xf0000
@@ -453,29 +424,9 @@ extern unsigned int zx279133_tx_word4_bit23;
 #define ZX279133_IDM_TX_CONTROL		0x00400000
 
 /*
- * The NP's own memory. Every address U-Boot handed it while this PC counted
- * 11,471,728 bytes of tftp - rings and payload alike - was inside
- * 0xb0000000..0xb0400000 (U-Boot's TX slot read "b0328000 0f80005c ..."), and
- * the vendor's idm_net_lan_tx_direct() memmoves each frame into such a buffer
- * before ringing the doorbell. Mainline instead names page_pool and
- * dma_map_single addresses: the descriptor is consumed (the completion word
- * moves) and no frame ever reaches the MAC. So transmit bounces through here.
- */
-#define ZX279133_NP_POOL_TX_OFF		0x328000
-#define ZX279133_NP_POOL_TX_SLOTS	64
-#define ZX279133_NP_POOL_TX_STRIDE	0x940
-#define ZX279133_NP_POOL_TX_SIZE	(ZX279133_CPU_TX_QUEUES * \
-					 ZX279133_NP_POOL_TX_SLOTS * \
-					 ZX279133_NP_POOL_TX_STRIDE)
-
-/*
  * Vendor kernel globals (kernel-2b5.elf rodata/BSS):
  * uIDM_RX_QUEUE_DESC_DEPTH = 2048, uIDM_RX_CFG_DEPTH = 1,
- * uNPPT_IDM_DESC_MODE = 0.  uIDM_TX_CFG_DEPTH was recorded as 0 with "no writer found"; the
- * traffic-proven bootloader holds 0x04000000 at nppt+0x28000c (docs/09-idm-proven-image-20261020.md,
- * read 2026-10-20 10:54 in a boot where ping answered), and 0x400 << 16 reproduces that word exactly.
- * 0x400 is also the vendor DT's own idm_desc_tx_depth, so the field is the TX descriptor depth at
- * bits 27:16 and only its value was wrong.
+ * uNPPT_IDM_DESC_MODE = 0, uIDM_TX_CFG_DEPTH = 0 (no writer found).
  */
 #define ZX279133_IDM_RX_QUEUE_DESC_DEPTH 2048
 #define ZX279133_IDM_RX_CFG_DEPTH	1
@@ -497,98 +448,12 @@ static inline u32 zx279133_idm_tx_done_reg(unsigned int queue)
 	return queue == 0 ? 0x0084 : 4 * (queue + 42);
 }
 
-/*
- * nppt holds two 256 KiB MAC windows. The board's own vendor module derives them as
- * id<<18 + 0x140000 (xmac_tx_enable(): "ubfiz x0,x0,#0x12,#0xe" then
- * "add x0,x0,#0x140,lsl #12"), so XMAC0 is at 0x140000 and XMAC1 at 0x180000. The
- * id=1 case reproduces the single base this driver used to hard-code, which is the
- * control that makes the formula usable: xmac_reset() agrees with it too, taking 0x400
- * for id 0 and 0x800 for id 1 - and the old ZX279133_XMAC_RESET_MASK was BIT(11).
- * SK-D840N's RTL8226 sits on xmac0 (U-Boot: "xmac0 is used" ... "xmac 0 speed set 2
- * in sgmii"), so the window is per-device, not a constant.
- */
-#define ZX279133_XMAC_BASE(id)	(0x140000 + (id) * 0x40000)
-/*
- * The SOPC handshake is an array in nppt's global 0x34000 block, not a register inside the MAC
- * window. Two artifacts that both carry traffic on this SoC name it, and their index arithmetic is
- * one model, not two: reading the entries as SMAC numbers s, ready(s) = 0x34000+(0xa5+s)*4 and
- * send(s) = 0x34000+(0xac+s)*4 - seven words apart.
- *   - pon/vendor-modules/np_133.ko, xmac_sopc_send_enable() (.text 0x1ac70) polls
- *     `nppt+0x34000+((idx+0xa9)<<2)` bit 0 (retrying forever through __const_udelay(0x418958)),
- *     then writes 1 to `nppt+0x34000+((idx+0xb0)<<2)`, and prints "sopc send enable, mac = %x" with
- *     idx+4 - so its argument is s-4 and it is SMAC6 when idx is 2. xmac_init_by_work_mode()
- *     (.text 0x1ae20) ends the same way: xmac_set_duplex_mode, xmac_set_sopc_duplex_mode,
- *     __const_udelay(0x418958), `str 1` into that send entry, xmac_tx_rx_enable(id).
- *   - this board's own U-Boot has both the generic and the SMAC6 form. backups/mtd1_boot.bin:0x5865c
- *     computes ready = (m+0xa5) and send = (m+0xac) for m checked `cmp #3, b.hi` - the SMAC0..3
- *     rows - and prints "read SOPC_CLR_OVER_READY_SMAC = 0x%x, mac = 0x%x" (0xa0b9f). :0x585a8
- *     hard-codes x23 = 0x190342ac = ready(6), polls bit 0 ten times with a 0x3e8 delay, then
- *     `mov x0,#0x42c8; mov w1,#1; str w1,[x0]` = send(6), printing "read SOPC_CLR_OVER_READY_SMAC6"
- *     (0xa0b47) and "write SOPC_SEND_EN_CFG_SMAC6" (0xa0b81). So this port is SMAC6, and the two
- *     forms agree on the same two words.
- *
- * THE PUBLISH HYPOTHESIS IS DEAD, and the reason is now sharper than the measurement that killed it.
- * Measured on this board 2026-10-19 (docs 补八十三): `md 0x190342a0 0x10` read send(0..6) =
- * 0x342b0..0x342c8 all as 1 at the prompt before any net command, ready(6) = 0x342ac as 0, and both
- * unchanged after an 11,464,708-byte tftp this PC counted arriving. 1 is that array's reset default,
- * which its name says outright (SOPC_SEND_EN_*CFG*), so the vendor's `str 1` re-asserts an enable
- * that is already set and a steady-state read of it witnesses nothing - for or against.
- *
- * WHAT NO SOFTWARE WRITES. staging/sopcscan.py resolves store addresses by constant propagation
- * over all 2 MiB of backups/mtd1_boot.bin (controls: it reports the stores at 0x58614 and 0x586c8,
- * and reports nothing for a bogus window) and U-Boot touches exactly three words of the 0x34000
- * block: send(6) = 0x342c8 with 1, 0x343c4 (CRC padding) with 0, and 0x343f0 (the per-XMAC duplex
- * bits) by read-modify-write at eight sites. It never writes 0x340b8..0x340d4 or 0x34130..0x34138 -
- * the words that sit at 0 at an idle prompt and hold values after traffic. Those are therefore
- * hardware-updated status, and reading them as configuration was a mistake of mine: 0x340b8 =
- * 0x00120018 is a pair of 16-bit counters (18 and 24), NOT "nppt+0x340b8 bit 4 set", so the
- * alignment I claimed against greg_sopc_auto_gate_en_set()'s BIT(4) (.text 0xcd94, reached from
- * set_sopc_auto_gate_en() .text 0x5b5f8 via register id 0x36) is coincidence, and that function is
- * the only evidence left that 0x340b8 has a control half at all.
- *
- * What the same round did establish about the datapath:
- *   nppt+0x1900c0f0 (SMCT_DONE)  0 -> 0x000101f4 across that transfer, so mainline's smct_done 24
- *     was a real count of 24 frames reaching the SMCT;
- *   nppt+0x19142070/0x191420b0 (this driver's xmac_tx_frames / tx_good) stayed 0 through the same
- *     transfer, so `xmac_tx_frames: 0` proved nothing - a dead gauge, not a stopped MAC;
- *   the whole XMAC0 image (0x19140000/0x10/0x20, +0x280, +0x500, +0x3400) reads 0 in the working
- *     state, in a second power cycle, exactly as the older traffic-proven dump has it.
- * Mainline's strobe target, `eth->xmac_base + 0x1c2c4` = nppt+0x15c2c4, is inside the MAC window and
- * is written by no working image on this board - wrong page and (0xb1 = 0xac+5) the wrong SMAC. It
- * reads 0 in both states, so the mis-aim is harmless; correcting it is not by itself a fix.
- */
-#define ZX279133_SOPC_BASE			0x34000
-#define ZX279133_SOPC_SMAC_READY(s)		\
-	(ZX279133_SOPC_BASE + ((((s) + 0xa5) & 0x1ff) << 2))
-#define ZX279133_SOPC_SMAC_SEND(s)		\
-	(ZX279133_SOPC_BASE + ((((s) + 0xac) & 0x1ff) << 2))
-/*
- * nppt+0x343f0 holds one bit per XMAC at BIT(4 + id): xmac_set_sopc_duplex_mode() (.text 0x1ac08)
- * rejects id > 1, computes `1 << (id + 4)` and BICs that bit when its value argument is 1, ORs it
- * otherwise - and xmac_init_by_work_mode() leaves w1 = 1 over from the xmac_set_duplex_mode(id, 1)
- * call immediately before, so for XMAC0 the vendor CLEARS BIT(4). zx279133-mac.c instead clears
- * BIT(5) whenever duplex is full, which is that function's id-1 action applied to a board whose
- * port is id 0: it edits the other MAC's bit and leaves this port's alone. Whether that is harmless
- * depends on the reset default of 0x343f0, which the same read answers (mainline measures 0).
- */
-#define ZX279133_XMAC_SOPC_READY_OFF		0x1c2a8
-#define ZX279133_XMAC_SOPC_SEND_OFF		0x1c2c4
-#define ZX279133_XMAC_EEE_CTRL_OFF	0x0340
-#define ZX279133_XMAC_EEE_TIMER_OFF	0x0350
+/* XMAC0 carries the LAN; the RTL8372N driver owns it. */
+#define ZX279133_XMAC0_BASE	0x140000
+#define ZX279133_XMAC1_BASE	0x180000
 #define ZX279133_XMAC_TX_CTRL	0x0000
 #define ZX279133_XMAC_RX_CTRL	0x0010
-/*
- * Bit number corrected against two artifacts that both carry traffic on this SoC, which is the
- * only reason to be sure: the vendor module's xamc_init_conf() builds w4 = 0xc6 | 0x3e80<<16 for
- * XMAC+0x10 (and both the 10G and the 1G lane go through it), and the U-Boot image that is
- * actually in this board's flash does the same at backups/mtd1_boot.bin:0x594e8 - there
- * `mov w1, #0xc6 ; movk w1, #0x3e80, lsl #16 ; str w1, [x4, x0]` with x0 = 0x19140010, i.e.
- * XMAC0+0x10, in the routine that also writes +0x00 = 0x00010000, +0x20 = 0x80000001 and
- * +0x280 = 2. So the receiver's initial image has bit 6 set and bit 9 clear; the 0x86 base below
- * plus this bit is exactly that 0xc6. The RX enable itself is a separate RMW of bit 0
- * (xmac_rx_enable() in both artifacts), which is why this bit was not already obvious.
- */
-#define ZX279133_XMAC_RX_IPC	BIT(6)
+#define ZX279133_XMAC_RX_IPC	BIT(9)
 #define ZX279133_XMAC_FRAME_CFG	0x0020
 #define ZX279133_XMAC_MODE_CFG	0x0280
 #define ZX279133_XMAC_DUPLEX	0x0500
@@ -602,7 +467,9 @@ static inline u32 zx279133_idm_tx_done_reg(unsigned int queue)
 #define ZX279133_XMAC_PAUSE_TIME	0xffff
 #define ZX279133_XMAC_RX_FLOW		0x0240
 #define ZX279133_XMAC_RX_FLOW_EN	BIT(0)
-#define ZX279133_XMAC_RESET_MASK(id)	(0x400 << (id))
+#define ZX279133_XMAC_RESET_MASK	BIT(11)
+#define ZX279133_XMAC1_EEE_CTRL		(ZX279133_XMAC1_BASE + 0x0340)
+#define ZX279133_XMAC1_EEE_TIMER	(ZX279133_XMAC1_BASE + 0x0350)
 #define ZX279133_XMAC_EEE_ENABLE_MASK	0x000b0000
 #define ZX279133_XMAC_EEE_TIMER_MASK	GENMASK(31, 16)
 #define ZX279133_XMAC_EEE_TIMER_ENABLE	BIT(5)
@@ -631,6 +498,8 @@ static inline u32 zx279133_idm_tx_done_reg(unsigned int queue)
 #define ZX279133_SOPC_RR5		0x340bc
 #define ZX279133_SOPC_TO_SMAC5		0x34108
 #define ZX279133_SOPC_REQ_SMAC5		0x34134
+#define ZX279133_XMAC1_SOPC_READY	0x342a8
+#define ZX279133_XMAC1_SOPC_SEND_ENABLE	0x342c4
 #define ZX279133_XMAC1_SOPC_DUPLEX_MASK	BIT(5)
 #define ZX279133_XMAC1_SGMII_SPEED	3
 
@@ -716,19 +585,42 @@ struct zx279133_rx_stats {
 	u64_stats_t foreign_pages;
 };
 
+/*
+ * What a flow needs from the WANID entry its fast response selects: the
+ * source MAC of every frame the flow sends, the source-NAT address (0 when
+ * the flow does not source-NAT), and the PPPoE rewrite with its session ID.
+ */
+struct zx279133_wanid_profile {
+	u8 mac[ETH_ALEN];
+	u32 sip;
+	u16 sid;
+	u8 pppoe;
+};
+
+/*
+ * One WANID entry lent to flows that share a profile. The entry's own image
+ * is saved on first use and written back when the last flow returns it.
+ */
+struct zx279133_wanid_slot {
+	struct zx279133_wanid_profile profile;
+	u32 saved[ZX279133_SMMU0_WORDS];
+	unsigned int users;
+	unsigned int snat_users;
+};
+
 struct zx279133_eth {
 	struct device *dev;
 	struct net_device *ndev;
 	struct net_device *lan_ndev;
+	/*
+	 * LAN ports switched to WAN-type in the PPU, one bit per transport VID
+	 * from ZX279133_LAN_TRANSPORT_VID_MIN; written under datapath_lock.
+	 */
+	unsigned long lan_wan_vports;
 	struct zx279133_flow_offload *flow_offload;
 	struct zx279133_lan_service lan_service;
 	struct zx279133_netdev_stats stats;
 	void __iomem *base;
-	unsigned int xmac_id;
-	u32 xmac_base;
-	u32 xmac_sopc_ready;
-	u32 xmac_sopc_send;
-	u32 xmac_reset_mask;
 	void __iomem *pps_base;
 	struct regmap *pon_route;
 	struct regmap *idm_cci;
@@ -741,9 +633,6 @@ struct zx279133_eth {
 	phys_addr_t idm_base;
 	phys_addr_t idm_size;
 	void __iomem *idm_mem;
-	phys_addr_t np_pool_base;
-	phys_addr_t np_pool_size;
-	void __iomem *np_pool_mem;
 	struct page_pool *rx_page_pool;
 	struct page_pool *lan_rx_page_pool;
 	struct xdp_rxq_info xdp_rxq[ZX279133_CPU_RX_QUEUES];
@@ -812,9 +701,6 @@ struct zx279133_eth {
 	u64 tx_timeouts;
 	u64 tx_timeout_recoveries;
 	u64 tx_timeout_stalls;
-	u64 tx_pool_bounces;
-	u64 tx_pool_oversize;
-	u64 tx_pool_last_addr;
 	u64 tx_hw_csum_packets;
 	u64 tx_sw_csum_packets;
 	atomic64_t rx_irq_count;
@@ -836,10 +722,13 @@ struct zx279133_eth {
 	struct mutex np_ind_lock;
 	/* Serializes read-modify-write of shared WANID table entries. */
 	struct mutex wanid_lock;
+	struct zx279133_wanid_slot wanid[ZX279133_WANID_COUNT];
 	struct napi_struct napi;
 	struct napi_struct lan_napi;
 	struct delayed_work tx_reclaim_work;
 	struct delayed_work rx_refill_work;
+	/* Copies the WAN unicast list (macvlans) into the SPA ONU MAC slots. */
+	struct work_struct rx_mode_work;
 	struct ptp_clock_info ptp_info;
 	struct ptp_clock *ptp_clock;
 	u32 ptp_agc_saved;
@@ -937,15 +826,24 @@ void zx279133_np_restore(struct zx279133_eth *eth);
 void zx279133_route_set(struct zx279133_eth *eth, bool enabled);
 int zx279133_vlan_runtime_prepare(struct zx279133_eth *eth);
 int zx279133_wan_port_bringup(struct zx279133_eth *eth);
+void zx279133_program_spa_uc_macs(struct zx279133_eth *eth);
+int zx279133_lan_vport_wan_set(struct zx279133_eth *eth, u16 vport, bool wan);
+void zx279133_rx_mode_work(struct work_struct *work);
 void zx279133_program_spa_cpu_mac(struct zx279133_eth *eth,
 				  const unsigned char *addr);
 int zx279133_program_wanid_cpu_mac(struct zx279133_eth *eth,
 				   const unsigned char *addr);
-int zx279133_program_wanid_sip(struct zx279133_eth *eth, u32 wanid,
-			       u32 sip, u32 *old_sip);
-int zx279133_program_wanid_pppoe(struct zx279133_eth *eth, u32 wanid,
-				 u8 mode, u16 sid, u8 *old_mode,
-				 u16 *old_sid);
+int zx279133_wanid_get(struct zx279133_eth *eth, bool downstream,
+		       const struct zx279133_wanid_profile *profile, u8 *wanid);
+void zx279133_wanid_put(struct zx279133_eth *eth, u8 wanid, bool snat);
+#ifdef CONFIG_DEBUG_FS
+int zx279133_wanid_debugfs_init(struct zx279133_eth *eth);
+#else
+static inline int zx279133_wanid_debugfs_init(struct zx279133_eth *eth)
+{
+	return 0;
+}
+#endif
 int zx279133_fast_ikey_write(struct zx279133_eth *eth, u32 index,
 			     const u32 *data);
 int zx279133_fast_stats_read(struct zx279133_eth *eth, u16 flow_id,
@@ -954,6 +852,7 @@ int zx279133_fast_age_read_clear(struct zx279133_eth *eth, u32 age,
 				 bool *used);
 int zx279133_flow_offload_init(struct zx279133_eth *eth);
 void zx279133_flow_offload_flush(struct zx279133_eth *eth);
+void zx279133_flow_offload_reset(struct zx279133_eth *eth);
 bool zx279133_flow_offload_active(struct zx279133_eth *eth);
 int zx279133_flow_offload_setup_tc(struct zx279133_eth *eth,
 				   struct net_device *ndev,
@@ -1005,6 +904,7 @@ int zx279133_get_ts_info(struct net_device *ndev,
 
 int zx279133_hardware_prepare(struct zx279133_eth *eth);
 void zx279133_hardware_unprepare(struct zx279133_eth *eth);
+void zx279133_shutdown(struct zx279133_eth *eth);
 extern const struct ethtool_ops zx279133_ethtool_ops;
 extern const struct net_device_ops zx279133_netdev_ops;
 extern const struct zx279133_lan_service_ops zx279133_lan_service_ops;

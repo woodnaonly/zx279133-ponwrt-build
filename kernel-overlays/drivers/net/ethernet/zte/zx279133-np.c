@@ -2,6 +2,7 @@
 
 #include <linux/bitfield.h>
 #include <linux/crc32.h>
+#include <linux/debugfs.h>
 #include <linux/delay.h>
 #include <linux/device.h>
 #include <linux/etherdevice.h>
@@ -10,6 +11,7 @@
 #include <linux/iopoll.h>
 #include <linux/module.h>
 #include <linux/regmap.h>
+#include <linux/seq_file.h>
 #include <linux/unaligned.h>
 
 #include "zx279133.h"
@@ -31,16 +33,6 @@ void zx279133_route_set(struct zx279133_eth *eth, bool enabled)
 	writel(enabled ? value | ZX279133_ROUTE_CLK_EN :
 			 value & ~ZX279133_ROUTE_CLK_EN,
 	       eth->base + ZX279133_ROUTE_CLK);
-
-	/*
-	 * ROUTE_CTRL bit 2 is "feed XMAC1 from the PON SerDes": the vendor writes it in
-	 * ponserdes_to_xmac1_en_set() (mask 0xfffffffb, value<<2, and the value arrives
-	 * inverted), and the pon_route regmap write is the other half of the same switch.
-	 * Neither belongs to a device whose MAC is XMAC0 - and clearing bit 2 on enable
-	 * would rewrite the fibre lane's routing from the copper port's bring-up.
-	 */
-	if (eth->xmac_id != 1)
-		return;
 
 	regmap_write(eth->pon_route, 0, enabled ? 0 : 1);
 
@@ -450,6 +442,20 @@ static const u32 zx279133_vlan0_entry[ZX279133_SMMU0_WORDS] = {
  * (SE ERAM sdt 2) settings.
  */
 
+static void zx279133_spa_onu_mac_write(struct zx279133_eth *eth,
+				       unsigned int slot, const u8 *addr)
+{
+	void __iomem *lo = eth->base + ZX279133_SPA_ONU_MAC_LO +
+			   ZX279133_SPA_ONU_STRIDE * slot;
+
+	writel(addr ? get_unaligned_be32(addr + 2) : ZX279133_SPA_MAC_HI_VALUE,
+	       eth->base + ZX279133_SPA_ONU_MAC_HI +
+	       ZX279133_SPA_ONU_STRIDE * slot);
+	writel((readl(lo) & ~ZX279133_SPA_MAC_LO_MASK) |
+	       (addr ? get_unaligned_be16(addr) : ZX279133_SPA_MAC_LO_VALUE),
+	       lo);
+}
+
 void zx279133_program_spa_cpu_mac(struct zx279133_eth *eth, const u8 *addr)
 {
 	u8 cpu_mac[ETH_ALEN];
@@ -457,26 +463,59 @@ void zx279133_program_spa_cpu_mac(struct zx279133_eth *eth, const u8 *addr)
 
 	ether_addr_copy(cpu_mac, addr);
 	for (i = 0; i < ZX279133_WANID_CPU_MAC_COUNT; i++) {
-		writel(get_unaligned_be32(cpu_mac + 2),
-		       eth->base + ZX279133_SPA_ONU_MAC_HI +
-		       ZX279133_SPA_ONU_STRIDE * i);
-		writel((readl(eth->base + ZX279133_SPA_ONU_MAC_LO +
-			      ZX279133_SPA_ONU_STRIDE * i) &
-			~ZX279133_SPA_MAC_LO_MASK) |
-		       get_unaligned_be16(cpu_mac),
-		       eth->base + ZX279133_SPA_ONU_MAC_LO +
-		       ZX279133_SPA_ONU_STRIDE * i);
+		zx279133_spa_onu_mac_write(eth, i, cpu_mac);
 		eth_addr_inc(cpu_mac);
 	}
+}
+
+/*
+ * The WAN ingress program forwards a frame in hardware only when its
+ * destination is one of the ONU MAC slots; anything else goes to the CPU.
+ * Slots 0 and 1 hold the WAN address. A macvlan on the WAN, such as one
+ * PPPoE session of several each with its own MAC, puts its address on the
+ * unicast list of the WAN device: give those the remaining slots, so that
+ * their offloaded flows are forwarded downstream too. Caller holds
+ * datapath_lock, with the hardware prepared.
+ */
+void zx279133_program_spa_uc_macs(struct zx279133_eth *eth)
+{
+	u8 addrs[ZX279133_SPA_ONU_MAC_SLOTS - ZX279133_WANID_CPU_MAC_COUNT][ETH_ALEN];
+	struct net_device *ndev = eth->ndev;
+	struct netdev_hw_addr *ha;
+	unsigned int i, n = 0;
+
+	netif_addr_lock_bh(ndev);
+	netdev_for_each_uc_addr(ha, ndev) {
+		if (n == ARRAY_SIZE(addrs)) {
+			netdev_warn(ndev,
+				    "%u unicast addresses, only %zu forwarded in hardware\n",
+				    netdev_uc_count(ndev), ARRAY_SIZE(addrs));
+			break;
+		}
+		ether_addr_copy(addrs[n++], ha->addr);
+	}
+	netif_addr_unlock_bh(ndev);
+
+	for (i = 0; i < ARRAY_SIZE(addrs); i++)
+		zx279133_spa_onu_mac_write(eth, ZX279133_WANID_CPU_MAC_COUNT + i,
+					   i < n ? addrs[i] : NULL);
 }
 
 static int __zx279133_program_one_wanid_cpu_mac(struct zx279133_eth *eth,
 						unsigned int wanid,
 						const u8 *addr)
 {
+	struct zx279133_wanid_slot *slot = &eth->wanid[wanid];
 	u32 data[4];
 	int ret;
 
+	/* Flows own the MAC of a lent entry; change what it returns to. */
+	if (slot->users) {
+		slot->saved[2] = get_unaligned_be32(addr + 2);
+		slot->saved[3] = (slot->saved[3] & ~GENMASK(15, 0)) |
+				 get_unaligned_be16(addr);
+		return 0;
+	}
 	ret = zx279133_smmu0_read(eth, (16386 + wanid) << 7, data, 4,
 				  ZX279133_SMMU0_CMD_READ);
 	if (ret)
@@ -517,78 +556,190 @@ int zx279133_program_wanid_cpu_mac(struct zx279133_eth *eth, const u8 *addr)
 	return zx279133_program_one_wanid_cpu_mac(eth, 16, addr);
 }
 
-static int __zx279133_program_wanid_sip(struct zx279133_eth *eth, u32 wanid,
-					u32 sip, u32 *old_sip)
-{
-	u32 data[ZX279133_SMMU0_WORDS];
-	int ret;
-
-	if (wanid >= ZX279133_WANID_COUNT)
-		return -EINVAL;
-	ret = zx279133_smmu0_read(eth, (16386 + wanid) << 7, data,
-				  ARRAY_SIZE(data), ZX279133_SMMU0_CMD_READ);
-	if (ret)
-		return ret;
-	if (old_sip)
-		*old_sip = data[1];
-	data[1] = sip;
-	return zx279133_smmu0_write(eth, (16386 + wanid) << 7, data,
-				    ARRAY_SIZE(data), ZX279133_SMMU0_CMD_WRITE);
-}
-
-int zx279133_program_wanid_sip(struct zx279133_eth *eth, u32 wanid,
-			       u32 sip, u32 *old_sip)
-{
-	int ret;
-
-	mutex_lock(&eth->wanid_lock);
-	ret = __zx279133_program_wanid_sip(eth, wanid, sip, old_sip);
-	mutex_unlock(&eth->wanid_lock);
-
-	return ret;
-}
-
 #define ZX279133_WANID_PPPOE_SID	GENMASK(31, 16)
 #define ZX279133_WANID_PPPOE_MODE	GENMASK(27, 26)
 
-static int __zx279133_program_wanid_pppoe(struct zx279133_eth *eth, u32 wanid,
-					  u8 mode, u16 sid, u8 *old_mode,
-					  u16 *old_sid)
+static int zx279133_wanid_write(struct zx279133_eth *eth, unsigned int wanid,
+				const struct zx279133_wanid_profile *profile,
+				const u32 *base)
 {
 	u32 data[ZX279133_SMMU0_WORDS];
-	int ret;
 
-	if (wanid >= ZX279133_WANID_COUNT || mode > 3)
-		return -EINVAL;
-	ret = zx279133_smmu0_read(eth, (16386 + wanid) << 7, data,
-				  ARRAY_SIZE(data), ZX279133_SMMU0_CMD_READ);
-	if (ret)
-		return ret;
-	if (old_sid)
-		*old_sid = FIELD_GET(ZX279133_WANID_PPPOE_SID, data[0]);
-	if (old_mode)
-		*old_mode = FIELD_GET(ZX279133_WANID_PPPOE_MODE, data[3]);
+	memcpy(data, base, sizeof(data));
 	data[0] &= ~ZX279133_WANID_PPPOE_SID;
-	data[0] |= FIELD_PREP(ZX279133_WANID_PPPOE_SID, sid);
-	data[3] &= ~ZX279133_WANID_PPPOE_MODE;
-	data[3] |= FIELD_PREP(ZX279133_WANID_PPPOE_MODE, mode);
+	data[0] |= FIELD_PREP(ZX279133_WANID_PPPOE_SID, profile->sid);
+	if (profile->sip)
+		data[1] = profile->sip;
+	data[2] = get_unaligned_be32(profile->mac + 2);
+	data[3] &= ~(ZX279133_WANID_PPPOE_MODE | GENMASK(15, 0));
+	data[3] |= FIELD_PREP(ZX279133_WANID_PPPOE_MODE, profile->pppoe) |
+		   get_unaligned_be16(profile->mac);
 
 	return zx279133_smmu0_write(eth, (16386 + wanid) << 7, data,
 				    ARRAY_SIZE(data), ZX279133_SMMU0_CMD_WRITE);
 }
 
-int zx279133_program_wanid_pppoe(struct zx279133_eth *eth, u32 wanid,
-				 u8 mode, u16 sid, u8 *old_mode,
-				 u16 *old_sid)
+/*
+ * A flow may share an entry whose MAC and PPPoE rewrite match its own. The
+ * source address matters only to flows that source-NAT, so a flow that does
+ * not ignores it, and an entry nobody source-NATs through takes a new one.
+ */
+static bool zx279133_wanid_fits(const struct zx279133_wanid_slot *slot,
+				const struct zx279133_wanid_profile *profile)
 {
-	int ret;
+	return ether_addr_equal(slot->profile.mac, profile->mac) &&
+	       slot->profile.pppoe == profile->pppoe &&
+	       slot->profile.sid == profile->sid &&
+	       (!profile->sip || !slot->snat_users ||
+		slot->profile.sip == profile->sip);
+}
+
+/*
+ * Lend a flow the WANID entry for its profile. Upstream flows take entries
+ * 0 to 15 and downstream flows 16 to 31, as np.ko's index | direction << 4
+ * does; the lowest free entry is taken, so one profile per direction keeps
+ * using WANID 0 and 16.
+ */
+int zx279133_wanid_get(struct zx279133_eth *eth, bool downstream,
+		       const struct zx279133_wanid_profile *profile, u8 *wanid)
+{
+	unsigned int first = downstream ? ZX279133_WANID_DOWNSTREAM : 0;
+	unsigned int i, free = ZX279133_WANID_COUNT;
+	struct zx279133_wanid_slot *slot;
+	int ret = 0;
+
+	if (profile->pppoe > 3)
+		return -EINVAL;
 
 	mutex_lock(&eth->wanid_lock);
-	ret = __zx279133_program_wanid_pppoe(eth, wanid, mode, sid, old_mode, old_sid);
-	mutex_unlock(&eth->wanid_lock);
+	for (i = first; i < first + ZX279133_WANID_DOWNSTREAM; i++) {
+		slot = &eth->wanid[i];
+		if (!slot->users) {
+			if (free == ZX279133_WANID_COUNT)
+				free = i;
+			continue;
+		}
+		if (zx279133_wanid_fits(slot, profile))
+			break;
+	}
 
+	if (i < first + ZX279133_WANID_DOWNSTREAM) {
+		if (profile->sip && slot->profile.sip != profile->sip) {
+			struct zx279133_wanid_profile update = slot->profile;
+
+			update.sip = profile->sip;
+			ret = zx279133_wanid_write(eth, i, &update, slot->saved);
+			if (ret)
+				goto out_unlock;
+			slot->profile.sip = profile->sip;
+		}
+	} else {
+		if (free == ZX279133_WANID_COUNT) {
+			ret = -ENOSPC;
+			goto out_unlock;
+		}
+		i = free;
+		slot = &eth->wanid[i];
+		ret = zx279133_smmu0_read(eth, (16386 + i) << 7, slot->saved,
+					  ARRAY_SIZE(slot->saved),
+					  ZX279133_SMMU0_CMD_READ);
+		if (ret)
+			goto out_unlock;
+		ret = zx279133_wanid_write(eth, i, profile, slot->saved);
+		if (ret)
+			goto out_unlock;
+		slot->profile = *profile;
+	}
+
+	slot->users++;
+	if (profile->sip)
+		slot->snat_users++;
+	*wanid = i;
+
+out_unlock:
+	mutex_unlock(&eth->wanid_lock);
 	return ret;
 }
+
+void zx279133_wanid_put(struct zx279133_eth *eth, u8 wanid, bool snat)
+{
+	struct zx279133_wanid_slot *slot = &eth->wanid[wanid];
+
+	mutex_lock(&eth->wanid_lock);
+	if (WARN_ON(!slot->users || (snat && !slot->snat_users)))
+		goto out_unlock;
+	if (snat)
+		slot->snat_users--;
+	if (--slot->users)
+		goto out_unlock;
+	if (zx279133_smmu0_write(eth, (16386 + wanid) << 7, slot->saved,
+				 ARRAY_SIZE(slot->saved),
+				 ZX279133_SMMU0_CMD_WRITE))
+		dev_warn(eth->dev, "failed to restore WANID %u\n", wanid);
+	memset(&slot->profile, 0, sizeof(slot->profile));
+
+out_unlock:
+	mutex_unlock(&eth->wanid_lock);
+}
+
+#ifdef CONFIG_DEBUG_FS
+/* One line per WANID: the hardware entry decoded, then who borrows it. */
+static int zx279133_wanid_show(struct seq_file *s, void *unused)
+{
+	struct zx279133_eth *eth = s->private;
+	u32 data[ZX279133_SMMU0_WORDS];
+	unsigned int i;
+	__be32 sip;
+	u8 mac[ETH_ALEN];
+	int ret = 0;
+
+	mutex_lock(&eth->datapath_lock);
+	if (!READ_ONCE(eth->hardware_prepared)) {
+		seq_puts(s, "hardware not prepared\n");
+		goto out_unlock;
+	}
+	mutex_lock(&eth->wanid_lock);
+	for (i = 0; i < ZX279133_WANID_COUNT; i++) {
+		const struct zx279133_wanid_slot *slot = &eth->wanid[i];
+
+		ret = zx279133_smmu0_read(eth, (16386 + i) << 7, data,
+					  ARRAY_SIZE(data),
+					  ZX279133_SMMU0_CMD_READ);
+		if (ret)
+			break;
+		put_unaligned_be16(data[3], mac);
+		put_unaligned_be32(data[2], mac + 2);
+		sip = cpu_to_be32(data[1]);
+		seq_printf(s, "%2u %08x %08x %08x %08x mtu %lu sid %lu sip %pI4 mac %pM pppoe %lu users %u snat %u\n",
+			   i, data[0], data[1], data[2], data[3],
+			   data[0] & GENMASK(15, 0),
+			   FIELD_GET(ZX279133_WANID_PPPOE_SID, data[0]),
+			   &sip, mac,
+			   FIELD_GET(ZX279133_WANID_PPPOE_MODE, data[3]),
+			   slot->users, slot->snat_users);
+	}
+	mutex_unlock(&eth->wanid_lock);
+out_unlock:
+	mutex_unlock(&eth->datapath_lock);
+	return ret;
+}
+DEFINE_SHOW_ATTRIBUTE(zx279133_wanid);
+
+static void zx279133_wanid_debugfs_remove(void *data)
+{
+	debugfs_remove(data);
+}
+
+int zx279133_wanid_debugfs_init(struct zx279133_eth *eth)
+{
+	struct dentry *dentry;
+
+	dentry = debugfs_create_file("zx279133-wanid", 0400, NULL, eth,
+				     &zx279133_wanid_fops);
+	return devm_add_action_or_reset(eth->dev,
+					zx279133_wanid_debugfs_remove, dentry);
+}
+#endif
 
 #define ZX279133_FAST_IKEY_BASE_BLOCK	23186
 #define ZX279133_FAST_STAT_BASE_BLOCK	0x9081
@@ -864,6 +1015,9 @@ static int zx279133_mf_port_startpc_copy(struct zx279133_eth *eth,
 #define ZX279133_LAN_PPU_PORT		5
 #define ZX279133_WAN_PPU_PORT		6
 #define ZX279133_LAN_COMPANION_PORT	10
+/* PC 10 uses the transport VID of a LAN port as its logical PPU port. */
+#define ZX279133_LAN_VPORT_FIRST	ZX279133_LAN_TRANSPORT_VID_MIN
+#define ZX279133_LAN_VPORT_LAST		ZX279133_LAN_TRANSPORT_VID_MAX
 
 static const u32 zx279133_wan_proto_table[ZX279133_PRO_BLOCKS_PER_PORT]
 					     [ZX279133_SMMU0_WORDS] = {
@@ -943,31 +1097,162 @@ static int zx279133_spa_pkt_type_runtime(struct zx279133_eth *eth)
 }
 
 /*
+ * The logical LAN ports of PC 10. Their protocol actions are those of the
+ * LAN port, except that reasons 30 and 33 (frames for the router itself)
+ * also select a packet-rate limit set, and their MF extension entries carry
+ * the per-port user-defined areas the factory driver copies from its SPA
+ * attributes (words 1..3 = attributes 69..71).
+ */
+static const u32 zx279133_lan_vport_mf[][ZX279133_SMMU0_WORDS] = {
+	{ 0, 0x2f235600, 0x00000a38, 0x1c8c2800 },	/* VID 59, lan4 */
+	{ 0, 0x2fc36000, 0x00000a60, 0x1c8c2800 },	/* VID 60, lan3 */
+	{ 0, 0x30636a00, 0x00000a88, 0x1c8c2800 },	/* VID 61, lan2 */
+	{ 0, 0x31037400, 0x00000ab0, 0x1c8c2800 },	/* VID 62, lan1 */
+};
+
+/* SDT 6: one entry per logical port; bit 31 of word 3 marks a LAN port. */
+#define ZX279133_PORT_TYPE_ERAM_BASE_BLOCK	23026
+#define ZX279133_PORT_TYPE_LAN			BIT(31)
+/*
+ * MF extension word 3 of a WAN-type logical port, as the factory system sets
+ * it for VID 59 (lan4) when that port becomes its "WAN2": 0x1c8c2800 turns
+ * into 0x148e2000, the kind of value of the WAN port itself (0x148e0000).
+ * Measured for VID 59 only; the same flip for 60..62 is an inference.
+ */
+#define ZX279133_LAN_VPORT_MF_WAN_FLIP		0x08020800
+
+/*
+ * Make a logical LAN port LAN-type or WAN-type. The factory system turns a
+ * LAN port into a second WAN this way: it gives the port the protocol
+ * actions of the WAN port, flips its MF extension entry to the WAN kind and
+ * clears its LAN mark in SDT 6. Frames from it then take the WAN path of the
+ * PPU: the PPPoE header is removed on the way in and added on the way out,
+ * neither of which a LAN-type port does.
+ */
+static int zx279133_lan_vport_mode_write(struct zx279133_eth *eth, u16 vport,
+					 bool wan)
+{
+	u32 table[ZX279133_PRO_BLOCKS_PER_PORT][ZX279133_SMMU0_WORDS];
+	u32 addr = (ZX279133_PORT_TYPE_ERAM_BASE_BLOCK + vport) << 7;
+	u32 mf[ZX279133_SMMU0_WORDS], type[ZX279133_SMMU0_WORDS];
+	int ret;
+
+	memcpy(table, wan ? zx279133_wan_proto_table : zx279133_lan_proto_table,
+	       sizeof(table));
+	/*
+	 * Reasons 30 and 33 (frames for the router itself) also select a
+	 * packet-rate limit set. Reason r is half r % 2 of word (r % 8) / 2
+	 * of block r / 8.
+	 */
+	table[30 / 8][(30 % 8) / 2] |= BIT(1);
+	table[33 / 8][(33 % 8) / 2] |= BIT(17);
+	ret = zx279133_proto_table_write(eth, vport, table);
+	if (ret)
+		return ret;
+
+	memcpy(mf, zx279133_lan_vport_mf[vport - ZX279133_LAN_VPORT_FIRST],
+	       sizeof(mf));
+	if (wan) {
+		mf[3] ^= ZX279133_LAN_VPORT_MF_WAN_FLIP;
+		mf[2] |= BIT(0);
+	}
+	ret = zx279133_mf_eram_entry_write(eth, vport, mf);
+	if (ret)
+		return ret;
+
+	ret = zx279133_smmu0_read(eth, addr, type, ARRAY_SIZE(type),
+				  ZX279133_SMMU0_CMD_READ);
+	if (ret)
+		return ret;
+	if (wan)
+		type[3] &= ~ZX279133_PORT_TYPE_LAN;
+	else
+		type[3] |= ZX279133_PORT_TYPE_LAN;
+
+	return zx279133_smmu0_write(eth, addr, type, ARRAY_SIZE(type),
+				    ZX279133_SMMU0_CMD_WRITE);
+}
+
+static int zx279133_lan_vport_bringup(struct zx279133_eth *eth)
+{
+	unsigned int port;
+	bool wan;
+	int ret;
+
+	for (port = ZX279133_LAN_VPORT_FIRST; port <= ZX279133_LAN_VPORT_LAST;
+	     port++) {
+		wan = test_bit(port - ZX279133_LAN_VPORT_FIRST,
+			       &eth->lan_wan_vports);
+		ret = zx279133_lan_vport_mode_write(eth, port, wan);
+		if (ret)
+			return ret;
+	}
+
+	return 0;
+}
+
+/*
+ * Switch one LAN port between LAN-type and WAN-type. Its offloaded flows were
+ * built for the old type, so they all go; nf_flow_table offers them again.
+ */
+int zx279133_lan_vport_wan_set(struct zx279133_eth *eth, u16 vport, bool wan)
+{
+	unsigned int bit = vport - ZX279133_LAN_VPORT_FIRST;
+	int ret = 0;
+
+	if (vport < ZX279133_LAN_VPORT_FIRST || vport > ZX279133_LAN_VPORT_LAST)
+		return -EINVAL;
+
+	mutex_lock(&eth->datapath_lock);
+	if (test_bit(bit, &eth->lan_wan_vports) == wan)
+		goto out_unlock;
+	if (eth->hardware_prepared) {
+		ret = zx279133_lan_vport_mode_write(eth, vport, wan);
+		if (ret)
+			goto out_unlock;
+	}
+	if (wan)
+		set_bit(bit, &eth->lan_wan_vports);
+	else
+		clear_bit(bit, &eth->lan_wan_vports);
+	zx279133_flow_offload_reset(eth);
+
+out_unlock:
+	mutex_unlock(&eth->datapath_lock);
+	return ret;
+}
+
+/*
  * LAN-side PPU state: the ingress start PC of the RTL8372N path, the protocol
  * action tables of the LAN ports and the SPA attributes of their memories.
+ *
+ * LAN frames reach XMAC0 (SPA memory 5) with the RTL8372N transport VLAN
+ * (VID 59..62, one per LAN port) still in front of the payload. The factory
+ * entry PC 10 removes it and carries on with the VID as the logical source
+ * port: it looks the port up in the MF extension table and in the protocol
+ * action tables, and a flow it routes to the WAN can have a PPPoE header
+ * pushed, which the ordinary-Ethernet program (PC 561) never does. Those
+ * per-port tables must therefore exist for the logical ports 59..62 as well;
+ * without them every frame for the router itself is forwarded and lost.
  *
  * The LAN carries traffic whether or not the WAN has a link, so this belongs
  * to the shared data path and is programmed before RX is enabled. It used to
  * be done by the WAN link-up. With no WAN link the LAN then stayed on the
- * factory defaults (entry PC 10, empty protocol tables), and every LAN frame
- * went through the default path to queue 0 and CPU0. The entry PC, the
- * protocol tables and the attributes belong together: the PC 561 program
- * relies on the tables, so none of them can be moved on its own.
+ * factory defaults (empty protocol tables), and every LAN frame went through
+ * the default path to queue 0 and CPU0. The entry PC, the protocol tables and
+ * the attributes belong together: the entry program relies on the tables, so
+ * none of them can be moved on its own.
  */
 static int zx279133_lan_port_bringup(struct zx279133_eth *eth)
 {
 	u32 reg;
 	int ret;
 
-	/*
-	 * RTL8372N strips the private transport VLAN before XMAC0.  Its real
-	 * ingress path is SPA memory 5, so use the ordinary-Ethernet entry PC;
-	 * the factory LAN PC expects the four-byte private header to remain.
-	 */
+	/* Table valid, start PC 10, flow number 1, as on the factory system. */
 	ret = zx279133_spa_indirect_read(eth, 5, 0, &reg);
 	if (ret)
 		return ret;
-	reg = (reg & ~GENMASK(23, 0)) | 0x463;
+	reg = (reg & ~GENMASK(23, 0)) | 0x8015;
 	ret = zx279133_spa_indirect_write(eth, 5, 0, reg);
 	if (ret)
 		return ret;
@@ -1026,7 +1311,7 @@ static int zx279133_lan_port_bringup(struct zx279133_eth *eth)
 	if (ret)
 		return ret;
 
-	return 0;
+	return zx279133_lan_vport_bringup(eth);
 }
 
 int zx279133_wan_port_bringup(struct zx279133_eth *eth)
@@ -1052,16 +1337,7 @@ int zx279133_wan_port_bringup(struct zx279133_eth *eth)
 	ret = zx279133_spa_indirect_write(eth, 0, 0, reg);
 	if (ret)
 		return ret;
-	/*
-	 * addr10 is read from the board, not from the factory system. In the power cycle where
-	 * U-Boot moved 11,465,012 bytes through panel jack 4, the SPA indirect read of this entry
-	 * returned 0x0fffc00c on every memory tried (0, 4, 5 and 6 - 19:02:07, 19:02:29, 19:02:52
-	 * and 19:03:15 in staging/ctl/serial.log), while the value transcribed from the factory's
-	 * WAN state was 0x01f4000c. The field differs in bits 31:20 - 0xfff against 0x1f4 - which
-	 * is a length-shaped difference, and this driver's RX path is the one thing that has never
-	 * worked on this board (rx_packets 0 with xmac_tx_good_frames 12).
-	 */
-	ret = zx279133_spa_indirect_write(eth, 0, 10, 0x0fffc00c);
+	ret = zx279133_spa_indirect_write(eth, 0, 10, 0x01f4000c);
 	if (ret)
 		return ret;
 
@@ -1074,34 +1350,26 @@ int zx279133_wan_port_bringup(struct zx279133_eth *eth)
 		return ret;
 
 	/*
-	 * PPU port 6 on THIS board is panel jack 4, and the SPA memory of the memory-6 entry that
-	 * carries its traffic was read while it was doing so: entries 1, 13, 17, 18 and 19 are all
-	 * zero there (19:03:10 to 19:03:26, `mw 0x19008054 0x0860000N` then `md 0x19008058 0x2`),
-	 * and entry 10 is 0x0fffc00c like every other memory. The values that used to be written
-	 * here (0x0000088f, 0x00008008, 0x0e014400, 0x000001f1, 0x148e0000 - iswanport | ppuinit |
-	 * onumode | isolate | smac_learn | bit 26) were transcribed from the factory system's WAN
-	 * port, which on that box faced the PON with an external switch behind it. Marking the LAN
-	 * lane as a WAN port is a plausible reason a frame that reaches the XMAC is dropped before
-	 * it ever reaches a ring, and it is the one hypothesis here that has a measured counter-
-	 * value instead of an argument. Writing the measured zero is preferred over deleting the
-	 * write, because a cold boot does not guarantee those entries hold anything in particular.
+	 * PPU port 6's final factory WAN state: MF attribute
+	 * 0x148e0000 = iswanport | ppuinit | onumode | isolate |
+	 * smac_learn | bit 26 (observed live on the factory system).
 	 */
-	ret = zx279133_spa_indirect_write(eth, 6, 1, 0);
+	ret = zx279133_spa_indirect_write(eth, 6, 1, 0x0000088f);
 	if (ret)
 		return ret;
-	ret = zx279133_spa_indirect_write(eth, 6, 10, 0x0fffc00c);
+	ret = zx279133_spa_indirect_write(eth, 6, 10, 0x01f4000c);
 	if (ret)
 		return ret;
-	ret = zx279133_spa_indirect_write(eth, 6, 13, 0);
+	ret = zx279133_spa_indirect_write(eth, 6, 13, 0x00008008);
 	if (ret)
 		return ret;
-	ret = zx279133_spa_indirect_write(eth, 6, 17, 0);
+	ret = zx279133_spa_indirect_write(eth, 6, 17, 0x0e014400);
 	if (ret)
 		return ret;
-	ret = zx279133_spa_indirect_write(eth, 6, 18, 0);
+	ret = zx279133_spa_indirect_write(eth, 6, 18, 0x000001f1);
 	if (ret)
 		return ret;
-	ret = zx279133_spa_indirect_write(eth, 6, 19, 0);
+	ret = zx279133_spa_indirect_write(eth, 6, 19, 0x148e0000);
 	if (ret)
 		return ret;
 	{
@@ -1124,14 +1392,9 @@ int zx279133_wan_port_bringup(struct zx279133_eth *eth)
 	if (ret)
 		return ret;
 
-	/* spa_set_down_port_config(6) as the board holds it while carrying traffic: NPPT 0x8000
-	 * read 0x68000000 at 19:01:24, which is bits 30, 29 and 27 set with bits [11:6] all zero.
-	 * So this lane has no down-port number in that field at all, and the auto path (bit 27) is
-	 * left on - the opposite of writing 6 << 6 and clearing it. Only the two fields that were
-	 * measured are touched; the rest of the word is whatever the boot established.
-	 */
+	/* spa_set_down_port_config(6): NPPT 0x8000 bits [11:6]. */
 	reg = readl(eth->base + ZX279133_SPA_IPV6_CRC_MODE);
-	writel((reg & ~GENMASK(11, 6)) | BIT(27),
+	writel((reg & ~(GENMASK(11, 6) | BIT(27))) | 6 << 6,
 	       eth->base + ZX279133_SPA_IPV6_CRC_MODE);
 
 	/*
@@ -1141,18 +1404,10 @@ int zx279133_wan_port_bringup(struct zx279133_eth *eth)
 	 * zero, so the port helper writes value 6 (not 0x106) into the
 	 * NPPT 0x10 field; the enable helper sets bit 3 and the OAM
 	 * helpers set bits [19:15].
-	 *
-	 * Measured against that: the same register read 0x00004146 in the power cycle that proved
-	 * the lane (19:01:20 inside the `md 0x19000000 0x10` row, and again on its own at
-	 * 19:03:29 after the SPA cycle - unchanged), which has
-	 * bit 8 SET, bit 3 CLEAR and bits [19:15] CLEAR. The old mask cleared bit 8 and set all of
-	 * 3, 15, 16, 17, 18 and 19, so every one of those five differences is an unmeasured guess
-	 * that this board's working state contradicts - and enabling the OAM paths on a port whose
-	 * traffic is ordinary Ethernet is precisely how received frames get claimed by something
-	 * other than the host ring. Written as the measured word, because the value is not a
-	 * permission to keep whatever the boot left there: it is a specific observed state.
 	 */
-	writel(0x00004146, eth->base + 0x10);
+	reg = readl(eth->base + 0x10);
+	reg = (reg & ~0x107) | 0x006 | BIT(3) | GENMASK(19, 15);
+	writel(reg, eth->base + 0x10);
 
 	return 0;
 }
@@ -2015,6 +2270,7 @@ static void zx279133_spa_prepare(struct zx279133_eth *eth)
 		       ZX279133_SPA_ONU_STRIDE * i);
 	}
 	zx279133_program_spa_cpu_mac(eth, eth->ndev->dev_addr);
+	zx279133_program_spa_uc_macs(eth);
 	for (i = 0; i < ZX279133_SPA_TRAP_DMAC_COUNT; i++) {
 		writel(ZX279133_SPA_MAC_HI_VALUE,
 		       eth->base + ZX279133_SPA_TRAP_DMAC_HI +
@@ -2153,14 +2409,12 @@ static void zx279133_sdet_prepare(struct zx279133_eth *eth)
 	eth->sdet_saved[0] = readl(eth->base + ZX279133_SDET_FRAME_CFG);
 	eth->sdet_saved[1] = readl(eth->base + ZX279133_SDET_DOWN_FRAME_CFG);
 
-	/* Whole-word write, as in the bootloader: the max field is bits 31:16, so the old
-	 * "preserve GENMASK(31,28) of the previous value" was re-inserting the top nibble of the
-	 * very field being set. See ZX279133_SDET_UP_MAX_LEN for where these numbers come from.
-	 */
-	writel(ZX279133_SDET_UP_MAX_LEN << ZX279133_SDET_UP_MAX_SHIFT |
+	writel((eth->sdet_saved[0] & GENMASK(31, 28)) |
+	       ZX279133_SDET_UP_MAX_LEN << ZX279133_SDET_UP_MAX_SHIFT |
 	       ZX279133_SDET_UP_MIN_LEN,
 	       eth->base + ZX279133_SDET_FRAME_CFG);
-	writel(ZX279133_SDET_DOWN_MAX_LEN << ZX279133_SDET_DOWN_MAX_SHIFT |
+	writel((eth->sdet_saved[1] & GENMASK(31, 30)) |
+	       ZX279133_SDET_DOWN_MAX_LEN << ZX279133_SDET_DOWN_MAX_SHIFT |
 	       ZX279133_SDET_DOWN_MIN_LEN,
 	       eth->base + ZX279133_SDET_DOWN_FRAME_CFG);
 	eth->sdet_prepared = true;

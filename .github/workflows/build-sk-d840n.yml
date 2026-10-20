@@ -37,14 +37,17 @@ env:
   IW_BRANCH: sr1010-zx279133
   KERNEL_URL: https://github.com/cnjn/linux-mainline-zte-zxslc-sr1010
   KERNEL_BRANCH: build
-  # Cloning the branch tip made every build a race against somebody else's push. Run 72 died 1 h in
-  # on 21 errors in `zx279133-offload.c` - a file we do not overlay - because the kernel pointer moved
-  # to a revision whose offload.c needs header symbols none of our overlaid files have, while our
-  # overlays still carry the previous revision's driver set. Pinning the repository commit makes the
-  # kit reproducible again; 96e5a241 is the `build` tip the last successful run (71) cloned, and the
-  # bump that broke it is 0db7674c (2026-10-20). Raising this sha is a deliberate act: the overlay
-  # set has to be re-synced to the new driver revision in the same commit, or the build fails the way
-  # run 72 did.
+  # Pinned because cloning the branch tip makes every build a race with somebody else's push, and that
+  # race is what killed runs 72/73/74 identically: 21 errors, all in `zx279133-offload.c`, a file we do
+  # not overlay, because our overlay set had fallen behind his driver revision and shadowed five files
+  # while his new offload.c called functions that only his netdev.c and np.c define.
+  # The overlay set is now his driver as of this commit plus exactly three measured value changes
+  # (docs/09 §2b, docs/10 §6): header `IDM_TX_CFG_DEPTH 0 -> 0x400`, and in zx279133-idm.c
+  # `0x00003d00 -> IDM_BP_RING_SIZE` at +0x10c/+0x110 and `0 -> 0x00000040` at +0x124. Those three are
+  # upstream bugs in his port, measured against the bootloader that carries traffic: his own tree
+  # contains all three wrong values verbatim.
+  # Raising this sha therefore means re-taking the six overlaid driver files from the new revision and
+  # re-applying only those three changes; the copies in this repository are otherwise his, byte for byte.
   KERNEL_SHA: 96e5a2413524742e177e383fe523ef21de5ed238
   # Single source of truth for the kernel version. It used to be spelled out in eight
   # places across three workflow files plus the release text, so a version bump meant

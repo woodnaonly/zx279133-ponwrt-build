@@ -1410,7 +1410,6 @@ static void zx279133_idm_tx_configure(struct zx279133_eth *eth)
 	writel(20, idm + 0x0090);
 	writel(1, idm + 0x0094);
 	writel(ZX279133_IDM_DESC_MODE, idm + 0x00c0);
-	/* The bootloader the bytes flow through leaves 0x40 here (docs/09 §2b); mainline had 0. */
 	writel(0x00000040, idm + 0x0124);
 	writel(0x00000f49, idm + 0x03fc);
 	writel(7, idm + 0x05c0);
@@ -1438,18 +1437,6 @@ static void zx279133_idm_tx_configure(struct zx279133_eth *eth)
 	       idm + 0x011c);
 	writel(lower_32_bits(eth->idm_base + ZX279133_IDM_FREE_RING4),
 	       idm + 0x0408);
-	/*
-	 * nppt+0x28010c / +0x280110 are the entry counts of the two buffer rings whose bases go into
-	 * +0x104 and +0x108 just above.  15616 is larger than either ring: rx_normal_bp is
-	 * ZX279133_IDM_FREE_RING_SIZE (0x4000 bytes = 4096 entries) and the producer wraps at
-	 * ZX279133_IDM_BP_RING_SIZE, so the hardware was told to walk 3x past the end of what the CPU
-	 * ever filled - which is a direct mechanism for rx_packets staying 0 while TX completes.
-	 * The bootloader the bytes actually flow through holds 0x100 (256) in both fields, and it
-	 * programs the same pair as its own 256-entry table; 4096 is also the vendor DT's
-	 * idm_rx_normal_buffer_num.  Deriving the value from BP_RING_SIZE keeps this register and the
-	 * producer mask from ever disagreeing again.  +0x40c is left alone: it pairs with the TX free
-	 * ring, whose size differs, and this kit tests the RX supply only.
-	 */
 	writel(ZX279133_IDM_BP_RING_SIZE, idm + 0x010c);
 	writel(ZX279133_IDM_BP_RING_SIZE, idm + 0x0110);
 	writel(0x00003d00, idm + 0x040c);
