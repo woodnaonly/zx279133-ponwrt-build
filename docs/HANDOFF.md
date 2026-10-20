@@ -1873,3 +1873,46 @@ path 型字符串，本机只缺 `/var/tmp/*` 这类运行时产物。期间 `om
    xmac0 到底收不收得到帧就会自动留在日志里，不用有人守着。
 5. **还是要机主**：(a) 光纤插没插、光猫注册灯态；(b) 四个 RJ45 里哪个是 eth0（换线即可，仪器会答）；
    (c) 要不要走 A（整机回厂商固件，写 flash）；(d) root 至今没密码，ssh 只认公钥。
+
+## 2026-10-20 22:53 收口：本轮结束时的确切状态（下一轮从这里接）
+
+**刷好的部分（都经纯冷启动验证，不是 reload 后的假象）**
+- flash 三元组未动过：社区 `boot.bin` U-Boot + 4.19.136+ `uImage`/`board.dtb` + OpenWrt 24.10.8 jffs2 `root`。
+  **本轮没有任何 flash 写入。**
+- `tools/verify_router.sh` 在 22:14、22:43 两次冷启动都是 **5/5 PASS / ROUTER IS USABLE**
+  （console flood 0、getty 到 `Please press Enter`、arp+ping 4/4、LuCI HTTP 200、ssh `4.19.136+`）。
+- root 与配置都有备份：`backups/root-20261020-2045.bin.gz`（md5 双向核对）、`backups/config-20261020-2100.tgz`、
+  `backups/network-pre-wan-20261020-215059.txt`（改 WAN 前的原文件）、`backups/network-backup-*.txt`。
+
+**当前网络配置（uci，可回退）**
+- `lan` = `br-lan` **只含 eth1**，静态 `192.168.9.1/24`；PC = `192.168.9.25`（插在哪只口都会自动记下来）。
+- `wan` = `eth2` + `proto dhcp`。**选 eth2 的理由是实测**：eth0（RTL8226，厂商 CLI 里的 sw_port 4）的 CPU 出口帧
+  永远只落在 TM 列 smac1，`xmac0/xmac1/rgmii/pon*` 恒 0，且 `upModeInfo`、`/proc/tm/shell`、loopback 三条路都堵死；
+  eth2/eth3 与已证明带过 22 MB 的 eth1 同属 9132 UNI 交换通路。
+- 实测隔离：`ping -I br-lan 192.168.9.25` = 4/4 且邻居 REACHABLE，`ping -I eth2 192.168.9.25` = 0/6 且 INCOMPLETE
+  ⇒ eth2 的广播没有泄进 LAN 泛洪域。**这只证明隔离，没证明 eth2 的 jack 能收**（现在没插线）。
+- 运行时状态干净：eth2 的临时 `192.168.9.3/24` 与多余路由已清并复查；实验残留（`g_up_mode`、
+  `forbid_telnet_ctrl_tm_shell`、`/tmp/vfull`、厂商进程）已由 22:28/22:43 两次断电自然清除。
+
+**在跑的无人值守仪器（不要 kill，它们是机主挪线时的唯一证人）**
+- `tools/jackmap.sh 240` → `staging/ctl/jackmap.log`：每 20 s 记 eth0..eth3 的 rx/tx/carrier。**看哪只 netdev 的 rx 开始涨**。
+- `tools/eth0jackwatch.sh 240` → `staging/ctl/eth0-jackwatch.log`：每 10 s 记 eth0 的 rx/tx、carrier、`sky_outerphy_state`。
+- 两者都是 PC→ssh 采样，板子断电只会缺 ~60 s；要停就按 PID 停 `sh.exe`（别用 `Get-Process … -match <pattern>`，会把自己杀掉）。
+- 插座实测断落点：21:56、22:12、22:28、22:43（≈15.5–16 min 一次，**不是**整刻钟），每次 ~30 s。
+
+**还差什么，才能说"刷好"**
+1. **上行还没接**（物理）：把线插进某个 RJ45 并说一声是哪只；日志会独立验证是不是 eth2。
+2. **NAT 还没有用户态**（任务 #56）：内核有 legacy ip_tables + `MASQUERADE`（`/proc/net/ip_tables_targets` 实测在），
+   但设备里没有任何 iptables 程序/库，24.10.8 armsr feed 也没有 `iptables`/`iptables-legacy`/`libxtables*`；
+   厂商 `/bin/iptables` 缺 `libxtables.so.12`。唯一通道：离线用 `jffs2reader`/`jefferson` 解 `restore_set/root_stock.bin`
+   取库（本机没这工具、python3 是 stub，vps1 上有），再和厂商二进制一起推进 `/tmp/vroot`，用
+   `ld-2.26.so --library-path` 跑（CONFIG_COMPAT 已验证可执行 arm32）。判据：`iptables -t nat -L -v` 列出
+   `-o eth2 -j MASQUERADE` 且 LAN 客户端过板时 pkts 计数上涨。
+3. **光纤/注册状态未知**：`pon` 的 rx 恒 0；若要恢复原厂光猫功能就走 A（`restore_set/` 五件套，写 flash，需批准）。
+4. root 至今无密码，ssh 只认公钥（机主未表态）。
+
+**本轮新增/修改的工具**：`tools/verify_router.sh`（arp 大小写+横线、getty 接受激活横幅，两个假阴性修好，
+正/反对照都跑过）、`tools/eth0egress.sh`（TM 出口归因，含"必须整窗口、按 label 配对"的教训）、
+`tools/eth0jackwatch.sh`、`tools/jackmap.sh`。文档：`docs/13-eth0-egress-port-measurement-20261020.md` §0–§15。
+提交（docs-only，**有意不 push**，以免未验证的 kit 占住发布指针）：`0f3308f 8835f6c 2c71f1c fa75a0e 055a788
+9bb0887 17e73ea b69dc57 0fab4c3`。
