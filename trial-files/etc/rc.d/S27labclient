@@ -1,0 +1,123 @@
+#!/bin/sh
+# Trial-only: put a client on the LAN side of the router, inside the board.
+#
+# The bench has one cable: the test PC's.  So the LAN side of the router has
+# no external client, and the plan's "a client on the LAN reaches the
+# internet" can only be shown by a client the board makes itself.  This one is
+# a veth pair:
+#
+#   labhost0  is a bridge port of br-lan - the LAN side, exactly where a
+#             laptop in a jack would sit;
+#   labcli0   is the other end, in its own network namespace when the kernel
+#             has namespaces, so it has its own stack: it takes a DHCP lease
+#             from the board's own dnsmasq and reaches the internet through
+#             the router's NAT, and nothing it does is the board's own traffic.
+#
+# The kernel needs CONFIG_VETH for the pair and CONFIG_NET_NS for the
+# namespace; both are pinned by scripts/configure-sk-d840n.sh.  Without the
+# namespace the client end stays in the root namespace and still takes its
+# lease and still goes out through the WAN - weaker, but it still shows the
+# DHCP server, the bridge and the NAT working, and the log says which of the
+# two it was.
+#
+# Nothing here writes flash.  It only configures the running system.
+LABNS=labcli
+LABH=labhost0
+LABC=labcli0
+BR=br-lan
+STATUS=/tmp/labclient.status
+
+log() { echo "trial: client: $*" >/dev/kmsg; }
+
+# The bridge has to be there: netifd builds it a moment after the network
+# init returns, and S26nat runs right after that.
+i=0
+while [ $i -lt 30 ]; do
+	[ -e "/sys/class/net/$BR" ] && break
+	i=$((i + 1))
+	sleep 1
+done
+[ -e "/sys/class/net/$BR" ] || { log "no $BR - there is no LAN to be a client of"; exit 0; }
+
+# The pair, once.  A second run of this script must not fail on an existing
+# pair, because the lab re-runs it by hand.
+if ! ip link show "$LABH" >/dev/null 2>&1; then
+	ip link add "$LABH" type veth peer name "$LABC" 2>/dev/null || {
+		log "cannot create a veth pair - CONFIG_VETH is not in this kernel?"; exit 0; }
+fi
+
+# The client's own stack, if the kernel has namespaces.
+INNS=0
+if ip netns add "$LABNS" 2>/dev/null; then
+	if ip link set "$LABC" netns "$LABNS" 2>/dev/null; then
+		INNS=1
+	else
+		ip netns del "$LABNS" 2>/dev/null
+	fi
+fi
+
+# The board-side end is a bridge port of the LAN.
+ip link set "$LABH" master "$BR" 2>/dev/null
+ip link set "$LABH" up 2>/dev/null
+
+# The lease script.  It applies the address and the route and deliberately
+# does not touch /etc/resolv.conf: the namespace shares the mount namespace,
+# so a resolver written here would be the board's resolver, and the board's
+# own name resolution must not depend on a lab client.
+cat > /tmp/labclient-dhcp.sh <<'EOF'
+#!/bin/sh
+[ "$1" = bound ] || exit 0
+case "$2" in
+ip)
+	ip addr replace "$ip/$mask" dev "$interface" 2>/dev/null
+	;;
+subnet)
+	ip route replace "$subnet" dev "$interface" 2>/dev/null
+	;;
+router)
+	ip route replace default via "$router" dev "$interface" 2>/dev/null
+	;;
+esac
+exit 0
+EOF
+chmod 755 /tmp/labclient-dhcp.sh
+
+if [ "$INNS" = 1 ]; then
+	ip netns exec "$LABNS" ip link set lo up 2>/dev/null
+	ip netns exec "$LABNS" ip link set "$LABC" up 2>/dev/null
+	ip netns exec "$LABNS" udhcpc -i "$LABC" -n -q -t 3 -T 4 \
+		-s /tmp/labclient-dhcp.sh >/tmp/labclient-dhcp.log 2>&1
+else
+	ip link set "$LABC" up 2>/dev/null
+	udhcpc -i "$LABC" -n -q -t 3 -T 4 \
+		-s /tmp/labclient-dhcp.sh >/tmp/labclient-dhcp.log 2>&1
+fi
+
+# The evidence, and a heartbeat that keeps it fresh: the lease, whether the
+# internet answers, and the conntrack entry that shows the flow went through
+# the NAT.
+(
+	while true; do
+		if [ "$INNS" = 1 ]; then
+			addr=$(ip netns exec "$LABNS" ip -4 addr show dev "$LABC" 2>/dev/null |
+				awk '/inet /{print $2; exit}')
+			ping_out=$(ip netns exec "$LABNS" ping -c 1 -W 3 8.8.8.8 2>&1 |
+				tail -n 2 | tr '\n' ' ')
+		else
+			addr=$(ip -4 addr show dev "$LABC" 2>/dev/null |
+				awk '/inet /{print $2; exit}')
+			ping_out=$(ping -c 1 -W 3 8.8.8.8 2>&1 | tail -n 2 | tr '\n' ' ')
+		fi
+		{
+			echo "client: $LABC (netns: $INNS)"
+			echo "lease: $addr"
+			echo "ping 8.8.8.8: $ping_out"
+			echo "conntrack:"
+			grep '192\.168\.9\.' /proc/net/nf_conntrack 2>/dev/null | head -n 5
+		} >"$STATUS" 2>/dev/null
+		sleep 30
+	done
+) &
+
+log "client up: $LABH is a port of $BR, $LABC is the client (netns: $INNS)"
+exit 0

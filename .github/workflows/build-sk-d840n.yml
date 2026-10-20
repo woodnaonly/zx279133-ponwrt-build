@@ -674,7 +674,7 @@ jobs:
           # if the seed says =y and the merge says otherwise, the question is which of
           # the three config-* fragments is last, not whether the pin ran.
           required="REALTEK_PHY LEDS_GPIO GPIO_ZX279133 GPIO_SYSFS PSTORE PSTORE_CONSOLE PSTORE_RAM MAGIC_SYSRQ MAGIC_SYSRQ_SERIAL"
-          reported="DEVMEM STRICT_DEVMEM IO_STRICT_DEVMEM DETECT_HUNG_TASK SOFTLOCKUP_DETECTOR IKCONFIG IKCONFIG_PROC"
+          reported="DEVMEM STRICT_DEVMEM IO_STRICT_DEVMEM DETECT_HUNG_TASK SOFTLOCKUP_DETECTOR IKCONFIG IKCONFIG_PROC NETFILTER NETFILTER_ADVANCED NF_CONNTRACK NF_NAT NF_TABLES NF_TABLES_IPV4 NFT_NAT NFT_MASQ VETH"
           SEED=$( { ls openwrt/target/linux/zte/zx279133/config-* 2>/dev/null || true; } | head -1 )
           echo "kernel config seed: ${SEED:-none}"
           echo "    seed:   $( { grep -E '^(CONFIG_DEVMEM=|# CONFIG_DEVMEM is not set$)' "$SEED" 2>/dev/null || echo 'DEVMEM not mentioned in the seed'; } )"

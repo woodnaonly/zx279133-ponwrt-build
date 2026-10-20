@@ -153,6 +153,18 @@ if [ -n "$BR" ]; then
 	echo "trial: nat: br-lan is up; the test PC is in $PC_PORT" >/dev/kmsg
 fi
 
+# A forced upstream.  /etc/labwan names the port that is to be the WAN, and
+# "pc" means "the port the test PC is in".  This is the mode the bench needs
+# while it has only one cable: the PC is then the upstream (it runs a DHCP
+# server and a NAT of its own), the board's WAN is the port the PC is in, and
+# the LAN keeps the other jacks.  The port leaves the bridge here, which is
+# also what makes the DSA bridge callback treat it as a WAN-typed port in the
+# NPPT.
+FORCED=""
+if [ -f /etc/labwan ]; then
+	FORCED=$(head -n 1 /etc/labwan 2>/dev/null | tr -d '\r\n ')
+fi
+
 # S15trial put 192.168.9.1 on everything.  Keep it on the LAN only.
 for d in /sys/class/net/*; do
 	[ -d "$d" ] || continue
@@ -225,6 +237,22 @@ search_others() {
 
 WAN=""
 if [ -n "$BR" ]; then
+	if [ -n "$FORCED" ]; then
+		case "$FORCED" in
+		pc) FORCED="$PC_PORT" ;;
+		lan1|lan2|lan3|lan4) ;;
+		*) FORCED="" ;;
+		esac
+	fi
+	if [ -n "$FORCED" ]; then
+		WAN="$FORCED"
+		echo "trial: nat: the upstream is forced onto $WAN" >/dev/kmsg
+		# out of the bridge first, so the DSA bridge callback sees the
+		# port leave, and then into the image's own network service, so
+		# the lease belongs to the configuration and survives a reload
+		ip link set "$WAN" nomaster 2>/dev/null
+		adopt_wan "$WAN"
+	else
 	# Give the default WAN its chance: the network service's own client is
 	# already running on it.
 	i=0
@@ -249,6 +277,7 @@ if [ -n "$BR" ]; then
 			[ "$p" = "$PC_PORT" ] && continue
 			uci -q get network.wan.device 2>/dev/null | grep -q "^$p\$" && WAN="$p"
 		done
+	fi
 	fi
 fi
 
@@ -304,7 +333,7 @@ if [ -n "$WAN" ] && command -v nft >/dev/null 2>&1; then
 table ip nat {
 	chain postrouting {
 		type nat hook postrouting priority 100; policy accept;
-		oifname "$WAN" masquerade
+		oifname "$WAN" masquerade counter
 	}
 }
 EOF
@@ -327,6 +356,10 @@ fi
 	cat /proc/sys/net/ipv4/ip_forward 2>/dev/null
 	echo "--- bridge ---"
 	brctl show 2>/dev/null
+	echo "--- conntrack ---"
+	head -n 20 /proc/net/nf_conntrack 2>/dev/null
+	echo "--- wan counters ---"
+	[ -n "$WAN" ] && ip -s link show "$WAN" 2>/dev/null
 	if command -v nft >/dev/null 2>&1; then
 		echo "--- nft ruleset ---"
 		nft list ruleset 2>/dev/null

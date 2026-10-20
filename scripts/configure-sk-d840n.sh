@@ -331,6 +331,63 @@ printf 'CONFIG_PACKAGE_mdread=y\n' >>.config
 # network blocks; see the comment in src/wrreg.c.
 printf 'CONFIG_PACKAGE_wrreg=y\n' >>.config
 
+# ---------------------------------------------------------------------------
+# The router half of the plan: netfilter, nft, and a virtual Ethernet pair.
+#
+# The image this build produced so far could not be a router at all, and the
+# reason is in two places that are easy to mistake for "the NAT is not
+# configured yet":
+#
+#   * the kernel has no netfilter.  The feed's own fragment says so -
+#     target/linux/generic/config-6.18:4003 "# CONFIG_NETFILTER is not set" -
+#     and the merged kernel config of run 51 agrees: "# CONFIG_NF_TABLES is
+#     not set", "# CONFIG_IP_NF_IPTABLES is not set".  Every netfilter symbol
+#     lives under `if NETFILTER` (net/Kconfig:165), so with that off there is
+#     no conntrack, no NAT and no nft, whatever the userspace asks for.
+#   * the image has no NAT userspace.  The run-86 rootfs carries ip-full,
+#     dnsmasq, dropbear, ethtool, brctl and udhcpc, and no nft and no
+#     iptables - the feed's nftables package cannot even be selected, because
+#     it depends on kmod-nft-core and this branch has no netfilter kmod
+#     packages (package/kernel/modules/nf_tables.ko and its siblings are 404).
+#
+# So the NAT is pinned into the kernel, built in rather than as modules (a
+# module build would leave a kmod package with nothing to package), and the
+# userspace comes from overlays/package/network/utils/nftables/Makefile, which
+# is the feed's recipe without the kmod dependency.
+#
+# The symbol names are this tree's, not the ones a web page would give:
+#   * the masquerade expression is CONFIG_NFT_MASQ here, not
+#     CONFIG_NFT_MASQUERADE (net/netfilter/Kconfig:543);
+#   * the counter expression has no symbol of its own - nft_counter.o is part
+#     of nf_tables-objs (net/netfilter/Makefile:91), so the counters the plan
+#     asks for exist as soon as nf_tables does;
+#   * CONFIG_NF_TABLES_IPV4 lives in net/ipv4/netfilter/Kconfig:35, not in
+#     net/netfilter/Kconfig, and it is what "table ip" needs;
+#   * CONFIG_VETH (drivers/net/Kconfig:440) is what lets the board be its own
+#     lab client, so that the LAN side of the router has something on it even
+#     when the bench has only one cable.
+#
+# Every fragment is rewritten, not just the subtarget: kconfig keeps the last
+# statement for a symbol, so a "# CONFIG_X is not set" left in an earlier
+# fragment decides the outcome unless it is taken out, and the DEVMEM round
+# already lost once to exactly that.
+NF_SYMS="NETFILTER NETFILTER_ADVANCED NF_CONNTRACK NF_NAT NF_TABLES NF_TABLES_IPV4 NFT_NAT NFT_MASQ VETH"
+for f in target/linux/generic/config-6.18 \
+	 target/linux/zte/config-6.18 \
+	 target/linux/zte/zx279133/config-6.18; do
+	[ -f "$f" ] || continue
+	for s in $NF_SYMS; do
+		sed -i -e "/^CONFIG_$s=/d" -e "/^# CONFIG_$s is not set\$/d" "$f"
+		printf 'CONFIG_%s=y\n' "$s" >>"$f"
+	done
+done
+grep -hE "^(CONFIG_|# CONFIG_)(NETFILTER|NETFILTER_ADVANCED|NF_CONNTRACK|NF_NAT|NF_TABLES|NF_TABLES_IPV4|NFT_NAT|NFT_MASQ|VETH)=" \
+	target/linux/zte/zx279133/config-6.18
+
+# The NAT userspace.  Both images get it: a flashed root that cannot
+# masquerade is a router that only works on the bench.
+printf 'CONFIG_PACKAGE_nftables=y\n' >>.config
+
 make defconfig
 
 # The same rule that this file already states twice: a config line for a symbol
@@ -365,6 +422,15 @@ grep -qx 'CONFIG_PACKAGE_wrreg=y' .config || {
 	echo "CONFIG_PACKAGE_wrreg did not survive defconfig - is package/utils/wrreg/Makefile in the tree?" >&2
 	ls -d package/utils/wrreg 2>/dev/null || echo "package/utils/wrreg is NOT in the tree" >&2
 	grep -i 'wrreg' .config || echo "(nothing at all)" >&2
+	exit 1; }
+
+# The NAT userspace, asserted the same way: a package whose dependency cannot
+# be satisfied is dropped by defconfig in silence, and an image without nft is
+# an image whose NAT rules cannot be loaded at all.
+grep -qx 'CONFIG_PACKAGE_nftables=y' .config || {
+	echo "CONFIG_PACKAGE_nftables did not survive defconfig - is overlays/package/network/utils/nftables/Makefile in the tree?" >&2
+	ls -d package/network/utils/nftables 2>/dev/null || echo "package/network/utils/nftables is NOT in the tree" >&2
+	grep -i 'nftables' .config || echo "(nothing at all)" >&2
 	exit 1; }
 
 # CONFIG_DEVMEM lost three rounds, and the winner is not the fragment merge. Read out of
