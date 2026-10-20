@@ -197,9 +197,25 @@
  */
 #define ZX279133_SWITCH_DSA_PORT_MIN	4
 #define ZX279133_SWITCH_DSA_PORT_MAX	7
-#define ZX279133_SWITCH_DSA_NUM_PORTS	8
-/* The CPU port: the one that faces the conduit. */
-#define ZX279133_SWITCH_DSA_CPU_PORT	0
+#define ZX279133_SWITCH_DSA_NUM_PORTS	9
+/*
+ * The CPU port: the one that faces the conduit.
+ *
+ * It is index 8 and not 0 because that is what the tree's own DSA switch
+ * does.  The tree's RTL8372N node (arch/arm64/boot/dts/zte/zx279133-sr1010.dts)
+ * describes its chassis LAN1..LAN4 as ports 4..7 and its CPU port as
+ * port@8, and its driver answers "port == 8" wherever the CPU port is
+ * asked about (zx279133_rtl8372n_phylink_fixed_state()).  This tree's DSA
+ * fork looks a port up by index (dsa_to_port()) and leaves the numbers
+ * between the CPU port and the user ports unused, so the same shape is
+ * used here: the four UNI jacks are 4..7 and the CPU port is 8.
+ *
+ * The tagger does not care which end is which - it puts
+ * TRANSPORT_VID_BASE + port on a user port's frames and reads the port
+ * back out of the VID - so the four jacks keep the transport VIDs 59..62,
+ * which are exactly the PVIDs zx279133_9132_port_init() programs.
+ */
+#define ZX279133_SWITCH_DSA_CPU_PORT	8
 /* The 9132's PPU port behind a DSA port: DSA 4..7 are PPU 1..4. */
 #define ZX279133_SWITCH_DSA_PPU(port)	((port) - \
 					 (ZX279133_SWITCH_DSA_PORT_MIN - 1))
@@ -1059,7 +1075,15 @@ static const struct dsa_switch_ops zx279133_switch_dsa_ops = {
  */
 static bool zx279133_switch_conduit_present(struct device *dev)
 {
-	struct netdev_tracker tracker;
+	/*
+	 * netdevice_tracker, not "struct netdev_tracker": this tree has no
+	 * such type.  Its netdev_hold()/netdev_put() take a
+	 * netdevice_tracker *, and its own DSA core declares the matching
+	 * member that way (include/net/dsa.h: "netdevice_tracker
+	 * conduit_tracker;").  A local tracker is therefore declared with
+	 * the tree's own typedef.
+	 */
+	netdevice_tracker tracker;
 	struct device_node *ports, *port;
 	bool present = false;
 
