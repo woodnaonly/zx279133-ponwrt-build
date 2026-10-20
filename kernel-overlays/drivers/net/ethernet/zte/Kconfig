@@ -1,0 +1,73 @@
+# SPDX-License-Identifier: GPL-2.0-only
+#
+# This file replaces the kernel tree's drivers/net/ethernet/zte/Kconfig
+# wholesale, because the overlay is applied with `cp -a kernel-overlays/. $KT/`
+# and a shadowed file has to carry the tree's own content as well.  The tree
+# content below is the one from
+# cnjn/linux-mainline-zte-zxslc-sr1010 at 96e5a2413524742e177e383fe523ef21de5ed238,
+# plus the SK-D840N's own switch driver.
+
+config NET_VENDOR_ZTE
+	bool "ZTE Ethernet devices"
+	default y
+	help
+	  Enable support for Ethernet controllers integrated in ZTE SoCs.
+	  This option controls the visibility of the individual ZTE Ethernet
+	  drivers and does not build a driver by itself. Select the controller
+	  option below for the target SoC.
+
+if NET_VENDOR_ZTE
+
+config ZTE_ZX279133_ETH
+	tristate "ZTE ZX279133 NPPT Ethernet support"
+	depends on OF && HAS_IOMEM && HAS_DMA
+	depends on COMMON_CLK_ZX279133
+	depends on PHY_ZX279133_PON_SERDES
+	depends on PCS_XPCS
+	select PAGE_POOL
+	select CRC32
+	help
+	  Enable support for the NPPT Ethernet controller and IDM packet DMA
+	  engine in the ZTE ZX279133 SoC. The driver provides phylink MAC/PCS
+	  integration, TX completion, page-pool RX, and the SR1010 WAN path.
+	  It also owns the shared packet-processing resources used by LAN.
+
+config ZTE_ZX279133_LAN_CONDUIT
+	bool "ZTE ZX279133 XMAC0 LAN conduit"
+	depends on ZTE_ZX279133_ETH
+	default y
+	help
+	  Build the XMAC0 LAN conduit netdev as a child of the ZX279133
+	  NPPT controller. The conduit is used as a DSA CPU-facing netdev.
+	  Shared DMA and datapath ownership remains in the parent driver,
+	  which coordinates WAN and LAN lifecycle and queue accounting.
+
+config ZTE_ZX279133_RTL8372N
+	tristate "ZTE ZX279133 RTL8372N DSA switch driver"
+	depends on ZTE_ZX279133_ETH
+	select ZTE_ZX279133_LAN_CONDUIT
+	depends on PHY_ZX279133_UNI_SERDES
+	depends on PCS_XPCS
+	depends on NET_DSA
+	select NET_DSA_TAG_ZX279133_RTL8372N
+	help
+	  Build the RTL8372N DSA switch driver for the SR1010 LAN path. The
+	  driver owns the external switch reset, XMAC0/XPCS0/Uni-SerDes link,
+	  physical ports 4 through 7, and CPU port 8. It registers four DSA
+	  user ports through the dedicated ZX279133 LAN conduit.
+
+config ZTE_ZX279133_SWITCH
+	tristate "ZTE ZX279133 on-board LAN switch driver"
+	depends on ZTE_ZX279133_ETH
+	select ZTE_ZX279133_LAN_CONDUIT
+	depends on PHY_ZX279133_UNI_SERDES
+	depends on PCS_XPCS
+	help
+	  Build the driver for the LAN switch this board carries, the 9132.
+	  Its CPU port sits on the XMAC0 LAN lane exactly where the RTL8372N's
+	  CPU port sits on the SR1010, so this driver owns the XMAC0 datapath
+	  and the XPCS0 lane, and programs the switch behind them. The 9132's
+	  own port attributes and its internal PHYs are programmed by the NPPT
+	  driver, which reaches them over the PPU's indirect register window.
+
+endif

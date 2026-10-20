@@ -270,72 +270,40 @@
 };
 
 &nppt {
-	/* zx279133.dtsi says 2500base-x, and that is a lie for this port as we
-	 * have to use it: it makes 2500baseT the only legal mode in phylink's
-	 * supported mask, so `ethtool -s eth0 speed 1000` moves only the PHY's
-	 * copper side while the lane keeps running 2.5G, and the RTL8221B does
-	 * not rate-adapt there. Measured on 2026-10-16 in exactly that state:
-	 * `Link is Up - 1Gbps/Full` and carrier=1 at both ends, but board
-	 * rx_packets stayed 0 and a 20-packet burst changed not one byte of the
-	 * peer's received counters - a link that carries nothing.
+	/*
+	 * The NPPT's own MAC is XMAC1 and its lane is the PON SerDes with XPCS1.
+	 * That is what zx279133.dtsi says, and it is what the vendor bootloader
+	 * does: "pon serdes init succeed", and separately "mode_eth_1gbase_x_cfg"
+	 * + "uni serdes init succeed" + "xmac 0 speed set 2 in sgmii" on the
+	 * *other* lane, the one that reaches jack 4's RTL8226.
 	 *
-	 * 1000BASE-X/SGMII is what this cable actually runs, measured from the
-	 * vendor bootloader on the same jack: its net init prints
-	 * `phy_id:0x5 port:0x4`, `mode_eth_1gbase_x_cfg`,
-	 * `xmac 0 speed set 2 in sgmii(xmac speed 3)`,
-	 * `mac 4 phy status changed: 1000M full-duplex`, then moved 12013 bytes
-	 * by tftp at 1.9 MiB/s. zx279133-mac.c accepts exactly 2500BASEX and
-	 * SGMII and carries the vendor's recovered 1G XPCS bring-up.
+	 * An earlier round of this file re-aimed the NPPT at the Uni SerDes and
+	 * XPCS0, on the theory that jack 4's RTL8226 sits on the Uni lane.  That
+	 * is wrong twice over, and both halves matter:
 	 *
-	 * It was NOT the whole fix, and that is measured too (2026-10-17): with
-	 * phy-mode="sgmii" the mask is right at last (`Supported link modes:
-	 * 10/100/1000baseT`, `Link partner advertised ... 1000baseT/Full`) and the
-	 * port still moves nothing - rx_packets 0, no RX counter in ethtool -S at
-	 * all while xmac_tx_good_frames counts 12 frames into the lane, IRQ
-	 * `22: 0 0 GICv3 33 Level 19000000.ethernet`, and the peer's ReceivedBytes
-	 * unmoved across six pings whose ARP stayed Incomplete. The same power
-	 * cycle had U-Boot print `uni serdes init succeed` and pull 11,440,284
-	 * bytes before bootm, so the leftovers are not what was missing either:
-	 * mainline's own bring-up configures the other pair.
+	 *   - phy-zx279133-uni-serdes.c only accepts USXGMII/10GBASE-R, so
+	 *     phy_set_mode_ext() with the "sgmii" below answers -EOPNOTSUPP and
+	 *     zx279133_hardware_prepare() fails at that step.  Everything after
+	 *     it in that function - including zx279133_np_prepare(), which is
+	 *     where the 9132's port attributes and its PHY enable are
+	 *     programmed - is then never reached, the datapath is never
+	 *     acquired and no netdev ever comes up.  That is why every trial so
+	 *     far moved no bytes at all, and it was not the PHY.
+	 *   - the Uni SerDes and XPCS0 are the 9132's CPU port lane
+	 *     (docs/16-9132-topology-and-driver-design-20261021.md): the vendor
+	 *     prints "xmac0_pcs_base is 0x140000" and "xmac0 is used" before it
+	 *     declares its MII devices, and the first of those is "sw", which is
+	 *     the 9132's CPU port.  The 9132's own driver owns that lane, the
+	 *     same way the RTL8372N driver owns it on the SR1010.
+	 *
+	 * The PON SerDes driver accepts both SGMII and 2.5GBASE-X, so "sgmii"
+	 * is a mode it can actually be put into.  The Uni SerDes and XPCS0 are
+	 * left for the switch driver below.
 	 */
 	phy-mode = "sgmii";
-	/* Which of nppt's two MAC windows carries this port. The vendor bootloader says
-	 * `xmac0 is used` on this jack, and np_133.ko addresses the windows as
-	 * 0x140000 + id * 0x40000 (id=1 is the base every constant in zx279133-mac.c was
-	 * written against), so this port is id 0. See docs 补五十四.
-	 */
-	zte,xmac-id = <0>;
-
-	/* This is the second half, and it is a claim about a binding, not a
-	 * profile. zx279133-main.c takes exactly one PHY (`devm_phy_get(dev,
-	 * "serdes")`, :429) and exactly one PCS (`of_parse_phandle(..., "pcs-handle", 0)`,
-	 * :434), while zx279133.dtsi spells "serdes" as <&pon_serdes>, "lan-serdes"
-	 * as <&uni_serdes>, pcs-handle as <&xpcs1> and the LAN-side PCS as
-	 * zte,lan-pcs-handle = <&xpcs0>. Repo-wide the only consumer of
-	 * "lan-serdes" and zte,lan-pcs-handle is drivers/net/dsa/zx279133-rtl8372n.c
-	 * (:7756, :7785) - the external switch this board does not have. So on this
-	 * board the two properties the LAN driver reads name the PON pair, and
-	 * nothing ever calls the UNI serdes: U-Boot's bring-up for this jack is
-	 * `mode_eth_1gbase_x_cfg` + `uni serdes init succeed` + `xmac 0 speed set 2
-	 * in sgmii`, i.e. xpcs0 + uni_serdes, and `/proc/pon/outer_phy` on the stock
-	 * system says `xmac0: phy_RTL8226`.
-	 *
-	 * Re-aim the slots the driver actually reads. Expected and still informative
-	 * either way: phy-zx279133-uni-serdes.c's set_mode() only accepts
-	 * USXGMII/10GBASE-R, so it will answer -EOPNOTSUPP for sgmii and
-	 * power_on() (its 10G profile) will not run. That makes the UNI lane stay
-	 * exactly as U-Boot left it and, critically, stops mainline reprogramming
-	 * pon_serdes/xpcs1 underneath it. Frames appearing = mainline's PON-side
-	 * programming was the thing breaking the lane, and the remaining work is a
-	 * measured 1000BASE-X profile for uni_serdes (from the captured
-	 * 0x16100000 block, not from the 10G array). Frames still absent = the lane
-	 * needs more than leaving it alone, and with CONFIG_DEVMEM now pinned the
-	 * same absolute addresses read under mainline (`md`-for-`dd`) say which bits
-	 * differ from the traffic-proven values, instead of another guess.
-	 */
-	phys = <&uni_serdes>;
-	phy-names = "serdes";
-	pcs-handle = <&xpcs0>;
+	phys = <&pon_serdes>, <&uni_serdes>;
+	phy-names = "serdes", "lan-serdes";
+	pcs-handle = <&xpcs1>;
 	/* The NP's own memory. Not a guess and not a leftover: in the one U-Boot session
 	 * that carried 11,471,728 bytes across this jack while this PC counted +469,482 of
 	 * them, every address handed to the NP - TX ring 0xb0008000, RX ring 0xb0028000,
@@ -426,14 +394,40 @@
 	 */
 	zx279133,uni-phy-bus = <&mdio0>;
 
-	/* LAST in this node, and it has to be: dtc orders a node as properties-then-subnodes
-	 * ("Properties must precede subnodes", run 60 at 393.2-18), so a `fixed-link {}` written
-	 * among the properties kills the build - and runs 56-59 died on exactly that before the
-	 * DEVMEM change ever got measured. devtools/dtslint.py now checks this rule locally.
+	/* LAST of this node's properties, and it has to be: dtc orders a node as
+	 * properties-then-subnodes ("Properties must precede subnodes", run 60 at
+	 * 393.2-18), so a `fixed-link {}` written among the properties kills the
+	 * build - and runs 56-59 died on exactly that before the DEVMEM change
+	 * ever got measured. devtools/dtslint.py now checks this rule locally.
 	 */
 	fixed-link {
 		speed = <1000>;
 		full-duplex;
+	};
+
+	/*
+	 * The 9132 is this board's LAN switch, and it sits on the XMAC0 LAN
+	 * lane - the same place the RTL8372N's CPU port sits on the SR1010.
+	 * The evidence is in docs/16-9132-topology-and-driver-design-20261021.md:
+	 * the vendor prints "xmac0_pcs_base is 0x140000" and "xmac0 is used"
+	 * before it declares its MII devices, and the first of those is "sw",
+	 * which is the 9132's CPU port.
+	 *
+	 * The LAN conduit is the netdev on that CPU port.  It is a child of the
+	 * NPPT controller on the SR1010 too, and the NPPT driver keeps the
+	 * shared datapath; the switch driver takes it with
+	 * zx279133_lan_service_datapath_get().
+	 *
+	 * Both are subnodes of &nppt, so they come after the properties and
+	 * after the fixed-link child - dtc orders a node as properties-then-
+	 * subnodes, and a property written among the subnodes kills the build.
+	 */
+	lan_cpu: ethernet-lan-cpu {
+		compatible = "zte,zx279133-lan-conduit";
+	};
+
+	switch {
+		compatible = "zte,zx279133-switch";
 	};
 };
 

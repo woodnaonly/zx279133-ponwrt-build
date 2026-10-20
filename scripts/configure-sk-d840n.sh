@@ -61,6 +61,16 @@ pin_y() {
 }
 pin_y REALTEK_PHY
 
+# The on-board LAN switch driver.  On the SK-D840N that is the 9132, whose CPU
+# port sits on the XMAC0 LAN lane - the same place the RTL8372N's CPU port sits
+# on the SR1010 - so it is the same kind of child driver and it is built the
+# same way.  It has to be built in rather than =m: the board device tree names
+# the switch node, and a module would have to be loaded before the node could
+# bind, which nothing in the RAM image does.  It is a separate module because a
+# second module_platform_driver() inside zx279133.ko would be a second
+# module_init in one module, which does not link.
+pin_y ZTE_ZX279133_SWITCH
+
 # The panel beacon needs the LED class devices to exist *in the RAM image*, and =m means
 # they only appear if something loads kmod-leds-gpio first - which is exactly the
 # userspace that the beacon is there to prove. So these two are pinned built-in: without
