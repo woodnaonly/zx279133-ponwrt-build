@@ -224,6 +224,13 @@
 					 (port) - ZX279133_SWITCH_DSA_PORT_MIN)
 
 struct zx279133_switch {
+	/* The device this driver was probed on.  Two of the helpers below
+	 * (the lane report and the SOPC publish) print through it and have
+	 * no other way to reach it: they are called from the probe and from
+	 * the DSA callbacks, and neither of those carries a device of its
+	 * own at the point where the messages are printed.
+	 */
+	struct device *dev;
 	struct zx279133_lan_service *service;
 	struct phy *serdes;
 	struct mdio_device *xpcs_mdiodev;
@@ -624,7 +631,7 @@ static void zx279133_switch_lane_snapshot(struct zx279133_switch *priv,
 		{ MDIO_MMD_VEND2, MII_BMCR, "vend2 BMCR" },
 		{ MDIO_MMD_PCS, MII_BMCR, "pcs BMCR" },
 	};
-	struct device *dev = &priv->dev;
+	struct device *dev = priv->dev;
 	u32 status, link, tx, rx, frame, mode, duplex, misc;
 	int i;
 
@@ -689,7 +696,7 @@ static void zx279133_switch_lane_snapshot(struct zx279133_switch *priv,
  */
 static void zx279133_switch_sopc_publish(struct zx279133_switch *priv)
 {
-	struct device *dev = &priv->dev;
+	struct device *dev = priv->dev;
 	int i;
 
 	for (i = 0; i < ZX279133_XMAC_SOPC_CHANNELS; i++) {
@@ -1208,6 +1215,8 @@ static int zx279133_switch_probe(struct platform_device *pdev)
 	priv = devm_kzalloc(dev, sizeof(*priv), GFP_KERNEL);
 	if (!priv)
 		return -ENOMEM;
+
+	priv->dev = dev;
 
 	priv->service = dev_get_drvdata(dev->parent);
 	if (!priv->service)
