@@ -161,3 +161,22 @@ g_switch_ponmode=0x40  g_kernel_switch_en=0x0  g_bosa_type=0x2  g_switch_time=60
 `tm_mactable_fdb_add` 这些正是"把端口/VLAN 接起来"的旋钮 —— 厂商 app 层（`cspd` 里有 `si_eth_upmode_set`、
 `g_reg_upmode`）就是靠它们把口接上的。要沿着这条走，下一步该做的是**读 `cspd`/`pc` 下发顺序**（离线，零风险），
 而不是继续往 NP 里乱写。
+
+## 9. 22:23 追加：`/proc/tm/shell` 是 NP 调试变量口子，不是配置 API
+
+cspd / sbin/httpd 里到处是 `echo g_wfwdlatency_flag=1 > /proc/tm/shell`、`echo tx_div_flag=1 > /proc/tm/shell`、
+`echo g_mode_detect_flag=%d > /proc/tm/shell` 这类命令，看起来像"厂商用一条 shell 把 NP 配起来"，
+`np_133.ko` 里也只有孤零零一句 `Usage: echo [OPTIONS] > /proc/tm/shell`（后面没有选项表）。实测：
+
+- 节点存在：`/proc/tm/shell`（`-r--r--r--`，但写有效）。
+- 写 `help` → dmesg 只有 `operation forbid`，**没有**选项表；
+- 闸门是 `/proc/pon/forbid_telnet_ctrl_tm_shell`：`echo 0 >` 之后 dmesg 明确回
+  `set proc-tm-shell for telnet enabled(0).`，但紧接着的 `echo help > /proc/tm/shell` **仍然** `operation forbid`
+  ⇒ forbid 来自内容不合法（这个口子只吃 `g_xxx=value` / `tx_div_flag=1` 这种**调试变量赋值**），
+  不是来自"远程不许用"。写完已把闸门恢复成 `disabled(1)`。
+
+⇒ 结论：**route D 的可用旋钮只有 `/proc/pon/{tm,switch}_debug/*` 那一族**（`sw_upmode_set` 实测能写并回显
+`input:upModeInfo is 0x40,new_upmode is 0x40,new_lanup_port is 0 new_wlanup_port is 0`），
+以及 `switch.ko` 的 ioctl 面（`cspd` 用 `si_sw_do_ioctl`/`si_eth_upmode_set` 走 `/dev/switch_dev`——
+本机 `/dev` 里根本没有那些节点，社区镜像没建，route B 时是我 mknod 出来的）。
+`/proc/tm/shell` 这条路可以直接排除，省下以后再来试的时间。
