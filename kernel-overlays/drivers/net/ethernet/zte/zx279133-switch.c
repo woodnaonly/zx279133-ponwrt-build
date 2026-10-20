@@ -956,13 +956,43 @@ zx279133_switch_get_tag_protocol(struct dsa_switch *ds, int port,
  * business, and the NPPT keeps one set of tables per transport VID.  This
  * is the tree's rule: a port that has joined a bridge is a LAN port, and a
  * port that has left it is a WAN port.
+ *
+ * Whether this board wants that rule is a separate question, and the answer
+ * is not known from the tree, so it is a parameter rather than a decision.
+ *
+ * The tree's RTL8372N driver calls the same two functions, but on the
+ * SR1010 no DSA port ever leaves a bridge, so only the "join" half of the
+ * rule can ever fire there.  On this board one of the four jacks is a WAN,
+ * and the tree's np.c says what the WAN type means: a WAN-typed port has a
+ * PPPoE header removed on the way in and added on the way out, which is the
+ * factory system's "WAN over a LAN jack" and is not what a plain DHCP
+ * uplink wants.  So the default here is NOT to touch the NPPT's port type at
+ * all: the four ports keep the type the NPPT driver gave them when it
+ * brought them up, which is the ordinary-Ethernet one, and Linux's own
+ * bridge and routing do the LAN/WAN split.
+ *
+ * The parameter exists so that the other answer can be measured on the same
+ * build instead of being argued about: with wan_type=1 the tree's rule is
+ * applied as written, and a port that leaves the bridge becomes a WAN-typed
+ * port in the NPPT.  It is writable at runtime, so one RAM image can answer
+ * both ways:
+ *
+ *	echo 1 > /sys/module/zx279133_switch/parameters/wan_type
  */
+static bool zx279133_9132_wan_type;
+module_param_named(wan_type, zx279133_9132_wan_type, bool, 0644);
+MODULE_PARM_DESC(wan_type,
+		 "1: a DSA port that leaves the bridge becomes a WAN-typed NPPT port (the tree's rule); 0: leave the NPPT's port type alone (default)");
+
 static int zx279133_switch_port_bridge_join(struct dsa_switch *ds, int port,
 					     struct dsa_bridge bridge,
 					     bool *tx_fwd_offload,
 					     struct netlink_ext_ack *extack)
 {
 	struct zx279133_switch *priv = ds->priv;
+
+	if (!zx279133_9132_wan_type)
+		return 0;
 
 	return zx279133_lan_service_port_wan_set(priv->service,
 						  ZX279133_RTL8372N_TRANSPORT_VID_BASE + port,
@@ -973,6 +1003,9 @@ static void zx279133_switch_port_bridge_leave(struct dsa_switch *ds, int port,
 					      struct dsa_bridge bridge)
 {
 	struct zx279133_switch *priv = ds->priv;
+
+	if (!zx279133_9132_wan_type)
+		return;
 
 	zx279133_lan_service_port_wan_set(priv->service,
 					  ZX279133_RTL8372N_TRANSPORT_VID_BASE + port,
