@@ -363,3 +363,89 @@ zx279133-np 19000000.nppt: 9132 UNI PHY 0a: id xxxx:xxxx, BMCR xxxx, link 1
 | 4 | `uni-phy` 里的 0x1c、0x02 是什么 | 活板继续查；或读厂商 `uni_phy` 符号 |
 | 5 | XMAC0 的 1G SGMII 档要不要给 `phy-zx279133-uni-serdes.c` 补一档 | 照厂商 U-Boot 的 `mode_eth_1gbase_x_cfg` 寄存器组做 |
 | 6 | 厂商的 `xmac0`（0x140000）与 RGMII MAC（0x15900000）的关系 | 本文件只用到"9132 的 CPU 口 = 0x140000 那一侧"，已被 `g_mii_dev_name[0] = sw` + `xmac0 is used` 交叉支持 |
+
+---
+
+## 8. 2026-10-21 这一轮：两条通道都换掉了
+
+### 8.1 run 82/83/84 挂在 Compile，原因是三个不存在的宏
+
+`2efe2d9`（G2b）之后的三轮 CI（run 82 = 39460558858、83 = 39469377776、
+84 = 39471292550）**全部死在 "Compile" 这一步**，不是超时也不是门禁。run 82 的 job
+页里 `data-conclusion="failure"` 落在 `data-name="Compile"` 上，其后的九步是
+`skipped`。真正的原因在源码里，而且是三个**内核里根本不存在的宏**：
+
+| 写错的宏 | 内核里实际是什么 |
+|---|---|
+| `BMCR_POWERDOWN` | `BMCR_PDOWN`（bit 11，`include/uapi/linux/mii.h`） |
+| `BMCR_ENABLE` | **不存在** —— 标准 BMCR 根本没有 "enable" 位；上电 = 清 PDOWN |
+| `MII_LMSR` | **不存在** —— 0x1a 是 `MII_RESV2`；链路位在 BMSR 的 `BMSR_LSTATUS`，且 BMSR 会锁存，必须读两次 |
+
+这三个名字是照厂商代码抄的（厂商的 `zte_set_gephy_enable()` 清 bit 11），不是照
+内核抄的。内核的 `BMCR_*`/`BMSR_*` 全在 `include/uapi/linux/mii.h`（`linux/mii.h`
+只做转发），`mdiobus_read()/mdiobus_write()` 声明在 **`include/linux/mdio.h`**
+——`linux/mdiobus.h` 这个文件从来就不存在。
+
+核对用的是树自己那份头文件，不是主线：
+`raw.githubusercontent.com/cnjn/linux-mainline-zte-zxslc-sr1010/96e5a2413524742e177e383fe523ef21de5ed238/include/{linux, uapi/linux}/{mii.h, mdio.h, phy.h}`。
+
+### 8.2 kexec 试跑通道死了，U-Boot RAM 引导接管
+
+run 81 之后的试跑全部没有拿到新内核的任何一行输出。串口日志把原因写得很清楚
+（`staging/ctl/serial.log` 第 515675 行附近）：
+
+```
+[  852.390925] kexec_core: Starting new kernel
+[  852.395118] Disabling non-boot CPUs ...
+[  852.496875] psci: CPU1 killed (polled 0 ms)
+[  852.530284] Bye!
+SPI NAND
+start read bootloader
+```
+
+`Bye!` 之后紧跟着的是 bootloader 自己的 "start read bootloader" —— 也就是说**这块板
+子上的 kexec 落回了一次硬件复位**，新内核一个字符都没打印。一个连 banner 都拿不到
+的通道对这一轮毫无价值：这一轮要的证据全在 dmesg 里。
+
+换掉它的通道是 **U-Boot 从 RAM 起内核**，而且这条路在这块板子上本来就跑通过
+（`staging/ctl/ubram-save.log`：`ubram: bootm 0x89000000` → 看到内核 banner →
+交出控制台）。流程是：
+
+```
+ssh root@192.168.9.1 'reboot -f'        # 回到 U-Boot
+# 串口敲键打断 autoboot，用 'bdinfo' 判定（只有 U-Boot 会答 baudrate=）
+setenv ipaddr 192.168.9.1 ; setenv serverip 192.168.9.25
+tftpboot 0x89000000 sk-d840n-initramfs.itb
+bootm 0x89000000
+```
+
+PC 侧要有一台 TFTP：`python tools/tftpsrv.py staging/trial 69`（U-Boot 的 tftpboot
+走 UDP/69，根目录必须是 kit 所在的目录，tftpboot 传的是**裸文件名**）。
+新脚本 `tools/ubtrial.sh` 把"重启→打断 autoboot→tftp→bootm→抓证据"串成一条，
+并且不写 flash：内核整轮都在 RAM 里，下一次断电就回到已装系统。
+
+### 8.3 Uni SerDes 的模式：不是我们说了算，是驱动说了算
+
+这一轮原本按"9132 的 CPU 口是 1G ⇒ lane 走 1G SGMII"来写（commit 82b01a5）。
+核对树自己的驱动后发现**同一条 lane**（XMAC0 + XPCS0 + uni_serdes）在 SR1010 上是
+**10G USXGMII**：
+
+- `drivers/net/ethernet/zte/zx279133-rtl8372n.c`：`phy_set_mode_ext(serdes,
+  PHY_MODE_ETHERNET, PHY_INTERFACE_MODE_USXGMII)`，XPCS 用
+  `ZX279133_XPCS_USXG_EN` / `ZX279133_XPCS_USXGMII_AN_BMCR 0x3140` 编程，
+  CPU 口（port 8）是 `PHY_INTERFACE_MODE_10GBASER`；
+- `phy-zx279133-uni-serdes.ko` 的 Kconfig 写的是"supports the USXGMII and 10GBASE-R
+  consumer modes"；
+- 而厂商 U-Boot 的 `userdes init_change` 帮助里 `MODE_SGMII 0`，厂商把 XMAC0 设成
+  "xmac 0 speed set 2 in sgmii" —— 这是**这块板子**上厂商自己的选择。
+
+两边都对：SR1010 的 CPU 口是 10G，本板的 9132 CPU 口是 1G。问题是 mainline 的
+uni-serdes 驱动**只接受它实现了的接口**，`set_mode(SGMII)` 很可能直接 -EOPNOTSUPP
+（这正是 DTS 注释里记的老坑）。
+
+所以驱动改成**协商**而不是硬要：先要 SGMII，被拒就退到 USXGMII，并按选中的那条
+用对应的 XPCS 序列（SGMII 用树里 `zx279133-mac.c` 的 1G 档，USXGMII 用树里
+`zx279133-rtl8372n.c` 的 10G 档），日志里明确打出拿到了哪一档。同时**证据行即使
+在 bring-up 失败时也要打印** —— 0x0090 是唯一能读到 XPCS0 状态的地方，"编程错了"
+和"根本没编程"从外面看是一样的。
+

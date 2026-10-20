@@ -712,12 +712,21 @@ static int zx279133_switch_probe(struct platform_device *pdev)
 			priv->usxgmii = true;
 	}
 	if (ret) {
-		ret = dev_err_probe(dev, ret,
-				    "failed to select a Uni SerDes mode\n");
-		goto err_datapath_put;
+		/*
+		 * Neither mode was accepted.  Do not give up: the driver
+		 * reported at probe that the SerDes is already in the 1G
+		 * profile the bootloader left ("Uni SerDes 1G inherited: mode
+		 * 0x1 already"), so powering it up untouched may still give
+		 * the 1G lane this board's 1G CPU port needs - and the XPCS0
+		 * status is the evidence either way.
+		 */
+		dev_warn(dev,
+			 "Uni SerDes takes neither SGMII nor USXGMII (%d); powering it up untouched\n",
+			 ret);
+	} else {
+		dev_info(dev, "Uni SerDes lane set to %s mode\n",
+			 priv->usxgmii ? "USXGMII" : "SGMII");
 	}
-	dev_info(dev, "Uni SerDes lane set to %s mode\n",
-		 priv->usxgmii ? "USXGMII" : "SGMII");
 
 	ret = phy_power_on(priv->serdes);
 	if (ret) {
@@ -727,10 +736,16 @@ static int zx279133_switch_probe(struct platform_device *pdev)
 		ret = phy_power_on(priv->serdes);
 	}
 	if (ret) {
-		ret = dev_err_probe(dev, ret, "failed to power on Uni SerDes\n");
-		goto err_datapath_put;
+		/*
+		 * Keep going.  The SerDes is what carries the lane, so a
+		 * failure here is the headline - but the XPCS0 status word is
+		 * still readable, and it is the only evidence this round can
+		 * produce.  Bailing out here would print nothing.
+		 */
+		dev_err(dev, "failed to power on Uni SerDes: %d\n", ret);
+	} else {
+		priv->serdes_powered = true;
 	}
-	priv->serdes_powered = true;
 
 	pcs_np = of_parse_phandle(parent_np, "zte,lan-pcs-handle", 0);
 	if (!pcs_np) {
