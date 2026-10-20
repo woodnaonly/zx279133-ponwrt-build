@@ -131,3 +131,33 @@ board.dtb `1a3d6a53…`、initramfs.lzma `6ed79f88…`）。
    然后让**下一次自动断电**去验证；不要一上来就擦分区。
 3. 只要有过 mainline 以读写方式挂载这块 root，就必须用一次 4.19 冷启动来验收，再相信 LAN。
 4. 网络一旦通，别只用串口：ssh/scp 到 192.168.9.1 是快通道，串口留给启动期证据。
+
+## 7. 路线 B 已经实测过（21:47-21:49），结论是"不行，而且原因很清楚"
+
+把整份厂商根文件系统切成 tar（1012 个文件、55 MB、`staging/vendor-full.tgz` 21,100,715 B）推进板子的
+`/tmp/vfull`，`mount --bind` 上 `/proc /sys /dev`（设备节点用**活内核的 major** 建：
+`gpondrv_dev=102 comdev=158 zxled=97 zxicvid_dev=95 gponsdk_dev=111 switch_dev=104 dl_ctl_dev=200`），
+然后照厂商 rcS 的做法 `chroot /tmp/vfull /bin/pc`（`pc` = 39,228 B EM_ARM 的进程管理器）。
+
+跑起来的样子（串口原话）：
+
+```
+[OSS_pc][Warn] [pc.c(1657)ScanProgram] httpd[6272] delay restart
+[OSS_pc][Warn] [pc.c(1643)ScanProgram] scan: voip[6328]  died  counter=5
+[osgid][Warn] [osgid_comm.c(3037)CmCMCCOSGICheck] CmCMCCOSGICheckJavaExist,FALSE
+[ifs_mgr][Warn] [ifs_notifier.c(196)si_ifs_regnotif] repeat Reg Msg[00620100]
+```
+
+三点实测结论：
+
+1. **框架本身能起。** `pc`/`osgid`/`ifs_mgr` 真在跑 —— 也就是"32 位厂商用户态跑在 aarch64 社区内核上"
+   这件事成立（CONFIG_COMPAT + 库 + 设备节点都够用）。
+2. **但应用子进程全死。** `voip / httpd / raserver / dhcps / dhcp6s` 起来就死，`pc` 按 1..6 的计数反复重启它们；
+   缺的是厂商那套配置数据库（`/usr/data`、`/userconfig`、XML db）与目录约定，不是二进制或库。
+   **`gpon_omci` 没被拉起来，`omci pkt cnt` / `txd frm cnt` / `pon` 的 RX-TX 全程仍是 0。**
+3. **它会改网络管理面**：`pc` 起来后 ssh 直接 `Connection reset by peer`。撤销办法实测有效：
+   `pkill -9 -f "/bin/pc"` + 逐个 `pkill` + `umount -l /tmp/vfull/{dev,proc,sys}` → `TEARDONE-0`，
+   90 秒内 ssh 恢复、`br-lan 192.168.9.1` 仍在。**全程没写 flash。**
+
+所以 **B 不是"多起几个 daemon"能收口的**：要的是厂商根文件系统本身。想要 GPON 上网，干净的路径是 **A：整机回
+厂商固件**（`restore_set/` 五件套齐全，含这份 stock kernel1 的 FIT）；只是想要外网，就走 **C：eth0 改 dhcp 接上游**。
