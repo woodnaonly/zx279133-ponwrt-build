@@ -37,6 +37,15 @@ env:
   IW_BRANCH: sr1010-zx279133
   KERNEL_URL: https://github.com/cnjn/linux-mainline-zte-zxslc-sr1010
   KERNEL_BRANCH: build
+  # Cloning the branch tip made every build a race against somebody else's push. Run 72 died 1 h in
+  # on 21 errors in `zx279133-offload.c` - a file we do not overlay - because the kernel pointer moved
+  # to a revision whose offload.c needs header symbols none of our overlaid files have, while our
+  # overlays still carry the previous revision's driver set. Pinning the repository commit makes the
+  # kit reproducible again; 96e5a241 is the `build` tip the last successful run (71) cloned, and the
+  # bump that broke it is 0db7674c (2026-10-20). Raising this sha is a deliberate act: the overlay
+  # set has to be re-synced to the new driver revision in the same commit, or the build fails the way
+  # run 72 did.
+  KERNEL_SHA: 96e5a2413524742e177e383fe523ef21de5ed238
   # Single source of truth for the kernel version. It used to be spelled out in eight
   # places across three workflow files plus the release text, so a version bump meant
   # editing ten strings and missing one produced a build that used one tree and announced
@@ -96,7 +105,11 @@ jobs:
         if: steps.pick.outputs.run == 'true'
         run: |
           git clone --depth 1 -b "$IW_BRANCH" "$IW_URL" openwrt
-          git clone --branch "$KERNEL_BRANCH" --recurse-submodules --shallow-submodules "$KERNEL_URL" linux-mainline-zte-zxslc-sr1010
+          git clone --branch "$KERNEL_BRANCH" --recurse-submodules "$KERNEL_URL" linux-mainline-zte-zxslc-sr1010
+          # --shallow-submodules would fetch only the commit the branch pointer names, which is the
+          # thing being moved off; a full submodule fetch is what lets the checkout below reach it.
+          git -C linux-mainline-zte-zxslc-sr1010 checkout --detach "$KERNEL_SHA"
+          git -C linux-mainline-zte-zxslc-sr1010 submodule update --init --recursive
           test -f linux-mainline-zte-zxslc-sr1010/linux-$KVER/arch/arm64/boot/dts/zte/zx279133.dtsi
 
       - name: Apply SK-D840N overlays
