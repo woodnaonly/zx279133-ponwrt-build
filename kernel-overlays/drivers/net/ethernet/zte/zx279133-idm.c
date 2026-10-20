@@ -1363,6 +1363,8 @@ static const u32 zx279133_idm_cfg_offsets[] = {
 	0x006c,
 	0x0104, 0x0108, 0x0118, 0x011c, 0x0408,
 	0x010c, 0x0110, 0x040c,
+	/* QMG descriptor-read mode; saved and restored like the rest of the block. */
+	0x0490,
 };
 
 /*
@@ -1410,6 +1412,20 @@ static void zx279133_idm_tx_configure(struct zx279133_eth *eth)
 	writel(20, idm + 0x0090);
 	writel(1, idm + 0x0094);
 	writel(ZX279133_IDM_DESC_MODE, idm + 0x00c0);
+	/*
+	 * QMG descriptor-read mode. A store-only scan of this board's own np_133.ko
+	 * (staging/idmgap.py, both controls passing) leaves exactly two IDM words the
+	 * vendor's bring-up writes and this driver never touches: +0x2c8, which U-Boot
+	 * already leaves at the vendor's value (docs/09), and this one. U-Boot's proven
+	 * store list (docs/09 section 4) does not include +0x490 either, so on this board
+	 * the word has never been programmed by anything and still holds its reset
+	 * default - a value no working driver has ever run with. The vendor reaches it
+	 * from idm_qmg_desc_rd_mode_cfg(), a six-instruction function whose only store
+	 * is `str wzr, [idm, #0x490]`. Its call site cannot be read out of the .ko,
+	 * because a BL in a relocatable object is a relocation placeholder rather than
+	 * a target, so this is placed with the other idm_init() words.
+	 */
+	writel(0, idm + 0x0490);
 	writel(0x00000080, idm + 0x0124);
 	writel(0x00000f49, idm + 0x03fc);
 	writel(7, idm + 0x05c0);

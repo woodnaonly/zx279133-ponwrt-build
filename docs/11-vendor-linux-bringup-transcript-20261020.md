@@ -207,6 +207,36 @@ Order of evidence from here: boot 78, re-read `+0x40` (must become `0x00000000` 
 `+0x44` (must become `0x071ffbfb`), then watch line 22's count. A non-zero count with `rx_packets` still
 0 moves the fault into descriptor consumption - and only then does the ring-latch question (§5) matter.
 
+## 4d. The vendor DT's IDM geometry table - the parameter set nothing had compared against yet
+
+`decompiled/sk-d840n-community-4.19.dts:1835-1861` carries the whole IDM shape, and it is the source of
+the values np_133.ko computes its bitfields from (the RUNTIME rows in §4b). Compared with
+`zx279133.h`:
+
+| vendor DT property | value | mainline constant | consequence |
+|---|---|---|---|
+| `idm_rx_queue_num` | 24 | `IDM_RX_QUEUES 24` | agree |
+| `idm_tx_queue_num` | 4 | `IDM_TX_QUEUES 4` | agree |
+| `idm_desc_mode` | 0 | `IDM_DESC_MODE 0` | agree (+0x00c0's literal 0x80 in §4b is a different global) |
+| `idm_desc_tx_depth` | `0x400` | `IDM_TX_CFG_DEPTH 0x400` | agree - the run-75 `+0x0c` value |
+| **`idm_desc_rx_depth`** | **`0x400` (1024)** | **`IDM_RX_QUEUE_DESC_DEPTH 2048`** | the RX ring is programmed twice as deep as the vendor's; this one IS register-visible (`+0x70` = depth-1, so 2047 vs 1023) and must stay consistent with the allocated ring |
+| **`idm_rx_normal_bp_ring_depth`** | **`0x2000` (8192)** | `IDM_FREE_RING_SIZE 0x4000` B = 4096 entries | mainline's RX buffer-ring is half the vendor's |
+| `idm_rx_jumbo_bp_ring_depth` | `0x1000` | (jumbo ring unused) | - |
+| **`idm_rx_normal_buffer_num`** | **`0x1000` (4096)** | **`IDM_RX_BUFFER_COUNT 2048`** | the NP is told to expect 4096 normal buffers in the vendor image; mainline posts 2048 |
+| `idm_tx_normal_bp_ring_depth` / `idm_tx_normal_buffer_num` | `0x400` / `0x400` | - | TX side matches its own desc depth |
+| **`idm_ring_free_queue_cnt`** | **3** | 4 extra rings wired (`FREE_RING1..4`) | mainline programs more free queues than the vendor says exist |
+| **`idm_free_ring_depth`** | **`0x10000` (65536)** | `IDM_BP_RING_SIZE 4096` | 16x smaller than the vendor's free ring |
+| `idm_queue_cpuid_map` | 27 entries: all 0 except idx2=3, idx10=3, idx21=1, idx22=2, idx23=3 | `IDM_CPU_RX_QUEUES 16` + `irq_set_affinity_and_hint` spread | the vendor steues *queues to CPUs*, mainline steers CPUs to queues - different model, same intent |
+| `se_hash_ddr_size` | `0x400000` | dts `se-hash` region | agree with the transcript's `0x83968000 size 0x400000` |
+
+Only the bolded rows are candidate bugs, and none of them can explain "the RX interrupt never
+asserts" - which is what §4c just localised. They matter for the *next* question (ring depth and
+buffer count consistency between what the CPU allocates, what the registers claim, and what the NP
+writes back), so they are recorded rather than patched now: a kit that changes four geometry values at
+once, on top of the mask and routing changes in run 78, would make 78's verdict unreadable. If run 78
+produces a non-zero count on the `19000000.ethernet` IRQ line but `rx_packets` still does not move,
+`idm_desc_rx_depth` (`+0x70`) and `idm_rx_normal_buffer_num` are the next two to take from this table.
+
 ## 5. Next round, in priority order
 
 **Update after the 14:28 re-run: §5-1 as written is not achievable, and the reason is worth keeping.**
@@ -259,3 +289,66 @@ Order from here:
   globals (0x77e0 / 0xd8 / 0xd0, 8 bytes each). Reason: references to file-scope statics are emitted
   against the **section symbol**, with the variable's offset carried in the addend, so matching on the
   variable's own symbol index finds nothing. **Its "0 sites" must never be read as "unused".**
+
+## 4e. Store-only diff: the two IDM words the vendor programs and mainline never writes
+
+`staging/idmgap.py` re-runs the IDM scan of `pon/vendor-modules/np_133.ko` with two changes over
+`staging/npidmsites.py`: it keeps **stores only** (that script lumps `ldr` in, so a read of `+0x3c`
+looked like a write), and it splits the result by function into bring-up vs diagnostics, because
+`np_idm_test_stats_for_wifi` alone touches `+0x014..+0x038` and would dominate any list.
+
+Both controls pass: the TX doorbell store at file `0x11dd8` is present, and `idm+0x004`/`idm+0x008`
+are absent from the store set, which is #43's established negative result re-derived by a new tool.
+
+Vendor bring-up stores that `zx279133-idm.c` never writes at all - two, and only two (five more words
+appear in the tool's list only as "ringed by the TX doorbell helper at run time", never programmed,
+and they are the queue-doorbell arithmetic rather than bring-up configuration):
+
+| word | vendor writer | what the vendor writes |
+| --- | --- | --- |
+| `idm+0x2c8` | `idm_init` @0x19650 | RMW: `ldr`, `and #0xc0ffffff`, `orr #0x12000000`, `str` -> field bits[29:24] = 0x12, rest preserved |
+| `idm+0x490` | `idm_qmg_desc_rd_mode_cfg` | the function is six instructions and this is its only store: `str wzr, [idm, #0x490]` |
+
+The first run reported eight gaps and the second reported seven, and both counts were wrong in
+opposite directions, so the shape of the list matters as much as its content:
+
+- Matching only **literal** offsets in the C hid two words mainline does write: `idm+0x088` is
+  `ZX279133_IDM_RX_RELEASE` (zx279133-idm.c:883, `rx_work | (queue << 12)` - the same shape as the
+  vendor's `idm_pkt_recv_update`: a `queue << 12` field ORed into the count) and `idm+0x0100` is
+  `ZX279133_IDM_BP_REFILL` (`zx279133_idm_rx_flush_refill()`, `writel(count, ...)`), which is what
+  `np_free_bp()` rings with `1` or `0x10000`. So the most tempting theory of the round - "mainline
+  posts RX buffers but never tells the NP" - is **refuted**: the doorbell exists, mainline rings it
+  with a count rather than per buffer.
+- Then folding the per-queue TX doorbell helper's arithmetic (`queue == 0 ? 0x0080 : 4*(queue+39)`)
+  into the same set made `idm+0x0bc` look covered, because it is queue 8's doorbell. That says
+  nothing about the vendor's bring-up `str wzr` there, so the helper range is now reported as a
+  separate bucket: `+0x080/0x0a0/0x0a4/0x0a8/0x0bc` are words mainline only ever rings as a TX
+  doorbell, never programs at bring-up.
+
+That leaves the two words above as the whole remaining bring-up divergence, which is a much smaller
+and much more useful list than the one the tool first printed. Only one of them is new information,
+and it is the one that ships: `+0x2c8` is already left at the vendor's value by U-Boot (docs/09 §4's
+store list includes `+0x2c8` with the same `and 0xc0ffffff` / `orr 0x12000000` RMW, so mainline
+correctly inherits it), while **`+0x490` appears in neither U-Boot's proven store list nor this
+driver's** - so on this board the word has held its reset default through every boot ever observed,
+which is a state no working driver has ever run in. `zx279133_idm_tx_configure()` now writes 0 there
+and the word is saved/restored with the rest of the block.
+
+`idm_qmg_desc_rd_mode_cfg()` is the interesting one: its name says *how the QMG reads descriptors*,
+which is the same question #43 left open (the vendor never writes the ring bases, so the NP must get
+them from its firmware image and something has to say in what mode it reads them). Since neither
+U-Boot's own bring-up nor mainline touches `+0x490`, whatever is in it at boot is what the NP
+firmware left - which is a measurable difference between this board's failing state and the working
+vendor driver, not a guess.
+
+Measured while doing this, on the currently flashed 24.10.8 system (kernel `Booting Linux on physical
+CPU ... [0x410fd034]`, uptime 402 s, eth0 up, `22: 0 0 GICv3 33 Level 190010000.ethernet` count 0,
+(`rx_packets` 0): **the flashed rootfs cannot read MMIO at all.** `/dev/mem` exists
+(`crw------- 1 root root 1, 1`) but `busybox devmem` prints `devmem: applet not found`, `od` is not
+found, and `busybox --list` itself is `applet not found`. So the `dd if=/dev/mem | od` fallback works
+only in the initramfs kits, which do carry devmem. That is why the three words are read from
+`tools/rxproof.sh` (`reg-0bc`, `reg-2c8`, `reg-490`) inside a kit round rather than from the flash.
+
+A scanner bug found on the way, recorded because it hid a real register: the store pattern
+`(?:w\d+|x\d+)` does not match `wzr`/`xzr`, so on the first run `idm_init`'s `str wzr, [x0, #0xbc]`
+was invisible and `+0xbc` did not appear at all. Writing zero is still a bring-up write.
