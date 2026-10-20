@@ -244,3 +244,36 @@ ssh/LuCI/ping 全没断，`tools/verify_router.sh` **5/5 PASS**；`eth2` `state 
    如果确实同 VLAN，WAN 与 LAN 会在 L2 上共享一段——**能拿到租约、NAT 也能跑，但隔离是假的**，
    届时要改成给 eth2 建独立 VLAN 或直接换 port。这条留在线插上之后判（一眼就能看出来：
    如果 PC 侧能直接看到上游路由器的 DHCP OFFER，就是同 VLAN）。
+
+## 12. 22:38 追加：真正卡住"当路由器用"的下一个环是 NAT，而它缺的只有一个用户态程序
+
+把 WAN 挪到 eth2 之后（§11）顺手查了"NAT 到底能不能做"，答案是**内核能做，用户态一个都没有**：
+
+| 检查 | 结果 |
+|---|---|
+| `which iptables iptables-legacy iptables-nft` | **全部 none** |
+| `nft list ruleset` | `netlink: cache initialization failed: Invalid argument`（这内核没有 nf_tables，`fw4` 因此永远是 "active with no instances"） |
+| `/proc/net/ip_tables_targets` | **存在**，内容含 `MASQUERADE SNAT DNAT REDIRECT NETMAP TCPMSS REJECT LOG MARK CONNMARK DSCP` + 厂商自注册项（`FFESKIP NAT44TRANS URLREDIRECT URLACCEPT MAC_DNAT`…） |
+| `/proc/net/ip_tables_matches` | `state tcp udp connmark physdev mac multiport iprange set …` |
+| `/proc/kallsyms` | `ipt_do_table`、`nf_nat_masquerade_ipv4`、`br_netfilter`、`nf_defrag_ipv4` 全在（builtin） |
+| `/proc/sys/net/ipv4/ip_forward` | `1` |
+
+⇒ **legacy ip_tables + NAT 是编译进内核的**，装一条 `MASQUERADE` 只需要一个用户态程序；`opkg` 又因为没有上行而用不了。
+试过两条取法，都还没成：
+- 24.10.8 官方 feed（`packages/aarch64_generic/{base,packages}`，index 各 347 KB / 2.5 MB 都取到了）里
+  **只有 `iptables-mod-*`**，没有 `iptables` / `libxtables*` 本体 —— 24.10 的 iptables 是 nft 后端，而这内核没有 nf_tables。
+- 厂商 initramfs 里有 `/bin/iptables`（423,712 B，EM_ARM=0x28 的 32 位 ELF，可被 CONFIG_COMPAT 跑），
+  但它依赖 `libxtables.so.12`，而整个 initramfs 里**没有这个库** → 这条也走不通（同族的 `libcommfun.so`、
+  `ld-2.26.so`、`libc-2.26.so` 都在，只缺 xtables）。
+- `releases/22.03.7/packages/aarch64_generic/base/Packages` 是 404（153 B），路径待换 `targets/armsr/armv8/packages`。
+
+**下一步（有网之后第一件事）**：找一个 aarch64 的 legacy `iptables`（1.8.x + `libxtables.so.12`，
+musl 或静态均可），`ssh root@192.168.9.1 "cat > /tmp/ipt.ipk" < f.ipk` 推进去 `opkg install --force-depends`，
+然后 `iptables -t nat -A POSTROUTING -o eth2 -j MASQUERADE`。判据是 `-t nat -L -v` 能列出规则且 pkts 计数会动；
+内核侧已经没有借口了。
+
+## 13. 四个口的实测计数（22:36，`tools/jackmap.sh` 第一条）
+
+`eth0 rx=0 tx=40180 | eth1 rx=213917 tx=175598 | eth2 rx=0 tx=22025 | eth3 rx=0 tx=13175`，
+carrier 分别 `1 / 1 / 1 / (空)`。只有 eth1 有 rx —— 也就是**全板只有 PC 那一根线在收**；
+eth2/eth3 的 tx 是它们还在桥里时被泛洪出来的计数，说明驱动层面一直在往这两个口发。
