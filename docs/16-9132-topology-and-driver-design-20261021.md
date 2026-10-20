@@ -449,3 +449,78 @@ uni-serdes 驱动**只接受它实现了的接口**，`set_mode(SGMII)` 很可�
 在 bring-up 失败时也要打印** —— 0x0090 是唯一能读到 XPCS0 状态的地方，"编程错了"
 和"根本没编程"从外面看是一样的。
 
+---
+
+## 9. 2026-10-21：主线活板第一次跑起来（RAM 引导，无刷机）
+
+用 `tools/ubtrial.sh` 把 run 78 的 initramfs FIT 从 RAM 引导起来，整条链路一次通：
+
+```
+ubtrial: kit=sk-d840n-initramfs.itb (11540268 bytes)
+ubtrial: at the U-Boot prompt at probe 1
+ubtrial: Bytes transferred = 11540268 (b0172c hex)
+ubtrial: kernel banner seen
+ubtrial: Kernel command line: console=ttyAMA0,115200n8
+```
+
+内核从第一条指令起就在串口上，`/init`、procd、ubus 全部起来，
+`trial: netdevs= br-lan eth0 lo addr=192.168.9.1/24`。
+
+### 9.1 三条取证通道的现状
+
+| 通道 | 状态 | 依据 |
+|---|---|---|
+| ramoops/pstore | **作废** | 厂商 4.19 自己也在 0x9c000000 写 pstore，会盖掉主线的记录 |
+| 串口日志 | **可用** | 常驻 `tools/serrelay.ps1` 独占 COM3，全程记录；19.6 MB |
+| 串口控制台（对活板下命令） | **可用** | 新脚本 `tools/concmd.sh`：往 `sercmd.txt` 写命令，从 `serial.log` 取回输出 |
+
+`tools/concmd.sh` 是这轮新写的。**主线活板只能从串口驱动**：它的 eth0 是 NPPT
+自己的 MAC（XMAC1 / pon_serdes 一侧），而 PC 插在 9132 的 UNI 口上，主线还没有
+驱动那条 lane，所以 `ping 192.168.9.1` 不通，SSH 也就无从谈起。
+
+### 9.2 RAM 环境已经具备刷机条件（G4 的前置）
+
+在活板上直接读到的：
+
+```
+dev:    size   erasesize  name
+mtd1: 00200000 00020000 "boot"
+mtd2: 00800000 00020000 "kernel"
+mtd3: 00100000 00020000 "dtb"
+mtd4: 00400000 00020000 "parameter tags"
+mtd5: 0f000000 00020000 "root"
+mtd6: 00100000 00020000 "scratch"
+```
+
+- **root = mtd5**，起始 0xf00000 —— 与厂商 U-Boot 的 `root=/dev/mtdblock5` 一致，
+  也与板级 DTS 里 `mtd5 = &rootpart` 的别名一致；
+- `/dev/mtd1..6` 都是可写字符设备，`/dev/mtdblock1..6` 都在；
+- `/usr/sbin/zrec`、`/usr/sbin/zrec-run`、`/www/zrec` **都在** —— 恢复刷写服务
+  已经编进 initramfs，而 flash 模式的镜像里它必须不存在（CI 有门禁查这件事）。
+
+所以 G4 的形态已经清楚：**从 RAM 环境刷 flash**，刷完断电重启，让板子按
+U-Boot 的 `bootcmd`（kernel/dtb/root 三个分区）从 flash 起来。
+
+### 9.3 一个必须记下来的分工
+
+厂商系统里 **eth0 就是 9132 的 CPU 口**（`g_mii_dev_name[0] = "sw"`），所以厂商
+的 eth0 能和 PC 通；主线里 eth0 是 NPPT 自己的 MAC，而**树里那个 conduit netdev
+才对应厂商的 eth0**，名字是 `lan-cpu0`（`zx279133-lan-conduit.c`:
+`strscpy(ndev->name, "lan-cpu%d", IFNAMSIZ)`）。
+
+也就是说：主线要接上 PC，靠的是 `lan-cpu0` 这条 XMAC0 lane；G3 的网络配置
+（lan 挂 `lan-cpu0`、wan 留在 eth0）要等这条 lane 通了才能定。
+
+### 9.4 G2d 的可复用面
+
+树里 `zx279133-rtl8372n.c`（SR1010 的外接交换芯片）已经示范了完整的 DSA 用法：
+CPU 口 + 4 个用户口 + 每个口一份 VLAN/隔离表 + 树自带的
+`DSA_TAG_PROTO_ZX279133_RTL8372N` 传输标签。
+
+9132 这一侧不同的地方只有一处：**VID→目的口的定向要由 9132 自己的表做**。
+而主线 `zx279133_9132_port_init()` 已经在写 9132 的端口属性字与两个 PVID 字，
+传输 VID 是 59..62（`ZX279133_LAN_TRANSPORT_VID_MIN`）。所以 G2d 缺的不是
+"怎么把帧送到某个口"，而是**在 conduit 之上挂一个 9132 的 DSA switch 驱动**，
+让树的标签器把 DSA 端口号编码成传输 VID。
+
+
