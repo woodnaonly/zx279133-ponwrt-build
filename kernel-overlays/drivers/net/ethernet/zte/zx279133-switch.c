@@ -57,6 +57,7 @@
 #include <linux/delay.h>
 #include <linux/device.h>
 #include <linux/ethtool.h>
+#include <linux/iopoll.h>
 #include <linux/mdio.h>
 #include <linux/mii.h>
 #include <linux/mod_devicetable.h>
@@ -83,8 +84,13 @@
 #define ZX279133_XMAC_HALF_DUPLEX	BIT(24)
 #define ZX279133_XMAC_ENABLE		BIT(0)
 #define ZX279133_XMAC_SPEED_MASK	GENMASK(31, 29)
-/* xmac_set_speed_sel(): 3 = 1G. */
+/*
+ * xmac_set_speed_sel(): 3 = 1G SGMII, 6 = 2.5G, 4 = 100M, 7 = 10M.
+ * The USXGMII image the tree's RTL8372N driver writes leaves the field at
+ * 0, which is what that lane runs at, so the two profiles differ here.
+ */
 #define ZX279133_XMAC_SPEED_1G		3
+#define ZX279133_XMAC_SPEED_USXGMII	0
 #define ZX279133_SYS_SOFT_RESET		0x2c0004
 #define ZX279133_XMAC0_RESET		BIT(10)
 #define ZX279133_XMAC_RESET_US		1718
@@ -121,6 +127,19 @@
 #define ZX279133_XPCS_BYPASS_REG	0x8005
 #define ZX279133_XPCS_BYPASS_EN		BIT(4)
 
+/*
+ * The USXGMII profile, from zx279133_lan_xpcs_configure() in the tree's
+ * drivers/net/ethernet/zte/zx279133-rtl8372n.c - the same XPCS0 block, on
+ * the same lane, driven for the RTL8372N's 10G CPU port.
+ */
+#define ZX279133_XPCS_VR_XS_PCS_KR_CTRL 0x8007
+#define ZX279133_XPCS_USXG_EN		BIT(9)
+#define ZX279133_XPCS_VSMMD1_EN	BIT(13)
+#define ZX279133_XPCS_VR_RST		BIT(15)
+#define ZX279133_XPCS_USXG_MODE_MASK	GENMASK(12, 10)
+#define ZX279133_XPCS_AN_ENABLE		BIT(12)
+#define ZX279133_XPCS_USXGMII_AN_BMCR	0x3140
+
 /* The 9132's four UNI ports are the switch ports the copper jacks sit on. */
 #define ZX279133_SWITCH_UNI_PORT_MIN	0
 #define ZX279133_SWITCH_UNI_PORT_MAX	3
@@ -135,6 +154,7 @@ struct zx279133_switch {
 	bool xmac_configured;
 	bool datapath_enabled;
 	bool serdes_powered;
+	bool usxgmii;
 	u16 saved_vend2_bmcr;
 	u16 saved_vend2_an_ctrl;
 	u16 saved_xpcs_bypass;
@@ -374,6 +394,60 @@ static int zx279133_switch_xpcs_sgmii(struct zx279133_switch *priv)
 					 BMCR_SPEED1000 | BMCR_FULLDPLX);
 }
 
+/*
+ * The USXGMII profile, from zx279133_lan_xpcs_configure() in the tree's
+ * drivers/net/ethernet/zte/zx279133-rtl8372n.c - the same XPCS0 block on
+ * the same lane, programmed there for the RTL8372N's 10G CPU port.
+ */
+static int zx279133_switch_xpcs_usxgmii(struct zx279133_switch *priv)
+{
+	int val;
+	int ret;
+
+	ret = zx279133_switch_xpcs_modify(priv, MDIO_MMD_VEND2,
+					   ZX279133_XPCS_VR_MII_AN_CTRL,
+					   BIT(3) | BIT(8), 0);
+	if (ret)
+		return ret;
+	ret = zx279133_switch_xpcs_write(priv, MDIO_MMD_PCS, MDIO_CTRL2, 0);
+	if (ret)
+		return ret;
+	ret = zx279133_switch_xpcs_modify(priv, MDIO_MMD_PCS,
+					   ZX279133_XPCS_VR_XS_PCS_DIG_CTRL1,
+					   ZX279133_XPCS_USXG_EN |
+					   ZX279133_XPCS_VSMMD1_EN,
+					   ZX279133_XPCS_USXG_EN |
+					   ZX279133_XPCS_VSMMD1_EN);
+	if (ret)
+		return ret;
+	ret = zx279133_switch_xpcs_modify(priv, MDIO_MMD_PCS,
+					   ZX279133_XPCS_VR_XS_PCS_KR_CTRL,
+					   ZX279133_XPCS_USXG_MODE_MASK, 0);
+	if (ret)
+		return ret;
+	ret = zx279133_switch_xpcs_modify(priv, MDIO_MMD_PCS,
+					   ZX279133_XPCS_VR_XS_PCS_DIG_CTRL1,
+					   ZX279133_XPCS_VR_RST,
+					   ZX279133_XPCS_VR_RST);
+	if (ret)
+		return ret;
+	ret = read_poll_timeout(zx279133_switch_xpcs_read, val,
+				val >= 0 && !(val & ZX279133_XPCS_VR_RST),
+				1000, 400000, false, priv, MDIO_MMD_PCS,
+				ZX279133_XPCS_VR_XS_PCS_DIG_CTRL1);
+	if (ret)
+		return ret;
+	ret = zx279133_switch_xpcs_modify(priv, MDIO_MMD_VEND2,
+					   ZX279133_XPCS_VR_MII_AN_CTRL,
+					   ZX279133_XPCS_AN_INTR_EN,
+					   ZX279133_XPCS_AN_INTR_EN);
+	if (ret)
+		return ret;
+
+	return zx279133_switch_xpcs_write(priv, MDIO_MMD_VEND2, MDIO_CTRL1,
+					  ZX279133_XPCS_USXGMII_AN_BMCR);
+}
+
 static int zx279133_switch_xpcs_bypass(struct zx279133_switch *priv, bool enable)
 {
 	int val;
@@ -413,7 +487,8 @@ static void zx279133_switch_xpcs_restore(struct zx279133_switch *priv)
  * The XMAC0 register image, from zx279133_xmac_program() in
  * drivers/net/ethernet/zte/zx279133-mac.c with the 1G speed code.
  */
-static void zx279133_switch_xmac_program(struct zx279133_switch *priv)
+static void zx279133_switch_xmac_program(struct zx279133_switch *priv,
+					 u32 speed_code)
 {
 	u32 xmac = ZX279133_XMAC0_BASE;
 	u32 value;
@@ -424,7 +499,7 @@ static void zx279133_switch_xmac_program(struct zx279133_switch *priv)
 	zx279133_switch_nppt_write(priv, xmac + ZX279133_XMAC_TX_CTRL,
 				    (value & ~ZX279133_XMAC_SPEED_MASK) |
 				    FIELD_PREP(ZX279133_XMAC_SPEED_MASK,
-					       ZX279133_XMAC_SPEED_1G));
+					       speed_code));
 
 	value = zx279133_switch_nppt_read(priv, xmac + ZX279133_XMAC_DUPLEX);
 	zx279133_switch_nppt_write(priv, xmac + ZX279133_XMAC_DUPLEX,
@@ -485,7 +560,9 @@ static void zx279133_switch_xmac_configure(struct zx279133_switch *priv)
 				    priv->saved_xmac_reset |
 				    ZX279133_XMAC0_RESET);
 
-	zx279133_switch_xmac_program(priv);
+	zx279133_switch_xmac_program(priv, priv->usxgmii ?
+					     ZX279133_XMAC_SPEED_USXGMII :
+					     ZX279133_XMAC_SPEED_1G);
 
 	priv->saved_sopc_duplex =
 		zx279133_switch_nppt_read(priv, ZX279133_XMAC_SOPC_DUPLEX);
@@ -614,13 +691,33 @@ static int zx279133_switch_probe(struct platform_device *pdev)
 		goto err_datapath_put;
 	}
 
+	/*
+	 * The lane's rate is not a free choice.  This board's vendor
+	 * bootloader runs XMAC0 in SGMII ("xmac 0 speed set 2 in sgmii") and
+	 * the 9132's CPU port is a 1G port, while the tree's RTL8372N driver
+	 * runs this very same XPCS0/Uni-SerDes lane at USXGMII 10G for the
+	 * RTL8372N's CPU port.  The Uni SerDes driver only accepts the
+	 * interface it implements, so ask for SGMII first and fall back to
+	 * USXGMII rather than losing the whole lane to a -EOPNOTSUPP.
+	 */
 	ret = phy_set_mode_ext(priv->serdes, PHY_MODE_ETHERNET,
 			       PHY_INTERFACE_MODE_SGMII);
 	if (ret) {
+		dev_warn(dev,
+			 "Uni SerDes does not take SGMII (%d); trying USXGMII\n",
+			 ret);
+		ret = phy_set_mode_ext(priv->serdes, PHY_MODE_ETHERNET,
+				       PHY_INTERFACE_MODE_USXGMII);
+		if (!ret)
+			priv->usxgmii = true;
+	}
+	if (ret) {
 		ret = dev_err_probe(dev, ret,
-				    "failed to select Uni SerDes 1G mode\n");
+				    "failed to select a Uni SerDes mode\n");
 		goto err_datapath_put;
 	}
+	dev_info(dev, "Uni SerDes lane set to %s mode\n",
+		 priv->usxgmii ? "USXGMII" : "SGMII");
 
 	ret = phy_power_on(priv->serdes);
 	if (ret) {
@@ -663,28 +760,40 @@ static int zx279133_switch_probe(struct platform_device *pdev)
 	if (ret)
 		return ret;
 
-	ret = zx279133_switch_xpcs_sgmii(priv);
+	ret = priv->usxgmii ? zx279133_switch_xpcs_usxgmii(priv) :
+			      zx279133_switch_xpcs_sgmii(priv);
 	if (ret) {
-		dev_err(dev, "failed to configure XPCS0 for 1G SGMII: %d\n", ret);
-		return dev_err_probe(dev, ret, "XPCS0 bring-up failed\n");
+		/*
+		 * Do not give up here.  The read-back below is the evidence
+		 * this round is after: a lane that was programmed wrongly and
+		 * a lane that was never programmed look the same from the
+		 * outside otherwise, and this is the only place the XPCS0
+		 * status word can be read at all.
+		 */
+		dev_err(dev, "failed to configure XPCS0 for %s mode: %d\n",
+			priv->usxgmii ? "USXGMII" : "SGMII", ret);
+		goto report;
 	}
 
 	ret = zx279133_switch_xpcs_bypass(priv, true);
 	if (ret) {
 		dev_err(dev, "failed to enable XPCS0 bypass: %d\n", ret);
-		return dev_err_probe(dev, ret, "XPCS0 bypass failed\n");
+		goto report;
 	}
 
 	zx279133_switch_xmac_configure(priv);
 
-	/* Re-apply after the XMAC/SOPC work; the C45 AN bits are lost. */
-	ret = zx279133_switch_xpcs_apply_sgmii_vend2(priv, DUPLEX_FULL);
-	if (ret) {
-		dev_err(dev, "failed to re-apply the XPCS0 AN state: %d\n", ret);
-		return dev_err_probe(dev, ret, "XPCS0 re-apply failed\n");
+	if (!priv->usxgmii) {
+		/* Re-apply after the XMAC/SOPC work; the C45 AN bits are lost. */
+		ret = zx279133_switch_xpcs_apply_sgmii_vend2(priv, DUPLEX_FULL);
+		if (ret)
+			dev_err(dev,
+				"failed to re-apply the XPCS0 AN state: %d\n",
+				ret);
 	}
 	usleep_range(10000, 11000);
 
+report:
 	/*
 	 * Report what the lane says about itself.  This is the G2 evidence:
 	 * 0x0090 bits 11..13 are the XPCS0 link status the tree's RTL8372N

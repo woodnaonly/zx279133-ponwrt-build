@@ -9,6 +9,7 @@
 #include <linux/firmware.h>
 #include <linux/io.h>
 #include <linux/iopoll.h>
+#include <linux/mdio.h>
 #include <linux/mii.h>
 #include <linux/module.h>
 #include <linux/of.h>
@@ -1207,7 +1208,7 @@ static void zx279133_9132_phy_enable(struct zx279133_eth *eth)
 
 	for (addr = ZX279133_9132_UNI_PHY_FIRST;
 	     addr <= ZX279133_9132_UNI_PHY_LAST; addr++) {
-		int id1, id2, bmcr, lmsr;
+		int id1, id2, bmcr, bmsr, link = -1;
 
 		id1 = mdiobus_read(bus, addr, MII_PHYSID1);
 		id2 = mdiobus_read(bus, addr, MII_PHYSID2);
@@ -1219,19 +1220,30 @@ static void zx279133_9132_phy_enable(struct zx279133_eth *eth)
 		bmcr = mdiobus_read(bus, addr, MII_BMCR);
 		if (bmcr < 0)
 			continue;
-		bmcr &= ~BMCR_POWERDOWN;
-		bmcr |= BMCR_ANENABLE | BMCR_ENABLE;
+		/*
+		 * Linux spells the powerdown bit BMCR_PDOWN (bit 11) - there is
+		 * no BMCR_POWERDOWN - and BMCR has no "enable" bit at all, so
+		 * there is no BMCR_ENABLE either.  Powering a PHY up is
+		 * clearing PDOWN and enabling auto-negotiation, which is what
+		 * the vendor's zte_set_gephy_enable() does.
+		 */
+		bmcr &= ~BMCR_PDOWN;
+		bmcr |= BMCR_ANENABLE;
 		mdiobus_write(bus, addr, MII_BMCR, (u16)bmcr);
 
-		/* BMSR's link bit is latched, so it has to be read twice. */
+		/*
+		 * The link bit lives in BMSR, not in a vendor "LMSR": Linux
+		 * has no MII_LMSR (0x1a is MII_RESV2).  BMSR's link bit is
+		 * latched, so it has to be read twice.
+		 */
 		mdiobus_read(bus, addr, MII_BMSR);
-		lmsr = mdiobus_read(bus, addr, MII_LMSR);
+		bmsr = mdiobus_read(bus, addr, MII_BMSR);
+		link = (bmsr < 0) ? -1 : !!(bmsr & BMSR_LSTATUS);
 
 		found++;
 		dev_info(eth->dev,
 			 "9132 UNI PHY %02x: id %04x:%04x, BMCR %04x, link %d\n",
-			 addr, id1, id2, bmcr,
-			 (lmsr < 0) ? -1 : !!(lmsr & BMSR_LSTATUS));
+			 addr, id1, id2, bmcr, link);
 	}
 
 	if (!found)
