@@ -471,12 +471,16 @@ extern unsigned int zx279133_tx_word4_bit23;
 /*
  * Vendor kernel globals (kernel-2b5.elf rodata/BSS):
  * uIDM_RX_QUEUE_DESC_DEPTH = 2048, uIDM_RX_CFG_DEPTH = 1,
- * uNPPT_IDM_DESC_MODE = 0, uIDM_TX_CFG_DEPTH = 0 (no writer found).
+ * uNPPT_IDM_DESC_MODE = 0.  uIDM_TX_CFG_DEPTH was recorded as 0 with "no writer found"; the
+ * traffic-proven bootloader holds 0x04000000 at nppt+0x28000c (docs/09-idm-proven-image-20261020.md,
+ * read 2026-10-20 10:54 in a boot where ping answered), and 0x400 << 16 reproduces that word exactly.
+ * 0x400 is also the vendor DT's own idm_desc_tx_depth, so the field is the TX descriptor depth at
+ * bits 27:16 and only its value was wrong.
  */
 #define ZX279133_IDM_RX_QUEUE_DESC_DEPTH 2048
 #define ZX279133_IDM_RX_CFG_DEPTH	1
 #define ZX279133_IDM_DESC_MODE		0
-#define ZX279133_IDM_TX_CFG_DEPTH	0
+#define ZX279133_IDM_TX_CFG_DEPTH	0x400
 
 /*
  * Per-queue doorbells and completion counters, recovered from
