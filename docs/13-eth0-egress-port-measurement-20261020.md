@@ -197,3 +197,50 @@ git -C ci-build-repo add docs/13-eth0-egress-port-measurement-20261020.md && git
 （同族嫌疑名字：`low_power_debug_set_int_mask`、`g_netdebug_mod_tab`、`netdebug`，**未证**）。
 route D 到此只剩两条：`/proc/pon/{tm,switch}_debug/*` 那族单项 setter（`sw_upmode_set` 实测可写可回显），
 和 `switch.ko` 的 `/dev/switch_dev` ioctl（需要 mknod，route B 已验证建节点可行）。
+
+## 11. 22:33–22:37 追加：把 WAN 从 eth0 挪到 eth2 —— 绕开 xmac0 的那条便宜路
+
+先补一条端口归因，因为它改变了形状。用 `tm_debug` 的 getter（`echo port=N > /proc/pon/tm_debug/sw_port_enable_get`，
+写法是从 np_133.ko 的 usage 字符串里拿的，答案落 dmesg）扫 port 0..15：
+
+```
+port=0..3  [outerphy?]            enable:1
+port=4     outerphy_mode=5,outerphy_name=phy_RTL8226.   enable:1
+port=5,6   [smac_get_port_enable] error
+port=7..14 [sw_port_change_to_smac_index] sw_port(N) is not unvalid smac
+```
+
+⇒ **RTL8226（eth0 的 PHY）在厂商 CLI 里是 sw_port 4，而且是 enable=1**；而 eth0 的 CPU 出口帧
+始终落在 `sopc2smac` 的第 2 列（index 1），第 5 列（index 4）一直是 0。
+试着给它加内部回环 `echo port=4 direct=1 enable=1 > tm_debug/sw_port_loopback_set`
+→ `[zxic_api_sw_port_set_port_loopback] input invalid port`（这个 API 不吃 port 4），
+所以"无光环境下自证 eth0 收发"这条路也堵了。
+
+于是换思路：**eth2 / eth3 是 9132 UNI 交换机上的口，和已经证明能带 22 MB 流量的 eth1 是同一条通路**，
+把它们从 br-lan 里摘出来当 WAN，就完全不需要碰 xmac0/NP 那层。做了，纯配置：
+
+```
+uci -q del_list network.@device[0].ports='eth2'   # eth3 同样摘掉
+uci set network.wan.device='eth2'; uci set network.wan.proto='dhcp'; uci commit network
+/etc/init.d/network reload
+```
+
+测得（22:36，reload 之后立刻）：`br-lan` 只剩 `eth1`，`lan` 仍 `up` 且 `192.168.9.1/24`，
+ssh/LuCI/ping 全没断，`tools/verify_router.sh` **5/5 PASS**；`eth2` `state UNKNOWN LOWER_UP`、
+`ifstatus wan` = `proto dhcp` + `up:false`（无租约，不冒假路由）。
+运行时残留也清了：`ifconfig eth0 0.0.0.0` 之后路由表只剩 `192.168.9.0/24 dev br-lan` 一条。
+
+四个口的当前计数（`tools/jackmap.sh` 第一条样本）：
+`eth0 rx=0 tx=40180 | eth1 rx=213917 tx=175598 | eth2 rx=0 tx=22025 | eth3 rx=0 tx=13175`
+——只有 eth1 有 rx，即只有 PC 那根线在收；eth2/eth3 的 tx 是桥时期泛洪留下的，说明**驱动一直在往这两个口发**。
+
+还没证的有两件，都必须等一根真实的线：
+
+1. **哪个 RJ45 是 eth2**：`tools/jackmap.sh`（20 s 一次，落 `staging/ctl/jackmap.log`）把 eth0..eth3 的
+   rx/tx/carrier 一起记；线一挪，rx 突然开始涨的那个 netdev 就是那只口。注意 carrier 不可靠——
+   eth0 在没有对端时也报 `c=1`（`sky_outerphy_state` 恒 `1 9 1`）。
+2. **9132 在硬件里是否还把 eth2 和 eth1/eth3 划在同一个 VLAN**：netifd 只把它从 Linux bridge 摘了出来，
+   硬件 VLAN 表不一定跟着变（`sw_vlan_port_pvid_get` 只回 `cmd success!`，没吐数值，读法还没破解）。
+   如果确实同 VLAN，WAN 与 LAN 会在 L2 上共享一段——**能拿到租约、NAT 也能跑，但隔离是假的**，
+   届时要改成给 eth2 建独立 VLAN 或直接换 port。这条留在线插上之后判（一眼就能看出来：
+   如果 PC 侧能直接看到上游路由器的 DHCP OFFER，就是同 VLAN）。
