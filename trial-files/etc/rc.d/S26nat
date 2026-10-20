@@ -294,7 +294,11 @@ if [ -n "$WAN" ]; then
 		i=$((i + 1))
 		sleep 1
 	done
-	if ! has_addr "$WAN"; then
+	if ! has_addr "$WAN" && [ -z "$FORCED" ]; then
+		# A forced upstream belongs to the image's own network service -
+		# adopt_wan handed it over and the reload started its client - so
+		# a second client of ours on the same port would race it for the
+		# lease and overwrite the address it got.
 		if command -v udhcpc >/dev/null 2>&1; then
 			echo "trial: nat: udhcpc on $WAN" >/dev/kmsg
 			udhcpc -i "$WAN" -f -t 0 -T 5 -s /tmp/udhcpc-trial.sh \
