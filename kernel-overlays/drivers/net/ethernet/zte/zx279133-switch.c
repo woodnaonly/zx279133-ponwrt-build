@@ -63,7 +63,7 @@
 #include <linux/mii.h>
 #include <linux/mod_devicetable.h>
 #include <linux/module.h>
-#include <linux/netdev.h>
+#include <linux/netdevice.h>
 #include <linux/of.h>
 #include <linux/of_mdio.h>
 #include <linux/of_net.h>
@@ -74,10 +74,10 @@
 #include <linux/pm_runtime.h>
 #include <linux/rtnetlink.h>
 #include <linux/slab.h>
-#include <linux/switchdev.h>
 
 #include <net/dsa.h>
 #include <net/dsa_zx279133_rtl8372n.h>
+#include <net/switchdev.h>
 
 #include "zx279133-lan.h"
 

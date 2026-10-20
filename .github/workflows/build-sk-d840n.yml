@@ -125,6 +125,24 @@ jobs:
           test -f "$KT/arch/arm64/boot/dts/zte/zx279133-sk-d840n.dts"
           grep -q 'zx279133-sk-d840n.dtb' "$KT/arch/arm64/boot/dts/zte/Makefile"
           grep -q 'Device/skyworth_sk-d840n' openwrt/target/linux/zte/image/Makefile
+          # Every header the 9132 driver includes must exist in the tree that
+          # compiles it.  This tree is not upstream: there is no
+          # include/linux/netdev.h and no include/linux/switchdev.h (the
+          # switchdev one is net/switchdev.h), and a missing include is a
+          # fatal error the compiler reports as "No such file or directory"
+          # - the very first line of that file's diagnostics, which the
+          # failure annotations used to throw away with a tail (runs 88, 89,
+          # 91 and 92 all failed with nothing but the make chain).  Checking
+          # the includes costs a second and saves an hour.
+          for inc in $(grep -oaE '#include <[^>]+>' "$KT/drivers/net/ethernet/zte/zx279133-switch.c" |
+                       sed -e 's/#include <//' -e 's/>//' | sort -u); do
+            if [ ! -f "$KT/include/$inc" ] && [ ! -f "$KT/arch/arm64/include/$inc" ] &&
+               [ ! -f "$KT/include/uapi/$inc" ]; then
+              echo "::error::zx279133-switch.c includes <$inc>, which this tree does not have"
+              exit 1
+            fi
+          done
+          echo "every header the 9132 driver includes is present in the tree"
           # board.d/02_network replaces cnjn's file, so the sr1010 case has to be
           # in the replacement too - and this board needs its own, because without
           # it the image boots with no interface configured for it at all.
@@ -540,9 +558,19 @@ jobs:
           if [ "$rc" = 0 ]; then exit 0; fi
           make -j1 V=s 2>&1 | tee ../compile-v1.log || rc=$?
           if [ "$rc" != 0 ]; then
-            grep -nE "error:|Error [0-9]+\$|No such file|command not found|undefined reference|make.*\*\*\*" \
-              ../compile-v1.log | tail -n 12 |
-            while IFS= read -r line; do
+            # The compiler's own message comes FIRST in the log and the make
+            # chain comes LAST, so a `tail` keeps the chain and throws the
+            # reason away.  That is how runs 88, 89, 91 and 92 all came back
+            # with "make[11]: *** [.../zx279133-switch.o] Error 1" and
+            # nothing that said what was wrong with that file: the reason
+            # was a missing include, on a line far above the chain.  Emit the
+            # reason first and the chain after it.
+            {
+              grep -naE "fatal error:|\berror:|No such file|undefined reference|not defined|implicit declaration" \
+                ../compile-v1.log | head -n 10
+              echo "--- and the make chain ---"
+              grep -naE "Error [0-9]+\$|make.*\*\*\*" ../compile-v1.log | tail -n 8
+            } | while IFS= read -r line; do
               echo "::error::$(printf '%s' "$line" | sed -e 's/%/%25/g' -e 's/#/%23/g' | tr -d '\r')"
             done
             echo "::error::compile rc=$rc; last 6 lines: $(tail -n 6 ../compile-v1.log | tr '\n' ' ' | sed -e 's/%/%25/g' -e 's/#/%23/g')"
