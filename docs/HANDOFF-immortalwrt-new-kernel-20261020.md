@@ -63,6 +63,48 @@
 按厂商 `switch.ko` init 的实参写 PPU 1..4 的属性字（isolate/learn/DA-lookup/flood/route-mode/VLAN-check）
 与 PVID（transport VID 59..62）。**端口使能（PHY 侧）还没做。**
 
+### 0.6 2026-10-21 白天的四条新结论（动手前先读这一节）
+
+**① CI 连挂四轮的真凶是两个头文件，不是别的东西。**
+本树没有 `include/linux/netdev.h`（404）也没有 `include/linux/switchdev.h`
+（在 `include/net/switchdev.h`），而我们的 `zx279133-switch.c` include 了这两个 ⇒
+编译器在头文件就 fatal，后续错误从未被解析。
+**workflow 的失败注解用 `tail -n 12` 只保留 make 链，把编译器原文截掉了** ⇒
+run88/89/91/92 四轮都在猜原因。已改为 `<linux/netdevice.h>` + `<net/switchdev.h>`，
+并在 CI 加了"驱动 include 必须存在于树里"的门（独立 step），失败注解先吐编译器原文。
+**详细**：docs/21 之前的 `docs/19`；CI 侧见 `.github/workflows/build-sk-d840n.yml`。
+
+**② GitHub Actions 的单个 `run:` 块上限是 21000 字符。**
+run95 因此被判 `Invalid workflow file ... Exceeded max expression length 21000`，
+**整轮白跑**（一秒都没编译）。散文必须放 YAML 注释，不能放 `run:` 脚本里。
+现在最长块 18134（余量 2866）；推之前用 `staging/ctl/wflen.py` 查。
+
+**③ "NAT 路由器"这条路原来内核和镜像两边都是空的**（docs/21）：
+内核 `CONFIG_NETFILTER` 关着（feed 的 fragment 就写着 `# CONFIG_NETFILTER is not set`），
+镜像里没有 nft、没有 iptables、连 busybox 的 iptables applet 都没有；
+而 feed 的 nftables 包依赖一个**这个分支里不存在的** kmod 包（`+kmod-nft-core`），
+所以它连被选中都不行。
+⇒ run97（`4129a20`）把 netfilter 全部**编进内核**，用户态用
+`overlays/package/network/utils/nftables/Makefile`（feed 的配方去掉那条依赖）。
+**符号名按本树写**：masquerade 是 `CONFIG_NFT_MASQ`（不是 `NFT_MASQUERADE`），
+counter 表达式**没有自己的符号**（`nft_counter.o` 在 `nf_tables-objs` 里）。
+
+**④ 板上只有一根网线，M1 的物理前提没有第二根。**
+PC↔UNI2（我们的 `lan2`）。厂商自己的 udhcpc 在另一只口上跑了一小时一个租约都没有。
+⇒ 两条路并存：
+- **真两口**（要机主插第二根线，插哪只都行，板子自己认：`S26nat` 搜 `lan3`→`lan1`→`lan4`，
+  60 s 一轮的 watcher 会认出后插的线）；
+- **单线**（不用等机主）：PC 当上游（Windows ICS：Wi-Fi 出、有线回，自带 DHCP 和 NAT，
+  `tools/labupstream.ps1`），板子的 WAN = PC 所在口（`/etc/labwan = pc`），
+  板子的 LAN = 其余三口 + **板子自己造的客户端**（`S27labclient`：veth 对 + 网络命名空间）。
+  ⇒ DHCP 服务器、DHCP 客户端、桥、路由、NAT、DNS、上网，全部能验；
+  **只有"两口各插一根线"这件事本身仍然要一根线**。
+
+**⑤ 一个镜像级的坑：这版镜像的 `/etc/config/network` 是 JSON。**
+`/lib/functions/uci-defaults.sh` 是用 `json_select_object` 写的，生成的文件是 JSON 对象、
+LAN 的端口是 `ports` 数组。**用 `uci set` 改它不保证被接受** ⇒ 改配置要走镜像自己的
+helper（`board_config_update` + `ucidef_set_interface` + `board_config_flush`）。
+
 ---
 
 ## 1. 板子现在的真实状态（2026-10-20 23:21–23:25 实测）
