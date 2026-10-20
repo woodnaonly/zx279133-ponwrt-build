@@ -1421,11 +1421,22 @@ static void zx279133_idm_tx_configure(struct zx279133_eth *eth)
 	 * active normal ring is DMA coherent; unused rings retain vendor offsets.
 	 */
 	writel(0x07ffffff, idm + 0x0040);
-	writel(ZX279133_IDM_DIRECT_RX_MASK, idm + 0x0044);
-	writel(0x00ff0000, idm + 0x0048);
-	/* No vendor buffer-release callback is used by the page_pool path. */
-	writel(0, idm + 0x004c);
-	writel(ZX279133_IDM_LOCAL_MASK, idm + 0x0050);
+	/*
+	 * Source -> IRQ-line routing, copied word for word from this board's working
+	 * vendor 4.19 boot: np_133.ko prints "irq[0..3] sg_idm_irq_mask_conf(0x71ffbfb
+	 * 0x200000 0x400000 0x800404)" and its idm_int_mask_configure_init() stores
+	 * exactly those four words to +0x44/+0x48/+0x4c/+0x50, one per line - so +0x44
+	 * is the routing for SPI1, the "rx" IRQ requested in zx279133-main.c. Of the 22
+	 * sources the vendor delivers there, the previous 0xf00f/0x00ff0000/0/0x0f00
+	 * split stranded 4..7 and 24..26 on no line at all and sent 8,9,11 to
+	 * local-test and 16..20 to the "idm" line, which is never requested. SPI2 and
+	 * SPI3 stay masked at the distributor, so writing the vendor's words for those
+	 * two lines cannot storm.
+	 */
+	writel(0x071ffbfb, idm + 0x0044);
+	writel(0x00200000, idm + 0x0048);
+	writel(0x00400000, idm + 0x004c);
+	writel(0x00800404, idm + 0x0050);
 	writel(0x000007c1, idm + 0x006c);
 
 	writel(lower_32_bits(eth->rx_normal_bp_dma), idm + 0x0104);
