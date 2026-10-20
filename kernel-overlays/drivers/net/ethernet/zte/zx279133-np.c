@@ -1083,6 +1083,76 @@ static int zx279133_9132_port_attr(struct zx279133_eth *eth, u32 ppu, u32 set,
 }
 
 /*
+ * The 9132's per-port words, read out and nothing else.
+ *
+ * Why this exists: everything below *writes* the per-port PVID and the
+ * per-port attribute word, and after that the chip no longer remembers what
+ * the bootloader left there.  The one number nobody can guess is the PVID the
+ * vendor's own 4.19 working configuration uses on each UNI port - if it is
+ * not the transport VID scheme, then the scheme this driver implements
+ * cannot be what the switch actually does, and no amount of further writing
+ * will make it work.  So the baseline is dumped first, before any of this
+ * driver's own 9132 writes.
+ *
+ * The addresses, and what they are:
+ *
+ *   0x000  the port's entry program counter - also the SPA window's
+ *          "port enable" word according to the switch API's port_enable
+ *          helper.  It is READ here and never written, because writing
+ *          bit 0 of it is what zx279133_lan_port_bringup() does to the
+ *          SoC's own entry program and a port that runs the wrong program
+ *          is a dead port.
+ *   0x001  default VLAN priority (bits 27..25)
+ *   0x002  untagged SVID / PVID (bits 29..18)
+ *   0x009  per-port VLAN filter mask, field 41 of the word - this is the
+ *          switch API's tm_port_vlan_filter_get()
+ *   0x013  the per-port attribute word (isolate, SA learn, DA lookup,
+ *          flooding, route mode, input VLAN check)
+ *
+ * PPU 0 is the CPU port, 1..4 are the 9132's UNI jacks, 5 is the external
+ * RTL8226.
+ */
+#define ZX279133_PPU_WORD_ENTRY_PC	0
+#define ZX279133_PPU_WORD_PVID_PRI	1
+#define ZX279133_PPU_WORD_PVID_VID	2
+#define ZX279133_PPU_WORD_VLAN_FILT	9
+#define ZX279133_PPU_WORD_ATTR		19
+
+static void zx279133_9132_port_words_read(struct zx279133_eth *eth)
+{
+	static const struct {
+		u32 addr;
+		const char *name;
+	} words[] = {
+		{ ZX279133_PPU_WORD_ENTRY_PC,	"entry-pc" },
+		{ ZX279133_PPU_WORD_PVID_PRI,	"pvid-pri" },
+		{ ZX279133_PPU_WORD_PVID_VID,	"pvid-vid" },
+		{ ZX279133_PPU_WORD_VLAN_FILT,	"vlan-filter" },
+		{ ZX279133_PPU_WORD_ATTR,	"attr" },
+	};
+	u32 ppu;
+	size_t i;
+
+	for (ppu = 0; ppu <= ZX279133_9132_OUTERPHY_PPU; ppu++) {
+		for (i = 0; i < ARRAY_SIZE(words); i++) {
+			u32 val;
+
+			if (zx279133_spa_indirect_read(eth, ppu, words[i].addr,
+						       &val)) {
+				dev_info(eth->dev,
+					 "9132 PPU %u word %u (%s): read failed\n",
+					 ppu, words[i].addr, words[i].name);
+				continue;
+			}
+
+			dev_info(eth->dev,
+				 "9132 PPU %u word %u (%s) = %08x\n",
+				 ppu, words[i].addr, words[i].name, val);
+		}
+	}
+}
+
+/*
  * Bring up the 9132's UNI ports.  PPU port p carries the LAN vport of the
  * same index (ZX279133_LAN_TRANSPORT_VID_MIN + (p - 1)), which is the VID
  * the CPU puts on a frame to reach that physical port.
@@ -2805,6 +2875,11 @@ int zx279133_np_prepare(struct zx279133_eth *eth)
 	if (ret)
 		return ret;
 	zx279133_spa_prepare(eth);
+	/*
+	 * Before anything here writes a single one of the 9132's per-port
+	 * words, take the baseline: what the bootloader left, per port.
+	 */
+	zx279133_9132_port_words_read(eth);
 	ret = zx279133_nppu_early_prepare(eth);
 	if (ret)
 		goto err_nppu_early_restore;
