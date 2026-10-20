@@ -115,3 +115,49 @@ outer PHY/XMAC 配成端口的路，现在只是没被下发。这条路（记�
 
 物理侧还有两个只有主人能回答的问题：光纤到底插没插（`pon` 的 RX 恒 0），以及四个 RJ45 里哪个是 eth0
 （`tools/sweepjack.sh` 就是为这个写的，需要人挪线）。
+
+## 8. 22:17–22:21 追加：找到并试过厂商的 uplink-mode 开关，route C 仍然不通
+
+`/proc/pon/` 里除了 `debug/` 还有 `tm_debug/`、`switch_debug/` 两整棵 CLI 树（`ls -l` 显示 -r-- 但**写入有效**，
+和 `debug/start_statistics` 同一族），里面赫然有两个 uplink 模式开关：`tm_debug/sw_upmode_set`、
+`switch_debug/sw_port_set_upmode`。用法直接写在 np_133.ko 的字符串里：
+
+```
+echo upModeInfo=xx > /proc/pon/tm_debug/sw_upmode_set
+[%s]input:upModeInfo is 0x%x,new_upmode is 0x%x,new_lanup_port is %d new_wlanup_port is %d
+```
+
+读 `/proc/pon/up_mode_info`（重启后第一次读，全部为"测得"）：
+
+```
+g_up_mode=0x40   g_is_auto_ponmode=0   g_epon_open_high=1
+g_wan_port=0     g_lanup_port=0        g_wlanup_port=0
+g_switch_ponmode=0x40  g_kernel_switch_en=0x0  g_bosa_type=0x2  g_switch_time=60
+```
+
+试过 `upModeInfo=1`：写入 `set success`，`g_up_mode` 真的从 0x40 变成 0x1，ssh/br-lan/ping 全不受影响。
+然后用**同一套三口径窗口**（idle / eth0 flood / lan 单播对照）复测，`staging/ctl/upmode1-egress-2218.txt`、
+`staging/ctl/upmode-ab-2219.txt`：
+
+| 窗口 | `sopc2smac uni sop`（smac0…smac6） | `in_sop_cnt`（smac0…smac3, xmac0, xmac1, rgmii, pon0, pon1） |
+|---|---|---|
+| idle（mode 0x1） | `0 38 0 0 0 0 0` | `0 38 0 0 0 0 0 0 0` |
+| eth0 flood（mode 0x1） | `0 115 31 31 0 0 0` | `0 154 0 0 0 0 0 0 0` |
+| eth0 flood（mode 0x1，第二次 A/B） | `0 116 0 0 0 0 0` / `0 118 0 0 0 0 0` | `0 118 …0` / `0 120 …0` |
+| lan 单播对照（mode 0x1） | `0 47 0 0 0 0 0` | `0 46 0 0 0 0 0 0 0` |
+
+结论三条，都是测得：
+
+1. **A/B 否掉了 upmode 假设**：mode 0x1 与"改之前"的 eth0 窗口在 `in_sop_cnt` 上一样，xmac0/xmac1/rgmii/pon0/pon1
+   六个口在**所有**窗口都是 0。`upModeInfo=1` 只是换了 `g_up_mode` 这个变量，没让任何一帧走到 eth0 的 MAC。
+2. **`31 31` 不是 upmode 造成的**，它时有时无（同样的 mode 0x1，两次 A/B 窗口里都没有）。第一次我把它当成
+   "eth0 到 smac2/smac3"的证据，第二次又把它当成截断假象 —— 两个都不对：它是**广播泛洪的偶发命中**
+   （udhcpc 在 eth0 上不停 broadcast discover），要归因必须在同一个窗口里区分单播/广播，这条留给下一次。
+3. **写不回去**：`upModeInfo=64` 报 `set success` 但 `g_up_mode` 仍是 0x1 —— 这个 handler 对入参有自己的映射，
+   没测清之前别把它当配置接口用。当前这块偏差是纯运行时状态，下一次断电（约 22:24）自动回到 0x40。
+
+⇒ route C（eth0 当 WAN）到这里可以判定：**在这套镜像 + 这套装载顺序下，eth0 的帧到不了 xmac0**，
+而 `/proc/pon/*_debug/` 这一大套写接口里有 `sw_port_linkmode_set`、`sw_vlan_set_port_pvid`、`sw_mac_onu_proaction_set`、
+`tm_mactable_fdb_add` 这些正是"把端口/VLAN 接起来"的旋钮 —— 厂商 app 层（`cspd` 里有 `si_eth_upmode_set`、
+`g_reg_upmode`）就是靠它们把口接上的。要沿着这条走，下一步该做的是**读 `cspd`/`pc` 下发顺序**（离线，零风险），
+而不是继续往 NP 里乱写。
