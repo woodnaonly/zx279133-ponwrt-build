@@ -140,17 +140,83 @@ for Linux, and the one that came from the Linux transcript is the one with a for
 run 75 boots and stays silent, do not conclude the mask theory is wrong: `+0x10c/+0x110 = 0x1000` may
 itself be a regression inherited from the bootloader's image.
 
+## 4b. The vendor Linux bring-up register image, extracted from the .ko
+
+`python staging/npidmvals.py pon/vendor-modules/np_133.ko idm_init idm_net_init idm_tx_desc_init
+idm_rx_desc_init` tracks `mov wN,#imm` / `movk` / `orr` per register and reports what each store into
+the IDM block carries. Result, with mainline's value beside it:
+
+| register | vendor Linux (literal) | mainline | U-Boot (docs/09) |
+|---|---|---|---|
+| `+0x054` | `0x06060606` | `0x06060606` | - |
+| `+0x058` | `0x00060606` | `0x00060606` | - |
+| `+0x05c` | `0x07070707` | `0x07070707` | - |
+| `+0x060` | `0x07070707` | `0x07070707` | - |
+| `+0x3fc` | `0x00000f49` | `0x00000f49` | - |
+| `+0x040` | `0x07ffffff` (`idm_net_init`) | `0x07ffffff` | - |
+| **`+0x124`** | **`0x00000080`** | `0x00000040` (since run 75) | `0x00000040` |
+| `+0x000` | RUNTIME (three stores in `idm_init`, one in `idm_rx_desc_init`) | - | `0x01ff0007` |
+| `+0x00c` | RUNTIME (`idm_tx_desc_init`) | `0x04000000` | `0x04000000` |
+| `+0x010`, `+0x0c0`, `+0x2c8`, `+0x5c0`, `+0x070` | RUNTIME - loaded from globals or computed | 128 / `IDM_DESC_MODE` / - / 7 / depth-1 | `0x00000020` / `0` / - / - / - |
+
+Six words the vendor writes as literals are **already exactly what mainline writes**, which is
+independent confirmation that mainline's bring-up was ported faithfully wherever the value is a
+constant. The one constant that disagrees is `+0x124`: the bootloader holds `0x40`, the Linux bring-up
+writes `0x80` (`mov w1, #0x80` at 0x19664 immediately followed by `str w1, [x0, #0x124]` at 0x19668 -
+read in the raw listing, not just inferred from the tracker). Since we are writing a Linux driver, the
+Linux value is the one that ships: **run 77 changes `+0x124` from `0x40` to `0x80`.**
+
+The remaining RUNTIME rows are the honest limit of this method - `+0x00c` and `+0x010` in particular
+are computed from variables in `.data`, so their Linux values are only known from what the board prints
+or from a register read, and §5 established that no register read under the vendor kernel is obtainable.
+
+**Self-check that mattered:** the first version of `npidmvals.py` excluded `ldr` from the
+register-kill list, so `ldr w1, [x1]` at 0x19688 left a stale `w1 = 0x80` live and the script reported
+`+0x010` and `+0x0c0` as literals `0x80` - two invented register values, both plausible-looking, both
+wrong. The corrected run reports them RUNTIME and keeps only `+0x124 = 0x80`, which the raw disassembly
+confirms. Same rule as everywhere else here: an extractor's output is only usable when its control
+lines up with the listing.
+
 ## 5. Next round, in priority order
 
-1. **`tools/v419spec.sh`** - RAM-boot `staging/v419-uImage` + `v419-dtb.bin` (proven procedure from
-   task #26) and dump `md 0x19280000 0x20` plus the `+0x40..+0x50` band, the `+0x100..+0x124` band and
-   the two ring bases *under the vendor kernel while it is carrying traffic*, with `tools/pcrxwatch.ps1`
-   as the traffic instrument. This replaces the U-Boot-derived spec with the Linux-derived one; every
-   register value mainline copies should come from that table.
-2. Read run 75 as a *mechanical* verdict only: did `+0x0c/+0x10c/+0x110/+0x124` reach the hardware.
-   Its traffic result cannot settle the mask question, because it does not touch those four words.
-3. `brdev_set.port_id 0` for eth0 in the same vendor boot is the first measured answer for the egress
-   binding on the Linux side; #37's outport sweep was done against the U-Boot model.
+**Update after the 14:28 re-run: §5-1 as written is not achievable, and the reason is worth keeping.**
+`tools/vendor419.sh` RAM-booted the vendor pair again at 14:28:49 and the bring-up transcript repeated
+*verbatim* - `1 idm_ddr_base is 000000004031c7e0, phy addr is 0x80b23000`,
+`ddr size(0xee5000), idm used(0xee5000)`, `irq[0] sg_idm_irq_mask_conf(0x71ffbfb)`,
+`idm net init ok`, `nppt init end. ret = 0` - now at [ 60.4 s ] instead of [ 18.6 s ], so it is a genuine
+second boot and those runtime-computed values are stable across boots, not per-boot noise.
+
+What did **not** happen is a shell, and that is structural rather than a timing problem: the vendor
+4.19 kernel mounts the root that is actually flashed - `VFS: Mounted root (jffs2 filesystem) readonly on
+device 31:5.` then `Run /sbin/init as init process` - and that root is OpenWrt/procd built for mainline.
+The console filled with `open: Not a directory` from services that cannot run on 4.19, and 18 probes of
+`echo V419SHELL-$((6*7))` never answered. `netdriver.ko` never loaded either (0 lines for `ethdrv_dev_
+ioctl` / `brdev_set`, which the 10-19 boot had printed at [27.8 s]), because that is started by the
+stock init scripts this root does not have. **So: no devmem reads under the vendor kernel, ever, on this
+flash layout - the module's own dmesg is the only vendor-side evidence obtainable, and it is now
+captured twice.** Anything else the vendor path does must come from the .ko (offline) or from the
+transcript.
+
+That leaves one question the transcript cannot answer, and it is the one docs/10 was written for: does
+the NP **latch** the ring-base registers when its firmware loads, so that a Linux driver writing new
+ring bases after `np init ok` is simply ignored? If it does, the vendor image makes sense - U-Boot's
+`0xb0008000 / 0xb0028000` stay authoritative, np_133.ko never touches them (§2), and the DRAM pool at
+`0x80b23000` is handed over through the buffer-table registers it *does* write (`+0x104/0x108/0x10c/
+0x110`, `idm_rx_bp_init`) - and it also explains run 68's `idm+0xb0` completion word advancing while
+mainline's DRAM ring bases were never consumed. This is now the top remaining suspect, and unlike the
+reachability theory it is testable in one mainline boot: a kit that **does not write `+0x04/+0x08`** and
+instead drives the rings U-Boot left in the np-pool window (mainline already ioremaps that window with
+`devm_ioremap_wc` + `memcpy_toio` for TX payload, so the machinery exists).
+
+Order from here:
+
+1. Boot the run-76 kit (`tools/queuekit.sh 76`, now also reading `+0x44..0x4c` and
+   `/proc/interrupts` before and after the traffic) - this tests the routing fix, and the IRQ delta
+   separates "line never asserts" from "handler runs, ring yields nothing".
+2. If the IRQ counter moves but `rx_packets` stays 0, the fault is downstream of routing and the
+   ring-latch kit is the next one.
+3. `brdev_set.port_id 0` for eth0 in the 10-19 vendor boot is still the only measured answer for the
+   Linux-side egress binding; #37's outport sweep was done against the U-Boot model.
 
 ## 6. Instrument notes (so these numbers can be re-taken)
 
