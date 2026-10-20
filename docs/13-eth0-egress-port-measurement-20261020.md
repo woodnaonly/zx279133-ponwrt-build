@@ -171,9 +171,13 @@ cspd / sbin/httpd 里到处是 `echo g_wfwdlatency_flag=1 > /proc/tm/shell`、`e
 - 节点存在：`/proc/tm/shell`（`-r--r--r--`，但写有效）。
 - 写 `help` → dmesg 只有 `operation forbid`，**没有**选项表；
 - 闸门是 `/proc/pon/forbid_telnet_ctrl_tm_shell`：`echo 0 >` 之后 dmesg 明确回
-  `set proc-tm-shell for telnet enabled(0).`，但紧接着的 `echo help > /proc/tm/shell` **仍然** `operation forbid`
-  ⇒ forbid 来自内容不合法（这个口子只吃 `g_xxx=value` / `tx_div_flag=1` 这种**调试变量赋值**），
-  不是来自"远程不许用"。写完已把闸门恢复成 `disabled(1)`。
+  `set proc-tm-shell for telnet enabled(0).`，但紧接着的 `echo help > /proc/tm/shell` **仍然** `operation forbid`；
+- 换成 cspd 用过的真实变量写法 `echo g_mode_detect_flag=1 > /proc/tm/shell`，**同样** `operation forbid`。
+
+⇒ 更正：我先前一句"forbid 来自内容不合法"是**错的**——合法形式也被拒。现在的测得只是：
+即使打开了 telnet 闸门，从 ssh 会话写 `/proc/tm/shell` 一律 `operation forbid`，原因未定
+（可能还检查控制终端/调用上下文，或另有第二道闸门）。写完已把闸门恢复成 `disabled(1)`。
+这条只能留到"用串口控制台写一次"再判（串口就是真 tty），本轮不追。
 
 ⇒ 结论：**route D 的可用旋钮只有 `/proc/pon/{tm,switch}_debug/*` 那一族**（`sw_upmode_set` 实测能写并回显
 `input:upModeInfo is 0x40,new_upmode is 0x40,new_lanup_port is 0 new_wlanup_port is 0`），
