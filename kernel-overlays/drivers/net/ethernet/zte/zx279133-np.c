@@ -9,7 +9,10 @@
 #include <linux/firmware.h>
 #include <linux/io.h>
 #include <linux/iopoll.h>
+#include <linux/mii.h>
 #include <linux/module.h>
+#include <linux/of.h>
+#include <linux/of_mdio.h>
 #include <linux/regmap.h>
 #include <linux/seq_file.h>
 #include <linux/unaligned.h>
@@ -1085,7 +1088,7 @@ static int zx279133_9132_port_attr(struct zx279133_eth *eth, u32 ppu, u32 set,
  */
 static int zx279133_9132_port_init(struct zx279133_eth *eth)
 {
-	u32 ppu, vid;
+	u32 ppu, vid, attr;
 	int ret;
 
 	for (ppu = ZX279133_9132_UNI_PPU_FIRST; ppu <= ZX279133_9132_UNI_PPU_LAST;
@@ -1121,6 +1124,35 @@ static int zx279133_9132_port_init(struct zx279133_eth *eth)
 						ZX279133_PPU_PVID_VID_SHIFT, vid);
 		if (ret)
 			return ret;
+
+		/*
+		 * Read the attribute word back.  The SPA indirect path is the
+		 * only way this driver talks to the 9132, so a word that does
+		 * not read back as written means the write never reached the
+		 * chip, and no amount of further port setup can work until
+		 * that is understood.
+		 */
+		ret = zx279133_spa_indirect_read(eth, ppu,
+						 ZX279133_PPU_ATTR_REG, &attr);
+		if (ret)
+			return ret;
+		dev_info(eth->dev,
+			 "9132 PPU %u attribute word %08x (VID %u)\n",
+			 ppu, attr, vid);
+
+		/* The two words the PVID lives in, read back the same way. */
+		ret = zx279133_spa_indirect_read(eth, ppu,
+						 ZX279133_PPU_PVID_PRI_REG,
+						 &attr);
+		if (ret)
+			return ret;
+		dev_info(eth->dev, "9132 PPU %u PVID word 1 %08x\n", ppu, attr);
+		ret = zx279133_spa_indirect_read(eth, ppu,
+						 ZX279133_PPU_PVID_VID_REG,
+						 &attr);
+		if (ret)
+			return ret;
+		dev_info(eth->dev, "9132 PPU %u PVID word 2 %08x\n", ppu, attr);
 	}
 
 	dev_info(eth->dev,
@@ -1131,6 +1163,82 @@ static int zx279133_9132_port_init(struct zx279133_eth *eth)
 		 (ZX279133_9132_UNI_PPU_LAST - ZX279133_9132_UNI_PPU_FIRST));
 
 	return 0;
+}
+
+/*
+ * The 9132's four UNI ports have their own internal PHYs, and a port whose
+ * PHY is still powered down has no link at all - so this write decides
+ * whether a 9132 port can ever come up.  It is also the vendor's own port
+ * enable: np_133.ko's smac_set_port_enable() calls zte_set_gephy_enable(),
+ * which reads the PHY's BMCR, clears bit 11 (POWERDOWN) and writes it back
+ * over zx_mdio_0_read/write(), i.e. MDIO controller #0.
+ *
+ * The addresses are not a guess.  The running vendor system's device tree
+ * carries a `uni-phy` property on both of the SoC's MDIO controllers and it
+ * is a u32 array:
+ *
+ *	{ 0x0a, 0x0b, 0x0c, 0x0d, 0x05, 0x1c, 0x02 }
+ *
+ * 0x0a..0x0d are the four internal UNI PHYs; 0x05 is the RTL8226 on jack 4,
+ * which mainline's board DTS already declares at mdio1 address 5.
+ */
+#define ZX279133_9132_UNI_PHY_FIRST	0x0a
+#define ZX279133_9132_UNI_PHY_LAST	0x0d
+
+static void zx279133_9132_phy_enable(struct zx279133_eth *eth)
+{
+	struct device_node *np;
+	struct mii_bus *bus;
+	int addr, found = 0;
+
+	np = of_parse_phandle(eth->dev->of_node, "zx279133,uni-phy-bus", 0);
+	if (!np) {
+		dev_info(eth->dev,
+			 "9132 PHY bus not named; UNI PHYs left as they are\n");
+		return;
+	}
+	bus = of_mdio_find_bus(np);
+	of_node_put(np);
+	if (!bus) {
+		dev_err(eth->dev,
+			"9132 PHY bus is not registered; UNI PHYs left as they are\n");
+		return;
+	}
+
+	for (addr = ZX279133_9132_UNI_PHY_FIRST;
+	     addr <= ZX279133_9132_UNI_PHY_LAST; addr++) {
+		int id1, id2, bmcr, lmsr;
+
+		id1 = mdiobus_read(bus, addr, MII_PHYSID1);
+		id2 = mdiobus_read(bus, addr, MII_PHYSID2);
+		if (id1 < 0 || id2 < 0)
+			continue;
+		if ((id1 == 0xffff && id2 == 0xffff) || (id1 == 0 && id2 == 0))
+			continue;
+
+		bmcr = mdiobus_read(bus, addr, MII_BMCR);
+		if (bmcr < 0)
+			continue;
+		bmcr &= ~BMCR_POWERDOWN;
+		bmcr |= BMCR_ANENABLE | BMCR_ENABLE;
+		mdiobus_write(bus, addr, MII_BMCR, (u16)bmcr);
+
+		/* BMSR's link bit is latched, so it has to be read twice. */
+		mdiobus_read(bus, addr, MII_BMSR);
+		lmsr = mdiobus_read(bus, addr, MII_LMSR);
+
+		found++;
+		dev_info(eth->dev,
+			 "9132 UNI PHY %02x: id %04x:%04x, BMCR %04x, link %d\n",
+			 addr, id1, id2, bmcr,
+			 (lmsr < 0) ? -1 : !!(lmsr & BMSR_LSTATUS));
+	}
+
+	if (!found)
+		dev_err(eth->dev,
+			"no 9132 UNI PHY answered on %02x..%02x\n",
+			ZX279133_9132_UNI_PHY_FIRST,
+			ZX279133_9132_UNI_PHY_LAST);
 }
 
 /*
@@ -2639,6 +2747,12 @@ int zx279133_np_prepare(struct zx279133_eth *eth)
 	ret = zx279133_9132_port_init(eth);
 	if (ret)
 		goto err_route_off;
+	/*
+	 * The port attributes are the switch side; the PHY is the line side.
+	 * A UNI port whose PHY is still powered down never links, so it is
+	 * enabled after the chip itself has been programmed.
+	 */
+	zx279133_9132_phy_enable(eth);
 
 	return 0;
 

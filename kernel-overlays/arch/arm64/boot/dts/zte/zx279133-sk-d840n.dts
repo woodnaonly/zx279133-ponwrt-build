@@ -406,6 +406,26 @@
 	 */
 	status = "okay";
 
+	/*
+	 * The 9132's four UNI ports have their own internal PHYs, and the
+	 * vendor enables them over MDIO controller #0: np_133.ko's
+	 * smac_set_port_enable() calls zte_set_gephy_enable(), which reads the
+	 * PHY's BMCR, clears bit 11 (POWERDOWN) and writes it back over
+	 * zx_mdio_0_read/write().  The addresses are not a guess: the running
+	 * vendor system's device tree carries a `uni-phy` property on both
+	 * MDIO controllers and it is the u32 array
+	 *
+	 *	{ 0x0a, 0x0b, 0x0c, 0x0d, 0x05, 0x1c, 0x02 }
+	 *
+	 * where 0x0a..0x0d are the four internal UNI PHYs and 0x05 is the
+	 * RTL8226 on jack 4, which &mdio1 below already declares at address 5.
+	 *
+	 * Naming the bus here is what lets the driver reach them; nothing
+	 * attaches a PHY to them, because phylib would have no netdev to give
+	 * them to and would never call phy_start() on them.
+	 */
+	zx279133,uni-phy-bus = <&mdio0>;
+
 	/* LAST in this node, and it has to be: dtc orders a node as properties-then-subnodes
 	 * ("Properties must precede subnodes", run 60 at 393.2-18), so a `fixed-link {}` written
 	 * among the properties kills the build - and runs 56-59 died on exactly that before the
