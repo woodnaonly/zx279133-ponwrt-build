@@ -115,6 +115,60 @@ jobs:
           git -C linux-mainline-zte-zxslc-sr1010 submodule update --init --recursive
           test -f linux-mainline-zte-zxslc-sr1010/linux-$KVER/arch/arm64/boot/dts/zte/zx279133.dtsi
 
+      # CONFIG_DEVMEM, and why the earlier attempts at it went nowhere.
+      #
+      # (This prose used to live inside the `run:` script of this step.  GitHub
+      # Actions refuses a workflow whose single run script is longer than 21000
+      # characters - "Invalid workflow file ... Exceeded max expression length
+      # 21000" - and this step was already at 20636, so a single extra
+      # paragraph in it is enough to stop the build from starting at all.
+      # The story belongs here, where it costs nothing.)
+      #
+      # Without /dev/mem the trial kernel gives no way to read a register: mknod
+      # succeeds, open() returns ENXIO, `ethtool -d eth0` is "Not supported", and
+      # the busybox in the RAM image has no devmem applet.  That makes U-Boot the
+      # only register view, and U-Boot is gone the moment Linux is running - so a
+      # boot that links but moves nothing can only be scored from the outside,
+      # which is exactly the state runs 42-45 were left in.
+      #
+      # Runs 42/43 pinned the symbol and the merged .config still had none, and
+      # the reason is now read straight out of the two fragments the clone
+      # carries:
+      #   target/linux/generic/config-6.18:1404      # CONFIG_DEVMEM is not set
+      #   target/linux/zte/zx279133/config-6.18:285  # CONFIG_DEVMEM is not set
+      # OpenWrt concatenates generic -> target -> subtarget and kconfig keeps the
+      # last statement for a symbol, so editing anything but the subtarget
+      # fragment cannot win.  The subtarget file is 17 KB of deliberate choices,
+      # so it is edited in place rather than replaced by an overlay copy of it.
+      #
+      # STRICT_DEVMEM is already off in generic, so =y here means full /dev/mem,
+      # and CONFIG_IO_STRICT_DEVMEM=y is inert behind it.  This is asserted
+      # before the build because a broken edit here is cheap now and costs a
+      # whole round later; the merged result is still only reported after the
+      # compile, so an instrument that fails to switch on never withholds a kit
+      # that works.
+      #
+      # Three fragments, not two.  Run 51 is the evidence: the subtarget was
+      # pinned, the pin asserted green, and the *shipped kernel* still carried
+      # `# CONFIG_DEVMEM is not set` - read straight out of the IKCFG_ST block
+      # inside the built Image (gunzip staging/trial/trial-Image.gz; the gzip
+      # between IKCFG_ST and IKCFG_ED is the whole .config), which needs no board
+      # and no job log.  So "generic -> target -> subtarget, last one wins" was
+      # not the rule, and the only edit that cannot lose is the one that leaves
+      # no fragment saying "not set" anywhere under target/linux.
+      #
+      # And that was still not the rule either.  The fourth read of this symbol
+      # went to include/kernel-defaults.mk and found it: Kernel/Configure/Default
+      # first runs `$(LINUX_CONF_CMD) > .config.target` (that is the fragment
+      # merge), then APPENDS every `CONFIG_KERNEL_*` line of the build-root
+      # .config to the same file with the prefix stripped, then kconfig.pl merges
+      # it.  `config KERNEL_DEVMEM` in config/Config-kernel.in has no default, so
+      # defconfig writes `# CONFIG_KERNEL_DEVMEM is not set`, and the awk turns
+      # that into a trailing `# CONFIG_DEVMEM is not set` that outranks every
+      # fragment.  These sed edits are what the seed carries, and they are kept
+      # because they are true; the edit that wins is pin_y_build KERNEL_DEVMEM in
+      # scripts/configure-sk-d840n.sh, and the check that settles it is the
+      # merged state printed after the compile, never the seed.
       - name: Apply SK-D840N overlays
         if: steps.pick.outputs.run == 'true'
         run: |
@@ -125,24 +179,6 @@ jobs:
           test -f "$KT/arch/arm64/boot/dts/zte/zx279133-sk-d840n.dts"
           grep -q 'zx279133-sk-d840n.dtb' "$KT/arch/arm64/boot/dts/zte/Makefile"
           grep -q 'Device/skyworth_sk-d840n' openwrt/target/linux/zte/image/Makefile
-          # Every header the 9132 driver includes must exist in the tree that
-          # compiles it.  This tree is not upstream: there is no
-          # include/linux/netdev.h and no include/linux/switchdev.h (the
-          # switchdev one is net/switchdev.h), and a missing include is a
-          # fatal error the compiler reports as "No such file or directory"
-          # - the very first line of that file's diagnostics, which the
-          # failure annotations used to throw away with a tail (runs 88, 89,
-          # 91 and 92 all failed with nothing but the make chain).  Checking
-          # the includes costs a second and saves an hour.
-          for inc in $(grep -oaE '#include <[^>]+>' "$KT/drivers/net/ethernet/zte/zx279133-switch.c" |
-                       sed -e 's/#include <//' -e 's/>//' | sort -u); do
-            if [ ! -f "$KT/include/$inc" ] && [ ! -f "$KT/arch/arm64/include/$inc" ] &&
-               [ ! -f "$KT/include/uapi/$inc" ]; then
-              echo "::error::zx279133-switch.c includes <$inc>, which this tree does not have"
-              exit 1
-            fi
-          done
-          echo "every header the 9132 driver includes is present in the tree"
           # board.d/02_network replaces cnjn's file, so the sr1010 case has to be
           # in the replacement too - and this board needs its own, because without
           # it the image boots with no interface configured for it at all.
@@ -170,48 +206,13 @@ jobs:
           if [ "$CRCOUNT" != 0 ]; then
             echo "::error::02_network carries $CRCOUNT CR byte(s) - it is a shell script and CRLF breaks its continuation"; exit 1
           fi
-          # CONFIG_DEVMEM, and why the earlier attempts at it went nowhere.
-          #
-          # Without /dev/mem the trial kernel gives no way to read a register: mknod succeeds,
-          # open() returns ENXIO, `ethtool -d eth0` is "Not supported", and the busybox in the
-          # RAM image has no devmem applet. That makes U-Boot the only register view, and U-Boot
-          # is gone the moment Linux is running - so a boot that links but moves nothing can only
-          # be scored from the outside, which is exactly the state runs 42-45 were left in.
-          #
-          # Runs 42/43 pinned the symbol and the merged .config still had none, and the reason is
-          # now read straight out of the two fragments the clone carries:
-          #   target/linux/generic/config-6.18:1404      # CONFIG_DEVMEM is not set
-          #   target/linux/zte/zx279133/config-6.18:285  # CONFIG_DEVMEM is not set
-          # OpenWrt concatenates generic -> target -> subtarget and kconfig keeps the last
-          # statement for a symbol, so editing anything but the subtarget fragment cannot win.
-          # The subtarget file is 17 KB of deliberate choices, so it is edited in place rather
-          # than replaced by an overlay copy of it.
-          #
-          # STRICT_DEVMEM is already off in generic, so =y here means full /dev/mem, and
-          # CONFIG_IO_STRICT_DEVMEM=y is inert behind it. This is asserted before the build
-          # because a broken edit here is cheap now and costs a whole round later; the merged
-          # result is still only reported after compile, so an instrument that fails to switch
-          # on never withholds a kit that works.
+          # CONFIG_DEVMEM, and why the earlier attempts at it went nowhere.  The long
+          # story is in the YAML comment above this step; what is left here is the
+          # edit itself and the assertions around it.
           DEVMEM_OFF='# CONFIG_DEVMEM is not set'
-          # Three fragments, not two. Run 51 is the evidence: the subtarget was pinned, the pin
-          # asserted green, and the *shipped kernel* still carried `# CONFIG_DEVMEM is not set` -
-          # read straight out of the IKCFG_ST block inside the built Image (gunzip
-          # staging/trial/trial-Image.gz; the gzip between IKCFG_ST and IKCFG_ED is the whole
-          # .config), which needs no board and no job log. So "generic -> target -> subtarget,
-          # last one wins" was not the rule, and the only edit that cannot lose is the one that
-          # leaves no fragment saying "not set" anywhere under target/linux.
-          #
-          # And that was still not the rule either. The fourth read of this symbol went to
-          # include/kernel-defaults.mk and found it: Kernel/Configure/Default first runs
-          # `$(LINUX_CONF_CMD) > .config.target` (that is the fragment merge), then APPENDS
-          # every `CONFIG_KERNEL_*` line of the build-root .config to the same file with the
-          # prefix stripped, then kconfig.pl merges it. `config KERNEL_DEVMEM` in config/
-          # Config-kernel.in has no default, so defconfig writes `# CONFIG_KERNEL_DEVMEM is
-          # not set`, and the awk turns that into a trailing `# CONFIG_DEVMEM is not set` that
-          # outranks every fragment. These sed edits are what the seed carries, and they are
-          # kept because they are true; the edit that wins is pin_y_build KERNEL_DEVMEM in
-          # scripts/configure-sk-d840n.sh, and the check that settles it is the merged state
-          # printed after the compile, never the seed.
+          # Three fragments, not two (see the YAML comment above): a fragment that
+          # still says "not set" anywhere under target/linux outranks the pin, and
+          # the merged result is only printed after the compile.
           for f in openwrt/target/linux/generic/config-6.18 \
                    openwrt/target/linux/zte/config-6.18 \
                    openwrt/target/linux/zte/zx279133/config-6.18; do
@@ -488,6 +489,39 @@ jobs:
             fi
             [ "$rc" -eq 0 ] || exit 1
           fi
+
+      # This is its own step on purpose.  GitHub Actions refuses a workflow
+      # whose single `run:` script is longer than 21000 characters, and the
+      # "Apply SK-D840N overlays" step is already close to that: run 95 was
+      # rejected as "Invalid workflow file ... Exceeded max expression length
+      # 21000" because this check was appended to it, and the build never
+      # started at all.  A step of its own keeps both facts true.
+      - name: "Gate: every header the 9132 driver includes exists"
+        if: steps.pick.outputs.run == 'true'
+        run: |
+          set -e
+          KT=linux-mainline-zte-zxslc-sr1010/linux-$KVER
+          DRV=$KT/drivers/net/ethernet/zte/zx279133-switch.c
+          test -f "$DRV" || { echo "::error::the 9132 driver did not reach the tree"; exit 1; }
+          # This tree is not upstream: there is no include/linux/netdev.h and
+          # no include/linux/switchdev.h (the switchdev one is
+          # net/switchdev.h here).  A missing include is a fatal error the
+          # compiler reports as "No such file or directory", on the first
+          # line of that file's diagnostics - which the failure annotations
+          # used to throw away with a tail, so runs 88, 89, 91 and 92 all
+          # failed with nothing but the make chain.  Checking the includes
+          # costs a second and saves an hour.
+          bad=0
+          for inc in $(grep -oaE '#include <[^>]+>' "$DRV" |
+                       sed -e 's/#include <//' -e 's/>//' | sort -u); do
+            if [ ! -f "$KT/include/$inc" ] && [ ! -f "$KT/arch/arm64/include/$inc" ] &&
+               [ ! -f "$KT/include/uapi/$inc" ]; then
+              echo "::error::zx279133-switch.c includes <$inc>, which this tree does not have"
+              bad=1
+            fi
+          done
+          [ "$bad" = 0 ] || exit 1
+          echo "every header the 9132 driver includes is present in the tree"
 
       - name: Cache dl/
         if: steps.pick.outputs.run == 'true' && inputs.clean_cache != 'true'
