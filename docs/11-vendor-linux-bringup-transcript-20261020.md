@@ -177,6 +177,36 @@ wrong. The corrected run reports them RUNTIME and keeps only `+0x124 = 0x80`, wh
 confirms. Same rule as everywhere else here: an extractor's output is only usable when its control
 lines up with the listing.
 
+## 4c. The run-75 kit read back over serial - the first in-hardware confirmation, and a second blocker
+
+The 15:00 round lost its recorder mid-boot (two `relayloop.sh` instances were alive and fighting for
+COM3 - see the pitfall note in memory; a `send error: 1Write:` wall in `serial.log`), but the kit's
+shell survived and the reads were taken by hand at 15:07-15:09 on `Linux ImmortalWrt 6.18.38+`,
+`root@ImmortalWrt:~#`, uptime 7 min, cmdline `root=/dev/mtdblock5`:
+
+| register | read live on kit 75 | meaning |
+|---|---|---|
+| `+0x0c` | `0x04000000` | the `IDM_TX_CFG_DEPTH` fix **reached the hardware** - first time ever measured |
+| `+0x10c`, `+0x110` | `0x00001000`, `0x00001000` | the BP-ring-count fix reached the hardware |
+| `+0x124` | `0x00000040` | landed, but §4b says the Linux bring-up uses `0x80` → run 77 |
+| `+0x04`, `+0x08` | `0x9a080000`, `0x9a100000` | mainline really does overwrite the ring bases with DRAM `dma_addrs`, replacing U-Boot's `0xb0008000/0xb0028000` |
+| `+0x10` | `0x00000080` | equals the vendor's `+0x124` literal - coincidence, not evidence |
+| `+0x40` | **`0x07ff0000` after `eth0` was brought up** | bits 16..26 are still MASKED for the interface's whole life |
+| `+0x44/48/4c/50` | `0x0000f00f / 0x00ff0000 / 0 / 0x00000ff0` | the pre-fix routing, as §3 predicted |
+| `/proc/interrupts` | line 22 `GICv3 33 Level 19000000.ethernet` count **0 0**; line 25 `GICv3 36 zx279133-idm-local` count 0 | the RX IRQ *is* requested (SPI 1) and `enable_irq()` does run (`zx279133-netdev.c:66`) - it simply has never fired |
+
+That last pair of rows is the important one. It kills a plausible-sounding reading of §3b: the RX
+interrupt was not missing because nobody requested it, and it is not missing because the ring bases are
+in DRAM. **Two IDM-side conditions keep it silent, and the routing words are only one of them**: the
+per-source mask at `+0x40` never clears bits 16..26, and the vendor's routing word for this line
+(`0x071ffbfb`) delivers sources 16,17,18,19,20,24,25,26 there. So run 76/77's routing fix is necessary
+but would still leave RX mute, and `ZX279133_IDM_NAPI_MASK` was widened to `GENMASK(26, 0)` for run 78 -
+`zx279133_idm_open()` unmasks with it and `napi_disable` masks with it, symmetrically.
+
+Order of evidence from here: boot 78, re-read `+0x40` (must become `0x00000000` with `eth0` up), re-read
+`+0x44` (must become `0x071ffbfb`), then watch line 22's count. A non-zero count with `rx_packets` still
+0 moves the fault into descriptor consumption - and only then does the ring-latch question (§5) matter.
+
 ## 5. Next round, in priority order
 
 **Update after the 14:28 re-run: §5-1 as written is not achievable, and the reason is worth keeping.**

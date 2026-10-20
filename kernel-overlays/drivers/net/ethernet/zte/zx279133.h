@@ -385,8 +385,14 @@
 #define ZX279133_IDM_LOCAL_MASK		(GENMASK(11, 8) | GENMASK(7, 4))
 #define ZX279133_IDM_DIRECT_RX_MASK	(GENMASK(15, 0) & \
 					 ~ZX279133_IDM_LOCAL_MASK)
-#define ZX279133_IDM_NAPI_MASK		(ZX279133_IDM_DIRECT_RX_MASK | \
-					 ZX279133_IDM_LOCAL_MASK)
+/*
+ * NAPI must unmask every source the routing words can deliver, not just the low 16 bits. Measured on
+ * the run-75 kit with eth0 up: idm+0x40 reads 0x07ff0000 after zx279133_idm_open()'s unmask, i.e.
+ * sources 16..26 stay masked for the whole life of the interface, and the "rx" IRQ (GICv3 SPI 1,
+ * /proc/interrupts line 22) counts 0 - while the vendor's routing word for that very line
+ * (0x071ffbfb) delivers sources 16,17,18,19,20,24,25,26 there. So bits 0..15 were never the whole set.
+ */
+#define ZX279133_IDM_NAPI_MASK		GENMASK(26, 0)
 #define ZX279133_IDM_RX_QUEUE		0
 #define ZX279133_IDM_RX_QUEUES		24
 #define ZX279133_IDM_CPU_RX_QUEUES	16
