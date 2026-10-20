@@ -277,3 +277,27 @@ musl 或静态均可），`ssh root@192.168.9.1 "cat > /tmp/ipt.ipk" < f.ipk` �
 `eth0 rx=0 tx=40180 | eth1 rx=213917 tx=175598 | eth2 rx=0 tx=22025 | eth3 rx=0 tx=13175`，
 carrier 分别 `1 / 1 / 1 / (空)`。只有 eth1 有 rx —— 也就是**全板只有 PC 那一根线在收**；
 eth2/eth3 的 tx 是它们还在桥里时被泛洪出来的计数，说明驱动层面一直在往这两个口发。
+
+## 14. NAT 用户态这一环：三条取法都试到底了，只剩离线拆包
+
+按 §12 的结论去取一个 legacy iptables，三条路的实测结果：
+
+1. **24.10.8 官方 feed（armsr aarch64_generic，index 347 KB + 2.5 MB 都完整取到）**：
+   `iptables` / `iptables-legacy` / `iptables-nft` / `libxtables*` **一个都没有**（0 命中）。
+   这不是解析失败——同一个 index 里 `iptables-mod-account/-asn/-chaos/…`、`collectd-mod-iptables`、
+   `geoip-shell-iptables`、`miniupnpd-iptables` 都列得出来，所以核心包是真的不在。
+   ⇒ 没有上行、也没有这些包的现在，`opkg` 这条路是死的。
+2. **厂商 initramfs**：有 `/bin/iptables`(423,712 B, EM_ARM) 和 `/bin/ip6tables`，但整个 initramfs 里没有
+   `libxtables.so.12`（同目录的 `libcommfun.so`、`ld-2.26.so`、`libc-2.26.so` 都在），所以它跑不起来。
+3. **本地所有 flash 导出**（`device-dumps/` 242 MB、`restore_set/root_stock.bin`、`backups/`）里
+   grep `xtables` **零命中**。注意这条**不能当否证**：jffs2 节点是压缩存的，字符串本来就看不见；
+   而 `staging/stock-initramfs.cpio` 命中 2 次，那正是 iptables 二进制自己引用的 SONAME。
+
+⇒ 唯一还没走的技术通道：**离线把 `root_stock.bin`（厂商 jffs2 根）里的 `usr/lib/libxtables.so.12` 抽出来**
+（`jffs2reader` / `jefferson`，本机没有、python3 是 stub，可行的是丢到 vps1 上解），
+拿到之后和厂商 `bin/iptables` 一起推进 `/tmp`，用
+`/tmp/vroot/lib/ld-2.26.so --library-path /tmp/vroot/lib /tmp/vroot/bin/iptables -t nat -A POSTROUTING -o eth2 -j MASQUERADE`
+——CONFIG_COMPAT 能跑 arm32 这点 route B 已经证过。内核侧没有障碍（`/proc/net/ip_tables_targets`
+里 `MASQUERADE` 就在，`ipt_do_table`/`nf_nat_masquerade_ipv4` 都是 builtin）。
+
+判据（下次有 WAN 时一次跑完）：`iptables -t nat -L -v` 列出规则，且 LAN 客户端经过板子时那条规则的 pkts 计数会涨。
