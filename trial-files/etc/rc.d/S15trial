@@ -30,13 +30,27 @@
 	i=0
 	while [ $i -lt 8 ]; do
 		i=$((i + 1))
-		for d in /sys/class/net/*; do
-			[ -d "$d" ] || continue
-			n=${d#/sys/class/net/}
-			[ "$n" = lo ] && continue
-			ip link set "$n" up 2>/dev/null
-			ip addr replace $addr dev "$n" 2>/dev/null
-		done
+		if [ -e /sys/class/net/br-lan ]; then
+			# The image's own network init has taken over, and it owns
+			# the address now.  The bridge's own ports must not get
+			# one either: an address on a bridge port is a second
+			# answer to the same ARP, and on a DSA port it is an
+			# address the bridge cannot take over.
+			ip addr replace $addr dev br-lan 2>/dev/null
+		else
+			for d in /sys/class/net/*; do
+				[ -d "$d" ] || continue
+				n=${d#/sys/class/net/}
+				case "$n" in
+				lo|lan1|lan2|lan3|lan4)
+					# The DSA user ports belong to the bridge.
+					continue
+					;;
+				esac
+				ip link set "$n" up 2>/dev/null
+				ip addr replace $addr dev "$n" 2>/dev/null
+			done
+		fi
 		pidof dropbear >/dev/null 2>&1 || /usr/sbin/dropbear -s -B -p 22
 		sleep 15
 	done

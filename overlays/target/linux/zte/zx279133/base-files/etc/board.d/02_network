@@ -60,10 +60,27 @@ skyworth,sk-d840n)
 	#
 	# The lab router needs one jack as the WAN and another as the LAN, and
 	# the two must be separate segments - that is the whole point of the
-	# NAT test.  So when the per-port netdevs are there, lan1 (plus the
-	# spare jacks) becomes the LAN bridge and lan2 becomes the WAN, and
-	# the WAN takes a DHCP lease from whatever is upstream instead of
-	# carrying the bench's static address.
+	# NAT test.  So when the per-port netdevs are there, the jack the test
+	# PC is plugged into becomes the LAN bridge and the jack that already
+	# carries the uplink cable becomes the WAN, and the WAN takes a DHCP
+	# lease from whatever is upstream instead of carrying the bench's
+	# static address.
+	#
+	# Which DSA port is which physical jack is measured, not guessed:
+	#
+	#   DSA port 4 = PPU 1 = PHY 0x0a = the 9132's UNI1
+	#   DSA port 5 = PPU 2 = PHY 0x0b = the 9132's UNI2  <- the test PC
+	#   DSA port 6 = PPU 3 = PHY 0x0c = the 9132's UNI3  <- the uplink
+	#   DSA port 7 = PPU 4 = PHY 0x0d = the 9132's UNI4
+	#
+	# The vendor's own naming confirms the last two: the vendor prints
+	# "[eth1] port 1 link up:1000M" for the jack the PC is in and calls
+	# that switch port 1, and its sw_port table says switch port 1 is
+	# smac_1, which is PPU 2.  The vendor's eth2 is switch port 2 = smac_2
+	# = PPU 3, and it is the port that has a cable in it on this bench.
+	#
+	# The labels in the device tree follow the DSA port number (lan1 is
+	# DSA port 4), so the PC's jack is lan2 and the uplink's is lan3.
 	#
 	# The rest of the cases keep the single-interface behaviour above:
 	# one address on the one netdev that exists, so the board is still
@@ -74,7 +91,7 @@ skyworth,sk-d840n)
 		lan_ports=""
 		wan_port=""
 		for d in $lan_dev; do
-			[ "$d" = lan2 ] && { wan_port="lan2"; continue; }
+			[ "$d" = lan3 ] && { wan_port="lan3"; continue; }
 			lan_ports="$lan_ports${lan_ports:+ }$d"
 		done
 		if [ -n "$wan_port" ] && [ -n "$lan_ports" ]; then

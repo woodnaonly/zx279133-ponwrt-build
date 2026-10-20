@@ -1,0 +1,181 @@
+#!/bin/sh
+# Trial-only: turn the RAM-booted mainline system into a lab router.
+#
+# It runs as S26nat, i.e. after the image's own network init (S20network)
+# and after the recovery service's own init (S21zrec), because everything it
+# does needs the network to be up first: the DSA user ports are only bridged
+# once netifd has run, and the WAN only takes a lease once it is up.  The
+# diagnostic script S15trial runs before that and puts 192.168.9.1 on every
+# netdev it can see; that is what makes the board reachable early, and it is
+# undone here, because a static address on the WAN never gets a lease and the
+# same address on the bridge and on a bridge port is two answers to one ARP.
+#
+#   * LAN  = br-lan when the image's own config built one (it makes br-lan
+#            from lan1 lan2 lan4), otherwise the first DSA port that is not
+#            the WAN.  It carries 192.168.9.0/24 and the bench address
+#            192.168.9.1.
+#   * WAN  = the DSA port that is not in the bridge - lan3, the jack that
+#            has the uplink cable in it on this bench.  It takes a DHCP
+#            lease from whatever is upstream.
+#   * dnsmasq serves the LAN: a DHCP lease for the clients and DNS
+#            forwarding to the upstream the WAN lease named.
+#   * forwarding is on and the WAN side is masqueraded, so a client on the
+#     LAN can reach the upstream.
+#   * everything that proves it - addresses, routes, the NAT ruleset and its
+#     counters - is printed into kmsg, which is where the rest of this
+#     round's evidence lives.
+#
+# Nothing here writes flash.  It is a trial script and it only configures the
+# running system.
+LAN=""
+WAN=""
+BR=""
+
+# netifd builds the bridge a moment after the network init returns.
+i=0
+while [ $i -lt 30 ]; do
+	[ -e /sys/class/net/br-lan ] && break
+	i=$((i + 1))
+	sleep 1
+done
+
+# The bridge the image's own config made, if any.
+if [ -e /sys/class/net/br-lan ]; then
+	BR="br-lan"
+	LAN="br-lan"
+	# The ports in the bridge are the LAN ports; the DSA port that is not
+	# in it is the WAN.
+	for d in lan1 lan2 lan3 lan4; do
+		[ -e "/sys/class/net/$d" ] || continue
+		if [ -e "/sys/class/net/$d/bridge" ]; then
+			continue
+		fi
+		[ -n "$WAN" ] || WAN="$d"
+	done
+else
+	for d in lan1 lan2 lan4; do
+		[ -e "/sys/class/net/$d" ] && [ -z "$LAN" ] && LAN="$d"
+	done
+	for d in lan3 lan2 lan1 lan4; do
+		[ -e "/sys/class/net/$d" ] && [ -z "$WAN" ] && [ "$d" != "$LAN" ] && WAN="$d"
+	done
+fi
+[ -n "$LAN" ] || LAN="lan-cpu0"
+[ -e "/sys/class/net/$LAN" ] || LAN="eth0"
+
+echo "trial: nat lan=$LAN wan=$WAN bridge=$BR" >/dev/kmsg
+
+# S15trial put 192.168.9.1 on everything.  Keep it on the LAN only.
+for d in /sys/class/net/*; do
+	[ -d "$d" ] || continue
+	n=${d#/sys/class/net/}
+	[ "$n" = lo ] && continue
+	[ "$n" = "$LAN" ] && continue
+	ip addr flush dev "$n" 2>/dev/null
+done
+ip link set "$LAN" up 2>/dev/null
+ip addr replace 192.168.9.1/24 dev "$LAN" 2>/dev/null
+
+if [ -n "$WAN" ]; then
+	ip link set "$WAN" up 2>/dev/null
+	# A lease script that applies what it is given: the address, the
+	# default route and the upstream resolver.  udhcpc's default script
+	# is not in this image, and without one a lease is announced and
+	# then thrown away.
+	cat > /tmp/udhcpc-trial.sh <<'EOF'
+#!/bin/sh
+[ "$1" = bound ] || exit 0
+case "$2" in
+ip)
+	ip addr replace "$ip/$mask" dev "$interface" 2>/dev/null
+	;;
+subnet)
+	ip route replace "$subnet" dev "$interface" 2>/dev/null
+	;;
+router)
+	ip route replace default via "$router" dev "$interface" 2>/dev/null
+	;;
+dns)
+	[ -n "$dns" ] && echo -n "$dns" > /etc/resolv.conf
+	;;
+esac
+exit 0
+EOF
+	chmod 755 /tmp/udhcpc-trial.sh
+	if command -v udhcpc >/dev/null 2>&1; then
+		echo "trial: nat: udhcpc on $WAN" >/dev/kmsg
+		udhcpc -i "$WAN" -n -q -t 5 -T 3 -s /tmp/udhcpc-trial.sh \
+			>/tmp/udhcpc.log 2>&1
+		cat /tmp/udhcpc.log >/dev/kmsg 2>&1
+		echo "trial: nat: udhcpc on $WAN done" >/dev/kmsg
+	else
+		echo "trial: nat: no udhcpc in this image" >/dev/kmsg
+	fi
+fi
+
+# The LAN side's DHCP server and resolver.  dnsmasq is the one the image
+# ships; if it is not there, the LAN still has an address and the board is
+# still reachable.
+if command -v dnsmasq >/dev/null 2>&1; then
+	killall dnsmasq 2>/dev/null
+	sleep 1
+	cat > /tmp/dnsmasq-trial.conf <<EOF
+interface=$LAN
+dhcp-range=192.168.9.100,192.168.9.200,255.255.255.0,12h
+dhcp-option=3,192.168.9.1
+dhcp-option=6,192.168.9.1
+EOF
+	dnsmasq -C /tmp/dnsmasq-trial.conf >/dev/kmsg 2>&1 &
+	sleep 2
+	echo "trial: nat: dnsmasq serving $LAN" >/dev/kmsg
+else
+	echo "trial: nat: no dnsmasq in this image" >/dev/kmsg
+fi
+
+# Forwarding and the NAT.  nftables is what mainline's fw4 uses, and the
+# plan asks for its counters, so nft is preferred; iptables is the fallback
+# when the image has no nft.
+echo 1 > /proc/sys/net/ipv4/ip_forward 2>/dev/null
+if [ -n "$WAN" ] && command -v nft >/dev/null 2>&1; then
+	nft -f - >/dev/kmsg 2>&1 <<EOF
+table ip nat {
+	chain postrouting {
+		type nat hook postrouting priority 100; policy accept;
+		oifname "$WAN" masquerade
+	}
+}
+EOF
+	echo "trial: nat: nft masquerade on $WAN" >/dev/kmsg
+elif [ -n "$WAN" ] && command -v iptables >/dev/null 2>&1; then
+	iptables -t nat -A POSTROUTING -o "$WAN" -j MASQUERADE 2>/dev/null
+	echo "trial: nat: iptables masquerade on $WAN" >/dev/kmsg
+else
+	echo "trial: nat: neither nft nor iptables in this image" >/dev/kmsg
+fi
+
+# The proof, in one place.
+{
+	echo "trial: nat evidence"
+	ip -br addr 2>/dev/null
+	echo "--- routes ---"
+	ip route 2>/dev/null
+	echo "--- forwarding ---"
+	cat /proc/sys/net/ipv4/ip_forward 2>/dev/null
+	if command -v nft >/dev/null 2>&1; then
+		echo "--- nft ruleset ---"
+		nft list ruleset 2>/dev/null
+		echo "--- nft counters ---"
+		nft list chain ip nat postrouting 2>/dev/null
+	fi
+	if command -v iptables >/dev/null 2>&1; then
+		echo "--- iptables nat ---"
+		iptables -t nat -L -n -v 2>/dev/null
+	fi
+	echo "--- neighbours ---"
+	ip neigh 2>/dev/null
+	echo "--- resolv.conf ---"
+	cat /etc/resolv.conf 2>/dev/null
+	echo "trial: nat evidence end"
+} >/dev/kmsg 2>&1
+
+exit 0
