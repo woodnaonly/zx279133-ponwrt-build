@@ -81,6 +81,38 @@
 > "ImmortalWrt + 新内核"实际等于：**用 ImmortalWrt 的 userland/rootfs 生态 + 我们自己出的 kernel/dtb**，
 > 走的还是本项目已经建好的那套 CI 管线。
 
+### 4.0 新内核的出处，以及"为什么不能简单移植"（机主 2026-10-20 23:05 明确）
+
+**新内核 = ZTE SR1010 那一套 mainline 支持**，参考仓 `https://github.com/huxiangjs/SK-D840N-OpenWRT`
+（该项目的目录里就有；内核侧对应 `cnjn/linux-mainline-zte-zxslc-sr1010`，分支 `codex/sr1010-mainline`）。
+**SR1010 是路由器，当前板子 SK-D840N 是光猫（GPON ONU）** —— 同一颗 SoC（ZX279133），**板级不同**，
+所以**不能简单移植，必须改内核适配**。这不是推测，架构与差异都已在 `docs/07` 落过：
+
+| 事项 | SR1010（基线，路由器） | SK-D840N（本板，光猫） | 已存在的适配 |
+|---|---|---|---|
+| target 树 | `immortalwrt/target/linux/zte/` **只有 SR1010**；`FEATURES` **不含 jffs2**；image/Makefile 没有 `skyworth_sk-d840n` | root 是 **jffs2 的 241 MiB `mtd5`**，需要 `skyworth_sk-d840n` 设备定义 | `ci-build-repo/overlays/target/linux/zte/{Makefile,image/Makefile}`（构建时 `cp -a` 注入，**故意不改主树**，否则破坏 SR1010 可构建性） |
+| 板级 dts | `zx279133-sr1010.dts` / `zx279133-sr1010-openwrt.dts`（本地已有：`tests/kernelsrc/arch_arm64_boot_dts_zte_zx279133-sr1010.dts`、`staging/src/zx279133-sr1010.dts`） | 分区表、LED、按键、MAC 来源（`/tagparam` 的 `0..7_mac_addr`，基址 `d0:45:8d:84:08:fc`）、`pon_rsvmem` 保留区都不同 | `kernel-overlays/arch/arm64/boot/dts/zx279133-sk-d840n.dts` + 那份 `zx279133.dtsi` |
+| 以太网驱动族 | SR1010 的 LAN 走 NPPT 路径 | **eth0 = NPPT + 外挂 RTL8226B（MDIO 地址 5，`rtl8226b: ethernet-phy@5`，故意不给 `compatible`）**；四个 LAN 口挂在 SoC 内部 **9132 UNI 交换机**上，厂商用 `/dev/ethdriver` ioctl 驱动，**不用 phylib 也不用 DSA** | `kernel-overlays/drivers/net/ethernet/zte/zx279133-{main,mac,np,idm,netdev}.c`、`drivers/phy/zte/phy-zx279133-uni-serdes.c`、`drivers/mtd/nand/spi/unim.c` |
+| PHY 芯片 | SR1010 上出过"把 `ZX279051` 驱动绑到 Realtek 芯片"的事故（PHY 节点的 `compatible` 会覆盖 ID 匹配） | 本板是 **RTL8226B**，CI 的门要 `CONFIG_REALTEK_PHY=y`，**不是** `ZX279051_PHY`（该符号在 Kconfig 里真实存在，所以这个错极难发现；`docs/07` 已把发布说明里的错字改掉） | `scripts/configure-sk-d840n.sh` 里 pin 符号 |
+| PON 侧 | 无 | **GPON/XG-PON 全套（`zte_xgpon`/`gpondrv_xg`/OMCI）主线没有驱动**，光猫功能回不来 | 无（这是本板独缺的一大块） |
+
+**还没解决、需要继续改内核的两条硬账（本轮实测）**：
+
+1. **9132 UNI 交换机主线无驱动** ⇒ mainline 下 `/sys/class/net` 只有 `eth0 lo`，
+   `br-lan` 是 netifd 建的空桥，**四个 LAN 口全不工作**。这条不解决，任何"新内核"产物都不是可用路由器。
+   （`tag_zx279133_rtl8372n.ko` 永不 probe；RTL8372N DSA 节点与 `lan-conduit` 子节点是被**故意去掉**的。）
+2. **eth0 的 NP/TM 出口端口映射不对**：CPU 发的帧全部落在 TM 列 `smac1`，而 eth0 的 PHY 在厂商 CLI 里是
+   **`sw_port 4`**（`enable:1`），`in_sop_cnt` 的 `xmac0/xmac1/rgmii/pon0/pon1` 列在所有窗口恒 0（`docs/13` §0/§8/§16）。
+   即主线驱动"发了包"，但没有把包交给它自己的 MAC。`upModeInfo`、`/proc/tm/shell`、loopback API 三条干预路都被否证。
+   要改的地方在 `zx279133-np.c`/`zx279133-idm.c`/`zx279133-mac.c` 这一族的端口选择/授权路径，
+   参照物是 `docs/09`/`docs/11` 的 U-Boot 与厂商 Linux 寄存器镜像，以及 U-Boot 的 `idm_tx_debug`/`idm_rx_debug`。
+
+**换内核顺带会解决的一条**：mainline 有 nftables → `fw4` 能用 → 当前 4.19 上"内核没有 nf_tables、镜像和 feed
+里又没有 iptables"的 NAT 死结自动消失（见 §5.2）。这是走新内核路线的一个真实收益。
+
+**一句话**：`overlays/` + `kernel-overlays/` + `configure-sk-d840n.sh` 就是"改内核适配光猫"的现有载体；
+新执行者要做的是**在这三层上继续加**（9132 驱动 + eth0 出口端口 + 若需要则 GPON），而不是把 SR1010 的树直接搬。
+
 **A. ImmortalWrt userland + 现有厂商 4.19 内核（推荐先做，风险最低）**
 - 内容：只换 `root`（ImmortalWrt 24.10/25.x 的 armsr/armv8 rootfs → 转 jffs2，241 MiB 分区），kernel/dtb **不动**。
 - 优点：LAN 通路、`br-lan`、厂商 kmods 全部现成可用；已证明这套 kernel 能带流量。
@@ -138,6 +170,15 @@
 - 工具：`tools/verify_router.sh`（4 通道判定）、`tools/eth0egress.sh`（TM 归因，含 idle 基线）、
   `tools/jackmap.sh`、`tools/eth0jackwatch.sh`、`tools/boot419score.sh`（开机打分）、`tools/ubflash.sh`、
   `tools/ubram.sh`、`tools/reflush_root.sh`（新 inode 重建，救命用）、`tools/onu2.cjs`（大文件传输）。
+- **新内核这条线的本地落点**（不用重新下载）：
+  `ci-build-repo/kernel-overlays/`（`zx279133-sk-d840n.dts` + `drivers/net/ethernet/zte/zx279133-{main,mac,np,idm,netdev}.c`
+  + `drivers/phy/zte/phy-zx279133-uni-serdes.c` + `drivers/mtd/nand/spi/unim.c`）、
+  `ci-build-repo/overlays/target/linux/zte/`（含 jffs2 的 target/image Makefile）、
+  `ci-build-repo/scripts/configure-sk-d840n.sh`（符号 pin）、
+  `ci-build-repo/tests/kernelsrc/arch_arm64_boot_dts_zte_zx279133-sr1010.dts`（SR1010 基线 dts，另有
+  `staging/src/zx279133-sr1010.dts`）、`staging/src/fork-SR1010_MTD_WRITE_ACCESS.md`（MTD 写权限说明）、
+  `.github/workflows/build-sr1010.yml` 与 `configs/sr1010-extra.config`。
+  注意还存在一份工作副本 **`ci-wanport/`**（含同名 `build-sr1010.yml`/`configs`/`tests`），接手前先确认改的是哪一个。
 - 数据：`device-dumps/`（**全分区导出，242 MB**，用户原始要求里就点名要它）、`restore_set/`（原厂五件套）、
   `backups/`、`staging/vendor-full/`（厂商 initramfs 全量 + `MANIFEST-links.txt`）、
   `staging/vendor-root/`（跑 arm32 厂商二进制所需的最小库集，route B 用过）、`staging/ctl/`（串口日志与各采样日志）。
