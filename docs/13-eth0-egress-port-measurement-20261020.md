@@ -301,3 +301,18 @@ eth2/eth3 的 tx 是它们还在桥里时被泛洪出来的计数，说明驱动
 里 `MASQUERADE` 就在，`ipt_do_table`/`nf_nat_masquerade_ipv4` 都是 builtin）。
 
 判据（下次有 WAN 时一次跑完）：`iptables -t nat -L -v` 列出规则，且 LAN 客户端经过板子时那条规则的 pkts 计数会涨。
+
+## 15. 22:52 实测：eth2 摘出桥之后，硬件层是真的隔离了（这一半可以放心）
+
+无光线也能判的一问：netifd 只是把 eth2 从 Linux bridge 里摘出来，9132 的**硬件**转发域跟不跟着变？
+做法：给 eth2 临时配 `192.168.9.3/24`（运行时，随后清掉），从板子分别朝 PC 打两次 ICMP：
+
+| 出口 | 结果 | 邻居表 |
+|---|---|---|
+| `ping -I br-lan 192.168.9.25` | **4/4 回复** | `192.168.9.25 dev br-lan lladdr 84:47:09:5b:bd:2c REACHABLE` |
+| `ping -I eth2 192.168.9.25` | **0/6 回复** | `192.168.9.25 dev eth2 probes 5 INCOMPLETE` |
+
+PC 就在同一个 IP 网段的 eth1 段上、并且对 br-lan 的 ARP 应答正常，
+所以 eth2 发出的 ARP who-has **没有泄进 LAN 泛洪域** —— 隔离成立（若还在同一硬件 VLAN，PC 必然回）。
+注意这一条**只证明隔离**，不证明 eth2 那只口能收：它现在没插线，0/6 同时也是"没对端"的预期结果。
+还剩两问：eth2 的 jack 收到帧（插上就有答案，`tools/jackmap.sh` 会记）、以及 NAT 用户态（#56）。
