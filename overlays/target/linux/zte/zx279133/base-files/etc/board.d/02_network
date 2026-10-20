@@ -57,8 +57,43 @@ skyworth,sk-d840n)
 	done
 	[ -n "$lan_dev" ] || { [ -e /sys/class/net/lan-cpu0 ] && lan_dev="lan-cpu0"; }
 	[ -n "$lan_dev" ] || lan_dev="eth0"
-	ucidef_set_interface "lan" device "$lan_dev" protocol "static" \
-		ipaddr "192.168.9.1" netmask "255.255.255.0"
+	#
+	# The lab router needs one jack as the WAN and another as the LAN, and
+	# the two must be separate segments - that is the whole point of the
+	# NAT test.  So when the per-port netdevs are there, lan1 (plus the
+	# spare jacks) becomes the LAN bridge and lan2 becomes the WAN, and
+	# the WAN takes a DHCP lease from whatever is upstream instead of
+	# carrying the bench's static address.
+	#
+	# The rest of the cases keep the single-interface behaviour above:
+	# one address on the one netdev that exists, so the board is still
+	# reachable on the bench.
+	#
+	case "$lan_dev" in
+	lan1*)
+		lan_ports=""
+		wan_port=""
+		for d in $lan_dev; do
+			[ "$d" = lan2 ] && { wan_port="lan2"; continue; }
+			lan_ports="$lan_ports${lan_ports:+ }$d"
+		done
+		if [ -n "$wan_port" ] && [ -n "$lan_ports" ]; then
+			ucidef_set_interfaces_lan_wan "$lan_ports" "$wan_port"
+			uci set network.lan.ipaddr='192.168.9.1'
+			uci set network.lan.netmask='255.255.255.0'
+		elif [ -n "$lan_ports" ]; then
+			ucidef_set_interface "lan" device "$lan_ports" protocol "static" \
+				ipaddr "192.168.9.1" netmask "255.255.255.0"
+		else
+			ucidef_set_interface "lan" device "$lan_dev" protocol "static" \
+				ipaddr "192.168.9.1" netmask "255.255.255.0"
+		fi
+		;;
+	*)
+		ucidef_set_interface "lan" device "$lan_dev" protocol "static" \
+			ipaddr "192.168.9.1" netmask "255.255.255.0"
+		;;
+	esac
 	;;
 *)
 	echo "Unsupported hardware. Network interfaces not initialized"

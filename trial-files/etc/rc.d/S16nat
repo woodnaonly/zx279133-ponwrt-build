@@ -1,0 +1,120 @@
+#!/bin/sh
+# Trial-only: turn the RAM-booted mainline system into a lab router.
+#
+# The diagnostic script S15trial puts 192.168.9.1/24 on every netdev it finds,
+# which is what makes the board reachable on the bench - but it also puts it
+# on the port that is supposed to be the WAN, and a WAN with a static address
+# never gets a lease.  This script undoes that on one device and does the
+# rest of a router's job:
+#
+#   * the WAN port takes a DHCP lease from whatever is upstream;
+#   * the LAN port runs a DHCP server and is the 192.168.9.0/24 segment;
+#   * forwarding is on and the WAN side is masqueraded, so a client on the
+#     LAN can reach the upstream;
+#   * everything that proves it - addresses, routes, the NAT ruleset and its
+#     counters - is printed into kmsg, which is where the rest of this
+#     round's evidence lives.
+#
+# Which device is which is decided by what the kernel actually created:
+#   lan1 (or the first lanN)  the LAN, with the bench's 192.168.9.x segment
+#   lan2 (or the second lanN) the WAN, with a DHCP lease
+# and if the per-port netdevs are not there, the flat conduit is the LAN and
+# there is no WAN to speak of, which is said out loud rather than hidden.
+#
+# Nothing here writes flash.  It is a trial script and it only configures the
+# running system.
+LAN=""
+WAN=""
+for d in lan1 lan3 lan4; do
+	[ -e "/sys/class/net/$d" ] && [ -z "$LAN" ] && LAN="$d"
+done
+[ -n "$LAN" ] || { [ -e /sys/class/net/lan-cpu0 ] && LAN="lan-cpu0"; }
+[ -n "$LAN" ] || { [ -e /sys/class/net/eth0 ] && LAN="eth0"; }
+for d in lan2 lan3 lan4; do
+	[ -e "/sys/class/net/$d" ] && [ -z "$WAN" ] && [ "$d" != "$LAN" ] && WAN="$d"
+done
+
+echo "trial: nat lan=$LAN wan=$WAN" >/dev/kmsg
+
+ip link set "$LAN" up 2>/dev/null
+ip addr replace 192.168.9.1/24 dev "$LAN" 2>/dev/null
+
+if [ -n "$WAN" ]; then
+	# The diagnostic script put the bench address on the WAN as well; a
+	# static address on the WAN is exactly what stops it from taking a
+	# lease, so it goes.
+	ip addr flush dev "$WAN" 2>/dev/null
+	ip link set "$WAN" up 2>/dev/null
+	if command -v udhcpc >/dev/null 2>&1; then
+		echo "trial: nat: udhcpc on $WAN" >/dev/kmsg
+		udhcpc -i "$WAN" -n -q -t 5 -T 3 -s /bin/true >/tmp/udhcpc.log 2>&1 &
+		sleep 12
+		cat /tmp/udhcpc.log >/dev/kmsg 2>&1
+	else
+		echo "trial: nat: no udhcpc in this image" >/dev/kmsg
+	fi
+fi
+
+# The LAN side's DHCP server.  dnsmasq is the one the image ships; if it is
+# not there, the LAN still has an address and the board is still reachable.
+if command -v dnsmasq >/dev/null 2>&1; then
+	killall dnsmasq 2>/dev/null
+	cat > /tmp/dnsmasq-trial.conf <<EOF
+interface=$LAN
+dhcp-range=192.168.9.100,192.168.9.200,255.255.255.0,12h
+dhcp-option=3,192.168.9.1
+dhcp-option=6,192.168.9.1
+port=0
+EOF
+	dnsmasq -C /tmp/dnsmasq-trial.conf >/dev/kmsg 2>&1 &
+	sleep 2
+	echo "trial: nat: dnsmasq serving $LAN" >/dev/kmsg
+else
+	echo "trial: nat: no dnsmasq in this image" >/dev/kmsg
+fi
+
+# Forwarding and the NAT.  nftables is what mainline's fw4 uses, and the
+# plan asks for its counters, so nft is preferred; iptables is the fallback
+# when the image has no nft.
+echo 1 > /proc/sys/net/ipv4/ip_forward 2>/dev/null
+if command -v nft >/dev/null 2>&1; then
+	nft -f - >/dev/kmsg 2>&1 <<EOF
+table ip nat {
+	chain postrouting {
+		type nat hook postrouting priority 100; policy accept;
+		oifname "$WAN" masquerade
+	}
+}
+EOF
+	echo "trial: nat: nft masquerade on $WAN" >/dev/kmsg
+elif command -v iptables >/dev/null 2>&1; then
+	iptables -t nat -A POSTROUTING -o "$WAN" -j MASQUERADE 2>/dev/null
+	echo "trial: nat: iptables masquerade on $WAN" >/dev/kmsg
+else
+	echo "trial: nat: neither nft nor iptables in this image" >/dev/kmsg
+fi
+
+# The proof, in one place.
+{
+	echo "trial: nat evidence"
+	ip -br addr 2>/dev/null
+	echo "--- routes ---"
+	ip route 2>/dev/null
+	echo "--- forwarding ---"
+	cat /proc/sys/net/ipv4/ip_forward 2>/dev/null
+	if command -v nft >/dev/null 2>&1; then
+		echo "--- nft ruleset ---"
+		nft list ruleset 2>/dev/null
+		echo "--- nft counters ---"
+		nft list chain ip nat postrouting 2>/dev/null
+	fi
+	if command -v iptables >/dev/null 2>&1; then
+		echo "--- iptables nat ---"
+		iptables -t nat -L -n -v 2>/dev/null
+	fi
+	echo "--- neighbours ---"
+	ip neigh 2>/dev/null
+	echo "trial: nat evidence end"
+} >/dev/kmsg 2>&1
+
+exit 0
