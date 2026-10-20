@@ -41,12 +41,21 @@
 **未证/未知**：光纤有没有插、能否注册（`pon` rx 恒 0）；eth2 对应面板哪只 RJ45（`tools/jackmap.sh` 正在记）；
 9132 是否把 eth2/eth3 划在别的硬件 VLAN（隔离只证到"不泄进 LAN 泛洪域"）。
 
+**23:08–23:16 复核（写这份文档之后又跑了一次）**：`192.168.9.1` 断电前仍 4/4 通（avg 2 ms）；
+23:14:51 起连续 `NO-REPLY` → 又一次断电，23:16:05 恢复且**计数已归零**（eth1 rx 从 40 万掉回 1.6 万）
+⇒ 计数器每次断电重启，**做增量必须限定在同一次开机内**。
+断电前 `jackmap.log` 连续样本里 **eth2 tx 每 22 s 涨约 2.4 kB（udhcpc 在重试），rx 恒 0**，eth0 rx/tx 全冻结，
+eth1 是唯一有来有回的口。断电后直接实测过：eth2 `rx_bytes=0`、`tx_bytes` 5692→7060（22 包）——
+**上行线仍未插入任何一只口**。这一条不解决，路线 D 的"实测出网"永远读不到结果。
+
 ---
 
 ## 2. 物理与时间约束（只有机主能配合，别绕）
 
-- 板子插在**智能插座**上，**每 ~15.5–16 分钟断电 30 秒**。实测落点：`21:56 / 22:12 / 22:28 / 22:43`，
+- 板子插在**智能插座**上，**每 ~15.5–16 分钟断电 30 秒**。实测落点：`21:56 / 22:12 / 22:28 / 22:43 / 23:14`
+  （`jackmap.log` 从 23:14:51 起连续 `NO-REPLY`，ssh 同时 `Connection timed out`），
   **不是整刻钟**，别按 :15/:30/:45 计划。进 U-Boot 只能靠这个断电窗口。
+  锚点会随插座自己的周期漂移，**每轮开始前用 `jackmap.log` 的 `NO-REPLY` 重新对一次表**。
 - **机主是唯一的物理传感器**。要人挪线/看灯/按 RESET，就明确地提出来；不可逆步骤（写 flash、断电时机）
   默认**先要批准**，但机主确实会批。
 - 子代理边界：**不许碰 ONU/串口，不许读 `C:\UGit\SSH`**；而且子代理会**编造板子的实时状态**，
@@ -62,8 +71,13 @@
 - 已知坑（都踩过）：串口回显会把输入原样打回；**持续 `u` 流穿过 Linux 启动会强制 procd FAILSAFE**；
   被杀的 round 会把 streamer 变孤儿；`tail -c +N` 看不到"已经是最后一行"的 prompt（先 `send 'version'` 探一下）；
   U-Boot 里只有 `md`，没有 `echo`/rdreg。
-- PC 侧判据：`ping -S 192.168.9.25 <target>`（**必须绑源**）；Windows `arp -a` 输出是 GBK、MAC 全横线、
-  回复行是大写 `TTL=`（大小写/分隔符踩过两次）；`tools/pcrxwatch.ps1 -Seconds N -Every 5` 看 RX 增量。
+- PC 侧判据：`ping -S 192.168.9.25 <target>`（**必须绑源**；Windows 是 `-w` 毫秒、`-n` 次数，写成 `-W 1500 4` 会报"
+  值超出范围"而一个包不发）；Windows `arp -a` 输出是 GBK、MAC 全横线、回复行是大写 `TTL=`（大小写/分隔符踩过两次）；
+  `tools/pcrxwatch.ps1 -Seconds N -Every 5` 看 RX 增量。
+- `tools/jackmap.sh` 的 `rx=`/`tx=` **都是字节**，不是包：`/proc/net/dev` 行首有空格 → `cut -d" " -f1` 得到空串，
+  于是 `f3=rx_bytes`、`f11=tx_bytes`（不是 rx_packets）。**注意别用 `awk` 复核**——`awk` 默认会跳过行首空白，
+  它的 `$11` 是 `tx_packets`，跟 `cut -f11` 差一位（23:16 就在这儿差点把自己骗过去，改回 `cut` 才对齐）。
+  所以"tx 一直涨、rx 恒 0"只说明**本端在发、对面没回**，不能读成"链路有流量"。
 - 板子侧 applet 现状（**很重要，容易做出假阴性**）：busybox **没有** `pkill`/`arp`/`timeout`/`od`/`stat`/`nohup`/
   `--list`；`killall` 有；`ping` **没有** `-b`/`-f`，`-i SECS` 只吃**整数**（`-i 0.1` 会一帧不发就报错）；
   `setsid` 有（要分离进程用它）。
@@ -77,9 +91,15 @@
 
 ## 4. 「新内核 ImmortalWrt」的三条现实路线（附判据）
 
-> ImmortalWrt 是 OpenWrt 的分支（软件包更全，中文生态好）。**它没有 ZX279133 这个 target**，所以
-> "ImmortalWrt + 新内核"实际等于：**用 ImmortalWrt 的 userland/rootfs 生态 + 我们自己出的 kernel/dtb**，
-> 走的还是本项目已经建好的那套 CI 管线。
+> **别自己发明构建路**：`ci-build-repo/.github/workflows/build-sk-d840n.yml` 已经就是"ImmortalWrt + 新内核"
+> 这条线的载体，头部注释写得很清楚：`base = cnjn/ImmortalWrt`（分支 `sr1010-zx279133`——`target/linux/zte/zx279133`
+> 是**这条分支**带来的，不是上游 ImmortalWrt master；本机没有 openwrt/immortalwrt 的检出，所以这句只能算对 workflow
+> env 的直读，别当成已核实过上游）、`kernel = cnjn/linux-mainline-zte-zxslc-sr1010`
+> `6.18.38`（`KERNEL_SHA` 已 pin）、`format = huxiangjs/SK-D840N-OpenWRT 证明过的 flash 布局`。
+> `mode=flash` 出的就是 `uImage + dtb.bin + rootfs.jffs2` 三件，正好对应 `mtd2/mtd3/mtd5`；
+> `mode=initramfs` 出 RAM FIT，用来 kexec 试跑、不动 flash。
+> **它构建的是下面路线 B 的那个东西**，而且已经在出 kit（75/76/77/78/79/80，逐 kit 的寄存器判据在 `docs/11`）。
+> 所以 §4 的 A/B 差别不在"能不能构建"，而在**产物在板上载不载流**。
 
 ### 4.0 新内核的出处，以及"为什么不能简单移植"（机主 2026-10-20 23:05 明确）
 
@@ -121,9 +141,18 @@
 - 判据：`verify_router.sh` 5/5 **且**至少两次纯冷启动复现；`uname -a`、`/proc/cmdline`、`lsmod` 记录清楚是哪套在跑。
 
 **B. ImmortalWrt + mainline 6.18.x（研究性，会撞墙）**
+- **构建侧其实已经通了**：`build-sk-d840n.yml`（`mode=both`/`flash`）就能出成品，触发方式是 `workflow_dispatch`，
+  或 push 命中 `build-sk-d840n.yml` / `kernel-overlays/**` / `overlays/**` / `configs/sk-d840n*` /
+  `scripts/configure-sk-d840n.sh` / `templates/**`（改文档不会触发）。产物自带 release 指针
+  `skd840n_<mode>_<run_number>_<run_id>`。
 - 已知硬缺口：9132 UNI 驱动（无）+ eth0 数据通路（未通）。**不解决这两条，刷进去就是"只有 eth0、且不带流量"**。
+- kit 75→80 的实际推进记录在 `docs/11`：三处寄存器值、RX 中断路由（`+0x2c8`）与 `NAPI_MASK` 加宽都**已在硬件里读到落地**，
+  但 RX 中断计数仍为 0 ⇒ 路由/掩码这一族已被否证。**把它当成"下一条假设"而不是"配置没配对"**。
 - 若仍要做：先在**当前** mainline 分支上把 `docs/13` 的 TM 归因做完（CPU 出口列 ≠ 期望列 → 找 NP 端口映射），
   并且**用独立的 root**（不要和 4.19 共用一个 jffs2，见 §0.2）。
+- **顺带说明与路线 A 的拼接点**：路线 B 的 `rootfs.jffs2` 里装的是 ImmortalWrt 的 userland + 6.18 的 modules。
+  如果只想借用它的 rootfs 而保留能载流的 4.19 内核（= 路线 A），**必须**同时带上
+  `/lib/modules/4.19.136+/` 那 39 个厂商 `.ko`，否则 LAN 桥建不起来。
 - 参考来源：`docs/09`/`docs/10`/`docs/11` 的 IDM/NP 寄存器对照、U-Boot 的 `idm_tx_debug`/`idm_rx_debug`
   与 `xmac_test … 0 2`（见记忆条目 *U-Boot vendor debug CLI*）；上游仓见记忆 *cnjn ZX279133 upstream repos*、
   *huxiangjs/SK-D840N-OpenWRT release v2.0*。
@@ -177,7 +206,9 @@
   `ci-build-repo/scripts/configure-sk-d840n.sh`（符号 pin）、
   `ci-build-repo/tests/kernelsrc/arch_arm64_boot_dts_zte_zx279133-sr1010.dts`（SR1010 基线 dts，另有
   `staging/src/zx279133-sr1010.dts`）、`staging/src/fork-SR1010_MTD_WRITE_ACCESS.md`（MTD 写权限说明）、
-  `.github/workflows/build-sr1010.yml` 与 `configs/sr1010-extra.config`。
+  `.github/workflows/build-sk-d840n.yml`（**本板这条线的主管线**：ImmortalWrt base + 6.18.38 内核 + overlay，
+  `mode=initramfs|flash|both`）、`.github/workflows/build-sr1010.yml` 与 `configs/sr1010-extra.config`（SR1010 基线，
+  别拿它当本板的产物）。
   注意还存在一份工作副本 **`ci-wanport/`**（含同名 `build-sr1010.yml`/`configs`/`tests`），接手前先确认改的是哪一个。
 - 数据：`device-dumps/`（**全分区导出，242 MB**，用户原始要求里就点名要它）、`restore_set/`（原厂五件套）、
   `backups/`、`staging/vendor-full/`（厂商 initramfs 全量 + `MANIFEST-links.txt`）、
@@ -189,5 +220,7 @@
 板子已刷好并可作为 LAN 路由器使用（4.19 厂商内核 + OpenWrt 24.10.8 root，5/5 验证、冷启动可复现）。
 新目标是「ImmortalWrt + 新内核」：**先选路线**（§4 的 A 或 B）。A 只换 root、几乎无风险；
 B 必须先解决 9132 UNI 驱动与 eth0 的 NP 数据通路（**这两条已被多轮实测确认不通**，别当成配置问题）。
+**构建不是瓶颈**：`build-sk-d840n.yml` 已经能出 ImmortalWrt + mainline 6.18.38 的 flash 三件套（kit 75–80 已发过），
+瓶颈是**产物在板上不载流**——所以先决定要不要接受"刷进去只有一张嘴能看见的 eth0"。
 无论 A/B：**换内核要连 rootfs 一起出**，别和 4.19 共用同一个 jffs2 根；**刷 root 必须先进 RAM 环境**。
 所有构建走 CI（push main = 触发），本机不编译。缺什么就明确向机主要：插线、看灯、按 RESET、批准写 flash。
