@@ -198,20 +198,38 @@ adopt_wan() {
 		[ "$q" = "$p" ] && continue
 		lan_list="$lan_list${lan_list:+ }$q"
 	done
+	# The image writes its own configuration in whatever format it uses,
+	# and this one writes it as JSON: /lib/functions/uci-defaults.sh in
+	# this image is built on json_select_object, and the generated
+	# /etc/config/network is a JSON object with a "ports" array.  Rewriting
+	# that file with "uci set" is not guaranteed to be accepted, so the
+	# image's own helpers are used first - they are what wrote the file in
+	# the first place - and uci is only the fallback.
+	if [ -f /lib/functions/uci-defaults.sh ]; then
+		(
+			. /lib/functions/uci-defaults.sh
+			board_config_update
+			ucidef_set_interface "lan" device "$lan_list" protocol static \
+				ipaddr "$SELF" netmask 255.255.255.0
+			ucidef_set_interface "wan" device "$p" protocol dhcp
+			board_config_flush
+		) >/dev/kmsg 2>&1
+	fi
 	if command -v uci >/dev/null 2>&1; then
-		# The list of the bridge's ports is spelled "device" in some
-		# OpenWrt releases and "ports" in others; whichever this image
-		# uses is the one that is rewritten.
-		if uci -q get network.lan.ports >/dev/null 2>&1; then
-			uci set network.lan.ports="$lan_list" 2>/dev/null
-		else
-			uci set network.lan.device="$lan_list" 2>/dev/null
-		fi
+		uci set network.lan.ports="$lan_list" 2>/dev/null
+		uci set network.lan.device="$lan_list" 2>/dev/null
 		uci set network.wan.device="$p" 2>/dev/null
 		uci commit network 2>/dev/null
-		/etc/init.d/network reload >/dev/kmsg 2>&1
-		echo "trial: nat: the WAN is now $p (lan is $lan_list)" >/dev/kmsg
 	fi
+	/etc/init.d/network reload >/dev/kmsg 2>&1
+	# The reload rebuilds the bridge from the configuration, so the port
+	# that is to be the WAN has to be out of it afterwards, whatever the
+	# configuration ended up saying.
+	ip link set "$p" nomaster 2>/dev/null
+	ip link set "$p" up 2>/dev/null
+	echo "trial: nat: the WAN is now $p (lan is $lan_list)" >/dev/kmsg
+	echo "trial: nat: the configuration says wan=$(uci -q get network.wan.device 2>/dev/null)" >/dev/kmsg
+	echo "trial: nat: the bridge says $(brctl show 2>/dev/null | tr '\n' ' ')" >/dev/kmsg
 }
 
 search_others() {
@@ -294,11 +312,15 @@ if [ -n "$WAN" ]; then
 		i=$((i + 1))
 		sleep 1
 	done
-	if ! has_addr "$WAN" && [ -z "$FORCED" ]; then
-		# A forced upstream belongs to the image's own network service -
-		# adopt_wan handed it over and the reload started its client - so
-		# a second client of ours on the same port would race it for the
-		# lease and overwrite the address it got.
+	if ! has_addr "$WAN"; then
+		# A client of our own runs on the WAN whatever the image's own
+		# network service does with it, for two reasons: the forced
+		# upstream is handed over with a uci rewrite, and this image's
+		# /etc/config/network is written in the json form that the
+		# uci library does not always accept a rewrite of; and a lease
+		# from the same server is the same lease, so a second client
+		# cannot fight the first one for the address - it replaces the
+		# same address with the same address.
 		if command -v udhcpc >/dev/null 2>&1; then
 			echo "trial: nat: udhcpc on $WAN" >/dev/kmsg
 			udhcpc -i "$WAN" -f -t 0 -T 5 -s /tmp/udhcpc-trial.sh \
