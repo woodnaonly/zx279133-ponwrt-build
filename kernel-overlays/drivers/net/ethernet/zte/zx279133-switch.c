@@ -56,19 +56,28 @@
 #include <linux/bitfield.h>
 #include <linux/delay.h>
 #include <linux/device.h>
+#include <linux/etherdevice.h>
 #include <linux/ethtool.h>
 #include <linux/iopoll.h>
 #include <linux/mdio.h>
 #include <linux/mii.h>
 #include <linux/mod_devicetable.h>
 #include <linux/module.h>
+#include <linux/netdev.h>
 #include <linux/of.h>
 #include <linux/of_mdio.h>
+#include <linux/of_net.h>
 #include <linux/phy.h>
 #include <linux/phy/phy.h>
+#include <linux/phylink.h>
 #include <linux/platform_device.h>
 #include <linux/pm_runtime.h>
+#include <linux/rtnetlink.h>
 #include <linux/slab.h>
+#include <linux/switchdev.h>
+
+#include <net/dsa.h>
+#include <net/dsa_zx279133_rtl8372n.h>
 
 #include "zx279133-lan.h"
 
@@ -144,10 +153,44 @@
 #define ZX279133_SWITCH_UNI_PORT_MIN	0
 #define ZX279133_SWITCH_UNI_PORT_MAX	3
 
+/*
+ * The four UNI ports as DSA ports, and the transport VID that carries them.
+ *
+ * The tree already ships a tagger for this SoC's LAN conduit -
+ * net/dsa/tag_zx279133_rtl8372n.c, built as CONFIG_NET_DSA_TAG_ZX279133_RTL8372N -
+ * and it puts the transport VID in an 802.1Q header on the conduit:
+ *
+ *	VID = ZX279133_RTL8372N_TRANSPORT_VID_BASE + port	(55 + port)
+ *
+ * The RTL8372N's four user ports are DSA ports 4..7, so the tagger's VIDs
+ * are 59..62 - and those are exactly the VIDs the NPPT driver programs as
+ * the untagged SVID (the PVID) of the 9132's PPU ports 1..4
+ * (zx279133_9132_port_init(): ZX279133_LAN_TRANSPORT_VID_MIN + (ppu - 1)).
+ * So the same tagger, the same VIDs and the same DSA port numbers serve
+ * this board, and DSA port N + 3 is the 9132's PPU port N.
+ *
+ * The tagger is not renamed: it is a transport-VID tagger that the tree
+ * happens to have named after the switch it was written for, and its
+ * protocol number is already in the tree's include/net/dsa.h.
+ */
+#define ZX279133_SWITCH_DSA_PORT_MIN	4
+#define ZX279133_SWITCH_DSA_PORT_MAX	7
+#define ZX279133_SWITCH_DSA_NUM_PORTS	8
+/* The CPU port: the one that faces the conduit. */
+#define ZX279133_SWITCH_DSA_CPU_PORT	0
+/* The 9132's PPU port behind a DSA port: DSA 4..7 are PPU 1..4. */
+#define ZX279133_SWITCH_DSA_PPU(port)	((port) - \
+					 (ZX279133_SWITCH_DSA_PORT_MIN - 1))
+/* The 9132's internal PHY behind a DSA port: PPU 1..4 are PHY 0x0a..0x0d. */
+#define ZX279133_SWITCH_DSA_PHY(port)	(0x0a + \
+					 (port) - ZX279133_SWITCH_DSA_PORT_MIN)
+
 struct zx279133_switch {
 	struct zx279133_lan_service *service;
 	struct phy *serdes;
 	struct mdio_device *xpcs_mdiodev;
+	struct mii_bus *uni_mdio;
+	struct dsa_switch *ds;
 	bool datapath_held;
 	bool xpcs_runtime_held;
 	bool xpcs_configured;
@@ -155,6 +198,7 @@ struct zx279133_switch {
 	bool datapath_enabled;
 	bool serdes_powered;
 	bool usxgmii;
+	bool dsa_registered;
 	u16 saved_vend2_bmcr;
 	u16 saved_vend2_an_ctrl;
 	u16 saved_xpcs_bypass;
@@ -646,11 +690,308 @@ static void zx279133_switch_release(void *data)
 	}
 }
 
+/*
+ * The 9132's four UNI ports as DSA user ports.
+ *
+ * The shape of this is the tree's RTL8372N driver: the same conduit, the
+ * same transport VID, the same DSA port numbers, the same service calls.
+ * Only the register writes differ, and for the 9132 there are almost none,
+ * because the 9132 forwards on its own - it learns source MACs by itself,
+ * and its port attributes are programmed by the NPPT driver over the PPU's
+ * indirect window (zx279133_9132_port_init()).
+ */
+
+/*
+ * The link state of one UNI port, read from that port's own internal PHY.
+ * The four PHYs are the 9132's, on the SoC's MDIO controller #0, at
+ * 0x0a..0x0d.  BMSR's link bit is latched, so it has to be read twice.
+ */
+static int zx279133_switch_uni_link(struct zx279133_switch *priv, int port)
+{
+	int addr, bmsr;
+
+	if (!priv->uni_mdio)
+		return -1;
+
+	addr = ZX279133_SWITCH_DSA_PHY(port);
+	mdiobus_read(priv->uni_mdio, addr, MII_BMSR);
+	bmsr = mdiobus_read(priv->uni_mdio, addr, MII_BMSR);
+	if (bmsr < 0)
+		return -1;
+
+	return !!(bmsr & BMSR_LSTATUS);
+}
+
+/*
+ * phylink asks the driver for the link state of a port it has no PHY to
+ * poll.  The 9132's ports do have PHYs - internal ones - so the answer is
+ * read there.  DSA sets poll_fixed_state when the driver provides this, so
+ * phylink asks again and again, and a cable that arrives after boot is
+ * noticed without anything else having to be done.
+ */
+static void zx279133_switch_phylink_fixed_state(struct dsa_switch *ds, int port,
+						 struct phylink_link_state *state)
+{
+	struct zx279133_switch *priv = ds->priv;
+	int link;
+
+	if (port == ZX279133_SWITCH_DSA_CPU_PORT) {
+		/* The CPU port's fixed link is in the device tree. */
+		state->link = true;
+		state->speed = SPEED_1000;
+		state->duplex = DUPLEX_FULL;
+		return;
+	}
+
+	if (port < ZX279133_SWITCH_DSA_PORT_MIN ||
+	    port > ZX279133_SWITCH_DSA_PORT_MAX) {
+		state->link = false;
+		return;
+	}
+
+	link = zx279133_switch_uni_link(priv, port);
+	state->link = link == 1;
+	state->speed = SPEED_1000;
+	state->duplex = DUPLEX_FULL;
+}
+
+static void zx279133_switch_phylink_get_caps(struct dsa_switch *ds, int port,
+					     struct phylink_config *config)
+{
+	if (port == ZX279133_SWITCH_DSA_CPU_PORT) {
+		/* The CPU port is the SoC's own SGMII lane at 1G. */
+		__set_bit(PHY_INTERFACE_MODE_SGMII,
+			  config->supported_interfaces);
+		config->mac_capabilities = MAC_1000FD;
+		return;
+	}
+
+	if (port < ZX279133_SWITCH_DSA_PORT_MIN ||
+	    port > ZX279133_SWITCH_DSA_PORT_MAX)
+		return;
+
+	/*
+	 * The ports are internal to the 9132: the PHY is on the far side of
+	 * the switch's own fabric, not on a link the SoC drives.  The tree's
+	 * RTL8372N driver describes its four internal ports the same way.
+	 */
+	__set_bit(PHY_INTERFACE_MODE_INTERNAL,
+		  config->supported_interfaces);
+	config->mac_capabilities = MAC_10 | MAC_100 | MAC_1000FD;
+	config->lpi_capabilities = MAC_100FD | MAC_1000FD;
+}
+
+static enum dsa_tag_protocol
+zx279133_switch_get_tag_protocol(struct dsa_switch *ds, int port,
+				  enum dsa_tag_protocol conduit_proto)
+{
+	return DSA_TAG_PROTO_ZX279133_RTL8372N;
+}
+
+/*
+ * Whether a port's traffic is LAN traffic or WAN traffic is the NPPT's
+ * business, and the NPPT keeps one set of tables per transport VID.  This
+ * is the tree's rule: a port that has joined a bridge is a LAN port, and a
+ * port that has left it is a WAN port.
+ */
+static int zx279133_switch_port_bridge_join(struct dsa_switch *ds, int port,
+					     struct dsa_bridge bridge,
+					     bool *tx_fwd_offload,
+					     struct netlink_ext_ack *extack)
+{
+	struct zx279133_switch *priv = ds->priv;
+
+	return zx279133_lan_service_port_wan_set(priv->service,
+						  ZX279133_RTL8372N_TRANSPORT_VID_BASE + port,
+						  false);
+}
+
+static void zx279133_switch_port_bridge_leave(struct dsa_switch *ds, int port,
+					      struct dsa_bridge bridge)
+{
+	struct zx279133_switch *priv = ds->priv;
+
+	zx279133_lan_service_port_wan_set(priv->service,
+					  ZX279133_RTL8372N_TRANSPORT_VID_BASE + port,
+					  true);
+}
+
+/*
+ * The port's PHY is the port's switch: the vendor's smac_set_port_enable()
+ * is a PHY power-down, and that is what DSA asks for here.  The NPPT
+ * driver already powered these four PHYs up when it probed, so this is
+ * the same write again, at the moment the netdev is opened.
+ */
+static int zx279133_switch_port_enable(struct dsa_switch *ds, int port,
+					struct phy_device *phy)
+{
+	struct zx279133_switch *priv = ds->priv;
+	int addr, bmcr;
+
+	if (port < ZX279133_SWITCH_DSA_PORT_MIN ||
+	    port > ZX279133_SWITCH_DSA_PORT_MAX)
+		return -EINVAL;
+	if (!priv->uni_mdio)
+		return 0;
+
+	addr = ZX279133_SWITCH_DSA_PHY(port);
+	bmcr = mdiobus_read(priv->uni_mdio, addr, MII_BMCR);
+	if (bmcr < 0)
+		return bmcr;
+
+	bmcr &= ~BMCR_PDOWN;
+	mdiobus_write(priv->uni_mdio, addr, MII_BMCR, (u16)bmcr);
+
+	return 0;
+}
+
+/*
+ * Deliberately not a power-down.  The vendor stops the PHY when the port
+ * goes down, but mainline's DSA port lifecycle is not the vendor's, and a
+ * PHY that a stray close left powered down is a port that never comes
+ * back.  The PHY stays up; the port's link state is reported from it.
+ */
+static void zx279133_switch_port_disable(struct dsa_switch *ds, int port)
+{
+}
+
+/*
+ * The 9132's VLAN tables are not written here.  What the ports do have is
+ * a PVID: the NPPT driver programs each UNI port's untagged SVID to that
+ * port's transport VID, the CPU port puts that VID on the frames it sends,
+ * and the tree's tagger strips it again on the way in.  The bridge's own
+ * VLANs are a Linux-side matter and the switch does not have to know them.
+ */
+static int zx279133_switch_port_vlan_filtering(struct dsa_switch *ds, int port,
+						bool vlan_filtering,
+						struct netlink_ext_ack *extack)
+{
+	return 0;
+}
+
+static int zx279133_switch_port_vlan_add(struct dsa_switch *ds, int port,
+					 const struct switchdev_obj_port_vlan *vlan,
+					 struct netlink_ext_ack *extack)
+{
+	return 0;
+}
+
+static int zx279133_switch_port_vlan_del(struct dsa_switch *ds, int port,
+					 const struct switchdev_obj_port_vlan *vlan)
+{
+	return 0;
+}
+
+static void zx279133_switch_port_stp_state_set(struct dsa_switch *ds, int port,
+						u8 state)
+{
+}
+
+static const struct dsa_switch_ops zx279133_switch_dsa_ops = {
+	.get_tag_protocol = zx279133_switch_get_tag_protocol,
+	.port_bridge_join = zx279133_switch_port_bridge_join,
+	.port_bridge_leave = zx279133_switch_port_bridge_leave,
+	.port_enable = zx279133_switch_port_enable,
+	.port_disable = zx279133_switch_port_disable,
+	.port_vlan_filtering = zx279133_switch_port_vlan_filtering,
+	.port_vlan_add = zx279133_switch_port_vlan_add,
+	.port_vlan_del = zx279133_switch_port_vlan_del,
+	.port_stp_state_set = zx279133_switch_port_stp_state_set,
+	.phylink_get_caps = zx279133_switch_phylink_get_caps,
+	.phylink_fixed_state = zx279133_switch_phylink_fixed_state,
+};
+
+/*
+ * The conduit is the netdev the CPU port's frames run on, and DSA needs it
+ * to exist before it can register: a switch whose CPU port has no conduit
+ * is a switch with no way in.  The device tree says which netdev it is -
+ * the CPU port node's "ethernet" property - and this is the same lookup
+ * DSA itself does.  Doing it here, before anything else is claimed, is what
+ * keeps a missing conduit from turning into a deferred probe that would
+ * take the shared datapath twice.
+ */
+static bool zx279133_switch_conduit_present(struct device *dev)
+{
+	struct netdev_tracker tracker;
+	struct device_node *ports, *port;
+	bool present = false;
+
+	ports = of_get_child_by_name(dev->of_node, "ports");
+	if (!ports)
+		return false;
+
+	for_each_available_child_of_node(ports, port) {
+		struct device_node *ethernet;
+		struct net_device *conduit;
+
+		ethernet = of_parse_phandle(port, "ethernet", 0);
+		if (!ethernet)
+			continue;
+
+		rtnl_lock();
+		conduit = of_find_net_device_by_node(ethernet);
+		if (conduit) {
+			netdev_hold(conduit, &tracker, GFP_KERNEL);
+			put_device(&conduit->dev);
+		}
+		rtnl_unlock();
+		of_node_put(ethernet);
+
+		if (conduit) {
+			netdev_put(conduit, &tracker);
+			present = true;
+		}
+		break;
+	}
+	of_node_put(ports);
+
+	return present;
+}
+
+static int zx279133_switch_dsa_register(struct device *dev,
+					 struct zx279133_switch *priv)
+{
+	struct dsa_switch *ds;
+	int ret;
+
+	ds = devm_kzalloc(dev, sizeof(*ds), GFP_KERNEL);
+	if (!ds)
+		return -ENOMEM;
+
+	ds->dev = dev;
+	ds->num_ports = ZX279133_SWITCH_DSA_NUM_PORTS;
+	ds->configure_vlan_while_not_filtering = true;
+	ds->max_num_bridges = ZX279133_SWITCH_DSA_PORT_MAX -
+			      ZX279133_SWITCH_DSA_PORT_MIN + 1;
+	ds->ops = &zx279133_switch_dsa_ops;
+	ds->priv = priv;
+	priv->ds = ds;
+
+	ret = dsa_register_switch(ds);
+	if (ret) {
+		priv->ds = NULL;
+		return dev_err_probe(dev, ret,
+				     "failed to register the 9132 as a DSA switch\n");
+	}
+
+	priv->dsa_registered = true;
+	dev_info(dev,
+		 "registered the 9132 as a DSA switch: ports %u..%u carry the transport VIDs %u..%u\n",
+		 ZX279133_SWITCH_DSA_PORT_MIN, ZX279133_SWITCH_DSA_PORT_MAX,
+		 ZX279133_RTL8372N_TRANSPORT_VID_BASE +
+		 ZX279133_SWITCH_DSA_PORT_MIN,
+		 ZX279133_RTL8372N_TRANSPORT_VID_BASE +
+		 ZX279133_SWITCH_DSA_PORT_MAX);
+
+	return 0;
+}
+
 static int zx279133_switch_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
 	struct device_node *parent_np;
 	struct device_node *pcs_np;
+	struct device_node *mdio_np;
 	struct zx279133_switch *priv;
 	u32 status;
 	int ret;
@@ -671,6 +1012,20 @@ static int zx279133_switch_probe(struct platform_device *pdev)
 	if (!zx279133_lan_service_valid(priv->service))
 		return dev_err_probe(dev, -EINVAL,
 				     "incomplete NPPT LAN service\n");
+
+	/*
+	 * The 9132's four internal PHYs are on the SoC's MDIO controller #0,
+	 * which the parent names.  Their link state is the port's link state,
+	 * so this bus is what the DSA ports report from.
+	 */
+	mdio_np = of_parse_phandle(parent_np, "zx279133,uni-phy-bus", 0);
+	if (mdio_np) {
+		priv->uni_mdio = of_mdio_find_bus(mdio_np);
+		of_node_put(mdio_np);
+	}
+	if (!priv->uni_mdio)
+		dev_warn(dev,
+			 "the 9132's PHY bus is not registered; port link state will be unknown\n");
 
 	ret = zx279133_lan_service_datapath_get(priv->service);
 	if (ret)
@@ -822,6 +1177,30 @@ report:
 		 ((status & 0x3800) == 0x3800) ? "up" : "down",
 		 zx279133_switch_nppt_read(priv, ZX279133_NPPT_XMAC_LINK),
 		 ZX279133_SWITCH_UNI_PORT_MIN, ZX279133_SWITCH_UNI_PORT_MAX);
+
+	/*
+	 * The four jacks as DSA ports.  The conduit has to be there first: a
+	 * DSA switch whose CPU port has no conduit is a switch with no way
+	 * in, and the conduit is the netdev the switch driver on the parent
+	 * registers - so it is asked for by name rather than assumed.
+	 */
+	if (!zx279133_switch_conduit_present(dev)) {
+		dev_err(dev,
+			"the LAN conduit is not registered; the 9132 stays one flat port\n");
+		return 0;
+	}
+
+	ret = zx279133_switch_dsa_register(dev, priv);
+	if (ret) {
+		/*
+		 * The lane and everything it says about itself are already in
+		 * the log above, so a DSA that would not register does not take
+		 * the round's answer with it.
+		 */
+		dev_err(dev, "the 9132 did not register as a DSA switch: %d\n",
+			ret);
+		return 0;
+	}
 
 	return 0;
 

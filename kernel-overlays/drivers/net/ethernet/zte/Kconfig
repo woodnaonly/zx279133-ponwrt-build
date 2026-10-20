@@ -62,6 +62,8 @@ config ZTE_ZX279133_SWITCH
 	select ZTE_ZX279133_LAN_CONDUIT
 	depends on PHY_ZX279133_UNI_SERDES
 	depends on PCS_XPCS
+	depends on NET_DSA
+	select NET_DSA_TAG_ZX279133_RTL8372N
 	help
 	  Build the driver for the LAN switch this board carries, the 9132.
 	  Its CPU port sits on the XMAC0 LAN lane exactly where the RTL8372N's
@@ -69,5 +71,10 @@ config ZTE_ZX279133_SWITCH
 	  and the XPCS0 lane, and programs the switch behind them. The 9132's
 	  own port attributes and its internal PHYs are programmed by the NPPT
 	  driver, which reaches them over the PPU's indirect register window.
+
+	  The four UNI ports are registered as DSA user ports through the
+	  same LAN conduit and the same transport-VID tagger the SR1010's
+	  RTL8372N uses, because the transport VIDs are the same ones this
+	  board's 9132 ports already carry as their PVID.
 
 endif

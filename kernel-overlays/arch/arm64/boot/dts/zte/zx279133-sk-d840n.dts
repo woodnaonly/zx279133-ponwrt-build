@@ -428,6 +428,63 @@
 
 	switch {
 		compatible = "zte,zx279133-switch";
+
+		/*
+		 * The four UNI ports as DSA ports, and the CPU port on the
+		 * conduit.
+		 *
+		 * The port numbers are the tree's RTL8372N numbers on purpose.
+		 * The tagger the tree ships for this SoC's LAN conduit puts the
+		 * transport VID 55 + port on the conduit - 59..62 for ports
+		 * 4..7 - and those are exactly the VIDs the NPPT driver programs
+		 * as the untagged SVID (the PVID) of the 9132's PPU ports 1..4.
+		 * So the tree's tagger, the tree's VIDs and this board's PVIDs
+		 * are one scheme, and DSA port N + 3 is the 9132's PPU port N.
+		 *
+		 * The labels name the 9132's own UNI ports.  Which of the four
+		 * jacks each of them is does not claim a panel order: the
+		 * vendor's own table says only that the test PC is in switch
+		 * port 1, and the panel order is not established.
+		 */
+		ports {
+			#address-cells = <1>;
+			#size-cells = <0>;
+
+			port@4 {
+				reg = <4>;
+				label = "lan1";
+				phy-mode = "internal";
+			};
+
+			port@5 {
+				reg = <5>;
+				label = "lan2";
+				phy-mode = "internal";
+			};
+
+			port@6 {
+				reg = <6>;
+				label = "lan3";
+				phy-mode = "internal";
+			};
+
+			port@7 {
+				reg = <7>;
+				label = "lan4";
+				phy-mode = "internal";
+			};
+
+			port@0 {
+				reg = <0>;
+				ethernet = <&lan_cpu>;
+				phy-mode = "sgmii";
+
+				fixed-link {
+					speed = <1000>;
+					full-duplex;
+				};
+			};
+		};
 	};
 };
 
