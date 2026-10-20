@@ -341,13 +341,43 @@ U-Boot's own bring-up nor mainline touches `+0x490`, whatever is in it at boot i
 firmware left - which is a measurable difference between this board's failing state and the working
 vendor driver, not a guess.
 
-Measured while doing this, on the currently flashed 24.10.8 system (kernel `Booting Linux on physical
-CPU ... [0x410fd034]`, uptime 402 s, eth0 up, `22: 0 0 GICv3 33 Level 190010000.ethernet` count 0,
-(`rx_packets` 0): **the flashed rootfs cannot read MMIO at all.** `/dev/mem` exists
-(`crw------- 1 root root 1, 1`) but `busybox devmem` prints `devmem: applet not found`, `od` is not
-found, and `busybox --list` itself is `applet not found`. So the `dd if=/dev/mem | od` fallback works
-only in the initramfs kits, which do carry devmem. That is why the three words are read from
-`tools/rxproof.sh` (`reg-0bc`, `reg-2c8`, `reg-490`) inside a kit round rather than from the flash.
+Read on the hardware, 15:48-15:50 on the flashed 24.10.8 system (uptime 402 s at the first probe and
+`22: 0 0 GICv3 33 Level 19000000.ethernet` count 0, `rx_packets` 0), and the answer is not what the
+offline diff suggested:
+
+| word | measured | vendor wants | verdict |
+| --- | --- | --- | --- |
+| `idm+0x010` | `0x00000080` | 128 (RUNTIME) | the read path is live: this is exactly what mainline writes |
+| `idm+0x014` | `0x00800080` | `0x00800080` | second confirmation of the same kind |
+| `idm+0x044` | `0x0000f00f` | `0x071ffbfb` | the flashed run-61 kernel, i.e. the pre-#48 routing - as expected |
+| `idm+0x0bc` | `0x00000000` | 0 | **already correct**, no kit needed (read at `0x00b8`, see below) |
+| `idm+0x2c8` | `0x00112233` | field bits[29:24] = `0x12` | **wrong**: the field is `0x00`, so this is the one real divergence |
+| `idm+0x490` | `0x00000000` | 0 | **already correct** - and the zero is real, not an unmapped read: `+0x48c` = `0x01030101` and `+0x498` = `0x02000000` around it |
+
+Two instrument facts, both of which would otherwise have been read as "the register is dead":
+
+- **The flashed rootfs can read MMIO**, but not with the applets I reached for first: `/dev/mem` is
+  present, `busybox devmem` prints `devmem: applet not found`, `od` is not found, and even
+  `busybox --list` is unavailable. The working primitive is the rootfs' own **`/sbin/devmem2`**
+  (76,208 B, Sep 10 15:54 - it came with the community image, and `tools/zkey` has long used it).
+- `devmem2` performs an **8-byte** access whatever type letter is given, so a 4-aligned but not
+  8-aligned address raises `Bus error` - that is why `+0xbc` and `+0x124` failed while `+0xb8` and
+  `+0x120` worked. Read the pair and take the half that is wanted; and note both words come back in
+  one printed value (low 32 bits = the address asked for, high 32 bits = that + 4), which is why
+  `+0x40` prints as `0xf00f07ff0000`.
+
+So the store-only diff produced its first hardware-verdict before any kit ran: one of its two
+candidates was already satisfied and the other is measurably wrong. `zx279133_idm_tx_configure()`
+now does the vendor's `and 0xc0ffffff` / `orr 0x12000000` RMW on `+0x2c8`; the `writel(0, ...)` on
+`+0x490` stays only because writing the value the vendor writes is parity, not a test.
+
+Why `+0x2c8` reads 0x00 in that field is itself the interesting part. docs/09 §4's U-Boot store list
+*does* contain `+0x2c8` with exactly this `and 0xc0ffffff` / `orr 0x12000000` RMW - so the bootloader
+programs it, and by the time anything can read it under Linux the field is gone. Something between
+the two resets that block, and the obvious candidate is mainline's own NP start: which is precisely
+why the vendor's driver writes the word late, in `idm_init()` after its NP bring-up, rather than
+relying on the bootloader. The same reasoning says the fix must live in the bring-up function that
+runs after the NP is started, not in anything inherited from U-Boot.
 
 A scanner bug found on the way, recorded because it hid a real register: the store pattern
 `(?:w\d+|x\d+)` does not match `wzr`/`xzr`, so on the first run `idm_init`'s `str wzr, [x0, #0xbc]`

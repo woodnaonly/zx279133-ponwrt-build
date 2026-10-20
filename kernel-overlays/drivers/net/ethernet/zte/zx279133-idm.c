@@ -1426,6 +1426,20 @@ static void zx279133_idm_tx_configure(struct zx279133_eth *eth)
 	 * a target, so this is placed with the other idm_init() words.
 	 */
 	writel(0, idm + 0x0490);
+	/*
+	 * The other word of the same diff, and the one that is actually wrong on this
+	 * board. The vendor's idm_init() does ldr / and #0xc0ffffff / orr #0x12000000 /
+	 * str here, i.e. field bits[29:24] = 0x12 with everything else preserved. Read
+	 * with /sbin/devmem2 on the flashed mainline (2026-10-20 15:48) this word is
+	 * 0x00112233: the field is 0x00, so neither U-Boot nor mainline leaves it the
+	 * way docs/09 assumed, and docs/09's "do not build a kit for +0x2c8" was based
+	 * on U-Boot's intent rather than on the value hardware ends up holding. The
+	 * read itself is trustworthy: +0x10 came back 0x80 and +0x14 0x00800080, both
+	 * exactly what this driver writes, and the neighbouring words of the two refuted
+	 * candidates (+0xbc = 0, +0x490 = 0 with +0x48c = 0x01030101 and +0x498 =
+	 * 0x02000000) show those two zeros are real register contents.
+	 */
+	writel((readl(idm + 0x02c8) & 0xc0ffffffu) | 0x12000000u, idm + 0x02c8);
 	writel(0x00000080, idm + 0x0124);
 	writel(0x00000f49, idm + 0x03fc);
 	writel(7, idm + 0x05c0);
