@@ -1,7 +1,7 @@
 # 09 - traffic-proven IDM image (2026-10-20 10:54) and mainline's diff against it
 
 This is the reference column for everything RX-related from here on. Captured by `tools/idmband.sh`
-from U-Boot at 10:54:28-10:55:30, **in a boot where the lane demonstrably carried traffic** (`ping
+from U-Boot at 10:54:28-10:55:40, **in a boot where the lane demonstrably carried traffic** (`ping
 192.168.9.25` answered `host 192.168.9.25 is alive`, three times in the same slice). Read-only: 16-word
 `md` chunks, because two 64-word reads in the earlier `tools/idmimage.sh` (10:45) were lost to the
 console relay and a lost read must never be recorded as a zero.
@@ -37,6 +37,10 @@ console relay and a lost read must never be recorded as a zero.
 19280200: 00006000 08002000 00000000 00000000
 192803c0..03e8: 0 ... 192803ec: b0111140
 192803f0: 1450050a 00000000 00000000 00000f49
+19280400: 00000000 00000000 00000000 001ffc00
+19280410: 00000000 00000000 00000000 00000000
+19280420..043c: 0
+19280440: 00000300 00000300 00000300 00000000
 192805c0: 00000067 00000000 0000006d 00000001
 192805d0: 00006000 00002000 0000004b 00000000
 ```
@@ -67,14 +71,16 @@ Source of the right column: `tests/kernelsrc/drivers_net_ethernet_zte_zx279133-i
 | +0x38 | `00001000` | `50000` (0xc350) | |
 | +0x3c | `00000000` | (not written) | the vendor .ko ANDs this word with the TX ring base before storing it |
 | +0x40 | `07ffffff` | `07ffffff` | match |
-| +0x44 | `07ffffff` | `DIRECT_RX_MASK` | check |
+| +0x44 | `07ffffff` | `DIRECT_RX_MASK` = `0x0000f00f` | **diverges** - mainline splits 0xffff into `LOCAL_MASK 0x0ff0` (at +0x50) + `0xf00f` here; the working image holds 0x07ffffff in *both* +0x40 and +0x44 and 0 in +0x48/+0x50 |
 | +0x48 | `00000000` | `0x00ff0000` | |
 | +0x4c | `00000000` | `0` | match |
-| +0x50 | `00000000` | `LOCAL_MASK` | |
+| +0x50 | `00000000` | `LOCAL_MASK` = `0x00000ff0` | |
 | +0x54,+0x58,+0x5c,+0x60 | `06060606 00060606 07070707 07070707` | same | **all four match** |
 | **+0x6c** | **`00000800`** | `0x000007c1` | |
 | **+0x70** | **`000003e8`** (1000) | `IDM_RX_QUEUE_DESC_DEPTH - 1` = 2047 | and the vendor DT says `idm_desc_rx_depth = 0x400` |
 | +0x74 | `00000000` | `0x00000210` | |
+| +0x80,+0x84,+0x88,+0x8c | `00020000`, `00000009`, `00000001`, `00000000` | (not written) | non-zero in a boot that carries traffic with nobody having programmed them - either reset defaults or counters, not config |
+| +0xf4 | `00001000` | (not written) | |
 | +0x90,+0x94 | `0`, `0` | `20`, `1` | |
 | +0xc0 | `0` | `DESC_MODE` = 0 | match |
 | **+0x100** | `00000001` (0x20 in the 10:31 boot) | `BP_REFILL` count | varies with traffic - status, not config |
@@ -89,9 +95,34 @@ Source of the right column: `tests/kernelsrc/drivers_net_ethernet_zte_zx279133-i
 | +0x140,+0x144 | `01111111`, `11111111` | (not written) | |
 | +0x180..+0x19c | `0000004b … 00960096` | (not written) | |
 | +0x3fc | `00000f49` | `0x00000f49` | match |
-| **+0x408,+0x40c** | (band not read this round) | `idm_base + FREE_RING4`, `0x3d00` | read +0x400/+0x410 before changing |
+| **+0x408,+0x40c** | **`0`, `001ffc00`** | `idm_base + FREE_RING4`, `0x3d00` | the working image leaves the fourth free-ring base **0** and holds `0x1ffc00` (2 096 128) in its count, a number that is not a count of any ring in either layout - so +0x40c is not "entries in ring 4", and 0x3d00 there is not a transposed `3400` either. Do not "fix" this pair from the table alone |
 | +0x5c0 | **`00000067`** | `7` | |
 | +0x5c4,+0x5cc | `0`, `00000001` | (not written) | |
+
+## 2b. Which rows of that table are evidence at all (corrected 11:47, from `staging/idmsites.txt`)
+
+`staging/idmsites.txt` is a disassembly store-site map of the vendor bootloader itself
+(`backups/mtd1_boot.bin`, window `0x19280000-0x19281000`). The vendor init writes **twenty** offsets
+only: `0x0, 0x4, 0x8, 0xc, 0x54, 0x58, 0x5c, 0x60, 0x80, 0x88, 0xbc, 0xc0, 0x100, 0x104, 0x108,
+0x10c, 0x110, 0x124, 0x2c8, 0x3fc`. Two consequences that change what is worth building:
+
+- A word the vendor wrote and mainline does **not** write is self-healing: Linux boots *after* the
+  bootloader, so the MMIO word still holds the vendor value. `+0x80 = 0x00020000`
+  (`mov w1,#0x20000` at `0x056f14`), `+0xbc = 0`, `+0x2c8` (field bits 29:24 = `0x12`,
+  `(old & 0xc0ffffff) | 0x12000000`), `+0x114 = 0x400` are therefore **not** missing configuration and
+  must not be turned into a kit. `+0x88` is a handshake (`tbnz bit31` retry loop, 20 passes), not config.
+- A word the vendor did **not** write held only a reset default, so the table's left column is not a
+  proven value for it: `+0x10`, `+0x14..0x34`, `+0x38`, `+0x44`, `+0x48`, `+0x50`, `+0x6c`, `+0x70`,
+  `+0x74`, `+0x90`, `+0x94`, `+0x5c0` all fall in this class. mainline overwrites them with constants
+  that come from the vendor *Linux* driver, which is not in this repository - so a difference against
+  this table is **not evidence of a bug**, and §4's earlier ranking of `+0x44/+0x48/+0x50` was wrong
+  for exactly that reason (the `07ffffff` there is a power-on default).
+
+What survives as real, measured, vendor-written divergence that mainline overwrites with a different
+value is a short list: `+0x0c` (0 in mainline, `0x4000000` written at `0x05787c`), `+0x10c/+0x110`
+(`0x100` written at `0x057784/88` vs mainline's hardcoded `0x3d00`), `+0x00`'s bit 28 / bits 13:12,
+and **`+0x124` - the vendor writes `0x40` (`mov w1,#0x40` at `0x057760`, stored at `0x057774`) while
+mainline writes `0`**. Run 72 shipped the first two; run 73 ships `+0x124`.
 
 ## 3. What is NOT the explanation any more
 
@@ -111,11 +142,25 @@ Source of the right column: `tests/kernelsrc/drivers_net_ethernet_zte_zx279133-i
 
 ## 4. Next
 
-Fix, in this order and as one kit, the constants that are wrong against this table
-(`+0x0c`, `+0x10`, `+0x14..0x34`, `+0x38`, `+0x6c`, `+0x70`, `+0x74`, `+0x90`, `+0x94`, `+0x124`,
-`+0x5c0`, and above all the `+0x10c/+0x110` buffer count, sized to what the driver actually allocates
-instead of 15616). Before editing, confirm that `tests/kernelsrc/...zx279133-idm.c` is byte-identical to
-the file the kernel submodule actually builds - the overlay copies whole files, and copying a stale
-snapshot over the tree would silently revert other fixes.
+Run 72 (commit 5374bed) shipped the two unambiguous ones: `+0x0c` = `IDM_TX_CFG_DEPTH << 16`
+now `0x04000000` as measured, and `+0x10c/+0x110` now `ZX279133_IDM_BP_RING_SIZE` (4096) instead of
+a hardcoded 15616 that exceeded both rings it pairs with (+0x104 is `rx_normal_bp`, +0x108 is
+FREE_RING1, each `IDM_FREE_RING_SIZE 0x4000` B = 4096 entries). Note the kit moves those two fields
+to 4096 while the working image holds **256** - the driver's own ring is 4096 deep, so 4096 is the
+self-consistent value and 256 was U-Boot's smaller table. `tools/rxproof.sh` reads all three words
+back before it says anything about traffic, for exactly that reason.
 
-Related: `docs/08-np-address-space-20261020.md` (descriptor format + the alias result), tasks #43 and #44.
+After §2b there is exactly **one** remaining register the vendor bootloader wrote that mainline
+overwrites with a different value: `+0x124`, `0x40` vs mainline's `0`. That is run 73, and it is a
+one-word change on top of run 72, so if 72 boots and RX is still 0, 73 is the next window and the
+two kits differ in one field only.
+
+If 73 also leaves `rx_packets` at 0, then the register-constant theory is spent and the remaining
+vendor-written divergence is the **address space** of `+0x04/+0x08/+0x104/+0x108` (plain DRAM
+`dma_addr`s in mainline vs `0xb000_8000 / 0xb002_8000 / 0xb000_0000 / 0xb000_4000` there) - which is
+task #43, and needs the clean-boot, fully-restoring `tools/npdram.sh` rework before any kit is built
+for it, because §3 shows the earlier attempts could not answer it either way.
+
+Do not build kits for `+0x44/+0x48/+0x50`, `+0x80`, `+0xbc`, `+0x114`, `+0x2c8`, `+0x14..0x34`,
+`+0x38`, `+0x6c`, `+0x70`, `+0x74`, `+0x90`, `+0x94` or `+0x5c0`: §2b explains why each of those rows
+is either self-healing or a reset default rather than a proven value.

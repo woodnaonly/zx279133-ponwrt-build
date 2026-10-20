@@ -1410,7 +1410,8 @@ static void zx279133_idm_tx_configure(struct zx279133_eth *eth)
 	writel(20, idm + 0x0090);
 	writel(1, idm + 0x0094);
 	writel(ZX279133_IDM_DESC_MODE, idm + 0x00c0);
-	writel(0, idm + 0x0124);
+	/* The bootloader the bytes flow through leaves 0x40 here (docs/09 §2b); mainline had 0. */
+	writel(0x00000040, idm + 0x0124);
 	writel(0x00000f49, idm + 0x03fc);
 	writel(7, idm + 0x05c0);
 
