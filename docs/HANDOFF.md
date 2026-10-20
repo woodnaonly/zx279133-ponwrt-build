@@ -1820,3 +1820,30 @@ skd840n_initramfs_39_38896098366
    想马上当普通路由器用的替代方案：把 `wan` 改 `proto dhcp` 并把 `eth0` 接到上游——这是改配置，等机主点头再做。
 
 另外：智能插座断电实测落在 **:09/:24/:39/:54**（约 15.1 分钟一次），不是整刻钟；武装 `tools/armu4.sh` 要跨过预测秒。
+
+### 21:34 更正（覆盖上面第 3 条里「不在盘上」那句——那句是错的）
+
+厂商 PON 用户态**在盘上**：`restore_set/root_stock.bin` 文件偏移 `0x1300000`（= stock `kernel1` 槽起点）保留了
+完整的 stock FIT（totalsize `0x126c84b`），三个子镜像 `kernel@133` gzip 4,814,954 B、`fdt@133` 49,307 B、
+**`initramfs@133` LZMA 14,452,253 B → newc cpio 54,466,560 B / 1849 条记录**，内含 `bin/gpon_omci` 889,128 B、
+`bin/nas_main`、`bin/cspd`、`bin/osgid`、`bin/sigpon`、91 个 arm32 库（glibc 2.26 + `liboss/libdb/libdbview/
+libdevinfo/libenv`）、`etc/GPON_GN28L95_datas/*` 光学 LUT。已切成独立文件放在 `staging/stock-restore/`
+（md5：`stock-Image.gz b456a47ab0444b65178863753ce6efea`、`stock-Image b61edb4c3013f5e1f306f9d9beedf71a`、
+`stock-board.dtb 1a3d6a535d339207f53afa69e89c1512`、`stock-initramfs.lzma 6ed79f886bcd4a8cdef20c7b7f1085ac`）。
+
+**并且它能在现系统上执行**（21:33:12 实测，全在 `/tmp`，没碰 flash）：内核虽是 aarch64，但
+`el0_sync_compat`/`el0_fiq_invalid_compat` 在 kallsyms 里 ⇒ CONFIG_COMPAT 开着；vendor 二进制是 32 位 ARM，
+把库和 soname 软链接补齐后 `ld-2.26.so --library-path /tmp/vroot/lib /tmp/vroot/bin/gpon_omci` 真的跑起来了：
+
+```
+====================gpon_omci start======================
+[ut_main]$$$ omci OSSStart error:-1!
+```
+
+它要的设备节点本机就有（用活 major 建的）：`gpondrv_dev=102`、`comdev=158`、`zxled=97`、`gponsdk_dev=111`、
+`switch_dev=104`。`OSSStart -1` 指向它在等厂商 app server（`nas_main` 那一层），不是缺文件——我扫过它的
+path 型字符串，本机只缺 `/var/tmp/*` 这类运行时产物。期间 `omci pkt cnt`/`txd frm cnt`/`pon` RX-TX 仍全 0。
+
+⇒ WAN 的两条实路（都要动 flash 或动配置，**等机主点头**）：
+**A 整机回厂商固件**（`restore_set/` boot/kernel/dtb/param/root 五件套齐全，光猫与注册一并回来）；
+**B 在现系统上起 vendor app server**（compat/库/节点已验证可用，剩下是与 netifd/firewall 共存和那套 XML 配置库）。

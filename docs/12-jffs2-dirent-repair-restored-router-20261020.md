@@ -71,10 +71,42 @@ mainline 自己只在扫描时报一条 `Node CRC failed on node at 0x0e4c17f4`�
 * 全盘搜 `*omci*` / `*pon*`：只有 `/etc/modules.d/` 里那三个模块声明，**一个 OMCI/注册用户态程序都没有**，
   `/usr/data` 是空的。
 
-结论：这套社区 root 带的是 PON **内核模块**，不带 PON **用户态**（PLOAM/OMCI 注册流程）。所以"光纤插上就能上网"
-在这套固件上不是配置问题，缺的是整条注册链路——与 [[pon-stack 的既有判断]] 一致（OMCI 收得到、发不出去，
-需要 `zte_xgpon` 补丁）。想立刻当普通路由器用，可行的做法是把 `wan` 改成 `proto dhcp` 并把 `eth0` 接到现有
-上游路由器；这属于改动配置，等口径确认再做。
+结论：这套社区 root 带的是 PON **内核模块**，不带 PON **用户态**（PLOAM/OMCI 注册流程）。
+
+**21:34 更正（本文件上一版说错了一句，那句是错的）**：厂商那份用户态**在盘上**。
+`restore_set/root_stock.bin`（252,706,816 B = 社区 `root` 分区 241 MiB，10-09 装社区 root 之前 dump 的）
+在文件偏移 `0x1300000`（绝对 `0x2200000`，正好是 stock `kernel1` 槽起点）处保留了**完整的 stock kernel1**：
+ZTE 容器 magic `99999999 44444444` + FIT（totalsize `0x126c84b`）+ 三个子镜像
+`kernel@133`(gzip 4,814,954 B)、`fdt@133`(49,307 B)、**`initramfs@133`(LZMA 14,452,253 B → newc cpio 54,466,560 B，
+1849 条记录、1012 个文件)**，里面有 `bin/gpon_omci`(889,128 B)、`bin/sigpon`、`bin/nas_main`、`bin/cspd`、
+`bin/osgid`、91 个 arm32 库（glibc 2.26 + `liboss/libdb/libdbview/libdevinfo/libenv…`）和 `etc/GPON_GN28L95_datas/*`
+光学 LUT。已切出来放在 `staging/stock-restore/`（md5：Image.gz `b456a47a…`、Image `b61edb4c…`、
+board.dtb `1a3d6a53…`、initramfs.lzma `6ed79f88…`）。
+
+**而且它能在这台机器上跑起来。** 厂商二进制是 **32 位 ARM**，现用内核是 aarch64，但
+`/proc/kallsyms` 里有 `el0_sync_compat`/`el0_fiq_invalid_compat` ⇒ CONFIG_COMPAT 是开的。实测（21:33:12，
+全部在 `/tmp` 里，没写 flash）：把 vendor 的 lib 目录 + soname 软链接配好之后，
+`ld-2.26.so --library-path … gpon_omci` **成功执行并打印了它自己的横幅**：
+
+```
+====================gpon_omci start======================
+[ut_main]$$$ omci OSSStart error:-1!
+```
+
+缺的设备节点也都在现内核里注册着：`gpondrv_dev=102`、`comdev=158`、`zxled=97`、`gponsdk_dev=111`、
+`switch_dev=104`（mknod 用的是活_MAJOR_，不是 stock 的编号）。`OSSStart` 返回 -1 是因为它在等厂商的
+应用框架（`nas_main`/OSS 那一层），也就是说**注册不是一个 daemon 的事，而是要把 vendor 的 app server 起起来**。
+期间 `omci pkt cnt`、`txd frm cnt`、`pon` 的 RX/TX 仍是 0。
+
+所以 WAN 现在有两条**都建立在盘上实物**的路线，而不是"只能自己从零写 OMCI"：
+
+1. **整机回到厂商固件**：`restore_set/` 已经是完整一套（boot/kernel/dtb/param/root 五件），且我们还能从
+   root_stock 里切出 stock kernel1 的 FIT——这条路会把 GPON 注册、光猫功能一起带回来，代价是现代 OpenWrt 没了。
+2. **在现系统上把 vendor 的 app server 起来**：compat、库、设备节点都已验证可用，剩下的是
+   `nas_main` 及其配置数据库（`libdb`/`libdbview`/XML）与 OpenWrt 的 netifd/firewall 共存问题。
+
+无论哪条，都要动 flash 或动系统配置，属于不可逆/半可逆操作，**等机主点头再做**；`root` 已 dump、
+`config` 已备份，两向都能回。
 
 ## 5. 本轮踩到的工具/脚本坑（下次别再踩）
 
