@@ -1044,6 +1044,30 @@ static int zx279133_mf_port_ppuinit(struct zx279133_eth *eth)
 #define ZX279133_PPU_ATTR_SA_LEARN	BIT(31)
 
 /*
+ * Bit 0 of the attribute word, which the named bits above do not cover.
+ *
+ * The vendor's own working configuration was read out of the running
+ * system through its module_ind_ram dump, and it says what a live port
+ * looks like there:
+ *
+ *	spa_port_attr_smac_0..3		0x96040001
+ *	spa_port_attr_xmac_0/1,
+ *	spa_port_attr_rgmii		0x96040001
+ *	spa_port_attr_pon_0		0x90040000
+ *	spa_port_attr_wifi_ssid_*	0x90040000
+ *	spa_port_attr_trap(cpu)		0x00000000
+ *	spa_port_attr_loop,
+ *	spa_port_attr_vir_err		0x00000000
+ *
+ * The named bits add up to 0x96040000, so the live ports carry bit 0 as
+ * well - and only the ports that carry traffic carry it.  It is set here
+ * for the same reason the vendor sets it: this word is a copy of a
+ * configuration that is known to work, and a bit whose name nobody knows
+ * is better copied than guessed at.
+ */
+#define ZX279133_PPU_ATTR_LIVE		BIT(0)
+
+/*
  * PVID: np_133.ko's spa_port_attr_table entry 14 is the default VLAN priority
  * (address 1, bits 27..25) and entry 16 is the upstream untagged SVID
  * (address 2, bits 29..18).  The 9132's UNI port N carries the transport VID
@@ -1177,7 +1201,8 @@ static int zx279133_9132_port_init(struct zx279133_eth *eth)
 					      ZX279133_PPU_ATTR_DA_LOOKUP |
 					      ZX279133_PPU_ATTR_BRD_FLOOD |
 					      ZX279133_PPU_ATTR_MUL_FLOOD |
-					      ZX279133_PPU_ATTR_IN_VLAN_CHK,
+					      ZX279133_PPU_ATTR_IN_VLAN_CHK |
+					      ZX279133_PPU_ATTR_LIVE,
 					      ZX279133_PPU_ATTR_ISOLATE_EN |
 					      ZX279133_PPU_ATTR_MAC_LIMIT |
 					      ZX279133_PPU_ATTR_ROUTE_MODE);

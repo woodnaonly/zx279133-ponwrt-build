@@ -113,6 +113,28 @@
 #define ZX279133_NPPT_XPCS0_STATUS	0x0090
 
 /*
+ * The SOPC publish array.
+ *
+ * np_133.ko's xmac_init_by_work_mode() and this board's own U-Boot both
+ * publish a MAC only after its own "clear-over-ready" word says the MAC is
+ * ready.  U-Boot's net bring-up says so out loud, four times, in this
+ * order:
+ *
+ *	read SOPC_CLR_OVER_READY_SMAC = 0x1, mac = 0x0
+ *	write SOPC_SEND_EN_CFG_SMAC,mac = 0x0
+ *	... mac = 0x1, mac = 0x2, mac = 0x3
+ *
+ * and the two words of the pair are nppt+0x34000+((mac+0xa9)<<2) and
+ * nppt+0x34000+((mac+0xb0)<<2).  The tree's RTL8372N driver knows only the
+ * first MAC of the array (0x342a4 / 0x342c0), and nothing in the tree has
+ * ever written the array at all - which is what the run-62 counters said:
+ * every descriptor completed and not one frame left the MAC.
+ */
+#define ZX279133_XMAC_SOPC_READY_BASE	0x342a4
+#define ZX279133_XMAC_SOPC_SEND_BASE	0x342c0
+#define ZX279133_XMAC_SOPC_CHANNELS	4
+
+/*
  * The XPCS 1G SGMII profile, recovered from the vendor's
  * xpcs_1g_mode_conf() and xpcs_auto_negotiation_conf_in_sgmii_mode() and
  * carried in zx279133-mac.c for the NPPT's own PCS.
@@ -561,6 +583,125 @@ static void zx279133_switch_xmac_program(struct zx279133_switch *priv,
 }
 
 /*
+ * The lane's own words, read and printed.
+ *
+ * Every number here is a number the lane itself reports: the NPPT's two
+ * status words, the six XMAC0 registers this driver programs, the SOPC
+ * publish array and the XPCS's own C45 registers.  The point is to be able
+ * to tell "the PCS says the link is down" from "the PCS says the link is
+ * up and the MAC is the part that is broken" - that is the difference
+ * between the next fix belonging to the SerDes and the next fix belonging
+ * to the XMAC, and nothing else in the log can say it.
+ */
+static void zx279133_switch_lane_snapshot(struct zx279133_switch *priv,
+					   const char *tag)
+{
+	static const struct {
+		int devad;
+		int reg;
+		const char *name;
+	} c45[] = {
+		{ MDIO_MMD_VEND2, ZX279133_XPCS_VR_MII_AN_CTRL,
+		  "vend2 AN_CTRL" },
+		{ MDIO_MMD_VEND2, ZX279133_XPCS_VR_MII_DIG_CTRL1,
+		  "vend2 DIG_CTRL1" },
+		{ MDIO_MMD_VEND2, MII_BMCR, "vend2 BMCR" },
+		{ MDIO_MMD_PCS, MII_BMCR, "pcs BMCR" },
+	};
+	struct device *dev = &priv->dev;
+	u32 status, link, tx, rx, frame, mode, duplex, misc;
+	int i;
+
+	status = zx279133_switch_nppt_read(priv, ZX279133_NPPT_XPCS0_STATUS);
+	link = zx279133_switch_nppt_read(priv, ZX279133_NPPT_XMAC_LINK);
+	tx = zx279133_switch_nppt_read(priv,
+				       ZX279133_XMAC0_BASE + ZX279133_XMAC_TX_CTRL);
+	rx = zx279133_switch_nppt_read(priv,
+				       ZX279133_XMAC0_BASE + ZX279133_XMAC_RX_CTRL);
+	frame = zx279133_switch_nppt_read(priv,
+					  ZX279133_XMAC0_BASE +
+					  ZX279133_XMAC_FRAME_CFG);
+	mode = zx279133_switch_nppt_read(priv,
+					 ZX279133_XMAC0_BASE +
+					 ZX279133_XMAC_MODE_CFG);
+	duplex = zx279133_switch_nppt_read(priv,
+					   ZX279133_XMAC0_BASE +
+					   ZX279133_XMAC_DUPLEX);
+	misc = zx279133_switch_nppt_read(priv,
+					 ZX279133_XMAC0_BASE +
+					 ZX279133_XMAC_MISC_CFG);
+
+	dev_info(dev,
+		 "lane %s: XPCS0 status=0x%04x link=%s XMAC link=0x%04x\n",
+		 tag, status,
+		 ((status & 0x3800) == 0x3800) ? "up" : "down", link);
+	dev_info(dev,
+		 "lane %s: XMAC0 tx=0x%08x rx=0x%08x frame=0x%08x mode=0x%08x duplex=0x%08x misc=0x%08x\n",
+		 tag, tx, rx, frame, mode, duplex, misc);
+
+	for (i = 0; i < ZX279133_XMAC_SOPC_CHANNELS; i++) {
+		u32 ready = zx279133_switch_nppt_read(priv,
+			ZX279133_XMAC_SOPC_READY_BASE + 4 * i);
+		u32 send = zx279133_switch_nppt_read(priv,
+			ZX279133_XMAC_SOPC_SEND_BASE + 4 * i);
+
+		dev_info(dev, "lane %s: SOPC mac %d ready=0x%08x send=0x%08x\n",
+			 tag, i, ready, send);
+	}
+
+	if (!priv->xpcs_mdiodev)
+		return;
+
+	for (i = 0; i < ARRAY_SIZE(c45); i++) {
+		int val = zx279133_switch_xpcs_read(priv, c45[i].devad,
+						    c45[i].reg);
+
+		dev_info(dev, "lane %s: XPCS %s = 0x%04x\n", tag, c45[i].name,
+			 val < 0 ? 0xffff : val);
+	}
+}
+
+/*
+ * Publish the SOPC send-enable for every MAC, each one after its own
+ * ready word says it may be published.
+ *
+ * The vendor's U-Boot does exactly this, for mac 0..3, and says so in its
+ * console output; the tree's RTL8372N driver publishes one word and
+ * nothing in the tree has ever written the rest of the array.  A MAC whose
+ * send-enable is never published does not move a frame, whatever else is
+ * correct.
+ */
+static void zx279133_switch_sopc_publish(struct zx279133_switch *priv)
+{
+	struct device *dev = &priv->dev;
+	int i;
+
+	for (i = 0; i < ZX279133_XMAC_SOPC_CHANNELS; i++) {
+		u32 ready = 0;
+		int tries;
+
+		for (tries = 0; tries < 10; tries++) {
+			ready = zx279133_switch_nppt_read(priv,
+				ZX279133_XMAC_SOPC_READY_BASE + 4 * i);
+			if (ready & BIT(0))
+				break;
+			usleep_range(1000, 1100);
+		}
+		if (!(ready & BIT(0)))
+			dev_warn(dev,
+				 "SOPC mac %d never became ready (0x%08x); not publishing it\n",
+				 i, ready);
+
+		zx279133_switch_nppt_write(priv,
+					   ZX279133_XMAC_SOPC_SEND_BASE + 4 * i,
+					   1);
+	}
+
+	dev_info(dev, "SOPC send-enable published for %d MAC(s)\n",
+		 ZX279133_XMAC_SOPC_CHANNELS);
+}
+
+/*
  * The XMAC0 bring-up, from zx279133_xmac_sgmii_init(): reset, program,
  * publish the SOPC send enable, then enable the MAC.
  */
@@ -616,7 +757,13 @@ static void zx279133_switch_xmac_configure(struct zx279133_switch *priv)
 	zx279133_switch_nppt_write(priv, ZX279133_XMAC_SOPC_DUPLEX, value);
 	/* Vendor xmac_init_by_work_mode(): __const_udelay(4295000). */
 	usleep_range(4295, 4395);
-	zx279133_switch_nppt_write(priv, ZX279133_XMAC0_SOPC_SEND, 1);
+	/*
+	 * Publish every MAC, not one word of the array: the vendor's U-Boot
+	 * publishes mac 0..3, each after its own ready word, and a MAC
+	 * whose send-enable is never written does not move a frame however
+	 * correct everything else is.
+	 */
+	zx279133_switch_sopc_publish(priv);
 
 	value = zx279133_switch_nppt_read(priv, xmac + ZX279133_XMAC_RX_CTRL);
 	zx279133_switch_nppt_write(priv, xmac + ZX279133_XMAC_RX_CTRL,
@@ -1034,6 +1181,15 @@ static int zx279133_switch_probe(struct platform_device *pdev)
 	priv->datapath_held = true;
 
 	/*
+	 * The lane, as the bootloader left it.  Nothing here has touched
+	 * the XMAC0 or the XPCS0 yet, and this board's bootloader did leave
+	 * the lane working - its own net bring-up moves eleven megabytes
+	 * through it - so the words it left are the reference the rest of
+	 * this driver is measured against.
+	 */
+	zx279133_switch_lane_snapshot(priv, "pre-serdes");
+
+	/*
 	 * The Uni SerDes carries the lane to the 9132's CPU port.  It is the
 	 * parent's second PHY: phy-names = "serdes", "lan-serdes".  The lane
 	 * runs 1G, and the bootloader left the SerDes in that state, so the
@@ -1130,6 +1286,28 @@ static int zx279133_switch_probe(struct platform_device *pdev)
 	if (ret)
 		return ret;
 
+	/*
+	 * The same lane, now with the XPCS0's own registers readable.
+	 *
+	 * If the PCS still says the link is up, the bootloader brought it up
+	 * and this driver has not broken it yet - and reprogramming it is
+	 * exactly what breaks it: the 1G SGMII profile below takes the PCS
+	 * from the bootloader's 0x380b to 0x280b, one bit of link status
+	 * short, and a lane that was carrying traffic stops carrying it.
+	 * So in that case the bootloader's configuration is adopted as it
+	 * is, and the only thing done to it is the SOPC publish, which the
+	 * kernel's own datapath needs and the bootloader did for its own.
+	 */
+	zx279133_switch_lane_snapshot(priv, "pre-pcs");
+	status = zx279133_switch_nppt_read(priv, ZX279133_NPPT_XPCS0_STATUS);
+	if ((status & 0x3800) == 0x3800) {
+		dev_info(dev,
+			 "the bootloader left the PCS link up (0x%04x); inheriting it\n",
+			 status);
+		zx279133_switch_sopc_publish(priv);
+		goto report;
+	}
+
 	ret = priv->usxgmii ? zx279133_switch_xpcs_usxgmii(priv) :
 			      zx279133_switch_xpcs_sgmii(priv);
 	if (ret) {
@@ -1169,14 +1347,32 @@ report:
 	 * 0x0090 bits 11..13 are the XPCS0 link status the tree's RTL8372N
 	 * driver polls for the same block, and 0x0084 is the NPPT's XMAC
 	 * link word.
+	 *
+	 * The link is given a moment to settle before it is read: the tree's
+	 * driver polls the same word for up to 400 ms after programming the
+	 * PCS, and a status read in the same millisecond as the last write
+	 * says nothing about whether the lane came up.
 	 */
-	status = zx279133_switch_nppt_read(priv, ZX279133_NPPT_XPCS0_STATUS);
+	{
+		int tries;
+
+		for (tries = 0; tries < 40; tries++) {
+			status = zx279133_switch_nppt_read(priv,
+						ZX279133_NPPT_XPCS0_STATUS);
+			if ((status & 0x3800) == 0x3800)
+				break;
+			usleep_range(25000, 26000);
+		}
+	}
 	dev_info(dev,
 		 "XMAC0 datapath enabled; XPCS0 status=0x%04x link=%s xmac_link=0x%04x; 9132 UNI ports %u..%u\n",
 		 status,
 		 ((status & 0x3800) == 0x3800) ? "up" : "down",
 		 zx279133_switch_nppt_read(priv, ZX279133_NPPT_XMAC_LINK),
 		 ZX279133_SWITCH_UNI_PORT_MIN, ZX279133_SWITCH_UNI_PORT_MAX);
+
+	/* And every word of the lane, after this driver's own work. */
+	zx279133_switch_lane_snapshot(priv, "after");
 
 	/*
 	 * The four jacks as DSA ports.  The conduit has to be there first: a

@@ -57,7 +57,7 @@
 	# the image is pulled out of the board's memory.
 	{
 		echo "trial: evidence"
-		dmesg | grep -E '9132|Uni SerDes|XMAC0|XPCS0|lan-cpu|conduit|Link is|DSA|dsa|tag_zx279133|phylink|MDIO|mdio'
+		dmesg | grep -E '9132|Uni SerDes|XMAC0|XPCS0|lan-cpu|conduit|Link is|DSA|dsa|tag_zx279133|phylink|MDIO|mdio|lane |SOPC'
 		echo "trial: evidence end"
 	} >/dev/kmsg 2>&1
 
