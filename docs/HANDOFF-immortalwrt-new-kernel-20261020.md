@@ -217,6 +217,58 @@ driver 的 `dsa_switch` 用 `devm_kzalloc()` 而不是 `dsa_switch_alloc()`。
 
 ---
 
+## 0.9 2026-10-21 上午 10:30–11:30：run100 成功注册为 DSA switch，四个用户口卡在 PHY（动手前先读这一节）
+
+完整取证见 **`docs/25-the-jacks-phy-and-the-trees-contract-20261021.md`**（树内契约逐条引用）、
+**`docs/24-9132-port-table-and-a-runtime-console-20261021.md`**（厂商活板端口表 + 运行时控制台）。
+
+**① run100 是这块板子上第一次真的跑起 mainline 内核 + 9132 驱动，1 秒内把 G2 的量测全拿到了：**
+无 panic，内核跑到用户态（`Run /init as init process`、`init: Console is alive`），
+**9132 成功注册为 DSA switch**（`registered the 9132 as a DSA switch: ports 4..7 carry the transport VIDs 59..62`），
+CPU 口 `lan-cpu0` 起来（`Link is Up - 1Gbps/Full`），conduit 与 WAN netdev 都注册了。
+
+**② 唯一的阻塞是四个用户口的 PHY：**
+```
+lan1..lan4 (uninitialized): failed to connect to PHY: -ENODEV
+error -19 setting up PHY for tree 0, switch 0, port 4..7
+```
+⇒ **lan1..lan4 根本没生成**，br-lan 无成员，G2d/G3/G4 全被它卡住。
+
+**③ 根因有两层，都已从树内源码读实（不要靠猜）：**
+- **第一层**：本驱动没有 `ops->phy_read`，而 DSA core **只为**提供了 `ops->phy_read` 的 switch driver
+  建 `ds->user_mii_bus`（`net/dsa/dsa.c:652`）⇒ `ds->user_mii_bus` 是 NULL，
+  `dsa_user_phy_setup()` 的 fallback（`if (ret == -ENODEV && ds->user_mii_bus)`）根本没机会跑。
+- **第二层**：就算有 bus，core 也只是**查表**（`mdiobus_get_phy()` → `bus->mdio_map[addr]`），
+  必须先有 PHY 设备被注册；而本树**没有任何驱动**认领这颗芯片报的 id
+  （C22 `0x84b9:0x5032`；树内 `zx279051.c` 期望 `0x000084b9` 且走 C45，Realtek 期望 `0x001cc9`，
+  `genphy_driver` 是 `0xffffffff/0xffffffff` 精确匹配）。**必须自写 PHY 驱动。**
+- 另外**地址对不上**：9132 内置 PHY 在 **SoC mdio0 的 0x0a..0x0d**，而 DSA 端口号是 **4..7** ⇒ 需要平移。
+- 树内的**正确范例**是 `zx279133-rtl8372n.c`（同 SoC 家族、同"switch+内置 PHY"形状）：
+  私有 `mii_bus` + 按 **bus 身份+地址**（不是 PHY id）匹配的私有 PHY 驱动；
+  而且**只要 bus 有 `read`，core 自己扫描就会把 PHY 设备建出来**（`__mdiobus_register()` → `mdiobus_scan_bus_c22()`）。
+
+**④ run102（`99ad1c7`）先解锁 lan1..lan4：**
+四个端口加 `fixed-link { speed=<1000>; full-duplex; }` ——
+`phylink_fwnode_phy_connect()` 在 `MLO_AN_FIXED` 下**直接 return 0，根本不找 PHY**。
+**代价说清楚**：fixed-link 的口没有自己的 carrier，软件看不到协商出的速率/双工；
+但 **PHY 本身没被动过**（NPPT 驱动照样上电+开自协商，0x0b 口 link 1 一直在），9132 自己读 PHY 状态，
+所以没插线时照样不通流。**run103 再上真 PHY。**
+同一轮还做了两件事：**把四颗 PHY 的 0x00..0x1f 全量寄存器打进 dmesg**（写驱动要对着芯片的真实回答写），
+debugfs 控制台加了 `m <addr> <reg>` / `mw <addr> <reg> <val>`（MDIO 读写，addr 是 mdio0 上的 0x0a..0x0d），
+**并修好了 NAT 规则集**（`masquerade` 是 nft 的终结语句，后面的 `counter` 让整张表加载失败 ⇒
+`oifname "$WAN" counter masquerade`）。
+
+**⑤ 工具坑：串口 root shell 通道已打通。**
+往 `staging/ctl/sercmd.txt` 写命令（结尾 `\r`，多命令用 `\r` 分隔），relay 自动发出，
+响应进 `staging/ctl/serial.log` —— 厂商 4.19 与 mainline 用户态都实测可用。
+
+**⑥ 别把厂商的"转发语义"记错（docs/15 需要订正）：**
+厂商的 "flood num / group id" 写的是**表 125**（字段 0x46/0x47），**不是** word17/18；
+隔离矩阵是 **ERAM 表 27**（`se_eram_table_set(0x1b, p | (q<<6), 1, value)`，64×64 bit，1=隔离）；
+厂商 UNI 口的 SVID=0 与 tree 的 tagger（55+port ⇒ 59..62）**冲突**，要靠 run101+ 的 debugfs 控制台在活体板上验。
+
+---
+
 ## 1. 板子现在的真实状态（2026-10-20 23:21–23:25 实测）
 
 | 项 | 值 |
@@ -354,7 +406,7 @@ driver 的 `dsa_switch` 用 `devm_kzalloc()` 而不是 `dsa_switch_alloc()`。
 ## 7. 文件索引（接手时按这个找）
 
 - 文档：`ci-build-repo/docs/01`…`docs/13`（`08` NP 地址空间、`09` U-Boot 已证 IDM 镜像、`10` ring 搬窗口、**`11` 厂商 Linux bring-up 逐字记录**、**`12` jffs2 dirent 损伤与修复 + 刷好的标准**、**`13` eth0 出口归因/upmode 否证/tm shell 否证/eth2 隔离/NAT 缺口**），`HANDOFF.md`（历史收口段）。
-- **本轮（2026-10-21）的新文档**：`docs/20`（M2/PON 可行性，冻结为"研究"）、`docs/21`（NAT 路由器那一半 + 单线 M1）、`docs/22`（NAT 验收基线 + busybox udhcpc 的另一套约定）、**`docs/23`（9132 第一次在 mainline 里开机 + DSA 的 `.setup` 钩子 + relay 卡死）**。
+- **本轮（2026-10-21）的新文档**：`docs/20`（M2/PON 可行性，冻结为"研究"）、`docs/21`（NAT 路由器那一半 + 单线 M1）、`docs/22`（NAT 验收基线 + busybox udhcpc 的另一套约定）、**`docs/23`（9132 第一次在 mainline 里开机 + DSA 的 `.setup` 钩子 + relay 卡死）**、**`docs/24`（厂商活板的 9132 端口表 + `zx279133-9132` 运行时控制台）**、**`docs/25`（四个用户口的 PHY：树内 DSA/phylink 契约逐条引用 + 为什么 9132 不合那个范例 + fixed-link 的代价）**。
 - 工具：`tools/verify_router.sh`（4 通道/5 判定）、`tools/eth0egress.sh`、`tools/jackmap.sh`、`tools/eth0jackwatch.sh`、`tools/boot419score.sh`、`tools/ubflash.sh`、`tools/ubram.sh`、`tools/reflush_root.sh`、`tools/onu2.cjs`、`tools/ponDis.py`、`staging/kofn.py`、`staging/kocalls.py`。
 - **新内核这条线的本地落点**：`ci-build-repo/kernel-overlays/`（`arch/arm64/boot/dts/zte/zx279133-sk-d840n.dts` + `drivers/net/ethernet/zte/zx279133-{main,mac,np,idm,netdev}.c` + `.h` + `drivers/phy/zte/phy-zx279133-uni-serdes.c` + `drivers/mtd/nand/spi/unim.c`）、`ci-build-repo/overlays/target/linux/zte/`、`ci-build-repo/scripts/configure-sk-d840n.sh`、`ci-build-repo/tests/kernelsrc/arch_arm64_boot_dts_zte_zx279133-sr1010.dts`、`staging/src/zx279133-sr1010.dts`、`staging/src/fork-SR1010_MTD_WRITE_ACCESS.md`、`.github/workflows/build-sk-d840n.yml`；`configs/sr1010-extra.config` 是 SR1010 基线，**别拿它当本板产物**。
 - **9132 / switch.ko 起步包**：板上 `/lib/modules/4.19.136+/switch.ko`（853 KB，md5 `993f0124…`；本地 `pon/vendor-modules/switch.ko`，同 md5；`staging/vendor-full/kmodule/switch.ko` 是另一版 `fdeba014…`，别拿错）；`/proc/pon/switch_debug`；`docs/07` 补七十七（内部 PHY 0x0A–0x0D、OUI 0x212E54）、补八十一（无 WAN 电口）、补九十四/九十五（厂商 4.19 也不发、U-Boot 11 MB）、补九十六（外部状态全一致）、**补九十七（`/dev/ethdriver` ioctl 是桩；差异在 switch.ko init；task #42 离线差集）**；`docs/13 §8`（`/proc/pon/*_debug` 的 setter）。
