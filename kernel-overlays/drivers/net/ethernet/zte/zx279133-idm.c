@@ -355,6 +355,31 @@ static bool zx279133_idm_rx_parsed(u32 word1, bool lan_source)
 	return port == zx279133_tx_port;
 }
 
+/*
+ * Whether the frame still carries an Ethernet type field.
+ *
+ * The 9132 is a transparent MAC-learning bridge (docs/16 2.2): it does
+ * not take the Ethernet header off a frame, and the frame it hands to
+ * the CPU has the same header the client sent.  The rewrite below is
+ * for the other shape - a frame whose type field the PPU took off - and
+ * applied to a frame that has one it shifts the payload four bytes to
+ * the right and writes the type and the IP version word twice, so the
+ * IP header the stack reads starts four bytes too far in and every
+ * IPv4 and IPv6 frame is dropped for a total length of 0x0800.
+ *
+ * The rest of this file already assumes the frame has its header: the
+ * checksum path reads the IP header at ETH_HLEN and the DSA path reads
+ * the frame as a vlan_ethhdr.  So the rewrite may only run on a frame
+ * that has no type field of its own.
+ */
+static bool zx279133_idm_rx_has_ethertype(const struct sk_buff *skb)
+{
+	if (skb->len < ETH_HLEN)
+		return false;
+
+	return get_unaligned_be16(skb->data + 2 * ETH_ALEN) >= ETH_P_802_3_MIN;
+}
+
 static u16 zx279133_idm_rx_restore_lan_l2(struct sk_buff *skb, u32 metadata0)
 {
 	u16 l3_prefix = metadata0 >> 16;
@@ -791,7 +816,8 @@ deliver_skb:
 			 * parsed descriptor fields, that split remains stable when CPU8
 			 * strips the LAN transport VLAN before PPU.
 			 */
-			if (queue < ZX279133_LAN_RX_QUEUE_COUNT)
+			if (queue < ZX279133_LAN_RX_QUEUE_COUNT &&
+			    !zx279133_idm_rx_has_ethertype(skb))
 				len += zx279133_idm_rx_restore_lan_l2(
 					skb, le32_to_cpu(READ_ONCE(desc->metadata[0])));
 			if (lan_source && !lan_dsa_active) {

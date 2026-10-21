@@ -612,6 +612,21 @@ static int zx279133_eram_window_patch(struct zx279133_eth *eth, u32 sdt_id,
 #define ZX279133_PORT_TYPE_ERAM_SDT_ID	0x06
 #define ZX279133_SWITCH_PROTO_SDT_ID	0x18
 /*
+ * The three tables the CPU path runs on.  They are named here rather than
+ * next to the code that fills them in, because the debugfs console below
+ * reaches them as well.
+ *
+ *	0x19  the reason map: the CPU queue a frame with a given reason is
+ *	      delivered on.  32 bits an entry.
+ *	0x22  the global config table: the CPU base queue id lives in bits
+ *	      17..25 of word 3 of entry 0.  128 bits an entry.
+ *	0x27  the outport map: the CPU's own outport 15 goes to the real
+ *	      port 15 and to a queue id.  16 bits an entry.
+ */
+#define ZX279133_QID_ERAM_SDT_ID	0x19
+#define ZX279133_GLBCFG_ERAM_SDT_ID	0x22
+#define ZX279133_OUTPORT_ERAM_SDT_ID	0x27
+/*
  * The flood group table: one entry per group, one destination port id per
  * entry.  The vendor's group_id_table_port_id_set() writes it with
  * se_eram_table_set(0x1f, group_id, 1, &port_id), so the index IS the group
@@ -1558,6 +1573,163 @@ static ssize_t zx279133_9132_write(struct file *file, const char __user *ubuf,
 	}
 
 	/*
+	 * Trap every protocol on a port to the CPU.
+	 *
+	 * The 9132 gives a frame from a jack to the CPU only when the port's
+	 * protocol action table says so.  The vendor's flood group holds the
+	 * WAN port and nothing else, so a frame whose destination is not in the
+	 * MAC table is never flooded towards the CPU - it has to be trapped -
+	 * and the trap is the only road the CPU has into the LAN.
+	 *
+	 * The table is ERAM table 0x18, two bits per (port, protocol) entry,
+	 * and the protocol number the chip uses is not written down anywhere
+	 * in this tree: the vendor's pairs were copied out of switch.ko's own
+	 * .rodata, so the numbering is the chip's, and the only way to find
+	 * out which number ARP has is to trap all of them and watch.
+	 *
+	 *	"trapall 2"	trap every protocol on the port 2
+	 *	"trapall 2 0"	leave every protocol on the port 2 alone
+	 */
+	if (!strcmp(tok, "trapall")) {
+		u32 port, action = 2, proto;
+		int err = 0;
+
+		tok = zx279133_9132_next_token(&p);
+		if (!tok || kstrtou32(tok, 0, &port) || port > 7)
+			return -EINVAL;
+		tok = zx279133_9132_next_token(&p);
+		if (tok && kstrtou32(tok, 0, &action))
+			return -EINVAL;
+
+		for (proto = 0; proto < 128; proto++) {
+			err = zx279133_eram_table_set_bits(eth,
+					ZX279133_SWITCH_PROTO_SDT_ID,
+					proto | (port << 7), 2,
+					action);
+			if (err)
+				break;
+		}
+		if (err)
+			return err;
+		pr_info("port %u traps every protocol with action %u\n",
+			port, action);
+		return count;
+	}
+
+	/*
+	 * The two queue ids the CPU path runs on.
+	 *
+	 * The CPU's own outport is 15, and the outport map sends it to the real
+	 * port 15 and to the queue id the global config table holds.  The
+	 * vendor's value for both is 0x193, and nothing in this tree says how
+	 * that number becomes one of the IDM's sixteen CPU queues, so both of
+	 * them are knobs now.
+	 *
+	 *	"cqid 0x193 0x193"	the vendor's own values
+	 *	"cqid 0x3 0x3"	the low ones
+	 */
+	if (!strcmp(tok, "cqid")) {
+		u32 base, out;
+		int err;
+
+		tok = zx279133_9132_next_token(&p);
+		if (!tok || kstrtou32(tok, 0, &base) || base > 0x1ff)
+			return -EINVAL;
+		tok = zx279133_9132_next_token(&p);
+		if (!tok || kstrtou32(tok, 0, &out) || out > 0x1ff)
+			return -EINVAL;
+
+		err = zx279133_eram_window_patch(eth, ZX279133_GLBCFG_ERAM_SDT_ID,
+						 0, 3,
+						 (0x1ffu << 17) | (1u << 16) |
+						 (1u << 13),
+						 (base << 17) | (1u << 16) |
+						 (1u << 13));
+		if (err)
+			return err;
+		err = zx279133_eram_table_set_bits(eth, ZX279133_OUTPORT_ERAM_SDT_ID,
+						    0x0f, 16,
+						    0x0f | (out << 6));
+		if (err)
+			return err;
+		pr_info("the CPU base queue id is now %u and the outport 15 queue id %u\n",
+			base, out);
+		return count;
+	}
+
+	/*
+	 * The reason map: the CPU queue a frame that arrives with a given
+	 * reason is delivered on.  The vendor's own load path sets only
+	 * reason 0 - OMCI - to queue 7, so every other reason is whatever
+	 * the chip came up with.
+	 *
+	 *	"rmap 8 0"	reason 8 goes to CPU queue 0
+	 */
+	if (!strcmp(tok, "rmap")) {
+		u32 reason, qid;
+		int err;
+
+		tok = zx279133_9132_next_token(&p);
+		if (!tok || kstrtou32(tok, 0, &reason) || reason > 0x3f)
+			return -EINVAL;
+		tok = zx279133_9132_next_token(&p);
+		if (!tok || kstrtou32(tok, 0, &qid) || qid > 0x1f)
+			return -EINVAL;
+
+		err = zx279133_eram_window_patch(eth, ZX279133_QID_ERAM_SDT_ID,
+						 reason, reason & 3,
+						 0x1fu << 24, qid << 24);
+		if (err)
+			return err;
+		pr_info("reason %u now goes to CPU queue %u\n", reason, qid);
+		return count;
+	}
+
+	/*
+	 * The IDM's receive descriptors.
+	 *
+	 * The rings live in coherent memory, so the console can read them: a
+	 * descriptor the hardware has filled in has an address and a length in
+	 * it, and a descriptor the driver has already released has an address
+	 * of zero.  This is the one piece of evidence that says whether a
+	 * frame ever reached the IDM at all, and which queue it landed in.
+	 *
+	 *	"rxd 0 8"	the eight descriptors at the head of queue 0
+	 */
+	if (!strcmp(tok, "rxd")) {
+		u32 queue, count, i;
+		u16 cons;
+
+		tok = zx279133_9132_next_token(&p);
+		if (!tok || kstrtou32(tok, 0, &queue) ||
+		    queue >= ZX279133_IDM_RX_QUEUES)
+			return -EINVAL;
+		tok = zx279133_9132_next_token(&p);
+		if (!tok || kstrtou32(tok, 0, &count) || count > 32)
+			return -EINVAL;
+
+		if (!eth->rx_descs)
+			return -ENODEV;
+		cons = eth->rx_cons[queue];
+		for (i = 0; i < count; i++) {
+			u16 index = (cons + i) &
+				(ZX279133_IDM_RX_RING_SIZE - 1);
+			struct zx279133_idm_desc *desc;
+
+			desc = eth->rx_descs +
+				queue * ZX279133_IDM_RX_RING_SIZE + index;
+			pr_info("rx queue %u desc %u: address %08x length %08x metadata %08x %08x %08x\n",
+				queue, index,
+				le32_to_cpu(READ_ONCE(desc->address)),
+				le32_to_cpu(READ_ONCE(desc->length_flags)),
+				le32_to_cpu(READ_ONCE(desc->metadata[0])),
+				le32_to_cpu(READ_ONCE(desc->metadata[1])),
+				le32_to_cpu(READ_ONCE(desc->metadata[2])));
+		}
+		return count;
+	}
+
+	/*
 	 * One entry of one ERAM table, by the table's id rather than by its
 	 * base block, so that a table can be read and written the way the
 	 * vendor's own code does it - the entry is merged into the 128-bit
@@ -2204,14 +2376,28 @@ static int zx279133_9132_mf_mirror(struct zx279133_eth *eth, u32 ppu)
 	 * and SPA register 18 holds the two group ids in that same order - the
 	 * multicast one in its low half, the unknown-DA one in its high half -
 	 * so word 1 is register 18 as it stands.  SPA register 17 holds the
-	 * broadcast group id in its *high* half, while the entry wants it in
-	 * word 2's *low* half: copying the register over unchanged leaves the
-	 * broadcast group id in the entry's byte 12..13, where no setter ever
-	 * put it, and the broadcast flood of a port runs on group 0x0410 - a
-	 * number that is not a group id at all - instead of on
-	 * (p+0x10)<<6.
+	 * broadcast group id in its *high* half, and the entry wants it in
+	 * word 2's *high* half as well: the entry is little endian, word 2 is
+	 * bytes 8..11, and byte 10..11 is word 2's most significant halfword.
 	 *
-	 * So the halves are swapped on the way in.
+	 * The vendor's own setters say exactly where they put it, and they are
+	 * the only evidence there is.  The entry buffer is at x29+0x48 in
+	 * np_133.ko, and the three setters store their halfword with
+	 *
+	 *	strh w22, [x29, #0x4c]	multicast, bytes 4..5
+	 *	strh w22, [x29, #0x4e]	unknown-DA, bytes 6..7
+	 *	strh w22, [x29, #0x52]	broadcast, bytes 10..11
+	 *
+	 * (port_attr_def_mul_flood_group_id_set at .text 0xbc794,
+	 * port_attr_def_unk_da_flood_group_id_set at .text 0xbc5b8 and
+	 * port_attr_def_brd_flood_group_id_set at .text 0xbc970).
+	 *
+	 * So word 2 is register 17 as it stands, unchanged: its low halfword
+	 * carries the 0x0410 the vendor's flood count lives in, and its high
+	 * halfword carries the broadcast group id.  Swapping the halves here
+	 * puts the group id on bytes 8..9, where no setter ever put it, and
+	 * runs the broadcast flood of a port on 0x0410 - a number that is not a
+	 * group id at all - instead of on (p+0x10)<<6.
 	 */
 	ret = zx279133_eram_window_patch(eth, ZX279133_MF_ERAM_SDT_ID, ppu, 1,
 					  0xffffffff,
@@ -2224,7 +2410,7 @@ static int zx279133_9132_mf_mirror(struct zx279133_eth *eth, u32 ppu)
 
 		return zx279133_eram_window_patch(eth, ZX279133_MF_ERAM_SDT_ID,
 						  ppu, 2, 0xffffffff,
-						  (brd >> 16) | (brd << 16));
+						  brd);
 	}
 }
 
@@ -2800,9 +2986,6 @@ static int zx279133_9132_proto_init(struct zx279133_eth *eth)
  *         id is in bits 0..4 of byte 3 of the entry, and the entries are
  *         32 bits wide, so entry 0 is word 0 of the window.
  */
-#define ZX279133_QID_ERAM_SDT_ID	0x19
-#define ZX279133_GLBCFG_ERAM_SDT_ID	0x22
-#define ZX279133_OUTPORT_ERAM_SDT_ID	0x27
 
 #define ZX279133_VENDOR_CPU_BASE_QID	0x193
 #define ZX279133_VENDOR_OMCI_QID	7
