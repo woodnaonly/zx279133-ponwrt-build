@@ -269,6 +269,46 @@ debugfs 控制台加了 `m <addr> <reg>` / `mw <addr> <reg> <val>`（MDIO 读写
 
 ---
 
+## 0.10 2026-10-21 中午 12:17–13:00：run102 让 lan1..lan4 出来了，帧一个都不过去（动手前先读这一节）
+
+完整取证见 **`docs/26-lan-datapath-and-the-9132-truth-20261021.md`**。
+
+**① run102（`99ad1c7`）是第一次四个口同时存在：**
+DSA 注册成功，`lan1..lan4` 四个 netdev 都在（fixed-link 解开了 run100/101 的 PHY -ENODEV），
+四颗 PHY 的寄存器第一次读全（`84b9:5032`，只有 0x0b 有链路 = PC 那只口），
+PPU 1..4 的 SVID 写进去读回来是 `00ec0000 / 00f00000 / 00f40000 / 00f80000`（59..62 << 18，**对**）。
+**但 PC ping 192.168.9.1 = 100% 丢包**，串口里每个用户口一次
+`lanN: failed to open conduit lan-cpu0`，桥把四个口都置成 disabled。
+
+**② 根因是 service 协议的两步没做，不是 9132：**
+- `zx279133_lan_netdev_open()`（conduit 的 ndo_open）在 `eth->lan_datapath_ready` 为假时
+  返回 **-ENETDOWN**；而 DSA 的 `dsa_user_open()` 第一件事就是 `dev_open(conduit)`
+  ⇒ 每个用户口都开不起来。**`datapath_set_ready()` 从来没被调用过。**
+- IDM 收包路径 `if (lan_source && !lan_dsa_active) { 丢帧 }` ——
+  **`set_dsa_active()` 也从来没被调用过**，所以 LAN 侧的帧本来也会被丢。
+- 树内 RTL8372N 驱动的顺序是：`datapath_set_ready(true)` → `dsa_register_switch()` →
+  `set_dsa_active(true)`。**run104（`9d9805a`）照抄这个顺序。**
+
+**③ 厂商活板量到的 9132 真值（`/proc/pon/tm_debug`，参数写法是 `key=value`）：**
+- 厂商 **switch port 1 = smac_1（ram_id 2）= PPU 2 = PHY 0x0b = DSA 口 5 = lan2**
+  （`sw_vlan_port_pvid_set port=1 vid=60` 落到了 `spa_port_attr_smac_1` 的 word2 = `0x00f00000`）。
+- **SVID 的位段 = word2 bits 18..29**（= 厂商 `tm_port_pvid_set()` 的位域号 0x10），
+  和我们 np.c 的 `PPU_PVID_VID_REG 2 / SHIFT 18` 一致，**这条不用改**。
+- 厂商把 9132 跑成**纯扁平桥**：全口 `802dot1_en=0`、`pp_vlTagMsk=0`、`inframode=0`、
+  隔离全 0；FDB 里只有 PC 的 MAC（`84:47:09:5b:bd:2c` → port_id 2）。
+  厂商的 4 个 per-port 网口靠**硬件元数据**分源端口（`skbinfo: port 1`），**帧里没有 VLAN 标签**。
+- ⇒ **厂商那条路（靠 MAC 学习定向）与 DSA 的路（靠 VID）不是同一条。**
+  我们的收侧靠 IDM 把描述符里的源端口翻译回传输 VID
+  （`zx279133_idm_rx_lan_vport()` / `zx279133_idm_rx_preserve_dsa_vlan()`，cnjn 的 idm.c 里已有），
+  **发侧则要 9132 认 VID** —— 这是 run104 之后要验的下一件事。
+
+**④ 工具坑：`tools/onewindow.sh` 的等窗口逻辑是坏的。**
+它用 powermon.log **最后一行**（每 17 秒一行）当“上次上电”，于是“距上电 60~600 秒”这个条件
+永远不成立，脚本会一直等。**改成找最后一次状态跳回 LINUX 的那一次**（`staging/ctl/wincheck.sh`
+可以单测这个判定）。
+
+---
+
 ## 1. 板子现在的真实状态（2026-10-20 23:21–23:25 实测）
 
 | 项 | 值 |
