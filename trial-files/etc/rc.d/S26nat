@@ -112,7 +112,11 @@ probe_lease() {
 	p=$1
 	rm -f "/tmp/probe-$p.txt"
 	ip link set "$p" up 2>/dev/null
-	udhcpc -i "$p" -n -q -t 2 -T 4 -s /tmp/probe-script.sh >"/tmp/probe-$p.log" 2>&1
+	# No -T here: in this image's client - busybox's udhcpc - -T is the
+	# delay before reconnecting after a lease expires, not a per-attempt
+	# timeout.  -n exits when no lease arrives, so two discover packets
+	# are enough to answer "is anything there".
+	udhcpc -i "$p" -n -q -t 2 -s /tmp/probe-script.sh >"/tmp/probe-$p.log" 2>&1
 	[ -s "/tmp/probe-$p.txt" ]
 }
 
@@ -256,6 +260,19 @@ adopt_wan() {
 	# configuration ended up saying.
 	ip link set "$p" nomaster 2>/dev/null
 	ip link set "$p" up 2>/dev/null
+	# What the configuration actually says, read back.
+	#
+	# The image's own helpers (ucidef_set_interface) APPEND to a list that
+	# is already there: the lan ports are written as a JSON array, and
+	# json_add_string adds to the array json_select_array selected rather
+	# than replacing it.  So a second call can leave the lan with six
+	# ports instead of three - the old ones and the new ones - and the
+	# board would still work, because the port that has to leave the
+	# bridge is taken out of it right here, but the configuration would
+	# be a lie.  It is printed so that the round's evidence says which of
+	# the two it was.
+	echo "trial: nat: the configuration now says:" >/dev/kmsg
+	cat /etc/config/network >/dev/kmsg 2>&1
 	echo "trial: nat: the WAN is now $p (lan is $lan_list)" >/dev/kmsg
 	echo "trial: nat: the configuration says wan=$(uci -q get network.wan.device 2>/dev/null)" >/dev/kmsg
 	echo "trial: nat: the bridge says $(brctl show 2>/dev/null | tr '\n' ' ')" >/dev/kmsg
@@ -441,13 +458,33 @@ fi
 # The bench's state is "no upstream cable yet", so the search has to keep
 # running: a cable that is plugged in after this script has run has to be
 # picked up without anybody touching the board.
-if [ -n "$BR" ] && ! has_addr "$WAN"; then
+if [ -n "$BR" ]; then
 	cat > /tmp/trial-nat-watch.sh <<'EOF'
 #!/bin/sh
-# Look for the upstream every minute and hand it to the network service.
+# Two jobs, once a minute:
+#
+#   1. keep the WAN port out of the bridge.  A bridge port cannot hold an
+#      IP address - the kernel answers "device or resource busy" - so if
+#      the port that is to be the WAN comes back into the bridge (the
+#      network service rebuilds it from the configuration whenever
+#      something makes it reload), the WAN cannot take an address at all
+#      and the round fails with no reason on the wire.
+#   2. look for an upstream on the other ports, and hand it over when one
+#      answers.
 PC=lan2
+WAN=""
+[ -f /etc/labwan ] && WAN=$(head -n 1 /etc/labwan 2>/dev/null | tr -d '\r\n ')
 while true; do
 	sleep 60
+	if [ -n "$WAN" ]; then
+		[ -e "/sys/class/net/$WAN" ] || continue
+		if [ -e "/sys/class/net/$WAN/bridge" ]; then
+			ip link set "$WAN" nomaster 2>/dev/null
+			ip link set "$WAN" up 2>/dev/null
+			echo "trial: nat: the watcher took $WAN out of the bridge again" >/dev/kmsg
+		fi
+		continue
+	fi
 	for p in lan3 lan1 lan4 lan2; do
 		[ -e "/sys/class/net/$p" ] || continue
 		[ "$p" = "$PC" ] && continue
@@ -455,7 +492,7 @@ while true; do
 		was=0
 		[ -e "/sys/class/net/$p/bridge" ] && was=1
 		[ "$was" = 1 ] && ip link set "$p" nomaster 2>/dev/null
-		if udhcpc -i "$p" -n -q -t 2 -T 4 -s /tmp/probe-script.sh >/dev/null 2>&1; then
+		if udhcpc -i "$p" -n -q -t 2 -s /tmp/probe-script.sh >/dev/null 2>&1; then
 			echo "trial: nat: the watcher found an upstream on $p" >/dev/kmsg
 			lan_list=""
 			for q in lan1 lan2 lan3 lan4; do
@@ -479,7 +516,7 @@ done
 EOF
 	chmod 755 /tmp/trial-nat-watch.sh
 	/tmp/trial-nat-watch.sh >/dev/kmsg 2>&1 &
-	echo "trial: nat: the upstream watcher is running" >/dev/kmsg
+	echo "trial: nat: the watcher is running (it keeps the WAN port out of the bridge and looks for an upstream)" >/dev/kmsg
 fi
 
 exit 0
