@@ -117,8 +117,14 @@ egress direction, and the protocol action table (0x18) is about the ingress
 direction - it is what traps a frame *to* the CPU - so 0x18 does not help
 here.
 
-The vendor's flood setup is in `sw_init_flood_ctrl()` (switch.ko 0x2780),
-and it is short enough to read out:
+The driver does write the vendor's per-port flood words: for every PPU it
+writes SPA indirect registers 17 and 18 - the broadcast flood word and the
+unknown-unicast / multicast flood word - with the values the vendor's own
+system has (0x05400410 / 0x01400940 for the CPU port, PPU 5).
+
+What the driver does **not** write is the flood *group*: the vendor's
+`sw_init_flood_ctrl()` (switch.ko 0x2780) also builds a destination port
+list and turns the flood on and off per port -
 
 ```
     multicast flood:  dest port list = { the WAN port } + { every port 0..7
@@ -128,20 +134,17 @@ and it is short enough to read out:
     broadcast flood:  the same shape
 ```
 
-So on the vendor's board a broadcast from the CPU port is sent out of all
-eight ports, WAN included.  **The mainline driver does not write this** -
-the flood group ids are among the values the vendor only ever sets at run
-time, and the driver fills the ERAM tables it can prove instead.
+- and the per-port group ids behind that list are values the vendor only
+ever sets at run time, so they are not knowable offline.
 
-What the 9132 does after a reset with nobody writing the flood setup is not
+What the 9132 does after a reset with nobody writing the flood group is not
 known from the vendor's code.  So:
 
 * if the board's DHCP discover reaches the PC, the question is settled and
   nothing has to be written;
 * if it does not, **this is the first thing to look at**, and the change is
   bounded: the four vendor API calls above, in the vendor's own order, and
-  the per-port group ids the vendor sets at run time (readable off a vendor
-  board, not offline).
+  the per-port group ids (readable off a vendor board, not offline).
 
 The G2 gate does not depend on it: the PC's frames reach the CPU by being
 trapped (0x18), and the board's reply is a unicast to a MAC the 9132 has
