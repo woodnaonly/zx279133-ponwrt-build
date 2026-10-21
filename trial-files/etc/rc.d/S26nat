@@ -466,10 +466,15 @@ if [ -n "$WAN" ]; then
 			# is a per-attempt timeout, and -t 0 is not "try forever"
 			# the way it looks.  With neither, busybox's client keeps
 			# discovering, which is what a WAN needs.
-			# nohup, for the same reason as dnsmasq's: this script is
+			# setsid, for the same reason as dnsmasq's: this script is
 			# about to end, and a background child that is still
 			# attached to this shell's session is killed with it.
-			nohup udhcpc -i "$WAN" -f -s /tmp/udhcpc-trial.sh \
+			# setsid puts the child in a session of its own, which
+			# is what nohup was standing in for - and nohup is not
+			# in this image: the busybox here has no nohup applet,
+			# so "nohup ..." failed with "not found" and neither
+			# the DHCP client nor the DHCP server ever started.
+			setsid udhcpc -i "$WAN" -f -s /tmp/udhcpc-trial.sh \
 				>"/tmp/udhcpc-$WAN.log" 2>&1 &
 		else
 			echo "trial: nat: no udhcpc in this image" >/dev/kmsg
@@ -491,10 +496,13 @@ dhcp-option=6,192.168.9.1
 dhcp-leasefile=/tmp/dnsmasq.leases
 pid-file=/tmp/dnsmasq.pid
 EOF
-	# nohup: this script is run by the init system, and a background child
+	# setsid: this script is run by the init system, and a background child
 	# that is still attached to this shell's session is killed when the
 	# script ends - which is the moment the DHCP server has to survive.
-	nohup dnsmasq -C /tmp/dnsmasq-trial.conf >/dev/kmsg 2>&1 &
+	# setsid gives the child a session of its own.  nohup would have done
+	# the same, and is not in this image: the busybox here has no nohup
+	# applet, so the server never started at all.
+	setsid dnsmasq -C /tmp/dnsmasq-trial.conf >/dev/kmsg 2>&1 &
 	sleep 2
 	echo "trial: nat: dnsmasq serving $LAN" >/dev/kmsg
 	if [ -s /tmp/dnsmasq.leases ]; then

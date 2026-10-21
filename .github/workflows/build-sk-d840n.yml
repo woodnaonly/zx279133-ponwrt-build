@@ -31,6 +31,12 @@ on:
       - configs/sk-d840n*
       - scripts/configure-sk-d840n.sh
       - templates/**
+      # The trial files go into the RAM image (the initramfs mode copies
+      # trial-files/ into openwrt/files/), so a change to them changes the
+      # image and has to rebuild it.  They were missing from this list, so
+      # a fix to them - the DHCP server that never started, for one -
+      # could be pushed and would never reach a board.
+      - trial-files/**
 
 env:
   IW_URL: https://github.com/cnjn/ImmortalWrt
