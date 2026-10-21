@@ -102,7 +102,45 @@ problem for this table and why the vendor fills it in at all.  (The
 diagonal-1 is what a switch needs: a port must not forward a frame back out
 of the port it came in on.)
 
-## 4. What is left
+## 4. The chip's table descriptor — the one thing that says where the tables
+## are
+
+**Answered, and it is right.**
+
+The base block and the content are only half of it: the chip has to be
+*told* where each table is, and that is the SDT descriptor the driver writes
+with `zx279133_se_sdt_eram_write()`:
+
+    node[0] = depth << 2
+    node[1] = (16 * (base & 0xffff)) | ((0x10 | (mode << 1)) << 24)
+
+The one field worth checking is `mode`, because the vendor's code puts
+something different there.  `se_sdt_creat_eram_sdt()` (np_133.ko 0x8d108)
+builds the descriptor in a stack frame, and at 0x8d19c it does
+
+    bfi w0, w2, #1, #3        ; bits 1..3 of the byte at frame+0x47
+
+which is bits 25..27 of the descriptor's second word.  What is `w2`?  The
+caller decides: `se_sdt_core_sdt_init()` (0x8da58) calls
+
+    ubfiz x1, x21, #4, #0x20
+    add   x1, x1, x23         ; &g_core_sdt_info[index]
+    add   x1, x1, #8          ; ... + 8
+    bl    se_sdt_creat_eram_sdt
+
+so the pointer it passes is **the entry's third word** - p3, the field that
+selects the width of an entry - and not the type.  The type is what the
+*outer* function switches on (`ldr w2, [x22]`, `sub w1, w2, #1`, a four-way
+jump table for ERAM, DDR, HASH and STAT).  So bits 25..27 of the descriptor
+carry p3, exactly as the driver writes them.
+
+The frame the descriptor is built in confirms the rest: the base goes in at
+bits 4..19 of the second word (`bfi w0, w1, #4, #0x10`), the depth at bits
+2..17 of the first word (`bfi w1, w0, #2, #0x10`), and the top byte's bits
+4..7 are set to one - which is the 0x10 the driver carries in every
+descriptor.
+
+## 5. What is left
 
 The three tables above are the ones whose *content* could have been wrong.
 They are not.  What remains unknown is not in the tables:
