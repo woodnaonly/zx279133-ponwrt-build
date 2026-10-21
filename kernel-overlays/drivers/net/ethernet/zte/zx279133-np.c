@@ -519,13 +519,90 @@ static int zx279133_eram_table_set_bits(struct zx279133_eth *eth, u32 sdt_id,
 }
 
 /*
+ * The same table read back, one entry.
+ */
+static int zx279133_eram_table_get_bits(struct zx279133_eth *eth, u32 sdt_id,
+					u32 index, u32 width, u32 *value)
+{
+	u32 base = zx279133_eram_base_of(sdt_id);
+	u32 bit_len = zx279133_eram_bit_len_of(sdt_id);
+	u32 bit_off, addr, word_idx, bit_pos, mask;
+	u32 window[ZX279133_SMMU0_WORDS];
+	int ret;
+
+	if (!base || !bit_len)
+		return -EINVAL;
+	if (width > bit_len || width > 32)
+		return -EINVAL;
+
+	bit_off = bit_len * index;
+	addr = (base << 7) + (bit_off & ~0x7fu);
+	word_idx = (bit_off >> 5) & (ZX279133_SMMU0_WORDS - 1);
+	bit_pos = bit_off & 0x1f;
+
+	ret = zx279133_smmu0_read(eth, addr, window, ZX279133_SMMU0_WORDS,
+				  ZX279133_SMMU0_CMD_READ);
+	if (ret)
+		return ret;
+
+	mask = (width >= 32) ? 0xffffffffu : ((1u << width) - 1);
+	*value = (window[word_idx] >> bit_pos) & mask;
+
+	return 0;
+}
+
+/*
+ * Patch one field of one word of the 128-bit window an entry lives in.
+ *
+ * The vendor's own helpers work exactly this way: they read the entry as
+ * four words, change one field of it, and write the four words back.
+ * se_eram_table_get(0x7d, mem_id) reads the block at
+ * (base << 7) + (128 * mem_id) and port_attr_def_brd_flood_en_set() patches
+ * byte 3 of it; glb_cfg_table_cpu_base_qid_set() reads entry 0 of table
+ * 0x22 and patches bits 1..9 of the halfword at byte 14; and
+ * tm_reason_map_cpu_qid_set() reads entry 0 of table 0x19 and patches bits
+ * 0..4 of byte 3.
+ *
+ * The word to patch is named, not derived, because it depends on the
+ * table: a table whose entries are 32 bits wide keeps four entries in one
+ * window, so entry 0 is word 0 of it, while a table whose entries are 128
+ * bits wide keeps one entry in a window and the field can be in any word.
+ */
+static int zx279133_eram_window_patch(struct zx279133_eth *eth, u32 sdt_id,
+				       u32 index, u32 word, u32 mask,
+				       u32 value)
+{
+	u32 base = zx279133_eram_base_of(sdt_id);
+	u32 bit_len = zx279133_eram_bit_len_of(sdt_id);
+	u32 addr, window[ZX279133_SMMU0_WORDS];
+	int ret;
+
+	if (!base || !bit_len)
+		return -EINVAL;
+	if (word >= ZX279133_SMMU0_WORDS)
+		return -EINVAL;
+
+	addr = (base << 7) + ((bit_len * index) & ~0x7fu);
+
+	ret = zx279133_smmu0_read(eth, addr, window, ZX279133_SMMU0_WORDS,
+				  ZX279133_SMMU0_CMD_READ);
+	if (ret)
+		return ret;
+
+	window[word] = (window[word] & ~mask) | (value & mask);
+
+	return zx279133_smmu0_write(eth, addr, window, ZX279133_SMMU0_WORDS,
+				     ZX279133_SMMU0_CMD_WRITE);
+}
+
+/*
  * SPA port-attribute updates recovered from np.ko, entry 71 (memory
  * address 19), byte 2: mf_port_iswanport_set(0, 1) sets bit 1 on mem_id
  * 0 (companion 14) at np_nppu_init, and mf_port_ppuinit_set() sets bit 2
  * on the mem ids the vendor configures at np_init_done, including CPU
  * injection memory 15 (companion 10 for mem_id 5). Every update is
  * mirrored into the MF extension table, SE ERAM table 0x7d: 64 entries of
- * 128 bits keyed by SPA memory id, word 3
+ * 128 bits keyed by SPA memory id, the first word
  * carrying the port-attribute word the SPA multi-forward engine consults
  * to accept CPU-originated frames for a port.
  */
@@ -1337,7 +1414,7 @@ static ssize_t zx279133_9132_write(struct file *file, const char __user *ubuf,
 					  ZX279133_SMMU0_CMD_READ);
 		if (ret)
 			return ret;
-		data[3] = val;
+		data[0] = val;
 		ret = zx279133_smmu0_write(eth,
 					   (zx279133_eram_base_of(ZX279133_MF_ERAM_SDT_ID) + mem_id) << 7,
 					   data, ZX279133_SMMU0_WORDS,
@@ -1352,6 +1429,48 @@ static ssize_t zx279133_9132_write(struct file *file, const char __user *ubuf,
 			return ret;
 		pr_info("mf eram mem %u = %08x %08x %08x %08x\n",
 			mem_id, data[0], data[1], data[2], data[3]);
+		return count;
+	}
+
+	/*
+	 * One entry of one ERAM table, by the table's id rather than by its
+	 * base block, so that a table can be read and written the way the
+	 * vendor's own code does it - the entry is merged into the 128-bit
+	 * window it lives in, bit by bit.
+	 *
+	 *	"es 18 128 2 2"	write entry 128 of table 0x18, 2 bits wide,
+	 *				with the value 2
+	 *	"eg 18 128 2"		read that entry back
+	 */
+	if (!strcmp(tok, "es") || !strcmp(tok, "eg")) {
+		u32 sdt_id, index, width, value = 0;
+		bool is_write = tok[1] == 's';
+
+		tok = zx279133_9132_next_token(&p);
+		if (!tok || kstrtou32(tok, 0, &sdt_id))
+			return -EINVAL;
+		tok = zx279133_9132_next_token(&p);
+		if (!tok || kstrtou32(tok, 0, &index))
+			return -EINVAL;
+		tok = zx279133_9132_next_token(&p);
+		if (!tok || kstrtou32(tok, 0, &width))
+			return -EINVAL;
+		if (is_write) {
+			tok = zx279133_9132_next_token(&p);
+			if (!tok || kstrtou32(tok, 0, &value))
+				return -EINVAL;
+			ret = zx279133_eram_table_set_bits(eth, sdt_id,
+							   index, width,
+							   value);
+			if (ret)
+				return ret;
+		}
+		ret = zx279133_eram_table_get_bits(eth, sdt_id, index, width,
+						   &value);
+		if (ret)
+			return ret;
+		pr_info("eram table 0x%02x entry %u width %u = 0x%x\n",
+			sdt_id, index, width, value);
 		return count;
 	}
 
@@ -2409,6 +2528,72 @@ static int zx279133_9132_proto_init(struct zx279133_eth *eth)
 	dev_info(eth->dev,
 		 "9132 switch ports 1..7 have the protocol action table at ERAM block %u (ARP trapped to the CPU)\n",
 		 base);
+
+	return 0;
+}
+
+/*
+ * The tables that say where a frame the switch hands to the CPU goes.
+ *
+ * Without them the switch forwards happily and the frame arrives at a
+ * queue the CPU is not listening on, which looks exactly like a dead
+ * wire.  The three writes below are the vendor's own, and every value
+ * comes out of the vendor's code rather than out of thin air:
+ *
+ *   0x22  the global config table.  np_user_table_init() calls
+ *         glb_cfg_table_cpu_base_qid_set(0x193) and nothing else writes
+ *         it; the setter puts the value in bits 1..9 of the halfword at
+ *         byte 14 of entry 0.  The table's entries are 128 bits wide, so
+ *         that halfword is word 3 of the entry, bits 17..25.
+ *
+ *   0x27  the outport map.  outport_and_real_port_map_table_init()
+ *         writes outport 15 - the CPU's own outport - with the real
+ *         port 15 and the queue id 0x193, which is the base queue id
+ *         above.  The entry is 16 bits wide: the real port is in bits
+ *         0..5 and the queue id in bits 6..14.
+ *
+ *   0x19  the reason map.  sw_init_omci_trap_qid_init() calls
+ *         zxic_api_sw_reason_map_cpu_qid_set(direct=0, reason=0, qid=7),
+ *         so reason 0 - OMCI - is delivered to CPU queue 7.  The queue
+ *         id is in bits 0..4 of byte 3 of the entry, and the entries are
+ *         32 bits wide, so entry 0 is word 0 of the window.
+ */
+#define ZX279133_QID_ERAM_SDT_ID	0x19
+#define ZX279133_GLBCFG_ERAM_SDT_ID	0x22
+#define ZX279133_OUTPORT_ERAM_SDT_ID	0x27
+
+#define ZX279133_VENDOR_CPU_BASE_QID	0x193
+#define ZX279133_VENDOR_OMCI_QID	7
+
+static int zx279133_9132_cpu_path_init(struct zx279133_eth *eth)
+{
+	int ret;
+
+	ret = zx279133_eram_window_patch(eth, ZX279133_GLBCFG_ERAM_SDT_ID, 0, 3,
+					  0x1ffu << 17,
+					  ZX279133_VENDOR_CPU_BASE_QID << 17);
+	if (ret)
+		return dev_err_probe(eth->dev, ret,
+				     "the CPU base queue id did not go into ERAM table 0x22\n");
+
+	ret = zx279133_eram_table_set_bits(eth, ZX279133_OUTPORT_ERAM_SDT_ID,
+					    0x0f, 16,
+					    0x0f | (ZX279133_VENDOR_CPU_BASE_QID << 6));
+	if (ret)
+		return dev_err_probe(eth->dev, ret,
+				     "the outport map did not go into ERAM table 0x27\n");
+
+	ret = zx279133_eram_window_patch(eth, ZX279133_QID_ERAM_SDT_ID, 0, 0,
+					  0x1fu << 24,
+					  ZX279133_VENDOR_OMCI_QID << 24);
+	if (ret)
+		return dev_err_probe(eth->dev, ret,
+				     "the reason map did not go into ERAM table 0x19\n");
+
+	dev_info(eth->dev,
+		 "9132 CPU path: base queue %u, outport 15 -> real port 15 queue %u, reason 0 -> queue %u\n",
+		 ZX279133_VENDOR_CPU_BASE_QID, ZX279133_VENDOR_CPU_BASE_QID,
+		 ZX279133_VENDOR_OMCI_QID);
 
 	return 0;
 }
@@ -3864,6 +4049,15 @@ int zx279133_np_prepare(struct zx279133_eth *eth)
 	 * trap a frame for the CPU instead of forwarding it to the WAN.
 	 */
 	ret = zx279133_9132_proto_init(eth);
+	if (ret)
+		goto err_route_off;
+	/*
+	 * And the three tables that say where a frame the switch hands to
+	 * the CPU goes.  The vendor writes them in np_user_table_init() and
+	 * sw_init_omci_trap_qid_init(); without them the frame arrives at
+	 * a queue nobody is listening on.
+	 */
+	ret = zx279133_9132_cpu_path_init(eth);
 	if (ret)
 		goto err_route_off;
 	/*
