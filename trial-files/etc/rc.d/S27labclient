@@ -47,12 +47,30 @@ if ! ip link show "$LABH" >/dev/null 2>&1; then
 fi
 
 # The client's own stack, if the kernel has namespaces.
+#
+# This has to be re-runnable: the router script and this one are run again
+# whenever the upstream port changes hands, and the second run must not
+# quietly drop the client out of its namespace.  The first version created
+# the namespace unconditionally, so a second run failed to move the client
+# end into it (it was already there), fell back to the root namespace, and
+# the "the client is in its own stack" evidence was lost - while everything
+# still looked like it had worked.
 INNS=0
-if ip netns add "$LABNS" 2>/dev/null; then
-	if ip link set "$LABC" netns "$LABNS" 2>/dev/null; then
+if ip netns list 2>/dev/null | grep -q "^$LABNS"; then
+	# The namespace is already there: is the client end still in it?
+	if ip netns exec "$LABNS" ip link show "$LABC" >/dev/null 2>&1; then
 		INNS=1
 	else
 		ip netns del "$LABNS" 2>/dev/null
+	fi
+fi
+if [ "$INNS" = 0 ]; then
+	if ip netns add "$LABNS" 2>/dev/null; then
+		if ip link set "$LABC" netns "$LABNS" 2>/dev/null; then
+			INNS=1
+		else
+			ip netns del "$LABNS" 2>/dev/null
+		fi
 	fi
 fi
 
