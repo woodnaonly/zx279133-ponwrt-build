@@ -481,11 +481,15 @@ fi
 # when the image has no nft.
 echo 1 > /proc/sys/net/ipv4/ip_forward 2>/dev/null
 if [ -n "$WAN" ] && command -v nft >/dev/null 2>&1; then
+	# "counter" before "masquerade", not after: masquerade is a terminal
+	# statement, and nft rejects anything that follows it ("Statement after
+	# terminal statement has no effect"), so the rule as it was written
+	# never loaded and the WAN side was never masqueraded.
 	nft -f - >/dev/kmsg 2>&1 <<EOF
 table ip nat {
 	chain postrouting {
 		type nat hook postrouting priority 100; policy accept;
-		oifname "$WAN" masquerade counter
+		oifname "$WAN" counter masquerade
 	}
 }
 EOF

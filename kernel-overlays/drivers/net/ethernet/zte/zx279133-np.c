@@ -747,6 +747,24 @@ int zx279133_wanid_debugfs_init(struct zx279133_eth *eth)
 }
 
 /*
+ * The 9132's four internal PHYs, and the bus they are on.
+ *
+ * The addresses are not a guess.  The running vendor system's device tree
+ * carries a `uni-phy` property on both of the SoC's MDIO controllers and it
+ * is a u32 array:
+ *
+ *	{ 0x0a, 0x0b, 0x0c, 0x0d, 0x05, 0x1c, 0x02 }
+ *
+ * 0x0a..0x0d are the four internal UNI PHYs; 0x05 is the RTL8226 on jack 4,
+ * which mainline's board DTS already declares at mdio1 address 5.
+ */
+#define ZX279133_9132_UNI_PHY_FIRST	0x0a
+#define ZX279133_9132_UNI_PHY_LAST	0x0d
+
+/* Defined further down, next to the PHY enable code that owns the bus. */
+static struct mii_bus *zx279133_9132_uni_mdio_bus(struct zx279133_eth *eth);
+
+/*
  * A console for the 9132's SPA indirect window.
  *
  * Why this exists: the 9132's forwarding is decided by words in a per-port attribute
@@ -760,15 +778,24 @@ int zx279133_wanid_debugfs_init(struct zx279133_eth *eth)
  * The interface is textual and writable, because the point is to try configurations
  * rather than to observe one:
  *
- *	cat  /sys/kernel/debug/zx279133-9132		# dump the port words
+ *	cat  /sys/kernel/debug/zx279133-9132		# dump the port words and the PHYs
  *	echo "r 1 19" > .../zx279133-9132		# read one word
  *	echo "w 1 19 0x96040001" > .../zx279133-9132	# write one word, read it back
+ *	echo "m 0b 04" > .../zx279133-9132		# read one PHY register
+ *	echo "mw 0b 00 1040" > .../zx279133-9132	# write one, read it back
  *
  * "mem" is the SPA memory id and "addr" is the word inside that port's twenty-word
  * attribute table.  The memory ids are the ones the bootloader itself prints:
  *
  *	0 = PON0, 1..4 = the four UNI jacks, 5 = XMAC0 (the conduit the DSA CPU
  *	port talks to), 6 = XMAC1, 7 = RGMII1, 15 = the CPU trap port.
+ *
+ * The "m" and "mw" commands are the PHYs, and they are a different address
+ * space: "addr" there is the MDIO address on the SoC's MDIO controller #0
+ * (0x0a..0x0d are the four internal PHYs) and "reg" is the register inside
+ * the PHY.  They are here because the same question - what does this chip
+ * actually answer - is the question a PHY driver for it has to be written
+ * against, and the answers are worth having in the same console.
  */
 #define ZX279133_9132_DUMP_MEM_COUNT	20
 static const u32 zx279133_9132_dump_mems[ZX279133_9132_DUMP_MEM_COUNT] = {
@@ -782,6 +809,7 @@ static const u32 zx279133_9132_dump_addrs[ZX279133_9132_DUMP_ADDR_COUNT] = {
 static int zx279133_9132_show(struct seq_file *s, void *unused)
 {
 	struct zx279133_eth *eth = s->private;
+	struct mii_bus *bus;
 	unsigned int m, a;
 
 	seq_puts(s, "mem   ");
@@ -803,6 +831,33 @@ static int zx279133_9132_show(struct seq_file *s, void *unused)
 		}
 		seq_puts(s, "\n");
 	}
+
+	/*
+	 * The four internal PHYs' register files, so that the console shows
+	 * the chip's own answers and not only the switch's words.  The
+	 * addresses are the ones on the SoC's MDIO controller #0.
+	 */
+	bus = zx279133_9132_uni_mdio_bus(eth);
+	if (!bus) {
+		seq_puts(s, "no 9132 PHY bus\n");
+		return 0;
+	}
+	seq_puts(s, "\n9132 UNI PHY registers (mdio addr, reg 00..1f)\n");
+	for (m = ZX279133_9132_UNI_PHY_FIRST;
+	     m <= ZX279133_9132_UNI_PHY_LAST; m++) {
+		int paddr = m;
+		int reg;
+
+		seq_printf(s, "%02x ", paddr);
+		for (reg = 0; reg < 32; reg++) {
+			int val = mdiobus_read(bus, paddr, reg);
+
+			seq_printf(s, " %04x",
+				   val < 0 ? 0xffff : (unsigned int)val);
+		}
+		seq_puts(s, "\n");
+	}
+
 	return 0;
 }
 
@@ -873,6 +928,49 @@ static ssize_t zx279133_9132_write(struct file *file, const char __user *ubuf,
 		if (ret)
 			return ret;
 		pr_info("9132 spa: mem %u addr %u = 0x%08x\n", mem, addr, val);
+		return count;
+	}
+
+	/*
+	 * The PHYs, over the SoC's MDIO controller #0.
+	 *
+	 * "m <addr> <reg>" reads one register and "mw <addr> <reg> <val>"
+	 * writes one and reads it back.  The address is the MDIO address
+	 * (0x0a..0x0d for the four internal PHYs), NOT the DSA port number.
+	 */
+	if (!strcmp(tok, "m") || !strcmp(tok, "mw")) {
+		struct mii_bus *bus;
+		bool is_write = tok[1] == 'w';
+		int maddr, mreg, mval = 0;
+
+		tok = zx279133_9132_next_token(&p);
+		if (!tok || kstrtou32(tok, 0, &mem))
+			return -EINVAL;
+		maddr = (int)mem;
+		tok = zx279133_9132_next_token(&p);
+		if (!tok || kstrtou32(tok, 0, &addr))
+			return -EINVAL;
+		mreg = (int)addr;
+		if (is_write) {
+			tok = zx279133_9132_next_token(&p);
+			if (!tok || kstrtou32(tok, 0, &val))
+				return -EINVAL;
+			mval = (int)val;
+		}
+
+		bus = zx279133_9132_uni_mdio_bus(eth);
+		if (!bus)
+			return -ENODEV;
+		if (is_write) {
+			ret = mdiobus_write(bus, maddr, mreg, (u16)mval);
+			if (ret)
+				return ret;
+		}
+		ret = mdiobus_read(bus, maddr, mreg);
+		if (ret < 0)
+			return ret;
+		pr_info("9132 mdio: addr %02x reg %02x = 0x%04x\n",
+			maddr, mreg, (u16)ret);
 		return count;
 	}
 
@@ -1507,18 +1605,25 @@ static int zx279133_9132_port_init(struct zx279133_eth *eth)
  * enable: np_133.ko's smac_set_port_enable() calls zte_set_gephy_enable(),
  * which reads the PHY's BMCR, clears bit 11 (POWERDOWN) and writes it back
  * over zx_mdio_0_read/write(), i.e. MDIO controller #0.
- *
- * The addresses are not a guess.  The running vendor system's device tree
- * carries a `uni-phy` property on both of the SoC's MDIO controllers and it
- * is a u32 array:
- *
- *	{ 0x0a, 0x0b, 0x0c, 0x0d, 0x05, 0x1c, 0x02 }
- *
- * 0x0a..0x0d are the four internal UNI PHYs; 0x05 is the RTL8226 on jack 4,
- * which mainline's board DTS already declares at mdio1 address 5.
  */
-#define ZX279133_9132_UNI_PHY_FIRST	0x0a
-#define ZX279133_9132_UNI_PHY_LAST	0x0d
+
+/*
+ * The bus the 9132's four internal PHYs are on: the SoC's MDIO controller #0,
+ * named by the "zx279133,uni-phy-bus" phandle on the NPPT node.
+ */
+static struct mii_bus *zx279133_9132_uni_mdio_bus(struct zx279133_eth *eth)
+{
+	struct device_node *np;
+	struct mii_bus *bus;
+
+	np = of_parse_phandle(eth->dev->of_node, "zx279133,uni-phy-bus", 0);
+	if (!np)
+		return NULL;
+	bus = of_mdio_find_bus(np);
+	of_node_put(np);
+
+	return bus;
+}
 
 /*
  * BMSR's link bit is latched: it has to be read twice, and the first read
@@ -1535,23 +1640,44 @@ static int zx279133_9132_phy_link(struct mii_bus *bus, int addr)
 	return (bmsr < 0) ? -1 : !!(bmsr & BMSR_LSTATUS);
 }
 
+/*
+ * The whole register file of one PHY, in one line.
+ *
+ * Why this is here and not a guess: a PHY driver for this chip has to know
+ * what the chip answers before it can be written - which registers exist,
+ * which are the capability registers, whether the link status is in the
+ * standard place.  The chip answers 0x84b9:0x5032 over Clause 22, and no
+ * driver in this tree claims that id, so the driver has to be ours, and ours
+ * has to be written against the chip's own answers rather than against an
+ * assumption about them.  Reading 0x00..0x1f once, at the moment the driver
+ * finds the PHYs, is how those answers get into the log.
+ */
+static void zx279133_9132_phy_dump(struct zx279133_eth *eth, struct mii_bus *bus,
+				   int addr)
+{
+	char buf[256];
+	int reg, len;
+
+	len = scnprintf(buf, sizeof(buf),
+			"9132 UNI PHY %02x regs 00-1f:", addr);
+	for (reg = 0; reg < 32; reg++) {
+		int val = mdiobus_read(bus, addr, reg);
+
+		len += scnprintf(buf + len, sizeof(buf) - len, " %04x",
+				 val < 0 ? 0xffff : (unsigned int)val);
+	}
+	dev_info(eth->dev, "%s", buf);
+}
+
 static void zx279133_9132_phy_enable(struct zx279133_eth *eth)
 {
-	struct device_node *np;
 	struct mii_bus *bus;
 	u16 found_addr[ZX279133_9132_UNI_PHY_LAST -
 			ZX279133_9132_UNI_PHY_FIRST + 1];
 	int addr, found = 0;
 	u32 i;
 
-	np = of_parse_phandle(eth->dev->of_node, "zx279133,uni-phy-bus", 0);
-	if (!np) {
-		dev_info(eth->dev,
-			 "9132 PHY bus not named; UNI PHYs left as they are\n");
-		return;
-	}
-	bus = of_mdio_find_bus(np);
-	of_node_put(np);
+	bus = zx279133_9132_uni_mdio_bus(eth);
 	if (!bus) {
 		dev_err(eth->dev,
 			"9132 PHY bus is not registered; UNI PHYs left as they are\n");
@@ -1594,6 +1720,14 @@ static void zx279133_9132_phy_enable(struct zx279133_eth *eth)
 			bmcr_rb = -1;
 
 		link = zx279133_9132_phy_link(bus, addr);
+
+		/*
+		 * The full register file, once, right after the PHY has been
+		 * powered up: it is the only place the chip's own answers are
+		 * written down, and they are what a PHY driver for it has to
+		 * be written against.
+		 */
+		zx279133_9132_phy_dump(eth, bus, addr);
 
 		found_addr[found++] = addr;
 		if (bmcr_rb < 0)

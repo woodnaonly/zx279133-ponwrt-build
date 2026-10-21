@@ -450,28 +450,93 @@
 			#address-cells = <1>;
 			#size-cells = <0>;
 
+			/*
+			 * The four UNI ports.
+			 *
+			 * These have internal PHYs (the 9132's own, at MDIO
+			 * 0x0a..0x0d on controller #0), and the tree's DSA
+			 * contract for a user port with no phy-handle is to
+			 * take them from ds->user_mii_bus at an address equal
+			 * to the port number (net/dsa/port.c: "User ports with
+			 * no phy-handle or fixed-link are expected to connect
+			 * to an internal PHY located on the ds->user_mii_bus
+			 * at an MDIO address equal to the port number").
+			 *
+			 * That path needs two things this tree does not have
+			 * for this chip: a mii_bus of our own (the 9132's PHYs
+			 * are not on a bus of the switch's, they are on the
+			 * SoC's controller #0) and a PHY driver that matches
+			 * them.  The chip answers 0x84b9:0x5032, and no
+			 * driver in this tree claims that id - the tree's own
+			 * zx279051.c expects 0x000084b9 and reads it over
+			 * Clause 45, while these are Clause 22.
+			 *
+			 * So the ports carry a fixed-link for now.  It is the
+			 * one thing phylink needs no PHY for:
+			 * phylink_fwnode_phy_connect() returns 0 as soon as
+			 * cfg_link_an_mode is MLO_AN_FIXED, before it looks
+			 * for a PHY at all, so the four netdevs appear and
+			 * the switch registration completes.
+			 *
+			 * What this costs, and it is not nothing: a port in
+			 * fixed-link mode has no carrier of its own, so it
+			 * claims 1G/full whether or not a cable is in it.
+			 * The PHYs themselves are untouched - the NPPT driver
+			 * still powers them and enables auto-negotiation
+			 * (zx279133_9132_phy_enable()), and the 9132 reads
+			 * their link state itself, so traffic still only
+			 * moves when a cable is really there.  What is lost
+			 * is the *software's* view of the link, and with it
+			 * the per-port speed and duplex that a real PHY
+			 * would report.
+			 *
+			 * The replacement is a PHY driver of our own and a
+			 * mii_bus of our own; until that exists this is the
+			 * honest way to say "1G, full duplex, and the PHY on
+			 * the other end negotiates as it always did".
+			 */
 			port@4 {
 				reg = <4>;
 				label = "lan1";
 				phy-mode = "internal";
+
+				fixed-link {
+					speed = <1000>;
+					full-duplex;
+				};
 			};
 
 			port@5 {
 				reg = <5>;
 				label = "lan2";
 				phy-mode = "internal";
+
+				fixed-link {
+					speed = <1000>;
+					full-duplex;
+				};
 			};
 
 			port@6 {
 				reg = <6>;
 				label = "lan3";
 				phy-mode = "internal";
+
+				fixed-link {
+					speed = <1000>;
+					full-duplex;
+				};
 			};
 
 			port@7 {
 				reg = <7>;
 				label = "lan4";
 				phy-mode = "internal";
+
+				fixed-link {
+					speed = <1000>;
+					full-duplex;
+				};
 			};
 
 			port@8 {
