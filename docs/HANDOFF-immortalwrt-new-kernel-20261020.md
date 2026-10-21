@@ -168,6 +168,55 @@ run98 的 initramfs 镜像里带的是**旧的**租约脚本（run99 才有新�
 
 ---
 
+## 0.8 2026-10-21 上午 09:05：9132 第一次在 mainline 里开机，卡在 DSA 注册（动手前先读这一节）
+
+完整取证见 **`docs/23-9132-first-mainline-boot-and-the-dsa-setup-hook-20261021.md`**，
+启动切片 `staging/ctl/run98-boot-evidence.txt`。
+
+**① run98 是这块板子上第一次真的跑起 mainline 内核 + 9132 驱动，1 秒内把 G2 的量测全拿到了：**
+
+| 计划要测的 | 板子说的 | 结论 |
+|---|---|---|
+| lane 继承自 bootloader | `XPCS0 status=0x380b link=up` | **PASS**（run86 是 `0x280b link=down`） |
+| Uni SerDes 不被改写 | `Uni SerDes 1G inherited: mode 0x1 already, image differs in 0/49 word(s)` | **PASS** |
+| 四个 SOPC MAC 放行 | `SOPC send-enable published for 4 MAC(s)` | **PASS** |
+| 四个内部 PHY / PC 在哪只口 | `UNI PHY 0b: ... link 1`，`0a/0c/0d: link 0` | **PASS**，PC 在第二只 UNI 口 |
+| PPU 逐端口字 + PVID | `PPU 1..4 attribute word 96040001 (VID 59..62)` | **PASS** |
+| 四个口分成 lan1..lan4 | **没走到**（panic） | 未验 |
+
+**② panic 的根因不是我们的代码写错，是这棵树的 DSA core 有一个"头文件说可选、core 直接调"的钩子。**
+`pc : 0x0` + `lr : dsa_register_switch+0x904/0xde0` = 跳到空函数指针。
+`staging/tree/net_dsa_dsa.c:644` 是 `err = ds->ops->setup(ds);` —— **前面没有 `if (ds->ops->setup)`**，
+而 `include/net/dsa.h` 里写的是 "Optional switch-wide initialization and destruction methods"。
+**不写 `.setup` 的驱动不是编不过，是开机就死。** 树里唯一的另一个开关驱动（RTL8372N）有 `.setup`，
+所以 core 才敢直接调。
+
+**③ 这棵树不是 stock mainline 6.18 —— 拿 mainline 的知识来改它一定会踩。**
+它的 DSA core 里有 "switch tree" 改造：端口是**链表**不是数组、**phylink 由 core 自己建**
+（`dsa_port_phylink_create()`，driver 只提供 `phylink_get_caps`/`phylink_fixed_state`）、
+driver 的 `dsa_switch` 用 `devm_kzalloc()` 而不是 `dsa_switch_alloc()`。
+**读树里那份驱动，别读 mainline 的。**
+
+**④ 同一个注册路径上还有第二个坑，它不 panic、只报错，但一样让四个口出不来。**
+`dsa_port_enable()` 对 **CPU 口**也会调一次，而我们的 `zx279133_switch_port_enable()`
+对 4..7 以外的端口一律返回 `-EINVAL` —— **CPU 口是 8**。⇒ 修好 `.setup` 之后注册仍然会失败。
+已改：CPU 口放行（它就是 SoC 自己的 SGMII lane，背后没有 PHY 要上电）；
+`port_bridge_join/leave` 也跳过 CPU 口（它没有自己的 PPU）。
+
+**⑤ 修法已推 `70a5f5b` → run100。** 配套检查工具 `staging/ctl/drivercheck.py`：
+读树里的 `include/net/dsa.h`，列出 core **无保护**调用（即可能跳到 0）的所有 `ops->`，
+并核对我们的 ops 表。结论：`.setup` 是唯一缺的。
+
+**⑥ 工具坑：串口 relay 的写句柄会卡死，看起来跟板子死了一模一样。**
+08:54 那次试跑，relay 一直在报 `send error`，板子其实**已经重启并打完了整个 U-Boot + 内核启动**，
+**747 字节的控制台输出卡在串口里没人读**。原因是 CH340 的发送缓冲在板子断电期间被填满，
+写超时后每一次写都超时。⇒ `tools/serrelay.ps1` 现在写失败就 close/open 端口（自愈），
+新增 `staging/ctl/relaycheck.sh`（写个 marker 看 relay 有没有说"已发送"，
+没有就杀掉 relay 子进程让 relayloop 重拉），`tools/onewindow.sh` 每次开机前先跑它。
+**卡死的 recorder 和死掉的板子长得一模一样 —— 窗口只有 14 分钟时，这是最贵的一类误会。**
+
+---
+
 ## 1. 板子现在的真实状态（2026-10-20 23:21–23:25 实测）
 
 | 项 | 值 |
@@ -305,6 +354,7 @@ run98 的 initramfs 镜像里带的是**旧的**租约脚本（run99 才有新�
 ## 7. 文件索引（接手时按这个找）
 
 - 文档：`ci-build-repo/docs/01`…`docs/13`（`08` NP 地址空间、`09` U-Boot 已证 IDM 镜像、`10` ring 搬窗口、**`11` 厂商 Linux bring-up 逐字记录**、**`12` jffs2 dirent 损伤与修复 + 刷好的标准**、**`13` eth0 出口归因/upmode 否证/tm shell 否证/eth2 隔离/NAT 缺口**），`HANDOFF.md`（历史收口段）。
+- **本轮（2026-10-21）的新文档**：`docs/20`（M2/PON 可行性，冻结为"研究"）、`docs/21`（NAT 路由器那一半 + 单线 M1）、`docs/22`（NAT 验收基线 + busybox udhcpc 的另一套约定）、**`docs/23`（9132 第一次在 mainline 里开机 + DSA 的 `.setup` 钩子 + relay 卡死）**。
 - 工具：`tools/verify_router.sh`（4 通道/5 判定）、`tools/eth0egress.sh`、`tools/jackmap.sh`、`tools/eth0jackwatch.sh`、`tools/boot419score.sh`、`tools/ubflash.sh`、`tools/ubram.sh`、`tools/reflush_root.sh`、`tools/onu2.cjs`、`tools/ponDis.py`、`staging/kofn.py`、`staging/kocalls.py`。
 - **新内核这条线的本地落点**：`ci-build-repo/kernel-overlays/`（`arch/arm64/boot/dts/zte/zx279133-sk-d840n.dts` + `drivers/net/ethernet/zte/zx279133-{main,mac,np,idm,netdev}.c` + `.h` + `drivers/phy/zte/phy-zx279133-uni-serdes.c` + `drivers/mtd/nand/spi/unim.c`）、`ci-build-repo/overlays/target/linux/zte/`、`ci-build-repo/scripts/configure-sk-d840n.sh`、`ci-build-repo/tests/kernelsrc/arch_arm64_boot_dts_zte_zx279133-sr1010.dts`、`staging/src/zx279133-sr1010.dts`、`staging/src/fork-SR1010_MTD_WRITE_ACCESS.md`、`.github/workflows/build-sk-d840n.yml`；`configs/sr1010-extra.config` 是 SR1010 基线，**别拿它当本板产物**。
 - **9132 / switch.ko 起步包**：板上 `/lib/modules/4.19.136+/switch.ko`（853 KB，md5 `993f0124…`；本地 `pon/vendor-modules/switch.ko`，同 md5；`staging/vendor-full/kmodule/switch.ko` 是另一版 `fdeba014…`，别拿错）；`/proc/pon/switch_debug`；`docs/07` 补七十七（内部 PHY 0x0A–0x0D、OUI 0x212E54）、补八十一（无 WAN 电口）、补九十四/九十五（厂商 4.19 也不发、U-Boot 11 MB）、补九十六（外部状态全一致）、**补九十七（`/dev/ethdriver` ioctl 是桩；差异在 switch.ko init；task #42 离线差集）**；`docs/13 §8`（`/proc/pon/*_debug` 的 setter）。
