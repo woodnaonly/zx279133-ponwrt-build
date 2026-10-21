@@ -1010,6 +1010,12 @@ static int zx279133_switch_port_bridge_join(struct dsa_switch *ds, int port,
 	if (!zx279133_9132_wan_type)
 		return 0;
 
+	/* The CPU port is the SoC's own lane, not a jack: it has no PPU
+	 * whose type could be changed.
+	 */
+	if (port == ZX279133_SWITCH_DSA_CPU_PORT)
+		return 0;
+
 	return zx279133_lan_service_port_wan_set(priv->service,
 						  ZX279133_RTL8372N_TRANSPORT_VID_BASE + port,
 						  false);
@@ -1021,6 +1027,9 @@ static void zx279133_switch_port_bridge_leave(struct dsa_switch *ds, int port,
 	struct zx279133_switch *priv = ds->priv;
 
 	if (!zx279133_9132_wan_type)
+		return;
+
+	if (port == ZX279133_SWITCH_DSA_CPU_PORT)
 		return;
 
 	zx279133_lan_service_port_wan_set(priv->service,
@@ -1039,6 +1048,17 @@ static int zx279133_switch_port_enable(struct dsa_switch *ds, int port,
 {
 	struct zx279133_switch *priv = ds->priv;
 	int addr, bmcr;
+
+	/*
+	 * The CPU port is the SoC's own SGMII lane, not a jack: there is no
+	 * PHY behind it to power up.  The core asks for it to be enabled all
+	 * the same time (net/dsa/port.c: dsa_port_enable() on a
+	 * DSA_PORT_TYPE_CPU port), so a driver that answers "-EINVAL" for it
+	 * refuses the whole switch and the registration ends in an error
+	 * instead of the four jacks appearing.
+	 */
+	if (port == ZX279133_SWITCH_DSA_CPU_PORT)
+		return 0;
 
 	if (port < ZX279133_SWITCH_DSA_PORT_MIN ||
 	    port > ZX279133_SWITCH_DSA_PORT_MAX)
@@ -1099,8 +1119,60 @@ static void zx279133_switch_port_stp_state_set(struct dsa_switch *ds, int port,
 {
 }
 
+/*
+ * The switch's own "get ready" hook, and the one this tree's DSA core does
+ * not let a driver skip.
+ *
+ * net/dsa.c says
+ *
+ *	err = ds->ops->setup(ds);
+ *
+ * with no "if (ds->ops->setup)" in front of it, so a driver that leaves the
+ * hook out does not fail to build - it fails to boot.  The call goes to
+ * address zero and the kernel dies with
+ *
+ *	Unable to handle kernel execute from non-executable memory at
+ *	virtual address 0000000000000000
+ *	pc : 0x0
+ *	lr : dsa_register_switch+0x904/0xde0
+ *
+ * Measured 2026-10-21 09:05, run 98: the 9132 came up, the NPPT brought
+ * the four internal PHYs up, the lane inherited the bootloader's link, and
+ * then the switch registration jumped to zero.  The tree's own RTL8372N
+ * driver - the only other switch driver in this tree - has a .setup, which
+ * is why the core can call it without looking.
+ *
+ * What the switch needs by now has already been done: the NPPT driver
+ * wrote the PPU's per-port words and PVIDs, the probe read the four PHY
+ * link bits, and the shared datapath's four SOPC MACs were published.  So
+ * there is nothing left to program here, and the hook says so out loud -
+ * a hook that does nothing silently is indistinguishable from one that was
+ * never called, and this round's whole answer is in the log.
+ */
+static int zx279133_switch_setup(struct dsa_switch *ds)
+{
+	dev_info(ds->dev,
+		 "the 9132 is serving: the jacks are the 9132's UNI ports %u..%u, they are DSA ports %u..%u, the CPU port is %u and the transport VIDs are %u..%u\n",
+		 ZX279133_SWITCH_UNI_PORT_MIN, ZX279133_SWITCH_UNI_PORT_MAX,
+		 ZX279133_SWITCH_DSA_PORT_MIN, ZX279133_SWITCH_DSA_PORT_MAX,
+		 ZX279133_SWITCH_DSA_CPU_PORT,
+		 ZX279133_RTL8372N_TRANSPORT_VID_BASE +
+		 ZX279133_SWITCH_DSA_PORT_MIN,
+		 ZX279133_RTL8372N_TRANSPORT_VID_BASE +
+		 ZX279133_SWITCH_DSA_PORT_MAX);
+
+	return 0;
+}
+
+static void zx279133_switch_teardown(struct dsa_switch *ds)
+{
+	dev_info(ds->dev, "the 9132 stops serving\n");
+}
+
 static const struct dsa_switch_ops zx279133_switch_dsa_ops = {
 	.get_tag_protocol = zx279133_switch_get_tag_protocol,
+	.setup = zx279133_switch_setup,
+	.teardown = zx279133_switch_teardown,
 	.port_bridge_join = zx279133_switch_port_bridge_join,
 	.port_bridge_leave = zx279133_switch_port_bridge_leave,
 	.port_enable = zx279133_switch_port_enable,
