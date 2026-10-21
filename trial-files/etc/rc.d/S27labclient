@@ -191,22 +191,49 @@ fi
 # The evidence, and a heartbeat that keeps it fresh: the lease, whether the
 # internet answers, and the conntrack entry that shows the flow went through
 # the NAT.
+#
+# WHAT IS PINGED
+#
+# One address is not enough: the bench is in a network where 8.8.8.8 is not
+# reliably reachable, and a ping that fails for that reason looks exactly like
+# a router that does not forward.  So the list is walked and the first answer
+# wins - and the address that answered is written down, so the record says
+# which one it was.  /etc/labtarget can set the list; the default is the
+# addresses that answer in this region first.
+TARGETS=$(cat /etc/labtarget 2>/dev/null | tr -d '\r\n ')
+[ -n "$TARGETS" ] || TARGETS="223.5.5.5 119.29.29.29 180.76.76.76 8.8.8.8 1.1.1.1"
+
 (
 	while true; do
 		if [ "$INNS" = 1 ]; then
 			addr=$(ip netns exec "$LABNS" ip -4 addr show dev "$LABC" 2>/dev/null |
 				awk '/inet /{print $2; exit}')
-			ping_out=$(ip netns exec "$LABNS" ping -c 1 -W 3 8.8.8.8 2>&1 |
-				tail -n 2 | tr '\n' ' ')
 		else
 			addr=$(ip -4 addr show dev "$LABC" 2>/dev/null |
 				awk '/inet /{print $2; exit}')
-			ping_out=$(ping -c 1 -W 3 8.8.8.8 2>&1 | tail -n 2 | tr '\n' ' ')
 		fi
+		ping_out=""
+		ping_ip=""
+		for t in $TARGETS; do
+			if [ "$INNS" = 1 ]; then
+				r=$(ip netns exec "$LABNS" ping -c 1 -W 3 "$t" 2>&1 |
+					tail -n 2 | tr '\n' ' ')
+			else
+				r=$(ping -c 1 -W 3 "$t" 2>&1 | tail -n 2 | tr '\n' ' ')
+			fi
+			case "$r" in
+			*"1 received"*|*"bytes from"*)
+				ping_out="$r"
+				ping_ip="$t"
+				break
+				;;
+			esac
+		done
+		[ -n "$ping_ip" ] || ping_out="no answer from any of: $TARGETS"
 		{
 			echo "client: $LABC (netns: $INNS)"
 			echo "lease: $addr"
-			echo "ping 8.8.8.8: $ping_out"
+			echo "ping ${ping_ip:-none}: $ping_out"
 			echo "conntrack:"
 			grep '192\.168\.9\.' /proc/net/nf_conntrack 2>/dev/null | head -n 5
 		} >"$STATUS" 2>/dev/null

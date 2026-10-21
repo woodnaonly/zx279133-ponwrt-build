@@ -353,6 +353,11 @@ if [ -n "$BR" ]; then
 	fi
 	if [ -n "$FORCED" ]; then
 		WAN="$FORCED"
+		# The resolved port is written down, because the watcher cannot
+		# work it out for itself once the port has left the bridge: the
+		# bridge's forwarding database is where the port was found, and
+		# the port is no longer in the bridge by then.
+		echo "$WAN" > /tmp/labwan.port
 		echo "trial: nat: the upstream is forced onto $WAN" >/dev/kmsg
 		# The port leaves the bridge and that is all that is needed for
 		# the forced case.  The configuration is deliberately NOT
@@ -543,6 +548,27 @@ if [ -n "$BR" ]; then
 PC=lan2
 WAN=""
 [ -f /etc/labwan ] && WAN=$(head -n 1 /etc/labwan 2>/dev/null | tr -d '\r\n ')
+# "pc" is a name for the port the test PC is in, not a port name, and it has
+# to become one before it can be used.  The port the PC is in is found in the
+# bridge's forwarding database - the PC's MAC is the only address it has
+# learned - and once the port has left the bridge that record is gone, so the
+# port the router script resolved is written down and read here.
+if [ -s /tmp/labwan.port ]; then
+	WAN=$(head -n 1 /tmp/labwan.port 2>/dev/null | tr -d '\r\n ')
+else
+	case "$WAN" in
+	pc)
+		if command -v brctl >/dev/null 2>&1; then
+			p=$(brctl showmacs br-lan 2>/dev/null |
+				awk '$1 ~ /^[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:/ {print $3; exit}')
+			[ -n "$p" ] && WAN="$p"
+		fi
+		;;
+	lan1|lan2|lan3|lan4) ;;
+	*) WAN="" ;;
+	esac
+fi
+echo "trial: nat: the watcher has the upstream on ${WAN:-none}" >/dev/kmsg
 while true; do
 	sleep 60
 	if [ -n "$WAN" ]; then
