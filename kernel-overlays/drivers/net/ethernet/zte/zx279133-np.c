@@ -446,13 +446,76 @@ static int zx279133_smmu0_write(struct zx279133_eth *eth, u32 addr_ind,
  * they are looked up by the table's id.
  */
 #define ZX279133_SDT_ID_MAX	0x100
-static u32 zx279133_eram_base[ZX279133_SDT_ID_MAX];
+
+/*
+ * What the driver told the hardware about one ERAM table: where it starts
+ * and how wide one of its entries is.  The width matters as much as the
+ * base - the vendor's se_eram_table_set_by_sdt_info() places an entry at
+ * (base << 7) + (width * index & ~0x7f) and merges the value into the
+ * 16-byte window bit by bit, so a table declared with the wrong width is
+ * read at the wrong place.
+ */
+struct zx279133_eram_table {
+	u32 base;
+	u32 bit_len;
+};
+
+static struct zx279133_eram_table zx279133_eram[ZX279133_SDT_ID_MAX];
 
 static u32 zx279133_eram_base_of(u32 sdt_id)
 {
 	if (sdt_id >= ZX279133_SDT_ID_MAX)
 		return 0;
-	return zx279133_eram_base[sdt_id];
+	return zx279133_eram[sdt_id].base;
+}
+
+static u32 zx279133_eram_bit_len_of(u32 sdt_id)
+{
+	if (sdt_id >= ZX279133_SDT_ID_MAX)
+		return 0;
+	return zx279133_eram[sdt_id].bit_len;
+}
+
+/*
+ * The vendor's se_eram_table_set_by_sdt_info() for a table whose entries are
+ * narrower than a word: the entry is not written whole, it is merged into
+ * the 16-byte window it lives in, bit by bit.  The window is read, the bits
+ * of the entry are replaced, and the window is written back.
+ *
+ * The window is the 128-bit block the entry falls in, so the address of the
+ * window is (base << 7) + (width * index & ~0x7f) and the entry sits in
+ * word (width * index >> 5) & 3 at bit (width * index) & 0x1f of it.
+ */
+static int zx279133_eram_table_set_bits(struct zx279133_eth *eth, u32 sdt_id,
+					u32 index, u32 width, u32 value)
+{
+	u32 base = zx279133_eram_base_of(sdt_id);
+	u32 bit_len = zx279133_eram_bit_len_of(sdt_id);
+	u32 bit_off, addr, word_idx, bit_pos, mask;
+	u32 window[ZX279133_SMMU0_WORDS];
+	int ret;
+
+	if (!base || !bit_len)
+		return -EINVAL;
+	if (width > bit_len || width > 32)
+		return -EINVAL;
+
+	bit_off = bit_len * index;
+	addr = (base << 7) + (bit_off & ~0x7fu);
+	word_idx = (bit_off >> 5) & (ZX279133_SMMU0_WORDS - 1);
+	bit_pos = bit_off & 0x1f;
+
+	ret = zx279133_smmu0_read(eth, addr, window, ZX279133_SMMU0_WORDS,
+				  ZX279133_SMMU0_CMD_READ);
+	if (ret)
+		return ret;
+
+	mask = (width >= 32) ? 0xffffffffu : ((1u << width) - 1);
+	window[word_idx] = (window[word_idx] & ~(mask << bit_pos)) |
+			   ((value & mask) << bit_pos);
+
+	return zx279133_smmu0_write(eth, addr, window, ZX279133_SMMU0_WORDS,
+				     ZX279133_SMMU0_CMD_WRITE);
 }
 
 /*
@@ -899,11 +962,12 @@ static int zx279133_9132_show(struct seq_file *s, void *unused)
 	 * here and the numbers the chip uses have to be the same, and this
 	 * is where that can be seen.
 	 */
-	seq_puts(s, "\nERAM tables (id, base block, depth)\n");
+	seq_puts(s, "\nERAM tables (id, base block, bits per entry)\n");
 	for (m = 0; m < ZX279133_SDT_ID_MAX; m++) {
-		if (!zx279133_eram_base[m])
+		if (!zx279133_eram[m].base)
 			continue;
-		seq_printf(s, "  0x%02x  %6u\n", m, zx279133_eram_base[m]);
+		seq_printf(s, "  0x%02x  %6u  %3u\n", m, zx279133_eram[m].base,
+			   zx279133_eram[m].bit_len);
 	}
 
 	/*
@@ -2260,6 +2324,7 @@ zx279133_proto_table_write(struct zx279133_eth *eth, u32 port,
 {
 	u32 block = zx279133_eram_base_of(ZX279133_PRO_ERAM_SDT_ID) +
 		    port * ZX279133_PRO_BLOCKS_PER_PORT;
+	u32 proto;
 	int i;
 	int ret;
 
@@ -2268,6 +2333,25 @@ zx279133_proto_table_write(struct zx279133_eth *eth, u32 port,
 					   table[i],
 					   ZX279133_SMMU0_WORDS,
 					   ZX279133_SMMU0_CMD_WRITE);
+		if (ret)
+			return ret;
+	}
+
+	/*
+	 * The same table in the form the switch engine reads it: SE ERAM
+	 * table 0x18, two bits per (port, protocol) entry.  The action is
+	 * the low two bits of the 16-bit entry, and the port is the chip's
+	 * own port number - 1 to 4 are the 9132's UNI jacks, 5 is XMAC0,
+	 * the 9132's CPU port.
+	 */
+	for (proto = 0; proto < 128; proto++) {
+		u32 half = table[proto / 8][(proto % 8) / 2];
+		u32 action = (half >> ((proto % 2) * 16)) & 3;
+
+		ret = zx279133_eram_table_set_bits(eth,
+						   ZX279133_SWITCH_PROTO_SDT_ID,
+						   proto | (port << 7), 2,
+						   action);
 		if (ret)
 			return ret;
 	}
@@ -2283,12 +2367,11 @@ zx279133_proto_table_write(struct zx279133_eth *eth, u32 port,
  * port and nothing else) nor trapped to the CPU, so it is dropped and the
  * client never sees an answer.
  *
- * The table is one word per (port, protocol) in SE ERAM table 0x18, at the
- * entry (port << 7) | protocol, and the action is in the low two bits of
- * the word.  The vendor installs it on switch ports 1..7 and 0x10..0x30;
- * the eight low ports are written here, which covers the 9132's four UNI
- * jacks and its CPU port whichever of the two numberings the port is
- * known by.
+ * The table is SE ERAM table 0x18: two bits per entry, 8192 entries, one
+ * entry per (port, protocol).  The vendor's index is reason | (port << 7)
+ * and the value is the action itself - 2 hands the frame to the CPU, 0
+ * leaves it to the normal path.  The ports are the 9132's own: 1 to 4 are
+ * the four UNI jacks and 5 is the CPU port the SoC talks to.
  */
 static int zx279133_9132_proto_init(struct zx279133_eth *eth)
 {
@@ -2301,22 +2384,22 @@ static int zx279133_9132_proto_init(struct zx279133_eth *eth)
 		return -EINVAL;
 	}
 
-	for (port = 0; port < 8; port++) {
+	for (port = 1; port <= 7; port++) {
 		for (proto = 0; proto < 128; proto++) {
-			u32 word = zx279133_9132_proto_action[proto];
+			u32 action = zx279133_9132_proto_action[proto];
 
-			if (word == 0xff)
+			if (action == 0xff)
 				continue;
-			ret = zx279133_smmu0_write(eth,
-					(base + (port << 7) + proto) << 7,
-					&word, 1, ZX279133_SMMU0_CMD_WRITE);
+			ret = zx279133_eram_table_set_bits(eth,
+					ZX279133_SWITCH_PROTO_SDT_ID,
+					proto | (port << 7), 2, action);
 			if (ret)
 				return ret;
 		}
 	}
 
 	dev_info(eth->dev,
-		 "9132 switch ports 0..7 have the protocol action table at ERAM block %u (ARP trapped to the CPU)\n",
+		 "9132 switch ports 1..7 have the protocol action table at ERAM block %u (ARP trapped to the CPU)\n",
 		 base);
 
 	return 0;
@@ -2654,61 +2737,59 @@ int zx279133_wan_port_bringup(struct zx279133_eth *eth)
 }
 
 /*
- * SE core SDT creation recovered from np.ko se_sdt_core_sdt_init() over
- * g_core_sdt_info_133. The ERAM pool starts at block 12288 (4096 age
- * blocks plus 8192 blocks skipped for the QMG) and the allocator is
- * strictly sequential. ERAM (type 1), hash (type 3), statistics (type 4),
- * and WRAM (type 5) descriptors are created below. SDT14 keeps the
- * factory's 512-bit fast-flow format but stores its response inline so
- * PPPoE can retain the len_changed field omitted by compact SDT43.
+ * SE core SDT creation, recovered from np_133.ko - the module this board
+ * actually loads - out of its g_core_sdt_info (.data+0x11be0, 53 entries
+ * of 16 bytes: id, type, p3, num).
+ *
+ * The list is the vendor's, entry for entry and in the vendor's order,
+ * because the switch engine's microcode knows each table's id, its width
+ * and its number of entries.  A table declared with another width is
+ * looked up at another place: the vendor's se_eram_table_set_by_sdt_info()
+ * places an entry at (base << 7) + (width * index & ~0x7f) and merges the
+ * value into the 16-byte window bit by bit, so a table of the right size
+ * but the wrong width is read at the wrong address.
+ *
+ * type 1 is ERAM, 3 is hash, 4 is statistics.  Only ERAM takes a block
+ * from the ERAM pool, and the pool is filled strictly in this order, so
+ * every table's base follows from the list.  p3 selects the width of one
+ * entry out of {1, 32, 64, 128, 2, 4, 8, 16} bits.
+ *
+ * The three tables this driver has of its own - the VLAN action table,
+ * the NPPT's own 16-bit protocol table and the port type table - are not
+ * in the vendor's list (the ids 0, 4 and 6 are free there) and are
+ * appended after it.
  */
 static const u32 zx279133_core_sdt_info[][4] = {
-	{ 0x0,  1, 0x3, 0x1000 },  { 0x1,  1, 0x3, 0x1 },
-	{ 0x37, 1, 0x3, 0x1 },     { 0x2,  1, 0x3, 0x20 },
-	{ 0x14, 1, 0x3, 0x20 },    { 0x15, 1, 0x3, 0x20 },
-	{ 0x19, 1, 0x2, 0x20 },    { 0x40, 1, 0x3, 0x20 },
-	{ 0x41, 1, 0x3, 0x20 },    { 0x42, 1, 0x3, 0x20 },
-	{ 0x2e, 5, 0x3, 0x100 },   { 0x2f, 5, 0x3, 0x100 },
-	{ 0x32, 1, 0x3, 0x40 },    { 0x3,  1, 0x1, 0x4000 },
-	{ 0x4,  1, 0x7, 0x2000 },  { 0x8,  1, 0x0, 0x10000 },
-	{ 0x16, 1, 0x3, 0x20 },    { 0x18, 1, 0x3, 0x20 },
-	{ 0xf,  1, 0x3, 0x20 },    { 0x10, 1, 0x3, 0x20 },
-	{ 0x11, 1, 0x3, 0x20 },    { 0x27, 1, 0x6, 0x400 },
-	{ 0x6,  1, 0x3, 0x40 },    { 0x28, 1, 0x2, 0x40 },
-	{ 0x29, 1, 0x3, 0x20 },    { 0x2a, 1, 0x3, 0x20 },
-	{ 0x2c, 1, 0x3, 0x1000 },  { 0x44, 1, 0x3, 0x20 },
-	{ 0x45, 1, 0x3, 0x20 },    { 0x46, 1, 0x3, 0x20 },
-	{ 0x9,  3, 0x8, 0x64 },    { 0xa,  3, 0xa, 0x94 },
-	{ 0xb,  3, 0x22, 0xd4 },   { 0xd,  3, 0x30, 0xd8 },
-	{ 0xe,  3, 0x10, 0xed },   { 0x2b, 3, 0x10, 0xb8 },
-	{ 0x43, 3, 0x30, 0xd8 },   { 0x2d, 3, 0x2, 0x40 },
-	{ 0x1e, 3, 0x6, 0x1000054 }, { 0x33, 3, 0x6, 0x54 },
-	{ 0x21, 3, 0x4, 0x44 },    { 0x24, 3, 0x4, 0x40 },
-	{ 0xc,  3, 0x8, 0x45 },    { 0x13, 3, 0x4, 0x41 },
-	{ 0x1a, 4, 0x1, 0x60000000 }, { 0x1b, 4, 0xc0, 0x40000000 },
-	{ 0x1c, 4, 0x40, 0x40000000 }, { 0x1d, 4, 0x800, 0x40000000 },
-	{ 0x38, 4, 0x80, 0x40000000 }, { 0x3b, 4, 0x40, 0x40000000 },
-	{ 0x3c, 4, 0x40, 0x40000000 }, { 0x3d, 4, 0x40, 0x40000000 },
-	{ 0x3e, 4, 0x800, 0x40000000 }, { 0x3f, 4, 0x800, 0x40000000 },
-	{ 0x1f, 4, 0xc, 0x20000000 }, { 0x20, 4, 0x2, 0x40000000 },
-	{ 0x22, 4, 0x88, 0x20000000 }, { 0x23, 4, 0x22, 0x40000000 },
-	{ 0x25, 4, 0x20, 0x40000000 }, { 0x26, 4, 0x10, 0x20000000 },
-	{ 0x12, 4, 0x8, 0x20000000 }, { 0x31, 4, 0x8, 0x20000000 },
-	{ 0x64, 1, 0x2, 0x1 },     { 0x65, 1, 0x3, 0x21 },
-	{ 0x66, 1, 0x1, 0x40 },    { 0x67, 1, 0x2, 0x4b0 },
-	{ 0x68, 1, 0x1, 0x40 },
-	{ 0x6e, 3, 0x6, 0x88 },    { 0x6b, 3, 0x4, 0x45 },
-	{ 0x6f, 3, 0x4, 0x44 },
-	{ 0x69, 4, 0xa0, 0x40000000 },
-	/*
-	 * The MF extension table: 64 entries of 128 bits, keyed by the SPA
-	 * memory id - the chip's own port number.  The vendor's np_133.ko
-	 * has this table (its id 0x7d, its index 50 in the vendor's list);
-	 * this driver's list did not have it, so the mirror of the port
-	 * attribute word - the copy the switch engine reads - was written
-	 * into a table the hardware had never heard of.
-	 */
-	{ 0x7d, 1, 0x3, 0x40 },
+	{ 0x6f, 1, 0x3, 0x400 },	{ 0x70, 1, 0x3, 0x200 },
+	{ 0x71, 1, 0x3, 0x200 },	{ 0x72, 1, 0x3, 0x200 },
+	{ 0x74, 1, 0x2, 0x40 },		{ 0x75, 1, 0x3, 0x20 },
+	{ 0x76, 1, 0x3, 0x20 },		{ 0x77, 1, 0x3, 0x20 },
+	{ 0x78, 1, 0x1, 0x20 },		{ 0x79, 1, 0x3, 0x100 },
+	{ 0x7a, 1, 0x3, 0x100 },	{ 0xa4, 3, 0x0, 0x3d },
+	{ 0xa5, 3, 0x0, 0x39 },		{ 0x1c, 1, 0x4, 0x40000 },
+	{ 0x22, 1, 0x3, 0x20 },		{ 0x18, 1, 0x4, 0x2000 },
+	{ 0x19, 1, 0x1, 0x100 },	{ 0x1a, 1, 0x7, 0x20 },
+	{ 0x1b, 1, 0x0, 0x1000 },	{ 0x1d, 1, 0x7, 0x40 },
+	{ 0x23, 1, 0x0, 0x40 },		{ 0x24, 1, 0x0, 0x40 },
+	{ 0x20, 1, 0x0, 0x40 },		{ 0x15, 1, 0x7, 0x40 },
+	{ 0x16, 1, 0x7, 0x40 },		{ 0x17, 1, 0x7, 0x40 },
+	{ 0x0a, 1, 0x7, 0x40 },		{ 0x26, 1, 0x7, 0x40 },
+	{ 0x30, 4, 0x200, 0x20000000 },	{ 0x2e, 4, 0x10, 0x40000000 },
+	{ 0x2f, 4, 0x3, 0x20000000 },	{ 0x31, 4, 0xc18, 0x60000000 },
+	{ 0x25, 1, 0x7, 0x40 },		{ 0x1e, 1, 0x2, 0x40 },
+	{ 0x21, 1, 0x2, 0x40 },		{ 0x1f, 1, 0x1, 0x4000 },
+	{ 0x27, 1, 0x7, 0x40 },		{ 0x32, 3, 0x8, 0x64 },
+	{ 0x38, 3, 0x6, 0x64 },		{ 0x35, 3, 0x8, 0x40 },
+	{ 0x36, 3, 0x0, 0x10 },		{ 0x37, 3, 0x0, 0x10 },
+	{ 0xfc, 4, 0x1, 0x60000000 },	{ 0x7b, 1, 0x3, 0x40 },
+	{ 0x7c, 1, 0x3, 0x40 },		{ 0x29, 1, 0x6, 0x20 },
+	{ 0x2a, 1, 0x3, 0x210 },		{ 0x39, 3, 0x6, 0x44 },
+	{ 0x3a, 3, 0x2, 0x40 },		{ 0x3b, 3, 0x6, 0x40 },
+	{ 0x7d, 1, 0x3, 0x40 },		{ 0x28, 1, 0x5, 0x2000 },
+	{ 0x2b, 1, 0x2, 0x40 },
+	/* this driver's own tables */
+	{ 0x00, 1, 0x3, 0x1000 },	{ 0x04, 1, 0x7, 0x2000 },
+	{ 0x06, 1, 0x3, 0x40 },
 };
 
 static const u32 zx279133_se_sdt_bit_len[8] = {
@@ -2956,7 +3037,12 @@ static int zx279133_se_plcr_init(struct zx279133_eth *eth)
 
 static int zx279133_se_sdt_create(struct zx279133_eth *eth)
 {
-	u32 eram_base = 12288;
+	/*
+	 * se_smmu0_reg_table: the ERAM pool's first free block is 0x1000 and
+	 * the pool is 0x8000 blocks long, so the tables live in
+	 * [0x1000, 0x9000).  The statistics pool starts at 0x9000.
+	 */
+	u32 eram_base = 0x1000;
 	u32 stat_base = 9 << 12;
 	u32 depth, base, bit_len;
 	u32 node[2];
@@ -2982,10 +3068,14 @@ static int zx279133_se_sdt_create(struct zx279133_eth *eth)
 			/*
 			 * The base the hardware is told about here is the
 			 * only one that is right for it, so it is the one
-			 * the tables are written at.
+			 * the tables are written at.  The width of an entry
+			 * matters just as much: the hardware looks an entry
+			 * up at (base << 7) + (width * index & ~0x7f).
 			 */
-			if (sdt_no < ZX279133_SDT_ID_MAX)
-				zx279133_eram_base[sdt_no] = base;
+			if (sdt_no < ZX279133_SDT_ID_MAX) {
+				zx279133_eram[sdt_no].base = base;
+				zx279133_eram[sdt_no].bit_len = bit_len;
+			}
 			ret = zx279133_se_sdt_eram_write(eth, sdt_no, depth,
 							 base, a);
 			if (ret)
@@ -3039,31 +3129,37 @@ static int zx279133_se_sdt_create(struct zx279133_eth *eth)
 				     "SE fast multi-hash setup failed\n");
 
 	/*
-	 * The factory's runtime SE table contents captured live: sdt 6 (the
-	 * 64-entry port table) and sdt 0x10 entry 4. The patterns below are
-	 * the app's P2P-mode values; the microcode reads these directly.
+	 * The factory's runtime port type table (SDT 6), captured live: one
+	 * 128-bit entry per logical port, the port attribute words the
+	 * switch engine reads directly.  The patterns below are the app's
+	 * P2P-mode values.
 	 */
 	{
 		static const struct {
-			u32 blk, w0, w1, w2, w3;
+			u32 entry, w0, w1, w2, w3;
 		} tabs[] = {
-			{ 22898 + 4, 0x54145414, 0x58185414, 0x581a4014, 0x581a581a },
-			{ 23026 + 1, 0xffff0140, 0x7801ffff, 0, 0 },
-			{ 23026 + 2, 0xffff0140, 0x7801ffff, 0, 0 },
-			{ 23026 + 3, 0xffff0140, 0x7801ffff, 0, 0 },
-			{ 23026 + 4, 0xffff0140, 0x7801ffff, 0, 0 },
-			{ 23026 + 5, 0xffff0140, 0x7801ffff, 0, 0 },
-			{ 23026 + 6, 0x00000040, 0, 0, 0 },
-			{ 23026 + 7, 0xffff0140, 0x7801ffff, 0, 0 },
-			{ 23026 + 8, 0, 0, 0, 0x80000000 },
+			{ 1, 0xffff0140, 0x7801ffff, 0, 0 },
+			{ 2, 0xffff0140, 0x7801ffff, 0, 0 },
+			{ 3, 0xffff0140, 0x7801ffff, 0, 0 },
+			{ 4, 0xffff0140, 0x7801ffff, 0, 0 },
+			{ 5, 0xffff0140, 0x7801ffff, 0, 0 },
+			{ 6, 0x00000040, 0, 0, 0 },
+			{ 7, 0xffff0140, 0x7801ffff, 0, 0 },
+			{ 8, 0, 0, 0, 0x80000000 },
 		};
+		u32 ptype_base = zx279133_eram_base_of(ZX279133_PORT_TYPE_ERAM_SDT_ID);
 		u32 idx;
+
+		if (!ptype_base)
+			return dev_err_probe(eth->dev, -EINVAL,
+					     "the port type table has no base\n");
 
 		for (idx = 0; idx < ARRAY_SIZE(tabs); idx++) {
 			u32 node[4] = { tabs[idx].w0, tabs[idx].w1,
 					tabs[idx].w2, tabs[idx].w3 };
 
-			ret = zx279133_smmu0_write(eth, tabs[idx].blk << 7,
+			ret = zx279133_smmu0_write(eth,
+						   (ptype_base + tabs[idx].entry) << 7,
 						   node, 4,
 						   ZX279133_SMMU0_CMD_WRITE);
 			if (ret)
@@ -3073,7 +3169,7 @@ static int zx279133_se_sdt_create(struct zx279133_eth *eth)
 			u32 node[4] = { 0x10000 << idx, 0, 0, 0 };
 
 			ret = zx279133_smmu0_write(eth,
-						   (23026 + 16 + idx) << 7,
+						   (ptype_base + 16 + idx) << 7,
 						   node, 4,
 						   ZX279133_SMMU0_CMD_WRITE);
 			if (ret)
@@ -3083,7 +3179,7 @@ static int zx279133_se_sdt_create(struct zx279133_eth *eth)
 			u32 node[4] = { 0, 1 << idx, 0, 0 };
 
 			ret = zx279133_smmu0_write(eth,
-						   (23026 + 32 + idx) << 7,
+						   (ptype_base + 32 + idx) << 7,
 						   node, 4,
 						   ZX279133_SMMU0_CMD_WRITE);
 			if (ret)
@@ -3093,7 +3189,7 @@ static int zx279133_se_sdt_create(struct zx279133_eth *eth)
 			u32 node[4] = { 0, 0, 0, 0x82000000 };
 
 			ret = zx279133_smmu0_write(eth,
-						   (23026 + 59 + idx) << 7,
+						   (ptype_base + 59 + idx) << 7,
 						   node, 4,
 						   ZX279133_SMMU0_CMD_WRITE);
 			if (ret)
