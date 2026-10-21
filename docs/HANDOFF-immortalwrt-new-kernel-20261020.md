@@ -119,16 +119,20 @@ run86 的真实值：`NETFILTER=y`、`NF_TABLES=not set`、`NF_CONNTRACK=not set
 另外 `config/Config-kernel.in` 里**没有** `KERNEL_NF_*`/`KERNEL_VETH`/`KERNEL_NETFILTER`
 ⇒ DEVMEM 那个"awk 追加压过片段"的坑对 netfilter **不成立**。
 
-**② 这版镜像的 udhcpc 是 busybox 的，它不给 `mask` —— M1 会必然不通过，而且日志上完全看不见。**
+**② 这版镜像的 udhcpc 是 busybox 的，它用的是**另一套约定** —— M1 会必然不通过，而且日志上完全看不见。**
 镜像已经换成 apk 格式，包清单里**没有 `udhcpc` 包**（也没有 `brctl` 包）⇒ 都是 busybox applet。
-busybox 的 udhcpc 调租约脚本时给 `subnet`（**是掩码** 255.255.255.0，**不是网络地址**），
-**不给 `mask`**。而我们的两个租约脚本写的是 `ip addr replace "$ip/$mask"` ⇒ 地址变成
-`192.168.9.100/` 被拒，而脚本把 `2>/dev/null` 挂在命令上 ⇒ **日志里什么都没有**，
-看起来跟"上游没接"一模一样。两个脚本已改成自己算前缀长度（掩码/数字/网络地址三种都收）。
-**教训与工具**：这类"变量可能不存在"的脚本必须用**真实脚本 + stub** 跑断言，
-`staging/ctl/testlease.sh`（18 项，全绿）——它自己就抓出了两个问题：
-`unset ip` 会把 stub **函数**一起删掉（于是测试全绿但什么都没测），
-以及前缀换算把网络地址算成了 `/31`。
+**决定性证据就在板子上**：厂商 4.19 的 `/usr/share/udhcpc/default.script` 就是 busybox 自己的脚本，
+它写着 `ip addr add $ip/${subnet:-255.255.255.0} ...` —— 所以 busybox 的 udhcpc
+**只调脚本一次**（`$1=bound`），**没有 `$2=option` 这个约定**，也**不导出 `mask`**，
+`$subnet` 还是**掩码**不是网络地址。
+而我们的两个租约脚本写的是 `case "$2" in ip)` ⇒ 在 busybox 下**一个分支都不匹配**，
+脚本直接 `exit 0`，**地址从来没被设过**；又因为脚本把 `2>/dev/null` 挂在命令上，
+**日志里什么都没有**，看起来跟"上游没接"一模一样。
+两个脚本现在两套约定都认，前缀长度由 `pfx_of` 自己算（前缀长度/掩码/网络地址三种都收）。
+**教训与工具**：这类"变量可能不存在、约定可能不同"的脚本必须用**真实脚本 + stub** 跑断言，
+`staging/ctl/testlease.sh`（21 项，全绿，两套约定都覆盖）——它自己就抓出了三个问题：
+`unset ip` 会把 stub **函数**一起删掉（于是测试全绿但什么都没测）、
+前缀换算把网络地址算成了 `/31`、以及**第一版测试只测了另一套约定**（测的根本不是这个镜像走的路）。
 
 **③ 单线 M1 的验收脚本原本有个鸡生蛋死锁。**
 `tools/labnat-upstream.ps1` 原来靠 `ssh 192.168.9.1` 去查 WAN 租约，

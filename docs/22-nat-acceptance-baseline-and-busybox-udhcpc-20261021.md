@@ -102,7 +102,7 @@ generic 片段里本来就有 `CONFIG_NF_TABLES_ARP/BRIDGE/INET/IPV4/IPV6/NETDEV
 
 ---
 
-## 2. M1 会直接卡死的一个真 bug：busybox 的 udhcpc 不给 `mask`
+## 2. M1 会直接卡死的两个 bug：这个镜像的 udhcpc 是 busybox 的
 
 ### 2.1 事实
 
@@ -110,28 +110,63 @@ run86 的 rootfs 是 **apk 格式**的（`lib/apk/packages/*.list`），
 整个包清单里**没有 `udhcpc` 包，也没有 `brctl` 包** ⇒
 `udhcpc` 和 `brctl` 都是 **busybox 的 applet**。
 
-busybox 的 udhcpc 调租约脚本时给的环境变量是
-`ip / siaddr / sname / boot_file / subnet / router / dns / lease / interface`，
-**没有 `mask`**；而且它的 `subnet` 是**掩码**（255.255.255.0），不是网络地址。
+**决定性证据就在板子上**：厂商 4.19 也是 busybox 系统，
+`/usr/share/udhcpc/default.script` 就是 busybox 自己的脚本，它写着
 
-### 2.2 我们写的两个租约脚本都用了 `"$ip/$mask"`
+```sh
+setup_interface() {
+	echo "udhcpc: ip addr add $ip/${subnet:-255.255.255.0} broadcast ${broadcast:-+} dev $interface"
+	ip addr add $ip/${subnet:-255.255.255.0} broadcast ${broadcast:-+} dev $interface
+	...
+}
+case "$1" in
+	deconfig) ip -4 addr flush dev "$interface" ;;
+	renew)    setup_interface update ;;
+	bound)    setup_interface ifup ;;
+esac
+```
+
+⇒ busybox 的 udhcpc 的约定是：
+
+| | busybox（本镜像） | 独立 udhcpc（OpenWrt 常见） |
+|---|---|---|
+| 调用次数 | **一次**，整个租约一起给 | 每个 option 一次 |
+| 第 1 个参数 | `bound` / `renew` / `deconfig` | 同 |
+| 第 2 个参数 | **没有** | option 名（`ip`/`subnet`/`router`/`dns`）|
+| 地址/掩码 | `$ip` + `$subnet`（**掩码**） | `$ip` + `$mask` |
+| 解析器 | `$dns` | `$dns` |
+| 网关 | `$router` | `$router` |
+
+### 2.2 我们写的两个租约脚本，用的是**另一套约定**
 
 `S26nat` 的 `/tmp/udhcpc-trial.sh` 与 `S27labclient` 的 `/tmp/labclient-dhcp.sh`：
 
 ```sh
+[ "$1" = bound ] || exit 0
+case "$2" in
 ip)	ip addr replace "$ip/$mask" dev "$interface" 2>/dev/null ;;
 ```
 
-⇒ 地址变成 `192.168.9.100/`，被 `ip` 拒绝；
-而脚本把 `2>/dev/null` 挂在命令上 ⇒ **日志里什么都没有**，
-看起来跟"上游没接"一模一样。
+在 busybox 下：**`$2` 是空的 ⇒ `case` 一个分支都不匹配 ⇒ 脚本直接落到 `exit 0` ⇒
+地址从来没被设过。** 而且脚本把 `2>/dev/null` 挂在命令上，
+所以**日志里什么都没有** —— 看起来跟"上游没接"一模一样。
 
 ⇒ **WAN 拿不到地址，板子自造的 LAN 客户端也拿不到地址，M1 必然不通过。**
 这是本计划里最贵的一个 bug，因为它在日志上完全隐形。
 
+（顺带：`$mask` 这个变量 busybox 也不导出。它导出的是 `$subnet`，
+而且那里的 `subnet` 是**掩码** 255.255.255.0，不是网络地址 —— 板子上那个脚本自己就写着
+`$ip/${subnet:-255.255.255.0}`。）
+
 ### 2.3 修法
 
-两个脚本现在自己算前缀长度，**掩码形式、纯数字前缀长度、网络地址三种都收**：
+两个脚本现在**两套约定都认**：
+
+- `$2` 为空 ⇒ busybox 的约定：`bound`/`renew` 一次把整个租约应用掉
+  （地址 + 默认路由 + 解析器）；`deconfig` 清地址。
+- `$2` 非空 ⇒ 独立 udhcpc 的约定：按 option 分别处理。
+
+前缀长度由 `pfx_of` 自己算，**前缀长度 / 掩码 / 网络地址三种形式都收**：
 
 ```sh
 pfx_of() {
@@ -150,25 +185,29 @@ pfx_of() {
 }
 ```
 
-`subnet)` 那一支**改成什么都不做**：地址一带前缀，连接路由内核自己就加；
-而 busybox 给的 `subnet` 是掩码，拿它去 `ip route replace` 是一条无效路由。
+客户端可能给一串网关（`gw1 gw2`）或一串解析器 ⇒ 网关取第一个，
+解析器一行一个写出来。
+**客户端那个脚本仍然不写解析器**：它跑在客户端自己的网络命名空间里，
+而命名空间共享挂载命名空间，写进去的解析器会变成**板子的**解析器。
 
 ### 2.4 这个 bug 是怎么被发现的（方法也值得记住）
 
 不是读代码读出来的，是**把脚本抽出来、用 stub 的 `ip` 跑一遍**：
 
 `staging/ctl/testlease.sh`（新写）把两个脚本从 rc.d 里按 heredoc 原样抽出来，
-用假的环境变量（busybox 风格 / 有 `mask` 风格 / 网络地址风格）跑，
-比对它**会**敲出的 `ip` 命令。18 项断言，全绿。
+用假的环境变量跑，比对它**会**敲出的 `ip` 命令 —— 现在覆盖两套约定，
+21 项断言，全绿。
 
-测试本身也踩了两个坑，都写在了脚本里：
+测试本身也踩了三个坑，都写在脚本里：
 
 - `unset ip` 会把**函数** `ip()` 一起删掉（POSIX 的 `unset` 对函数名一样生效），
-  于是 stub 没了，脚本自己的 `2>/dev/null` 又把 "command not found" 吞了 ⇒ **测试全绿但什么都没测**。
+  于是 stub 没了，板子脚本自己的 `2>/dev/null` 又把 "command not found" 吞了
+  ⇒ **测试全绿但什么都没测**。
 - 第一次的 awk 把网络地址 `192.168.9.0` 算成 `/31`（写成 `32-n` 而不是 `8*(4-n)`）。
-  是这个断言抓出来的。
+- 第一版测试只测了独立 udhcpc 的约定 ⇒ **它测的那条路根本不是这个镜像走的路**。
 
-⇒ **教训：这种"变量可能不存在"的脚本，必须用真实脚本 + stub 跑断言，不能靠读。**
+⇒ **教训：这种"变量可能不存在、约定可能不同"的脚本，必须用真实脚本 + stub 跑断言，
+而且断言必须覆盖"这个镜像真正会走的那条路"。**
 
 ### 2.5 busybox 的 udhcpc 开关语义
 
@@ -182,9 +221,7 @@ pfx_of() {
 ⇒ 原来那条命令在 busybox 下是"发 0 个包 + 5 秒后重连"，语义完全不是想的那样。
 现在改成 `udhcpc -i "$WAN" -f -s /tmp/udhcpc-trial.sh`：
 两个开关都不给，busybox 的客户端就持续 discover，这才是 WAN 需要的行为。
-
----
-
+`nohup` 也加上了：这个脚本是 init 跑的，脚本一结束，仍挂在它会话上的后台子进程会被一起杀掉。
 ## 3. 单线 M1 的验收脚本里有一个鸡生蛋死锁
 
 ### 3.1 死锁在哪
