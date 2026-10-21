@@ -105,6 +105,63 @@ PC↔UNI2（我们的 `lan2`）。厂商自己的 udhcpc 在另一只口上跑�
 LAN 的端口是 `ports` 数组。**用 `uci set` 改它不保证被接受** ⇒ 改配置要走镜像自己的
 helper（`board_config_update` + `ucidef_set_interface` + `board_config_flush`）。
 
+### 0.7 2026-10-21 早上这轮：三个"不测就一定会踩"的坑（动手前先读这一节）
+
+完整取证见 **`docs/22-nat-acceptance-baseline-and-busybox-udhcpc-20261021.md`**。
+
+**① 内核 .config 的实物证据拿到了，netfilter 的 pin 路径成立。**
+`staging/ctl/ikcfg.sh` 能把内核 Image 里 `IKCFG_ST/IKCFG_ED` 之间的 .config 解出来，
+run86 的产物就在 `staging/trial/trial-Image.gz` ⇒ **不用板子、不用 CI 日志**就能读出出货内核的真实配置。
+run86 的真实值：`NETFILTER=y`、`NF_TABLES=not set`、`NF_CONNTRACK=not set`、`VETH=not set`、
+**`NET_NS=y`**（⇒ `S27labclient` 的 netns 客户端成立）、`BRIDGE=y`。
+**整段 netfilter 没有任何一个 `=m`** ⇒ 这个分支里没有任何包声明过这些符号
+⇒ 优先级最高的 `.config.override` 里不会有它们 ⇒ 片段里的 `=y` 不会被压掉。
+另外 `config/Config-kernel.in` 里**没有** `KERNEL_NF_*`/`KERNEL_VETH`/`KERNEL_NETFILTER`
+⇒ DEVMEM 那个"awk 追加压过片段"的坑对 netfilter **不成立**。
+
+**② 这版镜像的 udhcpc 是 busybox 的，它不给 `mask` —— M1 会必然不通过，而且日志上完全看不见。**
+镜像已经换成 apk 格式，包清单里**没有 `udhcpc` 包**（也没有 `brctl` 包）⇒ 都是 busybox applet。
+busybox 的 udhcpc 调租约脚本时给 `subnet`（**是掩码** 255.255.255.0，**不是网络地址**），
+**不给 `mask`**。而我们的两个租约脚本写的是 `ip addr replace "$ip/$mask"` ⇒ 地址变成
+`192.168.9.100/` 被拒，而脚本把 `2>/dev/null` 挂在命令上 ⇒ **日志里什么都没有**，
+看起来跟"上游没接"一模一样。两个脚本已改成自己算前缀长度（掩码/数字/网络地址三种都收）。
+**教训与工具**：这类"变量可能不存在"的脚本必须用**真实脚本 + stub** 跑断言，
+`staging/ctl/testlease.sh`（18 项，全绿）——它自己就抓出了两个问题：
+`unset ip` 会把 stub **函数**一起删掉（于是测试全绿但什么都没测），
+以及前缀换算把网络地址算成了 `/31`。
+
+**③ 单线 M1 的验收脚本原本有个鸡生蛋死锁。**
+`tools/labnat-upstream.ps1` 原来靠 `ssh 192.168.9.1` 去查 WAN 租约，
+但单线 M1 里**板子的 WAN 口就是 PC 所在那只口** —— 板子把它摘出 br-lan 的那一刻，
+192.168.9.1 就离开了 PC 的二层域、从此不应答。脚本一路等到超时然后报 "no lease"，
+**而租约一直好好地在板子上**。
+现在改成**从 PC 侧发现板子**：先看邻居缓存（PC 自己的 DHCP 交互会把板子的地址和 MAC 放进去），
+没有就扫共享网段 `192.168.137.0/24` 的 22 端口 SSH banner；拿到地址后所有证据都用那个地址读。
+`S26nat` 同时改成 `nohup ... &` 脱离 ssh —— 原来它是那条 ssh 连接的前台子进程，
+而**那条连接正是端口换手时断掉的那条**。
+
+**④ busybox 的 udhcpc 开关语义和独立版不一样。**
+`-t N` 是**发 N 个 discover 包**，`-T SEC` 是**租约过期后多少秒再重连**；
+独立 udhcpc 的 `-t N -T SEC` 才是"N 次、间隔 SEC 秒"。
+原来的 `udhcpc -i $WAN -f -t 0 -T 5` 读起来像"永远重试、每 5 秒一次"，
+在 busybox 下却是"发 0 个包"。现在两个开关都不给。
+
+**⑤ 驱动侧复核结论：我们的 DSA 形状和树里那份已验证的驱动一致。**
+`ds->num_ports=9`（树里 RTL8372N 也是 9）、用户口 4..7 + CPU 口 8、
+`DSA_PPU(port)=port-3`（⇒ PPU 1..4）、`DSA_PHY(port)=0x0a+port-4`（⇒ PHY 0x0a..0x0d）、
+tagger 用树里已有的 `DSA_TAG_PROTO_ZX279133_RTL8372N`。
+**树里那份驱动也没有 `get_port_phy`** —— 链路状态同样走 `phylink_fixed_state` ⇒ 一致。
+只改了一个常量：`ZX279133_SWITCH_UNI_PORT_MIN/MAX` 由 `0..3` 改为 `1..4`
+（它们只用在一条打印语句里，而 NPPT 驱动打的是 "9132 UNI ports 1..4"，
+之前两个驱动对同一批硬件口报了两套编号）。
+
+**⑥ CI 现在有两个 round 在跑，用途不同。**
+run98（`d42686b`，07:45 起）修的是 `priv->dev` 那个编译错；
+run99（`f499177`，08:07 起）带的是租约脚本修复和 UNI 口编号。
+run98 的 initramfs 镜像里带的是**旧的**租约脚本（run99 才有新的）——
+这不阻塞，因为 `tools/labpush.sh` 每次 RAM 试跑前都会把仓库里当前的
+`S26nat`/`S27labclient` 推上板并重跑。
+
 ---
 
 ## 1. 板子现在的真实状态（2026-10-20 23:21–23:25 实测）
