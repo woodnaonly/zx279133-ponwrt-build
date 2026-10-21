@@ -16,7 +16,9 @@
 #include <linux/of_mdio.h>
 #include <linux/regmap.h>
 #include <linux/seq_file.h>
+#include <linux/kstrtox.h>
 #include <linux/unaligned.h>
+#include <linux/uaccess.h>
 
 #include "zx279133.h"
 #include "zx279133-rx-hash.h"
@@ -729,7 +731,7 @@ out_unlock:
 }
 DEFINE_SHOW_ATTRIBUTE(zx279133_wanid);
 
-static void zx279133_wanid_debugfs_remove(void *data)
+static void zx279133_debugfs_remove(void *data)
 {
 	debugfs_remove(data);
 }
@@ -741,7 +743,164 @@ int zx279133_wanid_debugfs_init(struct zx279133_eth *eth)
 	dentry = debugfs_create_file("zx279133-wanid", 0400, NULL, eth,
 				     &zx279133_wanid_fops);
 	return devm_add_action_or_reset(eth->dev,
-					zx279133_wanid_debugfs_remove, dentry);
+					zx279133_debugfs_remove, dentry);
+}
+
+/*
+ * A console for the 9132's SPA indirect window.
+ *
+ * Why this exists: the 9132's forwarding is decided by words in a per-port attribute
+ * table, and until now nothing in mainline could reach that table at runtime.  Every
+ * question about the switch - does a flood reach the conduit, does the DSA tagger's
+ * transport VID survive the trip, is the port learning at all - therefore cost a
+ * 70-minute CI build, and the answers cannot be guessed: the vendor's own 4.19 system
+ * programs a very specific set of values there and its own tm_debug interface can be
+ * used to read them back, but mainline had no way to try anything.
+ *
+ * The interface is textual and writable, because the point is to try configurations
+ * rather than to observe one:
+ *
+ *	cat  /sys/kernel/debug/zx279133-9132		# dump the port words
+ *	echo "r 1 19" > .../zx279133-9132		# read one word
+ *	echo "w 1 19 0x96040001" > .../zx279133-9132	# write one word, read it back
+ *
+ * "mem" is the SPA memory id and "addr" is the word inside that port's twenty-word
+ * attribute table.  The memory ids are the ones the bootloader itself prints:
+ *
+ *	0 = PON0, 1..4 = the four UNI jacks, 5 = XMAC0 (the conduit the DSA CPU
+ *	port talks to), 6 = XMAC1, 7 = RGMII1, 15 = the CPU trap port.
+ */
+#define ZX279133_9132_DUMP_MEM_COUNT	20
+static const u32 zx279133_9132_dump_mems[ZX279133_9132_DUMP_MEM_COUNT] = {
+	0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
+};
+#define ZX279133_9132_DUMP_ADDR_COUNT	9
+static const u32 zx279133_9132_dump_addrs[ZX279133_9132_DUMP_ADDR_COUNT] = {
+	0, 1, 2, 9, 10, 13, 17, 18, 19,
+};
+
+static int zx279133_9132_show(struct seq_file *s, void *unused)
+{
+	struct zx279133_eth *eth = s->private;
+	unsigned int m, a;
+
+	seq_puts(s, "mem   ");
+	for (a = 0; a < ZX279133_9132_DUMP_ADDR_COUNT; a++)
+		seq_printf(s, " a%-2u   ", zx279133_9132_dump_addrs[a]);
+	seq_puts(s, "\n");
+	for (m = 0; m < ZX279133_9132_DUMP_MEM_COUNT; m++) {
+		u32 mem = zx279133_9132_dump_mems[m];
+
+		seq_printf(s, "%3u  ", mem);
+		for (a = 0; a < ZX279133_9132_DUMP_ADDR_COUNT; a++) {
+			u32 val;
+
+			if (zx279133_spa_indirect_read(eth, mem,
+						       zx279133_9132_dump_addrs[a],
+						       &val))
+				val = 0xffffffff;
+			seq_printf(s, " %08x", val);
+		}
+		seq_puts(s, "\n");
+	}
+	return 0;
+}
+
+/* A tokenizer that does not need strsep(), which is not exported everywhere. */
+static char *zx279133_9132_next_token(char **pp)
+{
+	char *s = *pp;
+	char *start;
+
+	while (*s == ' ' || *s == '\t' || *s == '\r' || *s == '\n')
+		s++;
+	if (!*s) {
+		*pp = s;
+		return NULL;
+	}
+	start = s;
+	while (*s && *s != ' ' && *s != '\t' && *s != '\r' && *s != '\n')
+		s++;
+	if (*s) {
+		*s = '\0';
+		s++;
+	}
+	*pp = s;
+	return start;
+}
+
+static ssize_t zx279133_9132_write(struct file *file, const char __user *ubuf,
+				   size_t count, loff_t *ppos)
+{
+	struct seq_file *m = file->private_data;
+	struct zx279133_eth *eth = m ? m->private : NULL;
+	char buf[64];
+	char *p, *tok;
+	u32 mem, addr, val = 0;
+	int ret;
+
+	if (!eth)
+		return -ENODEV;
+	if (count >= sizeof(buf))
+		return -EINVAL;
+	if (copy_from_user(buf, ubuf, count))
+		return -EFAULT;
+	buf[count] = '\0';
+
+	p = buf;
+	tok = zx279133_9132_next_token(&p);
+	if (!tok)
+		return -EINVAL;
+
+	if (!strcmp(tok, "r") || !strcmp(tok, "w")) {
+		bool is_write = tok[0] == 'w';
+
+		tok = zx279133_9132_next_token(&p);
+		if (!tok || kstrtou32(tok, 0, &mem))
+			return -EINVAL;
+		tok = zx279133_9132_next_token(&p);
+		if (!tok || kstrtou32(tok, 0, &addr))
+			return -EINVAL;
+		if (is_write) {
+			tok = zx279133_9132_next_token(&p);
+			if (!tok || kstrtou32(tok, 0, &val))
+				return -EINVAL;
+			ret = zx279133_spa_indirect_write(eth, mem, addr, val);
+			if (ret)
+				return ret;
+		}
+		ret = zx279133_spa_indirect_read(eth, mem, addr, &val);
+		if (ret)
+			return ret;
+		pr_info("9132 spa: mem %u addr %u = 0x%08x\n", mem, addr, val);
+		return count;
+	}
+
+	return -EINVAL;
+}
+
+static int zx279133_9132_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, zx279133_9132_show, inode->i_private);
+}
+
+static const struct file_operations zx279133_9132_fops = {
+	.owner	= THIS_MODULE,
+	.open	= zx279133_9132_open,
+	.read	= seq_read,
+	.write	= zx279133_9132_write,
+	.llseek	= seq_lseek,
+	.release	= single_release,
+};
+
+int zx279133_9132_debugfs_init(struct zx279133_eth *eth)
+{
+	struct dentry *dentry;
+
+	dentry = debugfs_create_file("zx279133-9132", 0600, NULL, eth,
+				     &zx279133_9132_fops);
+	return devm_add_action_or_reset(eth->dev,
+					zx279133_debugfs_remove, dentry);
 }
 #endif
 
@@ -1032,6 +1191,29 @@ static int zx279133_mf_port_ppuinit(struct zx279133_eth *eth)
 #define ZX279133_9132_UNI_PPU_LAST	4
 #define ZX279133_9132_OUTERPHY_PPU	5
 
+/*
+ * PPU 5 is also the 9132 side of the DSA CPU port.
+ *
+ * The port numbering here is the SPA memory id, and the bootloader prints the
+ * authoritative list of them (spa_port_attr_op help, measured 2026-10-21):
+ *
+ *	 0 = PON0	 1..4 = SMAC0..3 (the four UNI jacks)	 5 = XMAC0
+ *	 6 = XMAC1	 7 = RGMII1	 8 = LOOP_SOPC	10 = XMAC_B
+ *	12 = PON_PTL	14 = PON1	15 = CPU (the trap port)	16 = WIFI0
+ *
+ * so the CPU trap port is memory 15 and memory 0 is PON0 - the comment that used
+ * to call PPU 0 "the CPU port" was wrong.
+ *
+ * The DSA CPU port is PPU 5.  The DSA switch driver numbers its ports 4..7 for
+ * the four jacks and 8 for the conduit, and maps a DSA port to its PPU with
+ * ZX279133_SWITCH_DSA_PPU(port) = port - 3, so port 8 lands on PPU 5 - which is
+ * XMAC0, the SGMII side the SoC's own MAC reaches the 9132 through.  Nothing
+ * configured PPU 5 before: the four jacks were set up and the conduit, which is
+ * where every frame between the CPU and the jacks has to pass, was left with
+ * whatever the bootloader left behind.
+ */
+#define ZX279133_9132_CONDUIT_PPU	5
+
 /* Per-port attribute word: SPA indirect address 19 of a PPU port. */
 #define ZX279133_PPU_ATTR_REG		19
 #define ZX279133_PPU_ATTR_ROUTE_MODE	BIT(13)
@@ -1118,23 +1300,35 @@ static int zx279133_9132_port_attr(struct zx279133_eth *eth, u32 ppu, u32 set,
  * will make it work.  So the baseline is dumped first, before any of this
  * driver's own 9132 writes.
  *
- * The addresses, and what they are:
+ * The addresses, and what they are.  The layout is not a guess: it is
+ * np_133.ko's own descriptor table, spa_port_attr_table, 74 entries of
+ * {id, mask, bit offset, word address}, decoded on 2026-10-21 (see
+ * docs/24).  The same numbering is what the bootloader's own
+ * "spa_port_attr_op help" prints, so the bootloader and the vendor module
+ * agree on it.
  *
- *   0x000  the port's entry program counter - also the SPA window's
- *          "port enable" word according to the switch API's port_enable
- *          helper.  It is READ here and never written, because writing
- *          bit 0 of it is what zx279133_lan_port_bringup() does to the
- *          SoC's own entry program and a port that runs the wrong program
+ *   0x000  TLB_VLD(0), PC(1..14), FLOWNUM(15..20), COS(21..23),
+ *          OUTPUT_PORT(24..29), NPPU_DIR_EN(30), CRC_ADD_EN(31).
+ *          The entry program counter is READ here and never written, because
+ *          writing bit 0 of it is what zx279133_lan_port_bringup() does to
+ *          the SoC's own entry program and a port that runs the wrong program
  *          is a dead port.
- *   0x001  default VLAN priority (bits 27..25)
- *   0x002  untagged SVID / PVID (bits 29..18)
- *   0x009  per-port VLAN filter mask, field 41 of the word - this is the
- *          switch API's tm_port_vlan_filter_get()
- *   0x013  the per-port attribute word (isolate, SA learn, DA lookup,
- *          flooding, route mode, input VLAN check)
+ *   0x001  ICU_COS_GET_EN(0..2), ICU_PRI_CFG(3..11), VLAN_FILTER_MOD(12..13),
+ *          QUEUE_ID(14..22), BPDU_TRAP_EN(23), PAE_TRAP_EN(24),
+ *          DFT_PRI(25..27), LLC_EN(28).  DFT_PRI is the default VLAN priority.
+ *   0x002  PORT_PVID_UNTAG(18..29) - the untagged SVID, i.e. the PVID -
+ *          and PORT_DMAC_OFFSET(30..31).
+ *   0x009  the IP rate-limit fields and TAG_FILTER(24..29).
+ *   0x011  USER_DEF_AREA1 - where the vendor's flood tables live.
+ *   0x012  USER_DEF_AREA2 - where the vendor's flood group ids live.
+ *   0x013  USER_DEF_AREA3 - the per-port attribute word (isolate, SA learn,
+ *          DA lookup, flooding, route mode, input VLAN check).  It is a
+ *          user area, so its bit meanings come from the vendor's switch API
+ *          rather than from the table above.
  *
- * PPU 0 is the CPU port, 1..4 are the 9132's UNI jacks, 5 is the external
- * RTL8226.
+ * The SPA memory ids are: 0 = PON0, 1..4 = the four UNI jacks, 5 = XMAC0
+ * (the DSA conduit, and the external RTL8226's port on the vendor's
+ * board), 6 = XMAC1, 7 = RGMII1, 15 = the CPU trap port.
  */
 #define ZX279133_PPU_WORD_ENTRY_PC	0
 #define ZX279133_PPU_WORD_PVID_PRI	1
@@ -1180,6 +1374,12 @@ static void zx279133_9132_port_words_read(struct zx279133_eth *eth)
  * Bring up the 9132's UNI ports.  PPU port p carries the LAN vport of the
  * same index (ZX279133_LAN_TRANSPORT_VID_MIN + (p - 1)), which is the VID
  * the CPU puts on a frame to reach that physical port.
+ *
+ * The DSA tagger puts that VID on the frame itself (net_dsa_tag_zx279133_
+ * rtl8372n.c: "the switch removes the service tag before transmission"), so
+ * the jack has to be an access port whose PVID is that VID, and the conduit
+ * has to let the tagged frame through.  That is why the conduit is configured
+ * without the input-VLAN-check bit while the jacks keep it.
  */
 static int zx279133_9132_port_init(struct zx279133_eth *eth)
 {
@@ -1250,6 +1450,45 @@ static int zx279133_9132_port_init(struct zx279133_eth *eth)
 			return ret;
 		dev_info(eth->dev, "9132 PPU %u PVID word 2 %08x\n", ppu, attr);
 	}
+
+	/*
+	 * The conduit: PPU 5, which is XMAC0, the 9132 side of the SGMII link
+	 * to the SoC's own MAC.  Every frame between the CPU and the jacks
+	 * crosses it, and it was not configured at all before.
+	 *
+	 * The vendor's own working value for this port was read out of the
+	 * running 4.19 system (spa_port_attr_xmac_0, 2026-10-21) and is
+	 * 0x96040001 in the attribute word - the same value the four jacks
+	 * carry - with no SVID and no VLAN filter.  Two differences are made
+	 * here, and both are forced by the DSA tagger rather than by taste:
+	 *
+	 *	 - the input-VLAN-check bit is cleared, because the frames the
+	 *   CPU sends towards a jack arrive carrying that jack's transport
+	 *   VID and a port that checks the VID of a tagged frame against a
+	 *   filter that is empty would drop them; the vendor's frames are
+	 *   untagged, which is why its own port keeps the bit; and
+	 *	 - no PVID is written, so the conduit stays a trunk that carries
+	 *   every transport VID instead of an access port with one.
+	 */
+	ret = zx279133_9132_port_attr(eth, ZX279133_9132_CONDUIT_PPU,
+				      ZX279133_PPU_ATTR_SA_LEARN |
+				      ZX279133_PPU_ATTR_DA_LOOKUP |
+				      ZX279133_PPU_ATTR_BRD_FLOOD |
+				      ZX279133_PPU_ATTR_MUL_FLOOD |
+				      ZX279133_PPU_ATTR_LIVE,
+				      ZX279133_PPU_ATTR_IN_VLAN_CHK |
+				      ZX279133_PPU_ATTR_ISOLATE_EN |
+				      ZX279133_PPU_ATTR_MAC_LIMIT |
+				      ZX279133_PPU_ATTR_ROUTE_MODE);
+	if (ret)
+		return ret;
+	ret = zx279133_spa_indirect_read(eth, ZX279133_9132_CONDUIT_PPU,
+					 ZX279133_PPU_ATTR_REG, &attr);
+	if (ret)
+		return ret;
+	dev_info(eth->dev,
+		 "9132 PPU %u (the DSA conduit) attribute word %08x\n",
+		 ZX279133_9132_CONDUIT_PPU, attr);
 
 	dev_info(eth->dev,
 		 "9132 UNI ports %u..%u up (transport VIDs %u..%u)\n",

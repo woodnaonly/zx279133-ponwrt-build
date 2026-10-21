@@ -512,6 +512,9 @@ static int zx279133_eth_probe(struct platform_device *pdev)
 	ret = zx279133_wanid_debugfs_init(eth);
 	if (ret)
 		return ret;
+	ret = zx279133_9132_debugfs_init(eth);
+	if (ret)
+		return ret;
 	ret = zx279133_ptp_init(eth);
 	if (ret)
 		return dev_err_probe(dev, ret, "failed to register PHC\n");

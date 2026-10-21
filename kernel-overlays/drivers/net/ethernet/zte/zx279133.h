@@ -844,8 +844,13 @@ int zx279133_wanid_get(struct zx279133_eth *eth, bool downstream,
 void zx279133_wanid_put(struct zx279133_eth *eth, u8 wanid, bool snat);
 #ifdef CONFIG_DEBUG_FS
 int zx279133_wanid_debugfs_init(struct zx279133_eth *eth);
+int zx279133_9132_debugfs_init(struct zx279133_eth *eth);
 #else
 static inline int zx279133_wanid_debugfs_init(struct zx279133_eth *eth)
+{
+	return 0;
+}
+static inline int zx279133_9132_debugfs_init(struct zx279133_eth *eth)
 {
 	return 0;
 }
