@@ -129,13 +129,42 @@ chmod 755 /tmp/probe-script.sh
 # image, and without one a lease is announced and then thrown away.
 cat > /tmp/udhcpc-trial.sh <<'EOF'
 #!/bin/sh
+# The prefix length, out of whatever this client exports.
+#
+# This image has no udhcpc package of its own: the client is busybox's, and
+# busybox's udhcpc does NOT export "mask".  It exports "subnet", and there it
+# is the netmask (255.255.255.0), not the network address.  A client that
+# exports the prefix length as "mask" is accepted too, and so is a network
+# address, so the script does not have to know which client it is talking to.
+#
+# Getting this wrong is not a small thing: the first version of this script
+# wrote "$ip/$mask" and the WAN never took an address, because "$mask" was
+# empty and the address was "$ip/".
+pfx_of() {
+	case "$1" in
+	'') echo 24 ;;
+	*[!0-9.]*) echo 24 ;;
+	*.*)
+		case "$1" in
+		255.255.255.*) echo 24 ;;
+		255.255.*.*) echo 16 ;;
+		255.*.*.*) echo 8 ;;
+		*) echo "$1" | awk -F. '{n=0; for (i=4;i>=1;i--) { if ($i=="0") n++; else break } p=8*(4-n); if (p<=0) p=24; print p}' ;;
+		esac ;;
+	*) echo "$1" ;;
+	esac
+}
 [ "$1" = bound ] || exit 0
 case "$2" in
 ip)
-	ip addr replace "$ip/$mask" dev "$interface" 2>/dev/null
+	pfx=$(pfx_of "${mask:-}")
+	[ -n "$pfx" ] || pfx=$(pfx_of "$subnet")
+	ip addr replace "$ip/$pfx" dev "$interface" 2>/dev/null
 	;;
 subnet)
-	ip route replace "$subnet" dev "$interface" 2>/dev/null
+	# The connected route comes with the address above.  A "subnet" line
+	# that carries a netmask is not a route at all, so it is dropped
+	# rather than turned into one.
 	;;
 router)
 	ip route replace default via "$router" dev "$interface" 2>/dev/null
@@ -323,7 +352,13 @@ if [ -n "$WAN" ]; then
 		# same address with the same address.
 		if command -v udhcpc >/dev/null 2>&1; then
 			echo "trial: nat: udhcpc on $WAN" >/dev/kmsg
-			udhcpc -i "$WAN" -f -t 0 -T 5 -s /tmp/udhcpc-trial.sh \
+			# No -t and no -T here: this image's udhcpc is busybox's,
+			# where -t is the number of discover packets and -T is the
+			# delay before reconnecting after a lease expires - neither
+			# is a per-attempt timeout, and -t 0 is not "try forever"
+			# the way it looks.  With neither, busybox's client keeps
+			# discovering, which is what a WAN needs.
+			udhcpc -i "$WAN" -f -s /tmp/udhcpc-trial.sh \
 				>"/tmp/udhcpc-$WAN.log" 2>&1 &
 		else
 			echo "trial: nat: no udhcpc in this image" >/dev/kmsg

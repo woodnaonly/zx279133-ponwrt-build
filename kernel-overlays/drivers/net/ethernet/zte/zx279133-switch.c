@@ -171,9 +171,18 @@
 #define ZX279133_XPCS_AN_ENABLE		BIT(12)
 #define ZX279133_XPCS_USXGMII_AN_BMCR	0x3140
 
-/* The 9132's four UNI ports are the switch ports the copper jacks sit on. */
-#define ZX279133_SWITCH_UNI_PORT_MIN	0
-#define ZX279133_SWITCH_UNI_PORT_MAX	3
+/*
+ * The 9132's four UNI ports are the switch ports the copper jacks sit on.
+ *
+ * They are numbered 1..4 here because that is how the rest of this driver
+ * family numbers them: the 9132's PPU ports are 1..4, the NPPT driver says
+ * so on the console ("9132 UNI ports 1..4 up (transport VIDs 59..62)"), and
+ * DSA port N + 3 is PPU port N.  These two constants used to say 0..3, and
+ * the only thing they were used for was this driver's own message - so the
+ * two drivers printed two different port ranges for the same four jacks.
+ */
+#define ZX279133_SWITCH_UNI_PORT_MIN	1
+#define ZX279133_SWITCH_UNI_PORT_MAX	4
 
 /*
  * The four UNI ports as DSA ports, and the transport VID that carries them.

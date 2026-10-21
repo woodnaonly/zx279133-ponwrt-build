@@ -66,13 +66,37 @@ ip link set "$LABH" up 2>/dev/null
 # own name resolution must not depend on a lab client.
 cat > /tmp/labclient-dhcp.sh <<'EOF'
 #!/bin/sh
+# The prefix length, out of whatever this client exports.
+#
+# This image has no udhcpc package of its own: the client is busybox's, and
+# busybox's udhcpc does NOT export "mask".  It exports "subnet", and there it
+# is the netmask (255.255.255.0), not the network address.  A client that
+# exports the prefix length as "mask" is accepted too, and so is a network
+# address.  The first version of this script wrote "$ip/$mask" and the
+# client never took an address, because "$mask" was empty.
+pfx_of() {
+	case "$1" in
+	'') echo 24 ;;
+	*[!0-9.]*) echo 24 ;;
+	*.*)
+		case "$1" in
+		255.255.255.*) echo 24 ;;
+		255.255.*.*) echo 16 ;;
+		255.*.*.*) echo 8 ;;
+		*) echo "$1" | awk -F. '{n=0; for (i=4;i>=1;i--) { if ($i=="0") n++; else break } p=8*(4-n); if (p<=0) p=24; print p}' ;;
+		esac ;;
+	*) echo "$1" ;;
+	esac
+}
 [ "$1" = bound ] || exit 0
 case "$2" in
 ip)
-	ip addr replace "$ip/$mask" dev "$interface" 2>/dev/null
+	pfx=$(pfx_of "${mask:-}")
+	[ -n "$pfx" ] || pfx=$(pfx_of "$subnet")
+	ip addr replace "$ip/$pfx" dev "$interface" 2>/dev/null
 	;;
 subnet)
-	ip route replace "$subnet" dev "$interface" 2>/dev/null
+	# The connected route comes with the address above.
 	;;
 router)
 	ip route replace default via "$router" dev "$interface" 2>/dev/null
