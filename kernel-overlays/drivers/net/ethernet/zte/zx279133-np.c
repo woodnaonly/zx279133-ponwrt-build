@@ -611,6 +611,13 @@ static int zx279133_eram_window_patch(struct zx279133_eth *eth, u32 sdt_id,
 #define ZX279133_PRO_ERAM_SDT_ID	0x04
 #define ZX279133_PORT_TYPE_ERAM_SDT_ID	0x06
 #define ZX279133_SWITCH_PROTO_SDT_ID	0x18
+/*
+ * The flood group table: one entry per group, one destination port id per
+ * entry.  The vendor's group_id_table_port_id_set() writes it with
+ * se_eram_table_set(0x1f, group_id, 1, &port_id), so the index IS the group
+ * id and the entry is a single 32-bit word.
+ */
+#define ZX279133_FLOOD_ERAM_SDT_ID	0x1f
 
 static const u32 zx279133_vlan0_entry[ZX279133_SMMU0_WORDS] = {
 	0xffc00000, 0x0000ffff, 0xffffffff, 0x00003003,
@@ -2103,8 +2110,92 @@ static int zx279133_9132_port_words_vendor(struct zx279133_eth *eth, u32 ppu)
  */
 static int zx279133_9132_mf_mirror(struct zx279133_eth *eth, u32 ppu)
 {
-	return zx279133_mf_eram_attr_set(eth, ppu,
+	u32 flood = ppu - 1;
+	int ret;
+
+	ret = zx279133_mf_eram_attr_set(eth, ppu,
 					 ZX279133_9132_VENDOR_ATTR_WORD);
+	if (ret)
+		return ret;
+
+	if (flood >= ARRAY_SIZE(zx279133_9132_vendor_flood))
+		return 0;
+
+	/*
+	 * The same entry carries the port's flood words: word 1 is the
+	 * unknown-DA / multicast flood word (SPA register 18) and word 2 is the
+	 * broadcast one (SPA register 17), bit for bit.  The switch engine
+	 * reads the flood group ids from here - the group id of a port p is
+	 * p<<6, (p+0x10)<<6 and (p+0x20)<<6, and it is an index into ERAM
+	 * table 0x1f - so without these two words every port's group is
+	 * group 0 and every group is whatever the driver never wrote.
+	 */
+	ret = zx279133_eram_window_patch(eth, ZX279133_MF_ERAM_SDT_ID, ppu, 1,
+					  0xffffffff,
+					  zx279133_9132_vendor_flood[flood][1]);
+	if (ret)
+		return ret;
+
+	return zx279133_eram_window_patch(eth, ZX279133_MF_ERAM_SDT_ID, ppu, 2,
+					  0xffffffff,
+					  zx279133_9132_vendor_flood[flood][0]);
+}
+
+/*
+ * The four UNI jacks' flood groups, with the CPU port in them.
+ *
+ * A group holds one destination port id, in bits 0..5, and the vendor's own
+ * groups hold exactly one member: the WAN port (PPU 0, which on this board is
+ * the PON).  That is right for a router, where a frame the switch does not
+ * know is to go out of the WAN - and wrong for this board, whose CPU port is
+ * a bridge port: a unicast frame addressed to the board itself, arriving
+ * before the 9132 has learned the board's address, is dropped at the 9132 and
+ * never reaches the CPU at all.  The vendor's own system has the same hole
+ * and does not care, because the vendor's CPU port is fed by the protocol
+ * trap (ERAM table 0x18) rather than by the flood path.
+ *
+ * So the CPU port goes into the four jacks' groups.  The entry holds one
+ * destination port, so the group becomes the CPU port instead of the WAN
+ * port: the frame is delivered instead of being dropped, and the board's
+ * answer teaches the 9132 the entry by ordinary source-address learning.
+ *
+ * This is the one place where this driver deliberately differs from the
+ * vendor, and it can only make the 9132 send more frames to the port the
+ * CPU is listening on.
+ */
+static int zx279133_9132_flood_cpu_port(struct zx279133_eth *eth)
+{
+	u32 p;
+	int ret;
+
+	for (p = ZX279133_9132_UNI_PPU_FIRST;
+	     p <= ZX279133_9132_UNI_PPU_LAST; p++) {
+		ret = zx279133_eram_table_set_bits(eth,
+						   ZX279133_FLOOD_ERAM_SDT_ID,
+						   p << 6, 32,
+						   ZX279133_9132_CONDUIT_PPU);
+		if (ret)
+			return ret;
+		ret = zx279133_eram_table_set_bits(eth,
+						   ZX279133_FLOOD_ERAM_SDT_ID,
+						   (p + 0x10) << 6, 32,
+						   ZX279133_9132_CONDUIT_PPU);
+		if (ret)
+			return ret;
+		ret = zx279133_eram_table_set_bits(eth,
+						   ZX279133_FLOOD_ERAM_SDT_ID,
+						   (p + 0x20) << 6, 32,
+						   ZX279133_9132_CONDUIT_PPU);
+		if (ret)
+			return ret;
+	}
+
+	dev_info(eth->dev,
+		 "9132 flood groups of PPU %u..%u point at the CPU port %u\n",
+		 ZX279133_9132_UNI_PPU_FIRST, ZX279133_9132_UNI_PPU_LAST,
+		 ZX279133_9132_CONDUIT_PPU);
+
+	return 0;
 }
 
 /*
@@ -2165,6 +2256,15 @@ static int zx279133_9132_port_init(struct zx279133_eth *eth)
 
 	/* And the copy of it in the table the switch engine reads. */
 	ret = zx279133_9132_mf_mirror(eth, ZX279133_9132_CONDUIT_PPU);
+	if (ret)
+		return ret;
+
+	/*
+	 * And the flood groups: the vendor's hold the WAN port, which drops a
+	 * unicast frame addressed to the board itself on the floor before the
+	 * CPU ever sees it.
+	 */
+	ret = zx279133_9132_flood_cpu_port(eth);
 	if (ret)
 		return ret;
 
