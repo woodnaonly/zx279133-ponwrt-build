@@ -364,7 +364,7 @@ static netdev_tx_t zx279133_start_xmit_common(struct sk_buff *skb,
 		zx279133_stats_tx_dropped(eth, ndev);
 		return NETDEV_TX_OK;
 	}
-	tx_port = ndev != hw_ndev ? ZX279133_LAN_TX_PORT : zx279133_tx_port;
+	tx_port = ndev != hw_ndev ? eth->lan_tx_port : zx279133_tx_port;
 
 	dma = dma_map_single(eth->dev, skb->data, skb->len, DMA_TO_DEVICE);
 	if (dma_mapping_error(eth->dev, dma))
@@ -405,7 +405,8 @@ static netdev_tx_t zx279133_start_xmit_common(struct sk_buff *skb,
 		desc->length_flags = cpu_to_le32(length_flags);
 		desc->metadata[0] = cpu_to_le32(metadata0);
 	}
-	desc->metadata[4] = cpu_to_le32(zx279133_tx_pon_control);
+	desc->metadata[4] = cpu_to_le32(ndev != hw_ndev ? eth->lan_tx_word4 :
+					   zx279133_tx_pon_control);
 	slot->skb = skb;
 	slot->ndev = ndev;
 	slot->dma = dma;

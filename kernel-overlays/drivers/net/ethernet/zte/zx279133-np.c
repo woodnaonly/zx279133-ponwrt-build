@@ -1495,6 +1495,69 @@ static ssize_t zx279133_9132_write(struct file *file, const char __user *ubuf,
 	}
 
 	/*
+	 * The two knobs for the two questions that are still open about the
+	 * way a frame leaves the board, both of them settled by experiment
+	 * rather than by reading:
+	 *
+	 *	"txp 1"	the IDM TX descriptor's output port for the LAN
+	 *			path.  The descriptor's byte 0x0a holds it in
+	 *			bits 0..5; the vendor writes 1 (smac_0) and
+	 *			never 5, this driver writes 5 (xmac_0, the
+	 *			9132's own CPU port).
+	 *	"usv 1"	give the four UNI ports the untag SVID their
+	 *			transport VID asks for, so the tag the DSA
+	 *			tagger puts on the conduit is taken off
+	 *			again on the way out to the client.
+	 */
+	if (!strcmp(tok, "txp")) {
+		u32 port;
+
+		tok = zx279133_9132_next_token(&p);
+		if (!tok || kstrtou32(tok, 0, &port) || port > 0x3f)
+			return -EINVAL;
+		eth->lan_tx_port = port;
+		pr_info("the LAN TX output port is now %u\n", port);
+		return count;
+	}
+
+	if (!strcmp(tok, "tx4")) {
+		u32 word;
+
+		tok = zx279133_9132_next_token(&p);
+		if (!tok || kstrtou32(tok, 0, &word))
+			return -EINVAL;
+		eth->lan_tx_word4 = word;
+		pr_info("the LAN TX metadata word 4 is now %08x\n", word);
+		return count;
+	}
+
+	if (!strcmp(tok, "usv")) {
+		u32 on, ppu;
+		int err = 0;
+
+		tok = zx279133_9132_next_token(&p);
+		if (!tok || kstrtou32(tok, 0, &on) || on > 1)
+			return -EINVAL;
+
+		for (ppu = ZX279133_9132_UNI_PPU_FIRST;
+		     ppu <= ZX279133_9132_UNI_PPU_LAST; ppu++) {
+			u32 svid = on ? ZX279133_LAN_TRANSPORT_VID_MIN +
+					 (ppu - 1) : 0;
+
+			err = zx279133_spa_indirect_write(eth, ppu, 2,
+							  svid << 18);
+			if (err)
+				break;
+		}
+		if (err)
+			return err;
+		eth->lan_untag_svid = on;
+		pr_info("the UNI ports' untag SVID is now %s\n",
+			on ? "their transport VID" : "0");
+		return count;
+	}
+
+	/*
 	 * One entry of one ERAM table, by the table's id rather than by its
 	 * base block, so that a table can be read and written the way the
 	 * vendor's own code does it - the entry is merged into the 128-bit
@@ -2129,6 +2192,26 @@ static int zx279133_9132_mf_mirror(struct zx279133_eth *eth, u32 ppu)
 	 * p<<6, (p+0x10)<<6 and (p+0x20)<<6, and it is an index into ERAM
 	 * table 0x1f - so without these two words every port's group is
 	 * group 0 and every group is whatever the driver never wrote.
+	 *
+	 * The two words are not bit for bit copies, though, and the difference
+	 * is the whole broadcast path.  The vendor's own layout of one entry is
+	 * (staging/ctl/re-eram-7d.md section 2.4):
+	 *
+	 *	word1 bytes 4..5   the multicast flood group id
+	 *	word1 bytes 6..7   the unknown-DA flood group id
+	 *	word2 bytes 10..11 the broadcast flood group id
+	 *
+	 * and SPA register 18 holds the two group ids in that same order - the
+	 * multicast one in its low half, the unknown-DA one in its high half -
+	 * so word 1 is register 18 as it stands.  SPA register 17 holds the
+	 * broadcast group id in its *high* half, while the entry wants it in
+	 * word 2's *low* half: copying the register over unchanged leaves the
+	 * broadcast group id in the entry's byte 12..13, where no setter ever
+	 * put it, and the broadcast flood of a port runs on group 0x0410 - a
+	 * number that is not a group id at all - instead of on
+	 * (p+0x10)<<6.
+	 *
+	 * So the halves are swapped on the way in.
 	 */
 	ret = zx279133_eram_window_patch(eth, ZX279133_MF_ERAM_SDT_ID, ppu, 1,
 					  0xffffffff,
@@ -2136,9 +2219,13 @@ static int zx279133_9132_mf_mirror(struct zx279133_eth *eth, u32 ppu)
 	if (ret)
 		return ret;
 
-	return zx279133_eram_window_patch(eth, ZX279133_MF_ERAM_SDT_ID, ppu, 2,
-					  0xffffffff,
-					  zx279133_9132_vendor_flood[flood][0]);
+	{
+		u32 brd = zx279133_9132_vendor_flood[flood][0];
+
+		return zx279133_eram_window_patch(eth, ZX279133_MF_ERAM_SDT_ID,
+						  ppu, 2, 0xffffffff,
+						  (brd >> 16) | (brd << 16));
+	}
 }
 
 /*

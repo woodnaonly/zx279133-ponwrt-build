@@ -647,6 +647,37 @@ struct zx279133_eth {
 	 * from ZX279133_LAN_TRANSPORT_VID_MIN; written under datapath_lock.
 	 */
 	unsigned long lan_wan_vports;
+	/*
+	 * The port id the IDM TX descriptor names for the LAN path.
+	 *
+	 * The descriptor's byte 0x0a holds the output port in bits 0..5 and the
+	 * "output port valid" flag in bit 6 (the vendor's own dump_desc_tx()
+	 * names both).  The vendor's LAN path writes 1 there - smac_0, the
+	 * first UNI jack - and never 5, which is xmac_0, the 9132's own CPU
+	 * port; this driver has always written 5.  Which of the two the chip
+	 * needs is still the open question, so the value is a knob the
+	 * debugfs "txp" command can turn while the question is open.
+	 */
+	u8 lan_tx_port;
+	/*
+	 * The fourth metadata word of the IDM TX descriptor, for the LAN path.
+	 *
+	 * The vendor's own dump_desc_tx() calls this word the GEM port's LLID
+	 * id plus its queue id.  The vendor's LAN path writes 0x003e0000 there
+	 * and its PON path writes 0x1f568623; this driver has always written
+	 * zx279133_tx_pon_control (0x08000000) on both.  The debugfs "tx4"
+	 * command turns it while the question is open.
+	 */
+	u32 lan_tx_word4;
+	/*
+	 * Whether the 9132's four UNI ports get their untag SVID (SPA
+	 * register 2, bits 18..29) set to the transport VID their DSA port
+	 * carries.  The vendor's own system leaves the SVID at 0, because the
+	 * vendor's system never tags: the DSA tagger on this driver's conduit
+	 * does, and a tagged frame that leaves the chip tagged is a frame the
+	 * client cannot use.
+	 */
+	bool lan_untag_svid;
 	struct zx279133_flow_offload *flow_offload;
 	struct zx279133_lan_service lan_service;
 	struct zx279133_netdev_stats stats;
