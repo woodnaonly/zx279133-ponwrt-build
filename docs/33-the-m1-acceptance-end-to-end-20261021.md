@@ -3,6 +3,15 @@
 Everything below is a script that already exists.  This is the order they
 run in, what each gate means, and the two things that are easy to get wrong.
 
+**Where the scripts live.**  `tools/...` in this document means the bench's
+own `tools/` directory at the top of the workspace - the scripts that drive
+the board from the PC.  The repository's `tools/` is the other one: the
+release and image tooling that CI uses.  The bench scripts stay outside the
+repository on purpose (docs/22, "仓库外（本机工具，不进镜像）"): they are
+about *this* board on *this* bench, and they must never end up inside a
+released image.  `staging/ctl/...` is the same thing: the scripts that talk
+to the board over the serial console.
+
 The physical setup is one cable: the PC is in the board's **UNI2** jack
 (`lan2` in DSA numbering, ifindex 5).  That single cable is the LAN path the
 PC's frames take into the 9132, and in the one-cable mode it is also the
