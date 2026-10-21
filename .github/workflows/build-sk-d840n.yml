@@ -169,6 +169,20 @@ jobs:
       # because they are true; the edit that wins is pin_y_build KERNEL_DEVMEM in
       # scripts/configure-sk-d840n.sh, and the check that settles it is the
       # merged state printed after the compile, never the seed.
+      - name: Check the overlay for what a compiler would have caught
+        if: steps.pick.outputs.run == 'true'
+        run: |
+          # Runs 105 to 108 all failed on one line of zx279133.h: two #defines
+          # on one line, so the preprocessor read the second one as part of
+          # the first one's replacement list and every use of the first macro
+          # expanded to a stray '#'.  Four builds and four hours for a
+          # missing newline.  This check is what catches that class of
+          # mistake in a second, before the kernel is built.
+          #
+          # It reads only the overlay, so it costs nothing but the time to
+          # walk thirteen files, and it runs before the long build rather
+          # than after it.
+          python3 tools/prepush.py "$GITHUB_WORKSPACE"
       - name: Apply SK-D840N overlays
         if: steps.pick.outputs.run == 'true'
         run: |
