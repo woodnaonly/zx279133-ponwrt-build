@@ -345,6 +345,13 @@
 #define ZX279133_SPA_IND_CMD		0x8054
 #define ZX279133_SPA_IND_STATUS	0x8058
 #define ZX279133_SPA_IND_DATA		0x805c
+/*
+ * The SPA window itself: 1024 registers at 0x8000.  The vendor's 4.19
+ * system reads the same window through /proc/pon/tm_debug/module_reg, so
+ * the two can be compared register by register.
+ */
+#define ZX279133_SPA_WINDOW_BASE	0x8000
+#define ZX279133_SPA_WINDOW_SIZE	0x1000
 #define ZX279133_SMMU0_CMD		0x48004
 #define ZX279133_SMMU0_ADDR		0x48008
 #define ZX279133_SMMU0_WDATA		0x4800c

@@ -930,7 +930,7 @@ static ssize_t zx279133_9132_write(struct file *file, const char __user *ubuf,
 {
 	struct seq_file *m = file->private_data;
 	struct zx279133_eth *eth = m ? m->private : NULL;
-	char buf[128];
+	char buf[4096];
 	char *p, *tok;
 	u32 mem, addr, val = 0;
 	int ret;
@@ -1059,6 +1059,145 @@ static ssize_t zx279133_9132_write(struct file *file, const char __user *ubuf,
 			return ret;
 		pr_info("9132 vlan: vid %u = %08x %08x %08x %08x\n",
 			vid, data[0], data[1], data[2], data[3]);
+		return count;
+	}
+
+	/*
+	 * The NPPT's own registers, read and written directly.
+	 *
+	 * The vendor's 4.19 system hands out the same window through
+	 * /proc/pon/tm_debug/module_reg ("-r <module> reg=<n> cnt=<n>"), so a
+	 * register this driver writes can be compared with the vendor's own
+	 * value word for word, and the vendor's value can be written back
+	 * without a rebuild.  The SPA window starts at 0x8000: register 0x14
+	 * is the indirect command, 0x15 its status, 0x16 the data latch, and
+	 * 0x17 the last value read - so those four are refused here, because
+	 * writing them would break the indirect path every other command uses.
+	 *
+	 *	"nr 8054"			read one register
+	 *	"nw 8054 0x1234"		write one and read it back
+	 *	"nd 8000 1024"		dump a range into the kernel log
+	 *	"nwp 8000 0x1 8004 0x2"	write a list of registers in one go
+	 */
+	if (!strcmp(tok, "nr") || !strcmp(tok, "nw") || !strcmp(tok, "nd") ||
+	    !strcmp(tok, "nwp")) {
+		bool is_dump = !strcmp(tok, "nd");
+		bool is_list = !strcmp(tok, "nwp");
+		u32 off, n = 1, i;
+
+		tok = zx279133_9132_next_token(&p);
+		if (!tok || kstrtou32(tok, 0, &off))
+			return -EINVAL;
+		if (off < ZX279133_SPA_WINDOW_BASE ||
+		    off >= ZX279133_SPA_WINDOW_BASE + ZX279133_SPA_WINDOW_SIZE)
+			return -EINVAL;
+
+		if (is_dump) {
+			tok = zx279133_9132_next_token(&p);
+			if (!tok || kstrtou32(tok, 0, &n))
+				return -EINVAL;
+			if (!n || n > ZX279133_SPA_WINDOW_SIZE / 4)
+				return -EINVAL;
+			for (i = 0; i < n; i++) {
+				u32 at = off + 4 * i;
+
+				pr_info("nppt reg 0x%04x = 0x%08x\n", at,
+					readl(eth->base + at));
+			}
+			return count;
+		}
+
+		if (is_list) {
+			/*
+			 * A list of (offset, value) pairs, so a whole
+			 * register window can be written with one write to
+			 * this file.  The console is a 115200 baud line and
+			 * a register at a time would take minutes.
+			 */
+			while ((tok = zx279133_9132_next_token(&p)) != NULL) {
+				u32 at, v;
+
+				if (kstrtou32(tok, 0, &at))
+					return -EINVAL;
+				tok = zx279133_9132_next_token(&p);
+				if (!tok || kstrtou32(tok, 0, &v))
+					return -EINVAL;
+				if (at < ZX279133_SPA_WINDOW_BASE ||
+				    at >= ZX279133_SPA_WINDOW_BASE +
+					     ZX279133_SPA_WINDOW_SIZE)
+					return -EINVAL;
+				if (at >= ZX279133_SPA_IND_CMD &&
+				    at <= ZX279133_SPA_IND_DATA)
+					return -EINVAL;
+				writel(v, eth->base + at);
+			}
+			pr_info("nppt: a list of registers written\n");
+			return count;
+		}
+
+		if (!strcmp(tok, "nw")) {
+			tok = zx279133_9132_next_token(&p);
+			if (!tok || kstrtou32(tok, 0, &val))
+				return -EINVAL;
+			if (off >= ZX279133_SPA_IND_CMD &&
+			    off <= ZX279133_SPA_IND_DATA)
+				return -EINVAL;
+			writel(val, eth->base + off);
+		}
+		pr_info("nppt reg 0x%04x = 0x%08x\n", off,
+			readl(eth->base + off));
+		return count;
+	}
+
+	/*
+	 * The NPPT's ERAM, which is where the tables the switch needs live:
+	 * the multi-forward extension table, the VLAN action table, the port
+	 * type table, the flood destination table and the port isolation
+	 * matrix.  One block is 128 bytes and every table entry uses the
+	 * first four words of its own block.
+	 *
+	 *	"er 125 8"			read eight blocks
+	 *	"ew 125 w0 w1 w2 w3"		write one block and read it back
+	 */
+	if (!strcmp(tok, "er") || !strcmp(tok, "ew")) {
+		u32 data[ZX279133_SMMU0_WORDS];
+		bool is_write = tok[1] == 'w';
+		u32 block, n = 1, i;
+		int j;
+
+		tok = zx279133_9132_next_token(&p);
+		if (!tok || kstrtou32(tok, 0, &block))
+			return -EINVAL;
+
+		if (is_write) {
+			for (j = 0; j < ZX279133_SMMU0_WORDS; j++) {
+				tok = zx279133_9132_next_token(&p);
+				if (!tok || kstrtou32(tok, 0, &data[j]))
+					return -EINVAL;
+			}
+			ret = zx279133_smmu0_write(eth, block << 7, data,
+						   ZX279133_SMMU0_WORDS,
+						   ZX279133_SMMU0_CMD_WRITE);
+			if (ret)
+				return ret;
+			n = 1;
+		} else {
+			tok = zx279133_9132_next_token(&p);
+			if (!tok || kstrtou32(tok, 0, &n))
+				return -EINVAL;
+			if (!n || n > 4096)
+				return -EINVAL;
+		}
+
+		for (i = 0; i < n; i++) {
+			ret = zx279133_smmu0_read(eth, (block + i) << 7,
+						  data, ZX279133_SMMU0_WORDS,
+						  ZX279133_SMMU0_CMD_READ);
+			if (ret)
+				return ret;
+			pr_info("eram block %u = %08x %08x %08x %08x\n",
+				block + i, data[0], data[1], data[2], data[3]);
+		}
 		return count;
 	}
 
