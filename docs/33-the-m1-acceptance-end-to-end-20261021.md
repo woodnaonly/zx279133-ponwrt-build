@@ -109,6 +109,44 @@ to the PC goes out through the board's own NAT and then through the PC's
 ICS NAT - and, on the way out, **across the 9132**, which is why G3 cannot
 be done before G2.
 
+## A known risk in G3, found while reading the vendor's flood setup
+
+The one-cable mode needs the board to **send** a broadcast: its DHCP
+discover, from the CPU port out towards the jack the PC is in.  That is the
+egress direction, and the protocol action table (0x18) is about the ingress
+direction - it is what traps a frame *to* the CPU - so 0x18 does not help
+here.
+
+The vendor's flood setup is in `sw_init_flood_ctrl()` (switch.ko 0x2780),
+and it is short enough to read out:
+
+```
+    multicast flood:  dest port list = { the WAN port } + { every port 0..7
+                       that is not the WAN port },  flood enabled on every
+                       one of those, disabled on the WAN port
+    unknown-DA flood: the same shape
+    broadcast flood:  the same shape
+```
+
+So on the vendor's board a broadcast from the CPU port is sent out of all
+eight ports, WAN included.  **The mainline driver does not write this** -
+the flood group ids are among the values the vendor only ever sets at run
+time, and the driver fills the ERAM tables it can prove instead.
+
+What the 9132 does after a reset with nobody writing the flood setup is not
+known from the vendor's code.  So:
+
+* if the board's DHCP discover reaches the PC, the question is settled and
+  nothing has to be written;
+* if it does not, **this is the first thing to look at**, and the change is
+  bounded: the four vendor API calls above, in the vendor's own order, and
+  the per-port group ids the vendor sets at run time (readable off a vendor
+  board, not offline).
+
+The G2 gate does not depend on it: the PC's frames reach the CPU by being
+trapped (0x18), and the board's reply is a unicast to a MAC the 9132 has
+learned.
+
 ## G4 — the flash
 
 **Gate:** two cold boots, `uname -r` = 6.18.38, the pinned cmdline, the
