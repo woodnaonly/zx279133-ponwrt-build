@@ -1766,6 +1766,56 @@ zx279133_lan_netdev_setup_tc(struct zx279133_lan_service *service,
 	return zx279133_flow_offload_setup_tc(eth, ndev, type, type_data);
 }
 
+/*
+ * The DSA tagger puts the transport VID on the frame in front of the payload
+ * (net_dsa_tag_zx279133_rtl8372n.c) so that the switch can tell its ports
+ * apart.  The 9132 is not a VLAN switch: the vendor's own working
+ * configuration has no SVID, no VLAN filter and a MAC table whose entries
+ * carry vid = 0 (docs/16 §2.2), so it would carry that tag straight out of
+ * the jack and the client on the other end would drop the frame as an
+ * unknown VLAN.
+ *
+ * The tag therefore comes off again here, on the way to the wire.  The 9132
+ * picks the egress port by MAC - it learns the client's address from the
+ * frames the client sends - so the tag is not needed to route the frame, and
+ * the frame the client sees is the frame it sent.
+ */
+static void zx279133_lan_strip_transport_vlan(struct sk_buff *skb)
+{
+	u8 *data;
+	u16 vid;
+
+	/* The frame has to be in one piece to have a hole taken out of it. */
+	if (skb->data_len && skb_linearize(skb))
+		return;
+	if (skb->len < VLAN_ETH_HLEN)
+		return;
+
+	data = skb->data;
+	if (data[12] != 0x81 || data[13] != 0x00)
+		return;
+
+	vid = ((u16)data[14] << 8) | data[15];
+	vid &= VLAN_VID_MASK;
+	if (vid < ZX279133_LAN_TRANSPORT_VID_MIN ||
+	    vid > ZX279133_LAN_TRANSPORT_VID_MAX)
+		return;
+
+	memmove(data + ETH_HLEN, data + ETH_HLEN + VLAN_HLEN,
+		skb->len - ETH_HLEN - VLAN_HLEN);
+	skb->len -= VLAN_HLEN;
+	skb->tail -= VLAN_HLEN;
+	skb->protocol = htons(((u16)data[12] << 8) | data[13]);
+	/*
+	 * The transport header moved four bytes towards the front of the
+	 * frame, so the offset the software checksum path works from moves
+	 * with it.  (A frame whose checksum is already complete keeps it:
+	 * the checksum covers the payload, which did not move.)
+	 */
+	if (skb->ip_summed == CHECKSUM_PARTIAL)
+		skb->csum -= VLAN_HLEN;
+}
+
 static netdev_tx_t
 zx279133_lan_netdev_xmit(struct zx279133_lan_service *service,
 			 struct sk_buff *skb, struct net_device *ndev)
@@ -1777,6 +1827,8 @@ zx279133_lan_netdev_xmit(struct zx279133_lan_service *service,
 	    !READ_ONCE(eth->lan_datapath_ready) ||
 	    !READ_ONCE(eth->hardware_prepared))
 		return NETDEV_TX_BUSY;
+
+	zx279133_lan_strip_transport_vlan(skb);
 
 	skb->dev = eth->ndev;
 	ret = zx279133_start_xmit_common(skb, eth->ndev, ndev);

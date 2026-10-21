@@ -859,6 +859,19 @@ static int zx279133_9132_show(struct seq_file *s, void *unused)
 	}
 
 	/*
+	 * The lane's own counters.  They answer the question that decides
+	 * where a frame that does not move is lost: does the SoC put a single
+	 * bit on the wire towards the 9132, or does the frame stop inside
+	 * the SoC?  XMAC0 is the MAC on the far side of that lane.
+	 */
+	seq_puts(s, "\n9132 lane (XMAC0, the SoC's MAC on the 9132's CPU port)\n");
+	seq_printf(s, "tx frames %08x  tx good %08x\n",
+		   readl(eth->base + ZX279133_XMAC0_BASE +
+			 ZX279133_XMAC_STAT_TX_FRAMES),
+		   readl(eth->base + ZX279133_XMAC0_BASE +
+			 ZX279133_XMAC_STAT_TX_GOOD));
+
+	/*
 	 * The VLAN action table, which is the other half of the forwarding
 	 * story and is not in the SPA window this console started with: it
 	 * lives in the NPPT's ERAM, and it says which ports a VID belongs
@@ -1360,8 +1373,11 @@ static int zx279133_mf_port_ppuinit(struct zx279133_eth *eth)
  * drives the port's internal PHY over MDIO.  That part needs the PHY side and
  * is not attempted here.
  */
-#define ZX279133_9132_UNI_PPU_FIRST	1
-#define ZX279133_9132_UNI_PPU_LAST	4
+/*
+ * The 9132's per-port attribute memories are the chip's own port numbers and
+ * live in zx279133.h: ZX279133_9132_UNI_PPU_FIRST..LAST are the four UNI
+ * jacks, ZX279133_9132_OUTERPHY_PPU is the external RTL8226 on jack 4.
+ */
 #define ZX279133_9132_OUTERPHY_PPU	5
 
 /*
@@ -1385,8 +1401,6 @@ static int zx279133_mf_port_ppuinit(struct zx279133_eth *eth)
  * where every frame between the CPU and the jacks has to pass, was left with
  * whatever the bootloader left behind.
  */
-#define ZX279133_9132_CONDUIT_PPU	5
-
 /* Per-port attribute word: SPA indirect address 19 of a PPU port. */
 #define ZX279133_PPU_ATTR_REG		19
 #define ZX279133_PPU_ATTR_ROUTE_MODE	BIT(13)
@@ -1423,53 +1437,14 @@ static int zx279133_mf_port_ppuinit(struct zx279133_eth *eth)
 #define ZX279133_PPU_ATTR_LIVE		BIT(0)
 
 /*
- * PVID: np_133.ko's spa_port_attr_table entry 14 is the default VLAN priority
- * (address 1, bits 27..25) and entry 16 is the upstream untagged SVID
- * (address 2, bits 29..18).  The 9132's UNI port N carries the transport VID
- * of the LAN vport that owns it, so the port's untagged SVID is that VID.
- */
-#define ZX279133_PPU_PVID_PRI_REG	1
-#define ZX279133_PPU_PVID_PRI_SHIFT	25
-#define ZX279133_PPU_PVID_VID_REG	2
-#define ZX279133_PPU_PVID_VID_SHIFT	18
-
-static int zx279133_spa_field_update(struct zx279133_eth *eth, u32 mem_id,
-				     u32 addr, u32 mask, u32 shift, u32 value)
-{
-	u32 cur;
-	int ret;
-
-	ret = zx279133_spa_indirect_read(eth, mem_id, addr, &cur);
-	if (ret)
-		return ret;
-	cur = (cur & ~(mask << shift)) | ((value & mask) << shift);
-
-	return zx279133_spa_indirect_write(eth, mem_id, addr, cur);
-}
-
-static int zx279133_9132_port_attr(struct zx279133_eth *eth, u32 ppu, u32 set,
-				   u32 clear)
-{
-	u32 attr;
-	int ret;
-
-	ret = zx279133_spa_indirect_read(eth, ppu, ZX279133_PPU_ATTR_REG, &attr);
-	if (ret)
-		return ret;
-	attr = (attr & ~clear) | set;
-
-	return zx279133_spa_indirect_write(eth, ppu, ZX279133_PPU_ATTR_REG, attr);
-}
-
-/*
  * The 9132's per-port words, read out and nothing else.
  *
- * Why this exists: everything below *writes* the per-port PVID and the
- * per-port attribute word, and after that the chip no longer remembers what
- * the bootloader left there.  The one number nobody can guess is the PVID the
- * vendor's own 4.19 working configuration uses on each UNI port - if it is
- * not the transport VID scheme, then the scheme this driver implements
- * cannot be what the switch actually does, and no amount of further writing
+ * Why this exists: everything below *writes* the per-port words, and after
+ * that the chip no longer remembers what the bootloader left there.  The one
+ * number nobody can guess is the configuration the vendor's own 4.19 working
+ * system uses on each UNI port - if it is not the transport VID scheme, then
+ * the scheme this driver implements cannot be what the switch actually does,
+ * and no amount of further writing of a guess will help.
  * will make it work.  So the baseline is dumped first, before any of this
  * driver's own 9132 writes.
  *
@@ -1544,53 +1519,95 @@ static void zx279133_9132_port_words_read(struct zx279133_eth *eth)
 }
 
 /*
- * Bring up the 9132's UNI ports.  PPU port p carries the LAN vport of the
- * same index (ZX279133_LAN_TRANSPORT_VID_MIN + (p - 1)), which is the VID
- * the CPU puts on a frame to reach that physical port.
+ * The vendor's own working state for one LAN-side 9132 port, word for word.
  *
- * The DSA tagger puts that VID on the frame itself (net_dsa_tag_zx279133_
- * rtl8372n.c: "the switch removes the service tag before transmission"), so
- * the jack has to be an access port whose PVID is that VID, and the conduit
- * has to let the tagged frame through.  That is why the conduit is configured
- * without the input-VLAN-check bit while the jacks keep it.
+ * Every value here was read out of the running 4.19 system with the vendor's
+ * read-only tm_debug interface (spa_port_attr_smac_0 .. smac_3 and
+ * spa_port_attr_xmac_0, 2026-10-21) and is kept in staging/ctl/
+ * vlive9132-cpu-20261021.txt.  Nothing here is guessed:
+ *
+ *	word0  = 0x0000a6a5  the port's entry program
+ *	word1  = 0x0000088f  (the same on every port; left alone)
+ *	word2  = 0x00000000  the untag SVID - the vendor's 9132 has none
+ *	word9  = 0x00000000  the VLAN filter
+ *	word10 = 0x0fa0000e
+ *	word13 = 0x00008008
+ *	word17 = the port's broadcast flood word
+ *	word18 = the port's unknown-unicast / multicast flood word
+ *	word19 = 0x96040001  the port attribute word
+ *
+ * Why the transport VID is not in there: the 9132 is a transparent
+ * MAC-learning bridge, not a VLAN switch.  Three independent pieces of the
+ * vendor's own working system say so (docs/16 §2.2): the vendor's FDB holds
+ * one entry and its vid field is 0, every port's VLAN filter mask reads 0,
+ * and every port's ingress frame mode reads 0.  The transport VID belongs to
+ * the tree's external RTL8372N, whose switch does speak 802.1Q; writing one
+ * into this chip gives it a VLAN filter to fail, and the DSA tagger's tag
+ * has to be taken off again on the way to the wire instead
+ * (zx279133_lan_strip_transport_vlan() in zx279133-netdev.c).
+ */
+static const u32 zx279133_9132_vendor_words[][2] = {
+	{ 0,  0x0000a6a5 },	/* the port's entry program */
+	{ 2,  0x00000000 },	/* the untag SVID: none */
+	{ 9,  0x00000000 },	/* the VLAN filter: none */
+	{ 10, 0x0fa0000e },
+	{ 13, 0x00008008 },
+	{ 19, 0x96040001 },	/* the port attribute word */
+};
+
+/*
+ * The flood words, per port: the first is the broadcast flood word and the
+ * second the unknown-unicast / multicast one.  PPU 1..4 are the four UNI
+ * jacks and PPU 5 is XMAC0, the 9132's CPU port.
+ */
+static const u32 zx279133_9132_vendor_flood[6][2] = {
+	{ 0x04400410, 0x00400840 },
+	{ 0x04800410, 0x00800880 },
+	{ 0x04c00410, 0x00c008c0 },
+	{ 0x05000410, 0x01000900 },
+	{ 0x05400410, 0x01400940 },
+	{ 0x00000000, 0x00000000 },
+};
+
+static int zx279133_9132_port_words_vendor(struct zx279133_eth *eth, u32 ppu)
+{
+	u32 flood = ppu - 1;
+	u32 i;
+	int ret;
+
+	if (flood >= ARRAY_SIZE(zx279133_9132_vendor_flood))
+		flood = 0;
+
+	for (i = 0; i < ARRAY_SIZE(zx279133_9132_vendor_words); i++) {
+		ret = zx279133_spa_indirect_write(eth, ppu,
+						  zx279133_9132_vendor_words[i][0],
+						  zx279133_9132_vendor_words[i][1]);
+		if (ret)
+			return ret;
+	}
+	ret = zx279133_spa_indirect_write(eth, ppu, 17,
+					  zx279133_9132_vendor_flood[flood][0]);
+	if (ret)
+		return ret;
+
+	return zx279133_spa_indirect_write(eth, ppu, 18,
+					   zx279133_9132_vendor_flood[flood][1]);
+}
+
+/*
+ * Bring up the 9132's UNI ports and its CPU port.
+ *
+ * The CPU port is PPU 5, which is XMAC0, the 9132 side of the SGMII link to
+ * the SoC's own MAC.  Every frame between the CPU and the jacks crosses it.
  */
 static int zx279133_9132_port_init(struct zx279133_eth *eth)
 {
-	u32 ppu, vid, attr;
+	u32 ppu, attr;
 	int ret;
 
 	for (ppu = ZX279133_9132_UNI_PPU_FIRST; ppu <= ZX279133_9132_UNI_PPU_LAST;
 	     ppu++) {
-		vid = ZX279133_LAN_TRANSPORT_VID_MIN + (ppu -
-			ZX279133_9132_UNI_PPU_FIRST);
-
-		/*
-		 * switch.ko's sw_init_port_isolate / sw_init_mac_lookup_ctrl /
-		 * sw_init_flood_ctrl / sw_init_port_route_mode /
-		 * sw_set_default_vlan_check_ctrl, for this port.
-		 */
-		ret = zx279133_9132_port_attr(eth, ppu,
-					      ZX279133_PPU_ATTR_SA_LEARN |
-					      ZX279133_PPU_ATTR_DA_LOOKUP |
-					      ZX279133_PPU_ATTR_BRD_FLOOD |
-					      ZX279133_PPU_ATTR_MUL_FLOOD |
-					      ZX279133_PPU_ATTR_IN_VLAN_CHK |
-					      ZX279133_PPU_ATTR_LIVE,
-					      ZX279133_PPU_ATTR_ISOLATE_EN |
-					      ZX279133_PPU_ATTR_MAC_LIMIT |
-					      ZX279133_PPU_ATTR_ROUTE_MODE);
-		if (ret)
-			return ret;
-
-		/* tm_port_pvid_set(): default VLAN priority and untag SVID. */
-		ret = zx279133_spa_field_update(eth, ppu,
-						ZX279133_PPU_PVID_PRI_REG, 0x7,
-						ZX279133_PPU_PVID_PRI_SHIFT, 0);
-		if (ret)
-			return ret;
-		ret = zx279133_spa_field_update(eth, ppu,
-						ZX279133_PPU_PVID_VID_REG, 0xfff,
-						ZX279133_PPU_PVID_VID_SHIFT, vid);
+		ret = zx279133_9132_port_words_vendor(eth, ppu);
 		if (ret)
 			return ret;
 
@@ -1606,53 +1623,18 @@ static int zx279133_9132_port_init(struct zx279133_eth *eth)
 		if (ret)
 			return ret;
 		dev_info(eth->dev,
-			 "9132 PPU %u attribute word %08x (VID %u)\n",
-			 ppu, attr, vid);
-
-		/* The two words the PVID lives in, read back the same way. */
-		ret = zx279133_spa_indirect_read(eth, ppu,
-						 ZX279133_PPU_PVID_PRI_REG,
-						 &attr);
-		if (ret)
-			return ret;
-		dev_info(eth->dev, "9132 PPU %u PVID word 1 %08x\n", ppu, attr);
-		ret = zx279133_spa_indirect_read(eth, ppu,
-						 ZX279133_PPU_PVID_VID_REG,
-						 &attr);
-		if (ret)
-			return ret;
-		dev_info(eth->dev, "9132 PPU %u PVID word 2 %08x\n", ppu, attr);
+			 "9132 PPU %u attribute word %08x (vendor configuration)\n",
+			 ppu, attr);
 	}
 
 	/*
 	 * The conduit: PPU 5, which is XMAC0, the 9132 side of the SGMII link
 	 * to the SoC's own MAC.  Every frame between the CPU and the jacks
-	 * crosses it, and it was not configured at all before.
-	 *
-	 * The vendor's own working value for this port was read out of the
-	 * running 4.19 system (spa_port_attr_xmac_0, 2026-10-21) and is
-	 * 0x96040001 in the attribute word - the same value the four jacks
-	 * carry - with no SVID and no VLAN filter.  Two differences are made
-	 * here, and both are forced by the DSA tagger rather than by taste:
-	 *
-	 *	 - the input-VLAN-check bit is cleared, because the frames the
-	 *   CPU sends towards a jack arrive carrying that jack's transport
-	 *   VID and a port that checks the VID of a tagged frame against a
-	 *   filter that is empty would drop them; the vendor's frames are
-	 *   untagged, which is why its own port keeps the bit; and
-	 *	 - no PVID is written, so the conduit stays a trunk that carries
-	 *   every transport VID instead of an access port with one.
+	 * crosses it, and the vendor's own working value for it is the same
+	 * as for the four jacks - entry program 0xa6a5, no SVID, the same
+	 * attribute word.
 	 */
-	ret = zx279133_9132_port_attr(eth, ZX279133_9132_CONDUIT_PPU,
-				      ZX279133_PPU_ATTR_SA_LEARN |
-				      ZX279133_PPU_ATTR_DA_LOOKUP |
-				      ZX279133_PPU_ATTR_BRD_FLOOD |
-				      ZX279133_PPU_ATTR_MUL_FLOOD |
-				      ZX279133_PPU_ATTR_LIVE,
-				      ZX279133_PPU_ATTR_IN_VLAN_CHK |
-				      ZX279133_PPU_ATTR_ISOLATE_EN |
-				      ZX279133_PPU_ATTR_MAC_LIMIT |
-				      ZX279133_PPU_ATTR_ROUTE_MODE);
+	ret = zx279133_9132_port_words_vendor(eth, ZX279133_9132_CONDUIT_PPU);
 	if (ret)
 		return ret;
 	ret = zx279133_spa_indirect_read(eth, ZX279133_9132_CONDUIT_PPU,
@@ -1664,11 +1646,9 @@ static int zx279133_9132_port_init(struct zx279133_eth *eth)
 		 ZX279133_9132_CONDUIT_PPU, attr);
 
 	dev_info(eth->dev,
-		 "9132 UNI ports %u..%u up (transport VIDs %u..%u)\n",
+		 "9132 UNI ports %u..%u and the CPU port %u up (the vendor's configuration)\n",
 		 ZX279133_9132_UNI_PPU_FIRST, ZX279133_9132_UNI_PPU_LAST,
-		 ZX279133_LAN_TRANSPORT_VID_MIN,
-		 ZX279133_LAN_TRANSPORT_VID_MIN +
-		 (ZX279133_9132_UNI_PPU_LAST - ZX279133_9132_UNI_PPU_FIRST));
+		 ZX279133_9132_CONDUIT_PPU);
 
 	return 0;
 }

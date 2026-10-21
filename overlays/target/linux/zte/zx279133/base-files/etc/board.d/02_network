@@ -94,10 +94,19 @@ skyworth,sk-d840n)
 			[ "$d" = lan3 ] && { wan_port="lan3"; continue; }
 			lan_ports="$lan_ports${lan_ports:+ }$d"
 		done
+		#
+		# The address is set with ucidef_set_interface, not with "uci set":
+		# this image's /lib/functions/uci-defaults.sh is built on
+		# json_select_object and writes /etc/config/network as a JSON
+		# object, so a "uci set" against it is not guaranteed to be
+		# accepted - and the symptom of it not being accepted is exactly
+		# what this file exists to prevent: the network service puts the
+		# default 192.168.1.1 on the bridge, the bench PC waits on
+		# 192.168.9.1, and the board looks dead while it is up.
 		if [ -n "$wan_port" ] && [ -n "$lan_ports" ]; then
-			ucidef_set_interfaces_lan_wan "$lan_ports" "$wan_port"
-			uci set network.lan.ipaddr='192.168.9.1'
-			uci set network.lan.netmask='255.255.255.0'
+			ucidef_set_interface "lan" device "$lan_ports" protocol "static" \
+				ipaddr "192.168.9.1" netmask "255.255.255.0"
+			ucidef_set_interface "wan" device "$wan_port" protocol "dhcp"
 		elif [ -n "$lan_ports" ]; then
 			ucidef_set_interface "lan" device "$lan_ports" protocol "static" \
 				ipaddr "192.168.9.1" netmask "255.255.255.0"

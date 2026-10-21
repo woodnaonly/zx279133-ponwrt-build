@@ -314,16 +314,34 @@ static void zx279133_idm_rx_put_vlan(struct sk_buff *skb, u16 vid)
 }
 
 /*
- * The source port the PPU reports in descriptor word 1. For a LAN frame the
- * entry program (PC 10) reports the logical port, which is the frame's
- * RTL8372N transport VID, and has removed the tag itself; 0 otherwise.
+ * The source port the PPU reports in descriptor word 1.
+ *
+ * The PPU reports the logical port the frame came in on, and which number
+ * that is depends on the switch on the other end of the lane:
+ *
+ *   - with the tree's external RTL8372N it is the transport VID the tagger
+ *     put on the frame (59..62), and the entry program (PC 10) has removed
+ *     the tag itself;
+ *   - with the 9132 - a transparent MAC-learning bridge with no VLANs at
+ *     all, see docs/16 §2.2 - it is the chip's own port number, 1..4 for
+ *     the four UNI jacks.
+ *
+ * Both mean the same thing, so both are understood here, and both are turned
+ * into the transport VID the DSA tagger dispatches on.
  */
 static u16 zx279133_idm_rx_lan_vport(u32 word1)
 {
 	u16 port = (word1 >> 16) & 0x3f;
 
-	return port >= ZX279133_LAN_TRANSPORT_VID_MIN &&
-	       port <= ZX279133_LAN_TRANSPORT_VID_MAX ? port : 0;
+	if (port >= ZX279133_LAN_TRANSPORT_VID_MIN &&
+	    port <= ZX279133_LAN_TRANSPORT_VID_MAX)
+		return port;
+	if (port >= ZX279133_9132_UNI_PPU_FIRST &&
+	    port <= ZX279133_9132_UNI_PPU_LAST)
+		return ZX279133_LAN_TRANSPORT_VID_MIN +
+		       (port - ZX279133_9132_UNI_PPU_FIRST);
+
+	return 0;
 }
 
 /* Whether word 1 names the port of a frame the PPU parsed for this side. */

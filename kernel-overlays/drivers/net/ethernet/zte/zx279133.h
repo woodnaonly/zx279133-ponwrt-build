@@ -30,7 +30,14 @@
 #define ZX279133_LAN_INGRESS_VID	1
 #define ZX279133_LAN_VID		62
 #define ZX279133_LAN_MAX_MTU		(ZX279133_MAX_MTU + VLAN_HLEN)
-#define ZX279133_TX_RECLAIM_DELAY_MS	10
+/*
+ * The 9132's per-port attribute memories (the SPA memory ids, which are the
+ * chip's own port numbers): 1..4 are the four UNI jacks and 5 is XMAC0, the
+ * 9132's CPU port - the one the DSA conduit talks to.
+ */
+#define ZX279133_9132_UNI_PPU_FIRST	1
+#define ZX279133_9132_UNI_PPU_LAST	4
+#define ZX279133_9132_CONDUIT_PPU	5#define ZX279133_TX_RECLAIM_DELAY_MS	10
 #define ZX279133_DATAPATH_USER_WAN	BIT(0)
 #define ZX279133_DATAPATH_USER_LAN	BIT(1)
 #define zx279133_tx_selector		0x0f
