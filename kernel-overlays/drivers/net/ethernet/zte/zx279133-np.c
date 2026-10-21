@@ -2569,9 +2569,22 @@ static int zx279133_9132_cpu_path_init(struct zx279133_eth *eth)
 {
 	int ret;
 
+	/*
+	 * The global config table.  np_user_table_init() calls
+	 * glb_cfg_table_cpu_base_qid_set(0x193), and nothing else writes
+	 * it; the setter puts the value in bits 1..9 of the halfword at
+	 * byte 14 of entry 0.  The table's entries are 128 bits wide, so
+	 * that halfword is word 3 of the entry, bits 17..25.
+	 *
+	 * Two more fields of the same word come from the same load path:
+	 * glb_cfg_table_mul_ip_mode_set(1) puts bit 5 of byte 13 - bit 13
+	 * of word 3 - and glb_cfg_table_ipv6_crc32_mode_set(1) puts bit 0
+	 * of byte 14 - bit 16 of word 3.
+	 */
 	ret = zx279133_eram_window_patch(eth, ZX279133_GLBCFG_ERAM_SDT_ID, 0, 3,
-					  0x1ffu << 17,
-					  ZX279133_VENDOR_CPU_BASE_QID << 17);
+					  (0x1ffu << 17) | (1u << 16) | (1u << 13),
+					  (ZX279133_VENDOR_CPU_BASE_QID << 17) |
+					  (1u << 16) | (1u << 13));
 	if (ret)
 		return dev_err_probe(eth->dev, ret,
 				     "the CPU base queue id did not go into ERAM table 0x22\n");
@@ -2594,6 +2607,138 @@ static int zx279133_9132_cpu_path_init(struct zx279133_eth *eth)
 		 "9132 CPU path: base queue %u, outport 15 -> real port 15 queue %u, reason 0 -> queue %u\n",
 		 ZX279133_VENDOR_CPU_BASE_QID, ZX279133_VENDOR_CPU_BASE_QID,
 		 ZX279133_VENDOR_OMCI_QID);
+
+	return 0;
+}
+
+/*
+ * The tables that decide whether a port may talk to another port and
+ * whether a frame is checked for a VLAN on the way out.
+ *
+ * The ERAM is DRAM: it comes up empty after a power cut, and the vendor
+ * fills these tables in its own load path, so a driver that leaves them
+ * alone leaves them empty.  An empty isolation matrix says that no port
+ * may talk to any other, and an empty output-VLAN-check table says that
+ * nothing is checked - the two are opposites, and only one of them lets
+ * a frame through.
+ *
+ * Every value here is the vendor's:
+ *
+ *   0x1b  the isolation matrix, 64 by 64 ports, one bit each, indexed
+ *         src | (dst << 6).  sw_init_port_isolate() writes the whole of
+ *         it: the diagonal is 1 and everything else is 0.
+ *
+ *   0x23  the output VLAN check, one bit per port.
+ *         sw_set_default_vlan_check_ctrl() turns it on for ports 0..7
+ *         and 0x10..0x30, and only turns it off again for ports 5 and 6
+ *         when the XMACs are extended - and on this board they are not:
+ *         the live system's own port attribute word for those two ports
+ *         has bit 19 clear, and that bit is the extend flag.
+ *
+ *   0x24  the port bind, one bit per port.  sw_init_port_route_mode()
+ *         writes 0 into all of them.
+ *
+ *   0x25  the port PVID, 16 bits per port.  The live system reads 0 for
+ *         every one of its ports, and so does the vendor's own VLAN
+ *         setup: zxic_api_sw_vlan_set_port_vlancfg(port, 0, 0, 0xfff).
+ */
+#define ZX279133_ISOLATE_ERAM_SDT_ID	0x1b
+#define ZX279133_OUTVLAN_ERAM_SDT_ID	0x23
+#define ZX279133_PORTBIND_ERAM_SDT_ID	0x24
+#define ZX279133_PVID_ERAM_SDT_ID	0x25
+
+static int zx279133_9132_isolate_init(struct zx279133_eth *eth)
+{
+	u32 base = zx279133_eram_base_of(ZX279133_ISOLATE_ERAM_SDT_ID);
+	u32 w;
+	int ret;
+
+	if (!base)
+		return -EINVAL;
+
+	/*
+	 * The index is src | (dst << 6), so the 64 sources of one
+	 * destination are 64 consecutive bits and two destinations share a
+	 * 128-bit window.  One read and one write per window is enough: the
+	 * diagonal of destination 2w is bit 2w of the window and the
+	 * diagonal of destination 2w+1 is bit w+65 of it.
+	 */
+	for (w = 0; w < 32; w++) {
+		u32 window[ZX279133_SMMU0_WORDS];
+		u32 addr = (base << 7) + (w << 7);
+		u32 b0 = 2 * w;
+		u32 b1 = w + 65;
+
+		ret = zx279133_smmu0_read(eth, addr, window, ARRAY_SIZE(window),
+					  ZX279133_SMMU0_CMD_READ);
+		if (ret)
+			return ret;
+
+		window[0] = 0;
+		window[1] = 0;
+		window[2] = 0;
+		window[3] = 0;
+		window[b0 / 32] |= 1u << (b0 % 32);
+		window[b1 / 32] |= 1u << (b1 % 32);
+
+		ret = zx279133_smmu0_write(eth, addr, window, ARRAY_SIZE(window),
+					   ZX279133_SMMU0_CMD_WRITE);
+		if (ret)
+			return ret;
+	}
+
+	dev_info(eth->dev,
+		 "9132 isolation matrix written: the diagonal only, %u ports\n",
+		 64);
+
+	return 0;
+}
+
+static int zx279133_9132_switch_tables_init(struct zx279133_eth *eth)
+{
+	u32 p;
+	int ret;
+
+	/* The output VLAN check: on for every port the vendor turns it on. */
+	for (p = 0; p < 8; p++) {
+		ret = zx279133_eram_table_set_bits(eth,
+						    ZX279133_OUTVLAN_ERAM_SDT_ID,
+						    p, 1, 1);
+		if (ret)
+			return ret;
+	}
+	for (p = 0x10; p < 0x31; p++) {
+		ret = zx279133_eram_table_set_bits(eth,
+						    ZX279133_OUTVLAN_ERAM_SDT_ID,
+						    p, 1, 1);
+		if (ret)
+			return ret;
+	}
+
+	/* The port bind: no port is bound to another. */
+	for (p = 0; p < 64; p++) {
+		ret = zx279133_eram_table_set_bits(eth,
+						    ZX279133_PORTBIND_ERAM_SDT_ID,
+						    p, 1, 0);
+		if (ret)
+			return ret;
+	}
+
+	/* The PVID: none, because this is a transparent bridge. */
+	for (p = 0; p < 8; p++) {
+		ret = zx279133_eram_table_set_bits(eth,
+						    ZX279133_PVID_ERAM_SDT_ID,
+						    p, 16, 0);
+		if (ret)
+			return ret;
+	}
+	for (p = 0x10; p < 0x31; p++) {
+		ret = zx279133_eram_table_set_bits(eth,
+						    ZX279133_PVID_ERAM_SDT_ID,
+						    p, 16, 0);
+		if (ret)
+			return ret;
+	}
 
 	return 0;
 }
@@ -4058,6 +4203,18 @@ int zx279133_np_prepare(struct zx279133_eth *eth)
 	 * a queue nobody is listening on.
 	 */
 	ret = zx279133_9132_cpu_path_init(eth);
+	if (ret)
+		goto err_route_off;
+	/*
+	 * And the tables that decide whether two ports may talk to each
+	 * other and whether a frame is VLAN-checked on the way out.  The
+	 * ERAM comes up empty after a power cut, so a table nobody fills
+	 * is a table that says nothing sensible.
+	 */
+	ret = zx279133_9132_isolate_init(eth);
+	if (ret)
+		goto err_route_off;
+	ret = zx279133_9132_switch_tables_init(eth);
 	if (ret)
 		goto err_route_off;
 	/*
