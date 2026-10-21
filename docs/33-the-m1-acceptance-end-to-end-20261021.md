@@ -61,6 +61,21 @@ internet, all on the one cable.
 pwsh -File tools/labnat-upstream.ps1
 ```
 
+**Disarm the canary first.**  The trial image reboots itself 300 s after
+userspace, so that "no answer" can be read as "it booted, this port is not
+it".  The NAT acceptance needs longer than that, and the RAM image's `/etc`
+is wiped by the reboot anyway - so the canary has to be taken out of the
+way, and the image says how: touch `/tmp/trial-noreboot` and the canary
+subshell exits instead of rebooting.  Over the serial console, in the same
+window where the G2 measurement is taken:
+
+```
+touch /tmp/trial-noreboot
+```
+
+(touch it again, or remove it, when the round is over and the canary should
+be back.)
+
 **Use `pwsh` 7, not `powershell` (Windows PowerShell 5.1).**  The scripts
 carry the adapter's Chinese name (以太网) and 5.1 reads a file without a BOM
 as the system code page, which does not parse.  This was measured, not
