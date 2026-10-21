@@ -1201,6 +1201,48 @@ static ssize_t zx279133_9132_write(struct file *file, const char __user *ubuf,
 		return count;
 	}
 
+	/*
+	 * The MF extension table's copy of a port's attribute word - the
+	 * copy the switch engine reads, and the one the vendor's own
+	 * port_attr_def_*_set() helpers keep in step with the SPA memory.
+	 *
+	 *	"fa 5 96040001"	write it, then read the entry back
+	 */
+	if (!strcmp(tok, "fa")) {
+		u32 data[ZX279133_SMMU0_WORDS];
+		u32 mem_id;
+
+		tok = zx279133_9132_next_token(&p);
+		if (!tok || kstrtou32(tok, 0, &mem_id))
+			return -EINVAL;
+		tok = zx279133_9132_next_token(&p);
+		if (!tok || kstrtou32(tok, 0, &val))
+			return -EINVAL;
+
+		ret = zx279133_smmu0_read(eth,
+					  (mem_id + ZX279133_MF_ERAM_BASE_BLOCK) << 7,
+					  data, ZX279133_SMMU0_WORDS,
+					  ZX279133_SMMU0_CMD_READ);
+		if (ret)
+			return ret;
+		data[3] = val;
+		ret = zx279133_smmu0_write(eth,
+					   (mem_id + ZX279133_MF_ERAM_BASE_BLOCK) << 7,
+					   data, ZX279133_SMMU0_WORDS,
+					   ZX279133_SMMU0_CMD_WRITE);
+		if (ret)
+			return ret;
+		ret = zx279133_smmu0_read(eth,
+					  (mem_id + ZX279133_MF_ERAM_BASE_BLOCK) << 7,
+					  data, ZX279133_SMMU0_WORDS,
+					  ZX279133_SMMU0_CMD_READ);
+		if (ret)
+			return ret;
+		pr_info("mf eram mem %u = %08x %08x %08x %08x\n",
+			mem_id, data[0], data[1], data[2], data[3]);
+		return count;
+	}
+
 	return -EINVAL;
 }
 
@@ -1576,6 +1618,13 @@ static int zx279133_mf_port_ppuinit(struct zx279133_eth *eth)
 #define ZX279133_PPU_ATTR_LIVE		BIT(0)
 
 /*
+ * The whole attribute word of a port that carries traffic, as the vendor's
+ * own working system has it: 0x96040000 for the named bits plus bit 0 for
+ * the one bit nobody can name.
+ */
+#define ZX279133_9132_VENDOR_ATTR_WORD	0x96040001
+
+/*
  * The 9132's per-port words, read out and nothing else.
  *
  * Why this exists: everything below *writes* the per-port words, and after
@@ -1691,7 +1740,7 @@ static const u32 zx279133_9132_vendor_words[][2] = {
 	{ 9,  0x00000000 },	/* the VLAN filter: none */
 	{ 10, 0x0fa0000e },
 	{ 13, 0x00008008 },
-	{ 19, 0x96040001 },	/* the port attribute word */
+	{ 19, ZX279133_9132_VENDOR_ATTR_WORD },	/* the port attribute word */
 };
 
 /*
@@ -1734,6 +1783,27 @@ static int zx279133_9132_port_words_vendor(struct zx279133_eth *eth, u32 ppu)
 }
 
 /*
+ * The switch engine does not read the port's attribute word out of the SPA
+ * memory.  It reads the copy that lives in the MF extension table, and the
+ * vendor's port_attr_def_*_set() helpers mirror every bit of the attribute
+ * word into that table when they set it - which is why np_133.ko's ERAM
+ * table 0x7d is described as the learning flag table with one entry per SPA
+ * memory id.
+ *
+ * So the word above has to be mirrored, and it has to be mirrored after the
+ * SPA memory has been given it: the CPU port's copy was last written with
+ * the RTL8372N path's value 0x00042000, which carries neither the learning
+ * enable, nor the DA lookup, nor the flood bits.  In the table the chip
+ * actually reads, the CPU port was therefore a dead end - and not one frame
+ * moved in either direction, which is exactly what the board did.
+ */
+static int zx279133_9132_mf_mirror(struct zx279133_eth *eth, u32 ppu)
+{
+	return zx279133_mf_eram_attr_set(eth, ppu,
+					 ZX279133_9132_VENDOR_ATTR_WORD);
+}
+
+/*
  * Bring up the 9132's UNI ports and its CPU port.
  *
  * The CPU port is PPU 5, which is XMAC0, the 9132 side of the SGMII link to
@@ -1764,6 +1834,11 @@ static int zx279133_9132_port_init(struct zx279133_eth *eth)
 		dev_info(eth->dev,
 			 "9132 PPU %u attribute word %08x (vendor configuration)\n",
 			 ppu, attr);
+
+		/* And the copy of it in the table the switch engine reads. */
+		ret = zx279133_9132_mf_mirror(eth, ppu);
+		if (ret)
+			return ret;
 	}
 
 	/*
@@ -1783,6 +1858,11 @@ static int zx279133_9132_port_init(struct zx279133_eth *eth)
 	dev_info(eth->dev,
 		 "9132 PPU %u (the DSA conduit) attribute word %08x\n",
 		 ZX279133_9132_CONDUIT_PPU, attr);
+
+	/* And the copy of it in the table the switch engine reads. */
+	ret = zx279133_9132_mf_mirror(eth, ZX279133_9132_CONDUIT_PPU);
+	if (ret)
+		return ret;
 
 	dev_info(eth->dev,
 		 "9132 UNI ports %u..%u and the CPU port %u up (the vendor's configuration)\n",
