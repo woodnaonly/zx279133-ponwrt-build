@@ -2990,6 +2990,172 @@ static int zx279133_9132_proto_init(struct zx279133_eth *eth)
 #define ZX279133_VENDOR_CPU_BASE_QID	0x193
 #define ZX279133_VENDOR_OMCI_QID	7
 
+/*
+ * The vendor's ERAM 0x19 - the reason map - in full.
+ *
+ * The index of an entry is cpu_qid + (reason << 7), so the table holds 128
+ * cpu_qids per reason, and the value is the five-bit CPU queue id in bits
+ * 24..28 of a 32-bit entry.
+ *
+ * The vendor's init path programs reason 0 and reason 1 only, 127 cpu_qids
+ * each - cpu_qid 50 is the one it never writes - and the queue id for reason 1
+ * is always the reason 0 one plus eight.  tm_reason_map_cpu_qid_set() at
+ * np_133.ko 0x1153b4 is the only writer; the table and the values are in
+ * staging/ctl/re-idm-queue-map.md.
+ *
+ * 0xff marks the entry the vendor leaves alone.  The ERAM comes up empty after
+ * a power cut, so that entry reads back as zero, and zero is not a queue id
+ * the vendor ever uses for a trapped LAN frame.
+ */
+static const u8 zx279133_9132_reason_qid[128] = {
+	7, 7, 6, 4, 4, 4, 4, 4, 6, 6, 6, 6, 6, 4, 4, 4,
+	6, 6, 6, 6, 6, 6, 6, 4, 4, 4, 4, 6, 6, 6, 6, 6,
+	6, 6, 6, 6, 6, 6, 6, 6, 2, 2, 6, 6, 6, 6, 5, 6,
+	6, 6, 6, 3, 0xff, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+	5, 5, 5, 4, 4, 4, 4, 3, 6, 6, 6, 2, 1, 4, 4, 4,
+	3, 3, 3, 5, 4, 4, 3, 3, 4, 4, 4, 4, 4, 4, 4, 4,
+	1, 1, 2, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+	4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+};
+
+/*
+ * The vendor's ERAM 0x27 - the outport map - in full.
+ *
+ * The index is the outport, 0 to 63, and the entry is 16 bits: the real port
+ * in bits 0..5 and the queue id in bits 6..14.  The vendor's
+ * outport_and_real_port_map_table_init() writes all 64 of them, with the
+ * real port 15 everywhere and the queue id 0x1a3 (419) by default; four
+ * outports are the exceptions: the CPU's own outport 15 goes to queue 0x193
+ * (403), and 49, 50 and 51 go to 0x1b1 (433), 0x1b3 (435) and 0x1b5 (437).
+ */
+#define ZX279133_VENDOR_OUTPORT_REAL_PORT	0x0f
+#define ZX279133_VENDOR_OUTPORT_DEFAULT_QID	0x1a3
+#define ZX279133_VENDOR_OUTPORT_CPU_QID	0x193
+
+static u32 zx279133_9132_outport_qid(u32 outport)
+{
+	switch (outport) {
+	case 0x0f:
+		return ZX279133_VENDOR_OUTPORT_CPU_QID;
+	case 0x31:
+		return 0x1b1;
+	case 0x32:
+		return 0x1b3;
+	case 0x33:
+		return 0x1b5;
+	default:
+		return ZX279133_VENDOR_OUTPORT_DEFAULT_QID;
+	}
+}
+
+/*
+ * Write one 128-bit ERAM block.  The block number is the one the console's
+ * "er" and "ew" commands use, so a table written here can be read back with
+ * them.
+ */
+static int zx279133_9132_eram_block_write(struct zx279133_eth *eth, u32 block,
+					  const u32 words[ZX279133_SMMU0_WORDS])
+{
+	return zx279133_smmu0_write(eth, block << 7, words,
+				     ZX279133_SMMU0_WORDS,
+				     ZX279133_SMMU0_CMD_WRITE);
+}
+
+/*
+ * The reason map, the vendor's way.
+ *
+ * A frame the switch hands to the CPU carries a reason, and this table says
+ * which of the SoC's CPU queues it is delivered on.  The vendor writes 254
+ * entries; this driver used to write one - reason 0, cpu_qid 0 - and left the
+ * other 253 at zero, which is not a queue id the switch can deliver on.  The
+ * whole table has to be there, because the cpu_qid of a trapped LAN frame is
+ * not the one this driver happened to guess.
+ */
+static int zx279133_9132_reason_map_init(struct zx279133_eth *eth)
+{
+	u32 base = zx279133_eram_base_of(ZX279133_QID_ERAM_SDT_ID);
+	u32 reason, block, cpu, i;
+	u32 words[ZX279133_SMMU0_WORDS];
+	int ret;
+
+	if (!base)
+		return dev_err_probe(eth->dev, -EINVAL,
+				     "the reason map has no base\n");
+
+	for (reason = 0; reason < 2; reason++) {
+		for (block = 0; block < 32; block++) {
+			for (i = 0; i < ZX279133_SMMU0_WORDS; i++)
+				words[i] = 0;
+			for (i = 0; i < ZX279133_SMMU0_WORDS; i++) {
+				cpu = block * ZX279133_SMMU0_WORDS + i;
+
+				if (zx279133_9132_reason_qid[cpu] == 0xff)
+					continue;
+				words[i] = (zx279133_9132_reason_qid[cpu] +
+					    (reason ? 8 : 0)) << 24;
+			}
+			ret = zx279133_9132_eram_block_write(eth,
+					base + reason * 32 + block, words);
+			if (ret)
+				return dev_err_probe(eth->dev, ret,
+						     "the reason map did not go into ERAM table 0x19\n");
+		}
+	}
+
+	dev_info(eth->dev,
+		 "9132 reason map: ERAM table 0x19 at block %u holds the vendor's 254 entries (reasons 0 and 1)\n",
+		 base);
+
+	return 0;
+}
+
+/*
+ * The outport map, the vendor's way.
+ *
+ * The switch says "this frame goes out of outport N"; this table says which
+ * real port that is and which queue it lands on.  The vendor writes all 64
+ * entries; this driver used to write one - outport 15 - and left the other
+ * 63 at zero, so a frame that came out of any other outport had no real port
+ * and no queue.
+ */
+static int zx279133_9132_outport_map_init(struct zx279133_eth *eth)
+{
+	u32 base = zx279133_eram_base_of(ZX279133_OUTPORT_ERAM_SDT_ID);
+	u32 block, outport, i;
+	u32 words[ZX279133_SMMU0_WORDS];
+	int ret;
+
+	if (!base)
+		return dev_err_probe(eth->dev, -EINVAL,
+				     "the outport map has no base\n");
+
+	for (block = 0; block < 8; block++) {
+		for (i = 0; i < ZX279133_SMMU0_WORDS; i++)
+			words[i] = 0;
+		for (i = 0; i < 8; i++) {
+			u32 value;
+
+			outport = block * 8 + i;
+			value = ZX279133_VENDOR_OUTPORT_REAL_PORT |
+				(zx279133_9132_outport_qid(outport) << 6);
+			if (i & 1)
+				words[i / 2] |= value << 16;
+			else
+				words[i / 2] |= value;
+		}
+		ret = zx279133_9132_eram_block_write(eth, base + block, words);
+		if (ret)
+			return dev_err_probe(eth->dev, ret,
+					     "the outport map did not go into ERAM table 0x27\n");
+	}
+
+	dev_info(eth->dev,
+		 "9132 outport map: ERAM table 0x27 at block %u holds the vendor's 64 entries\n",
+		 base);
+
+	return 0;
+}
+
 static int zx279133_9132_cpu_path_init(struct zx279133_eth *eth)
 {
 	int ret;
@@ -3014,19 +3180,13 @@ static int zx279133_9132_cpu_path_init(struct zx279133_eth *eth)
 		return dev_err_probe(eth->dev, ret,
 				     "the CPU base queue id did not go into ERAM table 0x22\n");
 
-	ret = zx279133_eram_table_set_bits(eth, ZX279133_OUTPORT_ERAM_SDT_ID,
-					    0x0f, 16,
-					    0x0f | (ZX279133_VENDOR_CPU_BASE_QID << 6));
+	ret = zx279133_9132_outport_map_init(eth);
 	if (ret)
-		return dev_err_probe(eth->dev, ret,
-				     "the outport map did not go into ERAM table 0x27\n");
+		return ret;
 
-	ret = zx279133_eram_window_patch(eth, ZX279133_QID_ERAM_SDT_ID, 0, 0,
-					  0x1fu << 24,
-					  ZX279133_VENDOR_OMCI_QID << 24);
+	ret = zx279133_9132_reason_map_init(eth);
 	if (ret)
-		return dev_err_probe(eth->dev, ret,
-				     "the reason map did not go into ERAM table 0x19\n");
+		return ret;
 
 	dev_info(eth->dev,
 		 "9132 CPU path: base queue %u, outport 15 -> real port 15 queue %u, reason 0 -> queue %u\n",
