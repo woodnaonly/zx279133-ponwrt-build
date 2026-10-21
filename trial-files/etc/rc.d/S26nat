@@ -133,17 +133,30 @@ chmod 755 /tmp/probe-script.sh
 # image, and without one a lease is announced and then thrown away.
 cat > /tmp/udhcpc-trial.sh <<'EOF'
 #!/bin/sh
-# The prefix length, out of whatever this client exports.
+# The lease, applied in whichever convention this client uses.
 #
 # This image has no udhcpc package of its own: the client is busybox's, and
-# busybox's udhcpc does NOT export "mask".  It exports "subnet", and there it
-# is the netmask (255.255.255.0), not the network address.  A client that
-# exports the prefix length as "mask" is accepted too, and so is a network
-# address, so the script does not have to know which client it is talking to.
+# busybox's udhcpc calls the script ONCE, with $1 = "bound" (or "renew" or
+# "deconfig"), and hands the whole lease over in the environment:
+# $ip, $subnet, $router, $dns, $interface, $broadcast.
 #
-# Getting this wrong is not a small thing: the first version of this script
-# wrote "$ip/$mask" and the WAN never took an address, because "$mask" was
-# empty and the address was "$ip/".
+# Two things about it are easy to get wrong, and both were wrong here:
+#
+#   * it does not call the script once per option.  There is no $2 naming
+#     the option - that is the OTHER convention, the standalone udhcpc's -
+#     so a script written for it ("case $2 in ip)") does nothing at all
+#     under busybox, and "nothing happens" looks exactly like "there is no
+#     network out there".
+#   * it does not export "mask", and what it exports as $subnet is the
+#     NETMASK (255.255.255.0), not a network address.  The board's own
+#     busybox says so in its default script:
+#         ip addr add $ip/${subnet:-255.255.255.0} ... dev $interface
+#
+# The other convention is accepted as well, because a script that only
+# understands one of them fails silently on the other.
+#
+# The prefix length is worked out from whatever the client exports: a
+# prefix length, a netmask, or a network address are all accepted.
 pfx_of() {
 	case "$1" in
 	'') echo 24 ;;
@@ -158,7 +171,34 @@ pfx_of() {
 	*) echo "$1" ;;
 	esac
 }
-[ "$1" = bound ] || exit 0
+
+first_of() {
+	# A client may hand over a list ("gw1 gw2"); the first one is used.
+	set -- $1
+	echo "$1"
+}
+
+if [ -z "$2" ]; then
+	# busybox's convention: one call for the whole lease.
+	case "$1" in
+	bound|renew)
+		[ -n "$ip" ] || exit 0
+		pfx=$(pfx_of "${mask:-}")
+		[ -n "$pfx" ] || pfx=$(pfx_of "$subnet")
+		ip addr replace "$ip/$pfx" dev "$interface" 2>/dev/null
+		gw=$(first_of "$router")
+		[ -n "$gw" ] && [ "$gw" != "0.0.0.0" ] && \
+			ip route replace default via "$gw" dev "$interface" 2>/dev/null
+		[ -n "$dns" ] && echo "$dns" | tr ' ' '\n' > /etc/resolv.conf 2>/dev/null
+		;;
+	deconfig)
+		ip -4 addr flush dev "$interface" 2>/dev/null
+		;;
+	esac
+	exit 0
+fi
+
+# The standalone udhcpc's convention: one call per option.
 case "$2" in
 ip)
 	pfx=$(pfx_of "${mask:-}")
@@ -171,13 +211,16 @@ subnet)
 	# rather than turned into one.
 	;;
 router)
-	ip route replace default via "$router" dev "$interface" 2>/dev/null
+	gw=$(first_of "$router")
+	[ -n "$gw" ] && [ "$gw" != "0.0.0.0" ] && \
+		ip route replace default via "$gw" dev "$interface" 2>/dev/null
 	;;
 dns)
-	[ -n "$dns" ] && echo -n "$dns" > /etc/resolv.conf
+		[ -n "$dns" ] && echo "$dns" | tr ' ' '\n' > /etc/resolv.conf 2>/dev/null
 	;;
 esac
 exit 0
+
 EOF
 chmod 755 /tmp/udhcpc-trial.sh
 
@@ -311,11 +354,24 @@ if [ -n "$BR" ]; then
 	if [ -n "$FORCED" ]; then
 		WAN="$FORCED"
 		echo "trial: nat: the upstream is forced onto $WAN" >/dev/kmsg
-		# out of the bridge first, so the DSA bridge callback sees the
-		# port leave, and then into the image's own network service, so
-		# the lease belongs to the configuration and survives a reload
+		# The port leaves the bridge and that is all that is needed for
+		# the forced case.  The configuration is deliberately NOT
+		# rewritten here: the image's own helpers APPEND to a list that
+		# is already there (the lan ports are a JSON array, and
+		# json_add_string adds to the array json_select_array selected
+		# rather than replacing it), so a second call can leave the lan
+		# with six ports instead of three - and a bridge setup that
+		# names the same port twice is one this image's network service
+		# may refuse.  The forced case needs three things and can have
+		# all three at runtime: the port out of the bridge, an address
+		# on it, and a DHCP server on the LAN.
+		#
+		# Out of the bridge first, so the DSA bridge callback sees the
+		# port leave - that is what tells the NPPT the port is a routed
+		# one - and then up, so the client on it has a carrier.
 		ip link set "$WAN" nomaster 2>/dev/null
-		adopt_wan "$WAN"
+		ip link set "$WAN" up 2>/dev/null
+		echo "trial: nat: the bridge says $(brctl show 2>/dev/null | tr '\n' ' ')" >/dev/kmsg
 	else
 	# Give the default WAN its chance: the network service's own client is
 	# already running on it.

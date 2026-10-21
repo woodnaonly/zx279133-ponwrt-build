@@ -84,14 +84,30 @@ ip link set "$LABH" up 2>/dev/null
 # own name resolution must not depend on a lab client.
 cat > /tmp/labclient-dhcp.sh <<'EOF'
 #!/bin/sh
-# The prefix length, out of whatever this client exports.
+# The lease, applied in whichever convention this client uses.
 #
 # This image has no udhcpc package of its own: the client is busybox's, and
-# busybox's udhcpc does NOT export "mask".  It exports "subnet", and there it
-# is the netmask (255.255.255.0), not the network address.  A client that
-# exports the prefix length as "mask" is accepted too, and so is a network
-# address.  The first version of this script wrote "$ip/$mask" and the
-# client never took an address, because "$mask" was empty.
+# busybox's udhcpc calls the script ONCE, with $1 = "bound" (or "renew" or
+# "deconfig"), and hands the whole lease over in the environment:
+# $ip, $subnet, $router, $dns, $interface, $broadcast.
+#
+# Two things about it are easy to get wrong, and both were wrong here:
+#
+#   * it does not call the script once per option.  There is no $2 naming
+#     the option - that is the OTHER convention, the standalone udhcpc's -
+#     so a script written for it ("case $2 in ip)") does nothing at all
+#     under busybox, and "nothing happens" looks exactly like "there is no
+#     network out there".
+#   * it does not export "mask", and what it exports as $subnet is the
+#     NETMASK (255.255.255.0), not a network address.  The board's own
+#     busybox says so in its default script:
+#         ip addr add $ip/${subnet:-255.255.255.0} ... dev $interface
+#
+# The other convention is accepted as well, because a script that only
+# understands one of them fails silently on the other.
+#
+# The prefix length is worked out from whatever the client exports: a
+# prefix length, a netmask, or a network address are all accepted.
 pfx_of() {
 	case "$1" in
 	'') echo 24 ;;
@@ -106,7 +122,36 @@ pfx_of() {
 	*) echo "$1" ;;
 	esac
 }
-[ "$1" = bound ] || exit 0
+
+first_of() {
+	# A client may hand over a list ("gw1 gw2"); the first one is used.
+	set -- $1
+	echo "$1"
+}
+
+if [ -z "$2" ]; then
+	# busybox's convention: one call for the whole lease.
+	case "$1" in
+	bound|renew)
+		[ -n "$ip" ] || exit 0
+		pfx=$(pfx_of "${mask:-}")
+		[ -n "$pfx" ] || pfx=$(pfx_of "$subnet")
+		ip addr replace "$ip/$pfx" dev "$interface" 2>/dev/null
+		gw=$(first_of "$router")
+		[ -n "$gw" ] && [ "$gw" != "0.0.0.0" ] && \
+			ip route replace default via "$gw" dev "$interface" 2>/dev/null
+		# The resolver is deliberately not touched here: this script runs inside
+		# the client's network namespace, which shares the mount namespace, so a
+		# resolver written here would be the board's resolver.
+		;;
+	deconfig)
+		ip -4 addr flush dev "$interface" 2>/dev/null
+		;;
+	esac
+	exit 0
+fi
+
+# The standalone udhcpc's convention: one call per option.
 case "$2" in
 ip)
 	pfx=$(pfx_of "${mask:-}")
@@ -114,13 +159,21 @@ ip)
 	ip addr replace "$ip/$pfx" dev "$interface" 2>/dev/null
 	;;
 subnet)
-	# The connected route comes with the address above.
+	# The connected route comes with the address above.  A "subnet" line
+	# that carries a netmask is not a route at all, so it is dropped
+	# rather than turned into one.
 	;;
 router)
-	ip route replace default via "$router" dev "$interface" 2>/dev/null
+	gw=$(first_of "$router")
+	[ -n "$gw" ] && [ "$gw" != "0.0.0.0" ] && \
+		ip route replace default via "$gw" dev "$interface" 2>/dev/null
+	;;
+dns)
+	# The resolver is deliberately not touched here either, for the same reason.
 	;;
 esac
 exit 0
+
 EOF
 chmod 755 /tmp/labclient-dhcp.sh
 
