@@ -180,7 +180,108 @@ fa 5 96040001        写 CPU 口那一份并读回
 
 ---
 
-## 4. 还没有定的
+## 4. 根因之二：协议动作表（reason → action），以及 reason 0/1 的补丁
+
+### 4.1 帧到 CPU 只有一条路：陷阱
+
+厂商 `switch.ko` 的 `sw_init_flood_ctrl`（反汇编见 `staging/ctl/switchko-init-20261020.txt`）：
+
+```
+zxic_api_sw_port_{mul,unk_da,brd}_flood_dest_port(wan, 0, &mask)   /* WAN 口：目的为空 */
+zxic_api_sw_port_{mul,unk_da,brd}_flood_en(wan, 0)
+for p in 0..7, p != wan:
+    zxic_api_sw_port_{mul,unk_da,brd}_flood_dest_port(p, 1, &mask)
+    zxic_api_sw_port_{mul,unk_da,brd}_flood_en(p, 1)
+```
+
+`mask` 是调用者放在栈上的一块，`x21` 指向它；里面第一个字节被写成 `g_wan_port_id`，
+其余是垃圾。所以**每个 LAN 口的泛洪组里只有 WAN 口一个成员**。
+
+⇒ **目的地址不在 MAC 表里的帧，永远不会被泛洪到 CPU 口。**
+⇒ 帧要上 CPU，只能靠**协议动作陷阱**。
+
+厂商自己的计数印证了这一点（`staging/ctl/vendor-tm-stats-20261020.txt`）：
+
+```
+protocol action trap cnt(32bit)   7
+in idm fwd cnt(32bit)              7
+out idm fwd cnt(32bit)             7
+port id 15 output uni cnt(8bit)    7
+```
+
+那 7 个正是测试 PC 那次 ping 的一来一回。**PC 的帧就是靠陷阱进 CPU 的。**
+
+### 4.2 陷阱规则在哪：每口的 reason → action 表
+
+`switch.ko` 的 `sw_init_port_protocol_action`（0x2370）：
+
+```
+set_protocol_action(g_wan_port_id)          /* 0x21dc：77 条 (协议, 动作) */
+for p in 1..7:   set_port_action(p)          /* 0x22a8：77 条 (协议, 动作) */
+for p in 0x10..0x30: set_port_action(p)
+```
+
+两个函数都是把 **0x268 字节（77 对 u32）从自己的 .rodata 拷到栈上**，然后逐对调用
+`tm_port_protocol_pktdeal_set(port, action, protocol)`。
+
+`np_133.ko` 侧（0x112498）：
+
+```c
+int tm_port_protocol_pktdeal_set(u32 port, u32 protocol, u32 action)
+{
+    if (port > 0x3f) return -1;
+    byte = (byte & ~3) | ((action - 2) & 3);      /* 动作占 2 bit */
+    return port_reason_action_table_set(protocol, port, &byte);
+}
+```
+
+`port_reason_action_table_set`（0xb1074）：
+
+```c
+offset = port | (reason << 7);
+se_eram_table_set(0x18, offset, 1, &byte);       /* ERAM 表 0x18 */
+```
+
+⇒ **ERAM 表 0x18，每口 128 个 reason，每个 entry 16 字节（4 word），动作在 entry 的低 2 bit。**
+⇒ 动作 2 = 陷阱到 CPU（厂商的编码是 `(action-2)&3`，所以动作 2 落在 0，动作 0 落在 2）。
+
+### 4.3 关键：np.ko 的表和 switch.ko 的表只差 reason 0 和 1
+
+驱动里已有的 `zx279133_lan_proto_table`（`zx279133-np.c`）就是 np.ko 给一个 LAN 口的
+**128 项 × 16 bit** 的表。把它按 entry 解出来，再和 switch.ko 的 .rodata 里的 77 对
+逐项比（`staging/ctl/prodec.py`）：
+
+```
+reason  driver-field  vendorB-action  vendorB-field
+    0       2            2              0   <-- differs
+    1       2            2              0   <-- differs
+    8       0            2              0
+    9       0            2              0
+   ...     （其余 74 项全部一致）
+```
+
+⇒ **驱动里的表和厂商 `switch.ko` 的表逐项相同，只有 reason 0 和 1 不同：**
+np.ko 留成 action 0（普通转发），switch.ko 改成 action 2（陷阱）。
+
+**reason 0 就是 ARP。** 而 ARP 是客户端发的第一个帧。
+
+⇒ mainline 写的是一张"ARP 走普通转发"的表，而且**根本没有给 9132 的四个 UNI 口写过这张表**。
+⇒ 9132 把客户端的每一个帧都丢了：既不能转发给 CPU，也不允许泛洪给 CPU。
+
+**修法（run108，commit `2439661`）**：给 PPU 1..4（四个 UNI 口）和 PPU 5（CPU 口）
+写 `zx279133_9132_proto_table` = 驱动的 LAN 表，但把 reason 0、1 的低 2 bit 清零
+（动作 2 落在 0）。**只有第一个 word 变**：`0x40024002` → `0x40004000`。
+
+### 4.4 厂商另外两张还没写的表
+
+| 厂商调用 | 表 | 我们的状态 |
+|---|---|---|
+| `sw_init_flood_ctrl` | 泛洪目的表（group id → 口列表） | 未写（LAN↔LAN 泛洪用；本路径靠陷阱，不拦 M1） |
+| `sw_init_omci_trap_qid_init` | ERAM 表 0x19，reason 0 → qid 7 | 未写（qid 0 也在 `queue < 8` 内，驱动照样当 LAN 源收） |
+
+---
+
+## 5. 还没有定的
 
 | # | 未决 | 怎么定 |
 |---|---|---|
