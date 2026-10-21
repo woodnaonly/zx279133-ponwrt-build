@@ -425,18 +425,52 @@ static int zx279133_smmu0_write(struct zx279133_eth *eth, u32 addr_ind,
 }
 
 /*
+ * Where the ERAM tables this driver uses actually are.
+ *
+ * The SE SDT tables are created here, out of one ERAM pool, with a strictly
+ * sequential allocator that starts at block 12288: each ERAM table takes
+ * the blocks that are left and the next one starts where the last ended.
+ * The base of a table is therefore not a constant anybody can write down -
+ * it is the sum of the depths of the tables before it, and it moves the
+ * moment the list moves.
+ *
+ * The driver had three such constants written down, and none of them was
+ * the base the driver itself gave the hardware: 17106 for the MF extension
+ * table, 21266 for the protocol table and 23026 for the port type table.
+ * They came from a different SDT list - the one the generic np.ko has,
+ * which has a table this driver's list does not have - so every one of
+ * those writes landed in some other table's blocks, and the hardware read
+ * the table it was told about and found nothing in it.
+ *
+ * So the bases are taken from the allocation that told the hardware, and
+ * they are looked up by the table's id.
+ */
+#define ZX279133_SDT_ID_MAX	0x100
+static u32 zx279133_eram_base[ZX279133_SDT_ID_MAX];
+
+static u32 zx279133_eram_base_of(u32 sdt_id)
+{
+	if (sdt_id >= ZX279133_SDT_ID_MAX)
+		return 0;
+	return zx279133_eram_base[sdt_id];
+}
+
+/*
  * SPA port-attribute updates recovered from np.ko, entry 71 (memory
  * address 19), byte 2: mf_port_iswanport_set(0, 1) sets bit 1 on mem_id
  * 0 (companion 14) at np_nppu_init, and mf_port_ppuinit_set() sets bit 2
  * on the mem ids the vendor configures at np_init_done, including CPU
  * injection memory 15 (companion 10 for mem_id 5). Every update is
- * mirrored into the MF extension table, SE ERAM table 50: 64 entries of
+ * mirrored into the MF extension table, SE ERAM table 0x7d: 64 entries of
  * 128 bits keyed by SPA memory id, word 3
  * carrying the port-attribute word the SPA multi-forward engine consults
  * to accept CPU-originated frames for a port.
  */
-#define ZX279133_MF_ERAM_BASE_BLOCK	17106
-#define ZX279133_VLAN_ERAM_BASE_BLOCK	12288
+#define ZX279133_MF_ERAM_SDT_ID	0x7d
+#define ZX279133_VLAN_ERAM_SDT_ID	0x00
+#define ZX279133_PRO_ERAM_SDT_ID	0x04
+#define ZX279133_PORT_TYPE_ERAM_SDT_ID	0x06
+#define ZX279133_SWITCH_PROTO_SDT_ID	0x18
 
 static const u32 zx279133_vlan0_entry[ZX279133_SMMU0_WORDS] = {
 	0xffc00000, 0x0000ffff, 0xffffffff, 0x00003003,
@@ -859,13 +893,26 @@ static int zx279133_9132_show(struct seq_file *s, void *unused)
 	}
 
 	/*
+	 * Where the ERAM tables this driver uses are.  The base is not a
+	 * constant: it is what the allocation gave the table, and the
+	 * hardware reads the table at the base it was told.  So the numbers
+	 * here and the numbers the chip uses have to be the same, and this
+	 * is where that can be seen.
+	 */
+	seq_puts(s, "\nERAM tables (id, base block, depth)\n");
+	for (m = 0; m < ZX279133_SDT_ID_MAX; m++) {
+		if (!zx279133_eram_base[m])
+			continue;
+		seq_printf(s, "  0x%02x  %6u\n", m, zx279133_eram_base[m]);
+	}
+
+	/*
 	 * The lane's own counters.  They answer the question that decides
 	 * where a frame that does not move is lost: does the SoC put a single
 	 * bit on the wire towards the 9132, or does the frame stop inside
 	 * the SoC?  XMAC0 is the MAC on the far side of that lane.
 	 */
-	seq_puts(s, "\n9132 lane (XMAC0, the SoC's MAC on the 9132's CPU port)\n");
-	seq_printf(s, "tx frames %08x  tx good %08x\n",
+	seq_puts(s, "\n9132 lane (XMAC0, the SoC's MAC on the 9132's CPU port)\n");	seq_printf(s, "tx frames %08x  tx good %08x\n",
 		   readl(eth->base + ZX279133_XMAC0_BASE +
 			 ZX279133_XMAC_STAT_TX_FRAMES),
 		   readl(eth->base + ZX279133_XMAC0_BASE +
@@ -888,7 +935,7 @@ static int zx279133_9132_show(struct seq_file *s, void *unused)
 			continue;
 
 		ret = zx279133_smmu0_read(eth,
-					  (ZX279133_VLAN_ERAM_BASE_BLOCK << 7) +
+					  (zx279133_eram_base_of(ZX279133_VLAN_ERAM_SDT_ID) << 7) +
 					  m * 128, data, ZX279133_SMMU0_WORDS,
 					  ZX279133_SMMU0_CMD_READ);
 		if (ret) {
@@ -1042,7 +1089,7 @@ static ssize_t zx279133_9132_write(struct file *file, const char __user *ubuf,
 				if (!tok || kstrtou32(tok, 0, &data[i]))
 					return -EINVAL;
 			}
-			addr_ind = (ZX279133_VLAN_ERAM_BASE_BLOCK << 7) +
+			addr_ind = (zx279133_eram_base_of(ZX279133_VLAN_ERAM_SDT_ID) << 7) +
 				   vid * 128;
 			ret = zx279133_smmu0_write(eth, addr_ind, data,
 						   ZX279133_SMMU0_WORDS,
@@ -1051,7 +1098,7 @@ static ssize_t zx279133_9132_write(struct file *file, const char __user *ubuf,
 				return ret;
 		}
 
-		addr_ind = (ZX279133_VLAN_ERAM_BASE_BLOCK << 7) + vid * 128;
+		addr_ind = (zx279133_eram_base_of(ZX279133_VLAN_ERAM_SDT_ID) << 7) + vid * 128;
 		ret = zx279133_smmu0_read(eth, addr_ind, data,
 					  ZX279133_SMMU0_WORDS,
 					  ZX279133_SMMU0_CMD_READ);
@@ -1220,20 +1267,20 @@ static ssize_t zx279133_9132_write(struct file *file, const char __user *ubuf,
 			return -EINVAL;
 
 		ret = zx279133_smmu0_read(eth,
-					  (mem_id + ZX279133_MF_ERAM_BASE_BLOCK) << 7,
+					  (zx279133_eram_base_of(ZX279133_MF_ERAM_SDT_ID) + mem_id) << 7,
 					  data, ZX279133_SMMU0_WORDS,
 					  ZX279133_SMMU0_CMD_READ);
 		if (ret)
 			return ret;
 		data[3] = val;
 		ret = zx279133_smmu0_write(eth,
-					   (mem_id + ZX279133_MF_ERAM_BASE_BLOCK) << 7,
+					   (zx279133_eram_base_of(ZX279133_MF_ERAM_SDT_ID) + mem_id) << 7,
 					   data, ZX279133_SMMU0_WORDS,
 					   ZX279133_SMMU0_CMD_WRITE);
 		if (ret)
 			return ret;
 		ret = zx279133_smmu0_read(eth,
-					  (mem_id + ZX279133_MF_ERAM_BASE_BLOCK) << 7,
+					  (zx279133_eram_base_of(ZX279133_MF_ERAM_SDT_ID) + mem_id) << 7,
 					  data, ZX279133_SMMU0_WORDS,
 					  ZX279133_SMMU0_CMD_READ);
 		if (ret)
@@ -1351,7 +1398,7 @@ int zx279133_vlan_runtime_prepare(struct zx279133_eth *eth)
 	 * port policy to VID 0 and to the switch's private service tags.
 	 */
 	ret = zx279133_smmu0_write(eth,
-				  ZX279133_VLAN_ERAM_BASE_BLOCK << 7,
+				  zx279133_eram_base_of(ZX279133_VLAN_ERAM_SDT_ID) << 7,
 				  zx279133_vlan0_entry,
 				  ARRAY_SIZE(zx279133_vlan0_entry),
 				  ZX279133_SMMU0_CMD_WRITE);
@@ -1361,7 +1408,7 @@ int zx279133_vlan_runtime_prepare(struct zx279133_eth *eth)
 	for (vid = ZX279133_LAN_TRANSPORT_VID_MIN;
 	     vid <= ZX279133_LAN_TRANSPORT_VID_MAX; vid++) {
 		ret = zx279133_smmu0_write(eth,
-					  (ZX279133_VLAN_ERAM_BASE_BLOCK << 7) +
+					  (zx279133_eram_base_of(ZX279133_VLAN_ERAM_SDT_ID) << 7) +
 					  vid * 128,
 					  zx279133_vlan0_entry,
 					  ARRAY_SIZE(zx279133_vlan0_entry),
@@ -1429,9 +1476,16 @@ static int zx279133_np_ppu_init_tail(struct zx279133_eth *eth)
 static int zx279133_mf_eram_entry_write(struct zx279133_eth *eth, u32 mem_id,
 					const u32 *data)
 {
-	u32 addr_ind = (mem_id + ZX279133_MF_ERAM_BASE_BLOCK) << 7;
+	u32 base = zx279133_eram_base_of(ZX279133_MF_ERAM_SDT_ID);
+	u32 addr_ind = (base + mem_id) << 7;
 	u32 rd[ZX279133_SMMU0_WORDS];
 	int ret;
+
+	/* A table that was never created has no base, and block 0 is not
+	 * a place to write a port's attributes to.
+	 */
+	if (!base)
+		return -EINVAL;
 
 	ret = zx279133_smmu0_write(eth, addr_ind, data,
 				   ZX279133_SMMU0_WORDS,
@@ -1457,8 +1511,12 @@ static int zx279133_mf_eram_attr_set(struct zx279133_eth *eth, u32 mem_id,
 				     u32 attr)
 {
 	u32 data[ZX279133_SMMU0_WORDS];
-	u32 addr_ind = (mem_id + ZX279133_MF_ERAM_BASE_BLOCK) << 7;
+	u32 base = zx279133_eram_base_of(ZX279133_MF_ERAM_SDT_ID);
+	u32 addr_ind = (base + mem_id) << 7;
 	int ret;
+
+	if (!base)
+		return -EINVAL;
 
 	ret = zx279133_smmu0_read(eth, addr_ind, data, ARRAY_SIZE(data),
 				  ZX279133_SMMU0_CMD_READ);
@@ -2090,7 +2148,11 @@ static int zx279133_mf_port_startpc_copy(struct zx279133_eth *eth,
 	return zx279133_spa_indirect_write(eth, dst_mem, 0, dst);
 }
 
-#define ZX279133_PRO_ERAM_BASE_BLOCK	21266
+/*
+ * The NPPT's own protocol table: 16-bit entries, 64 logical ports of 1024
+ * entries each, so 16 blocks of 128 bytes per port.  Its base is the one
+ * the allocation gave it.
+ */
 #define ZX279133_PRO_BLOCKS_PER_PORT	16
 #define ZX279133_LAN_INGRESS_PPU_PORT	0
 #define ZX279133_LAN_PPU_PORT		5
@@ -2144,11 +2206,11 @@ static const u32 zx279133_lan_proto_table[ZX279133_PRO_BLOCKS_PER_PORT]
  * The 9132's own protocol action table.
  *
  * The switch decides what to do with a frame of a given protocol on a given
- * port by looking in that port's reason-action table, and the action for
- * reason 0 and 1 is what decides whether the frame is forwarded or trapped
- * to the CPU.  The vendor's switch.ko installs this table on every switch
- * port: 77 (protocol, action) pairs copied out of its own .rodata, and the
- * action lands in the low two bits of the entry.
+ * port by looking in that port's reason-action table, and whether the frame
+ * is forwarded or trapped to the CPU is what that table says.  The vendor's
+ * switch.ko installs this table on every switch port: 77 (protocol, action)
+ * pairs copied out of its own .rodata, and the action lands in the low two
+ * bits of the entry.
  *
  * It is the only way a frame from a LAN jack reaches the CPU at all.  The
  * vendor's flood group holds the WAN port and nothing else
@@ -2158,38 +2220,45 @@ static const u32 zx279133_lan_proto_table[ZX279133_PRO_BLOCKS_PER_PORT]
  * test PC sent frames, and the counter for the frames that arrived on the
  * PC's own jack and were output again towards the jacks - the same seven.
  *
- * This table is np.ko's own table for a LAN port - the one
- * zx279133_lan_proto_table above is - with reasons 0 and 1 changed.  np.ko
- * leaves those two at action 0 and switch.ko patches them to action 2, and
- * reason 0 is ARP: the first frame a client ever sends.  The vendor's code
- * stores (action - 2) & 3 in those two bits, so action 2 is a zero field
- * and only the low two bits of the first entry differ.
+ * This table is the switch's own, and it is not the NPPT's protocol table
+ * above: the switch looks up the frame's protocol in the table of the port
+ * it came in on, in SE ERAM table 0x18, and the entry is one word per
+ * (port, protocol), at the entry (port << 7) | protocol.
+ *
+ * The vendor's own code writes it that way: tm_port_protocol_pktdeal_set()
+ * puts the action into the low two bits of a byte and hands it to
+ * port_reason_action_table_set(), which computes the index
+ * reason | (port << 7) and writes one word.  The action is stored as it
+ * is - 2 means "give this frame to the CPU" - and the pairs themselves are
+ * the 77 (protocol, action) pairs in switch.ko's own .rodata.
+ *
+ * 0xff means the vendor's table has no entry for that protocol, so nothing
+ * is written for it and the chip keeps what it had.
  */
-static const u32 zx279133_9132_proto_table[ZX279133_PRO_BLOCKS_PER_PORT]
-					     [ZX279133_SMMU0_WORDS] = {
-	{ 0x40004000, 0x14144002, 0x58181818, 0x58185818 },
-	{ 0x58185818, 0x58185818, 0x58185818, 0x58185818 },
-	{ 0x58185818, 0x58185818, 0x58185818, 0x58185818 },
-	{ 0x58185818, 0x58185818, 0x58185818, 0x58185010 },
-	{ 0x50105818, 0x58185818, 0x58185818, 0x58185818 },
-	{ 0x58185818, 0x58185818, 0x58181818, 0x18181818 },
-	{ 0x18185818, 0x58185818, 0x58185818, 0x58185818 },
-	{ 0x58185818, 0x58185818, 0x58185818, 0x58185818 },
-	{ 0x58185818, 0x58185818, 0x58185818, 0x18185818 },
-	{ 0x08085818, 0x48084002, 0x58180808, 0x48084808 },
-	{ 0x54145414, 0x58185414, 0x58184014, 0x58185818 },
-	{ 0x58185818, 0x58185818, 0x58185818, 0x58185818 },
-	{ 0x48084808, 0x58185818, 0x58185818, 0x58185818 },
-	{ 0x58185818, 0x58185818, 0x58185818, 0x58185818 },
-	{ 0x58185818, 0x58185818, 0x58185818, 0x58185818 },
-	{ 0x58185818, 0x58185818, 0x58185818, 0x58185818 },
+static const u8 zx279133_9132_proto_action[128] = {
+	2, 2, 255, 255, 255, 255, 255, 255,
+	2, 2, 2, 2, 2, 2, 255, 255,
+	2, 2, 2, 2, 2, 2, 255, 2,
+	2, 2, 2, 2, 2, 2, 2, 2,
+	2, 2, 2, 2, 2, 2, 2, 2,
+	2, 2, 2, 2, 255, 2, 255, 255,
+	2, 255, 2, 2, 2, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0,
+	2, 0, 2, 2, 0, 255, 255, 255,
+	2, 2, 2, 0, 2, 2, 2, 2,
+	2, 255, 255, 255, 255, 255, 255, 255,
+	2, 2, 2, 255, 255, 255, 255, 255,
+	255, 255, 255, 255, 255, 255, 255, 255,
+	255, 255, 255, 255, 255, 255, 255, 255,
+	255, 255, 255, 255, 255, 255, 255, 255,
 };
 
 static int
 zx279133_proto_table_write(struct zx279133_eth *eth, u32 port,
 			   const u32 table[][ZX279133_SMMU0_WORDS])
 {
-	u32 block = ZX279133_PRO_ERAM_BASE_BLOCK +
+	u32 block = zx279133_eram_base_of(ZX279133_PRO_ERAM_SDT_ID) +
 		    port * ZX279133_PRO_BLOCKS_PER_PORT;
 	int i;
 	int ret;
@@ -2207,34 +2276,48 @@ zx279133_proto_table_write(struct zx279133_eth *eth, u32 port,
 }
 
 /*
- * Give the 9132's four UNI ports, and its CPU port, the protocol action
- * table.  Without it the switch has no idea what to do with an ARP frame
- * that arrives on a jack: it is neither forwarded (the flood group holds
- * the WAN port and nothing else) nor trapped to the CPU, so it is dropped
- * and the client never sees an answer.
+ * Give the switch its protocol action table.
+ *
+ * Without it the switch has no idea what to do with an ARP frame that
+ * arrives on a jack: it is neither forwarded (the flood group holds the WAN
+ * port and nothing else) nor trapped to the CPU, so it is dropped and the
+ * client never sees an answer.
+ *
+ * The table is one word per (port, protocol) in SE ERAM table 0x18, at the
+ * entry (port << 7) | protocol, and the action is in the low two bits of
+ * the word.  The vendor installs it on switch ports 1..7 and 0x10..0x30;
+ * the eight low ports are written here, which covers the 9132's four UNI
+ * jacks and its CPU port whichever of the two numberings the port is
+ * known by.
  */
 static int zx279133_9132_proto_init(struct zx279133_eth *eth)
 {
-	u32 ppu;
+	u32 base = zx279133_eram_base_of(ZX279133_SWITCH_PROTO_SDT_ID);
+	u32 port, proto;
 	int ret;
 
-	for (ppu = ZX279133_9132_UNI_PPU_FIRST; ppu <= ZX279133_9132_UNI_PPU_LAST;
-	     ppu++) {
-		ret = zx279133_proto_table_write(eth, ppu,
-						 zx279133_9132_proto_table);
-		if (ret)
-			return ret;
+	if (!base) {
+		dev_err(eth->dev, "the switch's protocol table has no base\n");
+		return -EINVAL;
 	}
 
-	ret = zx279133_proto_table_write(eth, ZX279133_9132_CONDUIT_PPU,
-					 zx279133_9132_proto_table);
-	if (ret)
-		return ret;
+	for (port = 0; port < 8; port++) {
+		for (proto = 0; proto < 128; proto++) {
+			u32 word = zx279133_9132_proto_action[proto];
+
+			if (word == 0xff)
+				continue;
+			ret = zx279133_smmu0_write(eth,
+					(base + (port << 7) + proto) << 7,
+					&word, 1, ZX279133_SMMU0_CMD_WRITE);
+			if (ret)
+				return ret;
+		}
+	}
 
 	dev_info(eth->dev,
-		 "9132 ports %u..%u and %u have the protocol action table (ARP trapped to the CPU)\n",
-		 ZX279133_9132_UNI_PPU_FIRST, ZX279133_9132_UNI_PPU_LAST,
-		 ZX279133_9132_CONDUIT_PPU);
+		 "9132 switch ports 0..7 have the protocol action table at ERAM block %u (ARP trapped to the CPU)\n",
+		 base);
 
 	return 0;
 }
@@ -2270,7 +2353,6 @@ static const u32 zx279133_lan_vport_mf[][ZX279133_SMMU0_WORDS] = {
 };
 
 /* SDT 6: one entry per logical port; bit 31 of word 3 marks a LAN port. */
-#define ZX279133_PORT_TYPE_ERAM_BASE_BLOCK	23026
 #define ZX279133_PORT_TYPE_LAN			BIT(31)
 /*
  * MF extension word 3 of a WAN-type logical port, as the factory system sets
@@ -2292,7 +2374,7 @@ static int zx279133_lan_vport_mode_write(struct zx279133_eth *eth, u16 vport,
 					 bool wan)
 {
 	u32 table[ZX279133_PRO_BLOCKS_PER_PORT][ZX279133_SMMU0_WORDS];
-	u32 addr = (ZX279133_PORT_TYPE_ERAM_BASE_BLOCK + vport) << 7;
+	u32 addr = (zx279133_eram_base_of(ZX279133_PORT_TYPE_ERAM_SDT_ID) + vport) << 7;
 	u32 mf[ZX279133_SMMU0_WORDS], type[ZX279133_SMMU0_WORDS];
 	int ret;
 
@@ -2618,6 +2700,15 @@ static const u32 zx279133_core_sdt_info[][4] = {
 	{ 0x6e, 3, 0x6, 0x88 },    { 0x6b, 3, 0x4, 0x45 },
 	{ 0x6f, 3, 0x4, 0x44 },
 	{ 0x69, 4, 0xa0, 0x40000000 },
+	/*
+	 * The MF extension table: 64 entries of 128 bits, keyed by the SPA
+	 * memory id - the chip's own port number.  The vendor's np_133.ko
+	 * has this table (its id 0x7d, its index 50 in the vendor's list);
+	 * this driver's list did not have it, so the mirror of the port
+	 * attribute word - the copy the switch engine reads - was written
+	 * into a table the hardware had never heard of.
+	 */
+	{ 0x7d, 1, 0x3, 0x40 },
 };
 
 static const u32 zx279133_se_sdt_bit_len[8] = {
@@ -2888,6 +2979,13 @@ static int zx279133_se_sdt_create(struct zx279133_eth *eth)
 			depth = (bit_len * b + 127) >> 7;
 			base = eram_base;
 			eram_base += depth;
+			/*
+			 * The base the hardware is told about here is the
+			 * only one that is right for it, so it is the one
+			 * the tables are written at.
+			 */
+			if (sdt_no < ZX279133_SDT_ID_MAX)
+				zx279133_eram_base[sdt_no] = base;
 			ret = zx279133_se_sdt_eram_write(eth, sdt_no, depth,
 							 base, a);
 			if (ret)
