@@ -858,6 +858,34 @@ static int zx279133_9132_show(struct seq_file *s, void *unused)
 		seq_puts(s, "\n");
 	}
 
+	/*
+	 * The VLAN action table, which is the other half of the forwarding
+	 * story and is not in the SPA window this console started with: it
+	 * lives in the NPPT's ERAM, and it says which ports a VID belongs
+	 * to and which of them see it untagged.  The four service VIDs are
+	 * the ones the DSA tagger uses, and VID 0 is the untagged one.
+	 */
+	seq_puts(s, "\n9132 VLAN table (vid, four words)\n");
+	for (m = 0; m <= ZX279133_LAN_TRANSPORT_VID_MAX; m++) {
+		u32 data[ZX279133_SMMU0_WORDS];
+		int ret;
+
+		if (m != 0 && (m < ZX279133_LAN_TRANSPORT_VID_MIN ||
+			       m > ZX279133_LAN_TRANSPORT_VID_MAX))
+			continue;
+
+		ret = zx279133_smmu0_read(eth,
+					  (ZX279133_VLAN_ERAM_BASE_BLOCK << 7) +
+					  m * 128, data, ZX279133_SMMU0_WORDS,
+					  ZX279133_SMMU0_CMD_READ);
+		if (ret) {
+			seq_printf(s, "%4u read failed (%d)\n", m, ret);
+			continue;
+		}
+		seq_printf(s, "%4u %08x %08x %08x %08x\n", m,
+			   data[0], data[1], data[2], data[3]);
+	}
+
 	return 0;
 }
 
@@ -889,7 +917,7 @@ static ssize_t zx279133_9132_write(struct file *file, const char __user *ubuf,
 {
 	struct seq_file *m = file->private_data;
 	struct zx279133_eth *eth = m ? m->private : NULL;
-	char buf[64];
+	char buf[128];
 	char *p, *tok;
 	u32 mem, addr, val = 0;
 	int ret;
@@ -971,6 +999,53 @@ static ssize_t zx279133_9132_write(struct file *file, const char __user *ubuf,
 			return ret;
 		pr_info("9132 mdio: addr %02x reg %02x = 0x%04x\n",
 			maddr, mreg, (u16)ret);
+		return count;
+	}
+
+	/*
+	 * The VLAN action table, which is where the 9132 decides which
+	 * ports a VID belongs to and which of them see it untagged.  It is
+	 * in the NPPT's ERAM, not in the SPA window, so it gets its own
+	 * commands:
+	 *
+	 *	"v 3b"			read the entry of VID 0x3b
+	 *	"vw 3b w0 w1 w2 w3"	write it, then read it back
+	 */
+	if (!strcmp(tok, "v") || !strcmp(tok, "vw")) {
+		u32 data[ZX279133_SMMU0_WORDS];
+		bool is_write = tok[1] == 'w';
+		u32 vid, addr_ind;
+		int i;
+
+		tok = zx279133_9132_next_token(&p);
+		if (!tok || kstrtou32(tok, 0, &vid))
+			return -EINVAL;
+		if (vid > 0xfff)
+			return -EINVAL;
+
+		if (is_write) {
+			for (i = 0; i < ZX279133_SMMU0_WORDS; i++) {
+				tok = zx279133_9132_next_token(&p);
+				if (!tok || kstrtou32(tok, 0, &data[i]))
+					return -EINVAL;
+			}
+			addr_ind = (ZX279133_VLAN_ERAM_BASE_BLOCK << 7) +
+				   vid * 128;
+			ret = zx279133_smmu0_write(eth, addr_ind, data,
+						   ZX279133_SMMU0_WORDS,
+						   ZX279133_SMMU0_CMD_WRITE);
+			if (ret)
+				return ret;
+		}
+
+		addr_ind = (ZX279133_VLAN_ERAM_BASE_BLOCK << 7) + vid * 128;
+		ret = zx279133_smmu0_read(eth, addr_ind, data,
+					  ZX279133_SMMU0_WORDS,
+					  ZX279133_SMMU0_CMD_READ);
+		if (ret)
+			return ret;
+		pr_info("9132 vlan: vid %u = %08x %08x %08x %08x\n",
+			vid, data[0], data[1], data[2], data[3]);
 		return count;
 	}
 

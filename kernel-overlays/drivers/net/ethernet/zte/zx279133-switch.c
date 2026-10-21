@@ -244,6 +244,12 @@ struct zx279133_switch {
 	struct phy *serdes;
 	struct mdio_device *xpcs_mdiodev;
 	struct mii_bus *uni_mdio;
+	/*
+	 * The bus of the switch's own, which the four user ports' PHYs are
+	 * on: DSA port N is at MDIO address N on it, and it translates to
+	 * the SoC's controller #0 address 0x0a..0x0d.
+	 */
+	struct mii_bus *user_mdio;
 	struct dsa_switch *ds;
 	bool datapath_held;
 	bool xpcs_runtime_held;
@@ -1120,6 +1126,249 @@ static void zx279133_switch_port_stp_state_set(struct dsa_switch *ds, int port,
 }
 
 /*
+ * The 9132's four internal PHYs, on a bus of the switch's own.
+ *
+ * The tree's DSA contract for a user port with no phy-handle is written
+ * down in net/dsa/port.c:
+ *
+ *	User ports with no phy-handle or fixed-link are expected to connect
+ *	to an internal PHY located on the ds->user_mii_bus at an MDIO
+ *	address equal to the port number.
+ *
+ * The tree's RTL8372N driver - the same SoC family, the same
+ * switch-with-internal-PHYs shape - is that case: a mii_bus of its own,
+ * which the MDIO core scans, and a PHY driver of its own, which claims
+ * the PHY devices on that bus by the bus's identity and the address
+ * rather than by the PHY's id.
+ *
+ * The 9132's PHYs are not on a bus of the switch's.  They are on the SoC's
+ * MDIO controller #0 - the one the NPPT driver already reaches for the PHY
+ * enable - at 0x0a..0x0d, while the DSA ports are 4..7.  So the bus below
+ * is a translation: the port number goes in, the SoC's MDIO address comes
+ * out.  Everything else about it is the tree's own pattern.
+ *
+ * Why a bus of our own rather than the SoC's own: the core looks the PHY
+ * up with mdiobus_get_phy(ds->user_mii_bus, port), and the port number is
+ * the address it looks at.  The PHYs are at 0x0a..0x0d, and moving them
+ * is not an option.
+ */
+static int zx279133_switch_mdio_read(struct mii_bus *bus, int addr, int regnum)
+{
+	struct zx279133_switch *priv = bus->priv;
+	int val;
+
+	if (addr < ZX279133_SWITCH_DSA_PORT_MIN ||
+	    addr > ZX279133_SWITCH_DSA_PORT_MAX)
+		return -EIO;
+	if (!priv->uni_mdio)
+		return -ENODEV;
+
+	val = mdiobus_read(priv->uni_mdio, ZX279133_SWITCH_DSA_PHY(addr),
+			   regnum);
+	if (val < 0)
+		return val;
+	/*
+	 * 0xffff is what a bus answers for a device that is not there, and
+	 * the core's scan would take it for a PHY whose id is 0xffffffff -
+	 * so the id registers are the ones where that answer has to become
+	 * an error.
+	 */
+	if (val == 0xffff &&
+	    (regnum == MII_PHYSID1 || regnum == MII_PHYSID2))
+		return -ENODEV;
+
+	return val;
+}
+
+static int zx279133_switch_mdio_write(struct mii_bus *bus, int addr, int regnum,
+				      u16 val)
+{
+	struct zx279133_switch *priv = bus->priv;
+
+	if (addr < ZX279133_SWITCH_DSA_PORT_MIN ||
+	    addr > ZX279133_SWITCH_DSA_PORT_MAX)
+		return -EIO;
+	if (!priv->uni_mdio)
+		return -ENODEV;
+
+	return mdiobus_write(priv->uni_mdio, ZX279133_SWITCH_DSA_PHY(addr),
+			      regnum, val);
+}
+
+/*
+ * The PHY driver for the 9132's internal PHYs.
+ *
+ * It matches on the bus, not on the id: the chip answers 0x84b9:0x5032 over
+ * Clause 22, and no driver in this tree claims that id - the tree's own
+ * zx279051.c expects 0x000084b9 and reads it over Clause 45, and the
+ * Realtek driver expects 0x001cc9.  Matching the bus instead of the id is
+ * what the tree's RTL8372N does, for the same reason.
+ */
+static int zx279133_switch_phy_match(struct phy_device *phydev,
+				      const struct phy_driver *phydrv)
+{
+	struct mii_bus *bus = phydev->mdio.bus;
+
+	return bus && bus->read == zx279133_switch_mdio_read &&
+	       phydev->mdio.addr >= ZX279133_SWITCH_DSA_PORT_MIN &&
+	       phydev->mdio.addr <= ZX279133_SWITCH_DSA_PORT_MAX;
+}
+
+static int zx279133_switch_phy_probe(struct phy_device *phydev)
+{
+	phydev->is_internal = true;
+	phydev->port = PORT_TP;
+
+	return 0;
+}
+
+/*
+ * What the four PHYs can do, stated rather than read.
+ *
+ * The capability registers of a Clause 22 PHY are 0x10 (1000BASE-T), 0x11
+ * (100BASE-TX) and 0x12 (10BASE-T), and a driver that reads them learns
+ * what the chip says.  This one does not, because the chip's answer to
+ * them is not known yet - and a driver that guesses wrong in the other
+ * direction is worse than one that says what the hardware is known to do:
+ * the four jacks are gigabit, they are copper, and they auto-negotiate.
+ * That is the vendor's own configuration too: the NPPT driver reads the
+ * PHY's control register, finds auto-negotiation already on, and leaves
+ * it that way.
+ */
+static int zx279133_switch_phy_get_features(struct phy_device *phydev)
+{
+	linkmode_zero(phydev->supported);
+	linkmode_set_bit(ETHTOOL_LINK_MODE_TP_BIT, phydev->supported);
+	linkmode_set_bit(ETHTOOL_LINK_MODE_MII_BIT, phydev->supported);
+	linkmode_set_bit(ETHTOOL_LINK_MODE_Autoneg_BIT, phydev->supported);
+	linkmode_set_bit(ETHTOOL_LINK_MODE_10baseT_Half_BIT,
+			 phydev->supported);
+	linkmode_set_bit(ETHTOOL_LINK_MODE_10baseT_Full_BIT,
+			 phydev->supported);
+	linkmode_set_bit(ETHTOOL_LINK_MODE_100baseT_Half_BIT,
+			 phydev->supported);
+	linkmode_set_bit(ETHTOOL_LINK_MODE_100baseT_Full_BIT,
+			 phydev->supported);
+	linkmode_set_bit(ETHTOOL_LINK_MODE_1000baseT_Full_BIT,
+			 phydev->supported);
+	linkmode_set_bit(ETHTOOL_LINK_MODE_Pause_BIT, phydev->supported);
+	linkmode_set_bit(ETHTOOL_LINK_MODE_Asym_Pause_BIT, phydev->supported);
+
+	return 0;
+}
+
+/*
+ * Auto-negotiation, without touching anything but the control register.
+ *
+ * This is deliberately not genphy_config_aneg().  That one writes the
+ * advertisement registers (0x04 and 0x07) and then the control register,
+ * and writing registers whose layout is not known to a chip that is
+ * already negotiating is how a working link is turned into a silent one -
+ * it is exactly what happened to the RTL8226B on jack 4, where
+ * phy_init_hw()'s soft reset and the config_init that followed it left
+ * the PHY reporting 10baseT and no link (docs/09).
+ *
+ * So the only write here is the vendor's own enable: read the control
+ * register, clear the power-down bit, make sure auto-negotiation is on,
+ * and write it back.  Everything else the chip was doing keeps doing.
+ */
+static int zx279133_switch_phy_config_aneg(struct phy_device *phydev)
+{
+	int bmcr;
+
+	bmcr = phy_read(phydev, MII_BMCR);
+	if (bmcr < 0)
+		return bmcr;
+
+	bmcr &= ~BMCR_PDOWN;
+	bmcr |= BMCR_ANENABLE;
+
+	return phy_write(phydev, MII_BMCR, (u16)bmcr);
+}
+
+static struct phy_driver zx279133_switch_phy_driver = {
+	.name = "ZX279133 9132 internal PHY",
+	.flags = PHY_IS_INTERNAL,
+	.match_phy_device = zx279133_switch_phy_match,
+	.probe = zx279133_switch_phy_probe,
+	.get_features = zx279133_switch_phy_get_features,
+	.config_aneg = zx279133_switch_phy_config_aneg,
+	.read_status = genphy_read_status,
+};
+
+/*
+ * The bus, and the PHY devices on it.
+ *
+ * mdiobus_register() scans the bus, and the scan is what creates the PHY
+ * devices: the core reads the id of every address the bus allows, and
+ * makes a phy_device of the ones that answer.  That is why the bus's
+ * phy_mask is the inverse of the switch's phys_mii_mask - the four user
+ * ports and nothing else - and why the PHY driver has to be registered
+ * before the bus is: the device the scan creates is matched against it.
+ */
+static int zx279133_switch_mdio_setup(struct zx279133_switch *priv,
+				      struct dsa_switch *ds)
+{
+	struct mii_bus *bus;
+	int ret;
+
+	if (!priv->uni_mdio) {
+		dev_warn(priv->dev,
+			 "the 9132's PHY bus is not registered; the four jacks have no PHY\n");
+		return -ENODEV;
+	}
+
+	ret = phy_drivers_register(&zx279133_switch_phy_driver, 1, NULL);
+	if (ret)
+		return ret;
+
+	bus = mdiobus_alloc();
+	if (!bus) {
+		phy_drivers_unregister(&zx279133_switch_phy_driver, 1);
+		return -ENOMEM;
+	}
+
+	bus->priv = priv;
+	bus->name = "9132 internal MDIO";
+	snprintf(bus->id, MII_BUS_ID_SIZE, "%s-mii", dev_name(ds->dev));
+	bus->read = zx279133_switch_mdio_read;
+	bus->write = zx279133_switch_mdio_write;
+	bus->parent = ds->dev;
+	bus->phy_mask = ~ds->phys_mii_mask;
+
+	priv->user_mdio = bus;
+	ds->user_mii_bus = bus;
+
+	ret = mdiobus_register(bus);
+	if (ret) {
+		ds->user_mii_bus = NULL;
+		priv->user_mdio = NULL;
+		mdiobus_free(bus);
+		phy_drivers_unregister(&zx279133_switch_phy_driver, 1);
+		return ret;
+	}
+
+	dev_info(ds->dev,
+		 "the 9132's four PHYs are on a bus of the switch's own: DSA ports %u..%u are MDIO %02x..%02x on the SoC's controller #0\n",
+		 ZX279133_SWITCH_DSA_PORT_MIN, ZX279133_SWITCH_DSA_PORT_MAX,
+		 ZX279133_SWITCH_DSA_PHY(ZX279133_SWITCH_DSA_PORT_MIN),
+		 ZX279133_SWITCH_DSA_PHY(ZX279133_SWITCH_DSA_PORT_MAX));
+
+	return 0;
+}
+
+static void zx279133_switch_mdio_teardown(struct zx279133_switch *priv)
+{
+	if (!priv->user_mdio)
+		return;
+
+	mdiobus_unregister(priv->user_mdio);
+	mdiobus_free(priv->user_mdio);
+	priv->user_mdio = NULL;
+	phy_drivers_unregister(&zx279133_switch_phy_driver, 1);
+}
+
+/*
  * The switch's own "get ready" hook, and the one this tree's DSA core does
  * not let a driver skip.
  *
@@ -1142,15 +1391,29 @@ static void zx279133_switch_port_stp_state_set(struct dsa_switch *ds, int port,
  * driver - the only other switch driver in this tree - has a .setup, which
  * is why the core can call it without looking.
  *
- * What the switch needs by now has already been done: the NPPT driver
- * wrote the PPU's per-port words and PVIDs, the probe read the four PHY
- * link bits, and the shared datapath's four SOPC MACs were published.  So
- * there is nothing left to program here, and the hook says so out loud -
- * a hook that does nothing silently is indistinguishable from one that was
- * never called, and this round's whole answer is in the log.
+ * The four PHYs come first in it, because everything else here is about a
+ * switch that has them: the ports are the ports because their PHYs are
+ * there, and the core asks for them by the port number on a bus of the
+ * switch's own.  The bus has to exist before the core sets the ports up,
+ * and the core sets the ports up after this hook returns.
  */
 static int zx279133_switch_setup(struct dsa_switch *ds)
 {
+	struct zx279133_switch *priv = ds->priv;
+	int ret;
+
+	/*
+	 * Not fatal: a switch whose four jacks have no PHY is still a switch
+	 * with a CPU port and a conduit, and the four ports that cannot be
+	 * set up are reported by the core as they fail.  Failing here
+	 * instead would take the CPU port down with them.
+	 */
+	ret = zx279133_switch_mdio_setup(priv, ds);
+	if (ret)
+		dev_err(ds->dev,
+			"the 9132's PHYs could not be brought onto a bus of the switch's own: %pe\n",
+			ERR_PTR(ret));
+
 	dev_info(ds->dev,
 		 "the 9132 is serving: the jacks are the 9132's UNI ports %u..%u, they are DSA ports %u..%u, the CPU port is %u and the transport VIDs are %u..%u\n",
 		 ZX279133_SWITCH_UNI_PORT_MIN, ZX279133_SWITCH_UNI_PORT_MAX,
@@ -1166,6 +1429,10 @@ static int zx279133_switch_setup(struct dsa_switch *ds)
 
 static void zx279133_switch_teardown(struct dsa_switch *ds)
 {
+	struct zx279133_switch *priv = ds->priv;
+
+	zx279133_switch_mdio_teardown(priv);
+
 	dev_info(ds->dev, "the 9132 stops serving\n");
 }
 
