@@ -3380,11 +3380,28 @@ static int zx279133_se_plcr_init(struct zx279133_eth *eth)
 static int zx279133_se_sdt_create(struct zx279133_eth *eth)
 {
 	/*
-	 * se_smmu0_reg_table: the ERAM pool's first free block is 0x1000 and
-	 * the pool is 0x8000 blocks long, so the tables live in
-	 * [0x1000, 0x9000).  The statistics pool starts at 0x9000.
+	 * se_smmu0_reg_table: the ERAM pool's first free block is 0x3000 and
+	 * the pool is 0x9000 blocks long, so the tables live in
+	 * [0x3000, 0x9000).  The statistics pool starts at 0x9000 and runs
+	 * to the end of the ERAM at 0xc000.
+	 *
+	 * The first free block is 0x3000 and not 0x1000, and the board says
+	 * so: a block below 0x3000 cannot be written at all.  Write
+	 * 0xdeadbeef into it and read it back, and the word that comes out
+	 * is not the one that went in - it is a page table entry out of the
+	 * SoC's own memory, because that address is not ERAM at all.  Above
+	 * 0x3000 the same write comes back exactly as it went in, and the
+	 * boundary is exactly 0x3000:
+	 *
+	 *	eram block 12000 = 00b91a7f 40000000 00b91452 40000000
+	 *	eram block 12288 = deadbeef 11111111 22222222 33333333
+	 *
+	 * So the tables this driver allocates have to start where the ERAM
+	 * does.  Starting them 0x2000 blocks lower put every one of them
+	 * outside the ERAM, and the hardware - which reads the tables where
+	 * the driver told it to - found nothing there.
 	 */
-	u32 eram_base = 0x1000;
+	u32 eram_base = 0x3000;
 	u32 stat_base = 9 << 12;
 	u32 depth, base, bit_len;
 	u32 node[2];
