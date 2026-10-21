@@ -120,7 +120,21 @@ here.
 The driver does write the vendor's per-port flood words: for every PPU it
 writes SPA indirect registers 17 and 18 - the broadcast flood word and the
 unknown-unicast / multicast flood word - with the values the vendor's own
-system has (0x05400410 / 0x01400940 for the CPU port, PPU 5).
+system has.  Decoded, the broadcast destinations are:
+
+| PPU | port | broadcast goes to | unknown multicast goes to |
+|-----|------|-------------------|---------------------------|
+| 1 | UNI1 | 4, 10, 22, 26 | 6, 11, 22 |
+| 2 | UNI2 | 4, 10, 23, 26 | 7, 11, 23 |
+| 3 | UNI3 | 4, 10, 22, 23, 26 | 6, 7, 11, 22, 23 |
+| 4 | UNI4 | 4, 10, 24, 26 | 8, 11, 24 |
+| 5 | the CPU port (XMAC0) | 4, 10, 22, 24, 26 | 6, 8, 11, 22, 24 |
+
+which is the vendor's own configuration, copied verbatim.  Note that the
+CPU port's broadcast set does not contain every UNI port's own bit, so
+whether the board's DHCP discover reaches the jack the PC is in depends on
+which logical port UNI2 is - a question the board, not the vendor's code,
+has to answer.
 
 What the driver does **not** write is the flood *group*: the vendor's
 `sw_init_flood_ctrl()` (switch.ko 0x2780) also builds a destination port
