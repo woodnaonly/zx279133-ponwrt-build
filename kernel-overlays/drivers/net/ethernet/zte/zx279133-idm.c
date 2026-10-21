@@ -1395,6 +1395,30 @@ static const u32 zx279133_idm_cfg_offsets[] = {
  *    0x3fc = 0x0f49, 0x074 = 0x210, 0x070 = RX depth - 1,
  *    0x0c0 = descriptor mode, 0x00c = TX config depth << 16, 0x124 = 0,
  *    and the CPU133-only 0x5c0 = 7.
+ *
+ * One word of that image does not belong to this board, and it is the
+ * one that decides where a received frame is reported: 0x014..0x034.
+ *
+ * Those nine words are the per-queue routing fields of RX queues 6..23
+ * - which interrupt group and which thread a queue's completion is
+ * reported on.  plat_132.ko writes 0x00800080 into all nine, and so
+ * did this driver, from the same source.
+ *
+ * But plat_132.ko is not this board's module.  The only IDM bring-up on
+ * this board is np_133.ko's own idm_init(), and it does not write those
+ * nine words at all: the hardware keeps its reset default, which is
+ * 0x00010001 - the value U-Boot leaves behind and the value a working
+ * board runs with.  The one vendor write in that range is
+ * idm_queue_rx_int_num_thread(7, 1), which sets the upper half of 0x014
+ * to 1, which is what the reset default already holds.
+ *
+ * So the driver was stamping a routing field from another platform into
+ * a block whose routing the vendor leaves alone, and the driver was
+ * using np_133.ko's interrupt-group words at 0x044..0x050 at the same
+ * time - words that are derived from the very field that had just been
+ * overwritten.  The two halves of the vendor's scheme contradicted each
+ * other, and a completion reported on a group that does not exist never
+ * reaches the driver at all.
  */
 
 static void zx279133_idm_tx_configure(struct zx279133_eth *eth)
@@ -1418,8 +1442,13 @@ static void zx279133_idm_tx_configure(struct zx279133_eth *eth)
 	writel(lower_32_bits(eth->rx_descs_dma), idm + 0x0008);
 	writel(ZX279133_IDM_TX_CFG_DEPTH << 16, idm + 0x000c);
 	writel(128, idm + 0x0010);
+	/*
+	 * The reset default of the per-queue routing words, which is what
+	 * this board's own vendor module leaves them at.  See the comment
+	 * above zx279133_idm_cfg_offsets[].
+	 */
 	for (i = 0x14; i <= 0x34; i += 4)
-		writel(0x00800080, idm + i);
+		writel(0x00010001, idm + i);
 	writel(50000, idm + 0x0038);
 	writel(0x06060606, idm + 0x0054);
 	writel(0x00060606, idm + 0x0058);

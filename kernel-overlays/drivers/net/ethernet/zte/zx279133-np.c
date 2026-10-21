@@ -1161,6 +1161,61 @@ static ssize_t zx279133_9132_write(struct file *file, const char __user *ubuf,
 	}
 
 	/*
+	 * The SoC's own registers, read and written directly.
+	 *
+	 * The offset is relative to the network processing block's base
+	 * (0x19000000 on this board), which is the base every other offset in
+	 * this file is relative to as well: the SPA window is at +0x8000, the
+	 * XMAC0 at +0x140000, the XMAC1 at +0x180000 and the IDM at
+	 * +0x280000.
+	 *
+	 * This is the one thing the console could not do before.  The
+	 * kernel's /dev/mem refuses every device address, so a register
+	 * outside the SPA window could not be read or written at all while
+	 * the board was running - and the XMAC and the IDM are exactly where
+	 * the questions are.  With this, the vendor's own values can be put
+	 * back into a register and watched, one experiment at a time,
+	 * without a rebuild for each of them.
+	 *
+	 *	"reg 140010"		read one word
+	 *	"regw 140010 3e8000c6"	write one word and read it back
+	 *	"regs 140000 8"		dump a range of words
+	 */
+	if (!strcmp(tok, "reg") || !strcmp(tok, "regw") ||
+	    !strcmp(tok, "regs")) {
+		bool is_write = !strcmp(tok, "regw");
+		bool is_dump = !strcmp(tok, "regs");
+		u32 off, n = 1, i;
+
+		tok = zx279133_9132_next_token(&p);
+		if (!tok || kstrtou32(tok, 0, &off))
+			return -EINVAL;
+		if (off >= ZX279133_NPPT_WINDOW_SIZE)
+			return -EINVAL;
+		if (is_dump) {
+			tok = zx279133_9132_next_token(&p);
+			if (!tok || kstrtou32(tok, 0, &n))
+				return -EINVAL;
+			if (!n || n > 256)
+				return -EINVAL;
+		}
+		if (is_write) {
+			tok = zx279133_9132_next_token(&p);
+			if (!tok || kstrtou32(tok, 0, &val))
+				return -EINVAL;
+			writel(val, eth->base + off);
+		}
+		for (i = 0; i < n; i++) {
+			u32 at = off + 4 * i;
+
+			val = readl(eth->base + at);
+			pr_info("soc reg 0x%08x (nppt +0x%06x) = 0x%08x\n",
+				ZX279133_NPPT_BASE + at, at, val);
+		}
+		return count;
+	}
+
+	/*
 	 * The PHYs, over the SoC's MDIO controller #0.
 	 *
 	 * "m <addr> <reg>" reads one register and "mw <addr> <reg> <val>"

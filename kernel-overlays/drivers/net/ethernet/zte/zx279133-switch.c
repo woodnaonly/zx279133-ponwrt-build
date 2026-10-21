@@ -94,6 +94,21 @@
 #define ZX279133_XMAC_ENABLE		BIT(0)
 #define ZX279133_XMAC_SPEED_MASK	GENMASK(31, 29)
 /*
+ * The vendor's own values for the XMAC0 on this lane.
+ *
+ * RX_CTRL and FRAME_CFG are xamc_init_conf_by_speed()'s (np_133.ko
+ * 0x1a240 and 0x1a258) literals, and the "IPC" bit 0x200 is the one
+ * xamc_init_conf_by_speed() puts into MISC_CFG (0x1a288) - not into
+ * RX_CTRL, where the tree's RTL8372N driver has it.  That driver drives
+ * the same MAC towards a different far side, and its two values were
+ * wrong for the 9132's CPU port: RX_CTRL bit 6 is set by the vendor and
+ * cleared here, and FRAME_CFG bit 0 is cleared by the vendor and set
+ * here.
+ */
+#define ZX279133_XMAC_VENDOR_RX_CTRL	0x3e8000c6
+#define ZX279133_XMAC_VENDOR_FRAME_CFG	0x80000000
+#define ZX279133_XMAC_MISC_IPC		BIT(9)
+/*
  * xmac_set_speed_sel(): 3 = 1G SGMII, 6 = 2.5G, 4 = 100M, 7 = 10M.
  * The USXGMII image the tree's RTL8372N driver writes leaves the field at
  * 0, which is what that lane runs at, so the two profiles differ here.
@@ -589,8 +604,28 @@ static void zx279133_switch_xpcs_restore(struct zx279133_switch *priv)
 }
 
 /*
- * The XMAC0 register image, from zx279133_xmac_program() in
- * drivers/net/ethernet/zte/zx279133-mac.c with the 1G speed code.
+ * The XMAC0's own registers, written the way the vendor writes them.
+ *
+ * The vendor's xamc_init_conf_by_speed() (np_133.ko 0x1a200) is six
+ * stores and nothing else:
+ *
+ *	+0x0000 TX_CTRL	 0x00010000, then the speed bits
+ *	+0x0010 RX_CTRL	 0x3e8000c6
+ *	+0x0020 FRAME_CFG	 0x80000000
+ *	+0x0280 MODE_CFG	 2
+ *	+0x3400 MISC_CFG	 |= 0x200
+ *
+ * and xmac_tx_rx_enable() (0x1a114) then sets bit 0 of TX_CTRL and of
+ * RX_CTRL, which is the enable.
+ *
+ * The two values this driver used before came from the tree's RTL8372N
+ * driver, which drives the same MAC towards a different far side - an
+ * external RTL8372N rather than the 9132's CPU port - and they were not
+ * even the same register: the "IPC" bit 0x200 belongs in MISC_CFG, and
+ * it was being written to RX_CTRL as well; and RX_CTRL bit 6 was being
+ * cleared where the vendor sets it.  Neither of those had ever been
+ * exercised on this board, because the function was never called on it
+ * (see zx279133_switch_xmac_configure()).
  */
 static void zx279133_switch_xmac_program(struct zx279133_switch *priv,
 					 u32 speed_code)
@@ -611,14 +646,14 @@ static void zx279133_switch_xmac_program(struct zx279133_switch *priv,
 				    value & ~ZX279133_XMAC_HALF_DUPLEX);
 
 	zx279133_switch_nppt_write(priv, xmac + ZX279133_XMAC_RX_CTRL,
-				    0x3e800086 | ZX279133_XMAC_RX_IPC);
+				    ZX279133_XMAC_VENDOR_RX_CTRL);
 	zx279133_switch_nppt_write(priv, xmac + ZX279133_XMAC_FRAME_CFG,
-				    0x80000001);
+				    ZX279133_XMAC_VENDOR_FRAME_CFG);
 	zx279133_switch_nppt_write(priv, xmac + ZX279133_XMAC_MODE_CFG, 2);
 
 	value = zx279133_switch_nppt_read(priv, xmac + ZX279133_XMAC_MISC_CFG);
 	zx279133_switch_nppt_write(priv, xmac + ZX279133_XMAC_MISC_CFG,
-				    value | BIT(9));
+				    value | ZX279133_XMAC_MISC_IPC);
 }
 
 /*
@@ -743,8 +778,17 @@ static void zx279133_switch_sopc_publish(struct zx279133_switch *priv)
 /*
  * The XMAC0 bring-up, from zx279133_xmac_sgmii_init(): reset, program,
  * publish the SOPC send enable, then enable the MAC.
+ *
+ * The reset is optional, and on this board it is not wanted: the soft
+ * reset word is shared with the PCS, and the PCS on this board was
+ * brought up by the bootloader and must not be disturbed (see
+ * zx279133_switch_probe()).  The XMAC is a block of its own and is
+ * programmed either way - it is at its reset state already, every one of
+ * its control words reading zero, and a MAC that is not configured
+ * neither sends nor receives.
  */
-static void zx279133_switch_xmac_configure(struct zx279133_switch *priv)
+static void zx279133_switch_xmac_configure(struct zx279133_switch *priv,
+					    bool do_reset)
 {
 	u32 xmac = ZX279133_XMAC0_BASE;
 	u32 value;
@@ -775,14 +819,17 @@ static void zx279133_switch_xmac_configure(struct zx279133_switch *priv)
 				    value & ~ZX279133_XMAC_ENABLE);
 	zx279133_switch_nppt_write(priv, ZX279133_XMAC0_SOPC_SEND, 0);
 
-	/* smac_reset(): preserve the shared reset word and pulse XMAC0 only. */
-	zx279133_switch_nppt_write(priv, ZX279133_SYS_SOFT_RESET,
-				    priv->saved_xmac_reset &
-				    ~ZX279133_XMAC0_RESET);
-	usleep_range(ZX279133_XMAC_RESET_US, ZX279133_XMAC_RESET_US + 100);
-	zx279133_switch_nppt_write(priv, ZX279133_SYS_SOFT_RESET,
-				    priv->saved_xmac_reset |
-				    ZX279133_XMAC0_RESET);
+	if (do_reset) {
+		/* smac_reset(): preserve the shared reset word and pulse XMAC0 only. */
+		zx279133_switch_nppt_write(priv, ZX279133_SYS_SOFT_RESET,
+					    priv->saved_xmac_reset &
+					    ~ZX279133_XMAC0_RESET);
+		usleep_range(ZX279133_XMAC_RESET_US,
+			     ZX279133_XMAC_RESET_US + 100);
+		zx279133_switch_nppt_write(priv, ZX279133_SYS_SOFT_RESET,
+					    priv->saved_xmac_reset |
+					    ZX279133_XMAC0_RESET);
+	}
 
 	zx279133_switch_xmac_program(priv, priv->usxgmii ?
 					     ZX279133_XMAC_SPEED_USXGMII :
@@ -1722,8 +1769,21 @@ static int zx279133_switch_probe(struct platform_device *pdev)
 	 * from the bootloader's 0x380b to 0x280b, one bit of link status
 	 * short, and a lane that was carrying traffic stops carrying it.
 	 * So in that case the bootloader's configuration is adopted as it
-	 * is, and the only thing done to it is the SOPC publish, which the
-	 * kernel's own datapath needs and the bootloader did for its own.
+	 * is.
+	 *
+	 * The XMAC is a different matter, and this is where the board used to
+	 * stop.  The XMAC0 is the MAC on the far side of the lane - the one
+	 * that faces the 9132's CPU port - and the bootloader leaves it at
+	 * zero: every one of its control words reads 0x00000000, so the MAC
+	 * was never configured by anybody.  This driver used to skip the
+	 * XMAC along with the PCS, and a MAC that is not configured neither
+	 * sends nor receives: the frames the stack queued went into the IDM
+	 * and stopped there, the XMAC's own transmit counter stayed at zero,
+	 * and nothing at all crossed the lane in either direction.
+	 *
+	 * So the XMAC is programmed in this branch as well.  What is not
+	 * repeated is the reset: the soft reset word is shared with the PCS,
+	 * and the XMAC is at its reset state already.
 	 */
 	zx279133_switch_lane_snapshot(priv, "pre-pcs");
 	status = zx279133_switch_nppt_read(priv, ZX279133_NPPT_XPCS0_STATUS);
@@ -1732,6 +1792,7 @@ static int zx279133_switch_probe(struct platform_device *pdev)
 			 "the bootloader left the PCS link up (0x%04x); inheriting it\n",
 			 status);
 		zx279133_switch_sopc_publish(priv);
+		zx279133_switch_xmac_configure(priv, false);
 		goto report;
 	}
 
@@ -1756,7 +1817,7 @@ static int zx279133_switch_probe(struct platform_device *pdev)
 		goto report;
 	}
 
-	zx279133_switch_xmac_configure(priv);
+	zx279133_switch_xmac_configure(priv, true);
 
 	if (!priv->usxgmii) {
 		/* Re-apply after the XMAC/SOPC work; the C45 AN bits are lost. */

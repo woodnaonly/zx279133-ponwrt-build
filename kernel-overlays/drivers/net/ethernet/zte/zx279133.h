@@ -353,6 +353,15 @@
  */
 #define ZX279133_SPA_WINDOW_BASE	0x8000
 #define ZX279133_SPA_WINDOW_SIZE	0x1000
+/*
+ * The whole network processing block: the device tree maps it at
+ * 0x19000000 with a size of 16 MiB, and every block in it is reachable
+ * from the driver's own mapping - the SPA window at +0x8000, the XMAC0
+ * at +0x140000, the XMAC1 at +0x180000, the IDM at +0x280000.  The
+ * console's "reg" command uses this as its bound.
+ */
+#define ZX279133_NPPT_BASE		0x19000000
+#define ZX279133_NPPT_WINDOW_SIZE	0x1000000
 #define ZX279133_SMMU0_CMD		0x48004
 #define ZX279133_SMMU0_ADDR		0x48008
 #define ZX279133_SMMU0_WDATA		0x4800c
