@@ -2140,6 +2140,51 @@ static const u32 zx279133_lan_proto_table[ZX279133_PRO_BLOCKS_PER_PORT]
 	{ 0x58185818, 0x58185818, 0x58185818, 0x58185818 },
 };
 
+/*
+ * The 9132's own protocol action table.
+ *
+ * The switch decides what to do with a frame of a given protocol on a given
+ * port by looking in that port's reason-action table, and the action for
+ * reason 0 and 1 is what decides whether the frame is forwarded or trapped
+ * to the CPU.  The vendor's switch.ko installs this table on every switch
+ * port: 77 (protocol, action) pairs copied out of its own .rodata, and the
+ * action lands in the low two bits of the entry.
+ *
+ * It is the only way a frame from a LAN jack reaches the CPU at all.  The
+ * vendor's flood group holds the WAN port and nothing else
+ * (sw_init_flood_ctrl), so a frame whose destination is not in the MAC
+ * table is never flooded towards the CPU - it has to be trapped.  The
+ * vendor's own counters show the trap firing exactly as many times as the
+ * test PC sent frames, and the counter for the frames that arrived on the
+ * PC's own jack and were output again towards the jacks - the same seven.
+ *
+ * This table is np.ko's own table for a LAN port - the one
+ * zx279133_lan_proto_table above is - with reasons 0 and 1 changed.  np.ko
+ * leaves those two at action 0 and switch.ko patches them to action 2, and
+ * reason 0 is ARP: the first frame a client ever sends.  The vendor's code
+ * stores (action - 2) & 3 in those two bits, so action 2 is a zero field
+ * and only the low two bits of the first entry differ.
+ */
+static const u32 zx279133_9132_proto_table[ZX279133_PRO_BLOCKS_PER_PORT]
+					     [ZX279133_SMMU0_WORDS] = {
+	{ 0x40004000, 0x14144002, 0x58181818, 0x58185818 },
+	{ 0x58185818, 0x58185818, 0x58185818, 0x58185818 },
+	{ 0x58185818, 0x58185818, 0x58185818, 0x58185818 },
+	{ 0x58185818, 0x58185818, 0x58185818, 0x58185010 },
+	{ 0x50105818, 0x58185818, 0x58185818, 0x58185818 },
+	{ 0x58185818, 0x58185818, 0x58181818, 0x18181818 },
+	{ 0x18185818, 0x58185818, 0x58185818, 0x58185818 },
+	{ 0x58185818, 0x58185818, 0x58185818, 0x58185818 },
+	{ 0x58185818, 0x58185818, 0x58185818, 0x18185818 },
+	{ 0x08085818, 0x48084002, 0x58180808, 0x48084808 },
+	{ 0x54145414, 0x58185414, 0x58184014, 0x58185818 },
+	{ 0x58185818, 0x58185818, 0x58185818, 0x58185818 },
+	{ 0x48084808, 0x58185818, 0x58185818, 0x58185818 },
+	{ 0x58185818, 0x58185818, 0x58185818, 0x58185818 },
+	{ 0x58185818, 0x58185818, 0x58185818, 0x58185818 },
+	{ 0x58185818, 0x58185818, 0x58185818, 0x58185818 },
+};
+
 static int
 zx279133_proto_table_write(struct zx279133_eth *eth, u32 port,
 			   const u32 table[][ZX279133_SMMU0_WORDS])
@@ -2157,6 +2202,39 @@ zx279133_proto_table_write(struct zx279133_eth *eth, u32 port,
 		if (ret)
 			return ret;
 	}
+
+	return 0;
+}
+
+/*
+ * Give the 9132's four UNI ports, and its CPU port, the protocol action
+ * table.  Without it the switch has no idea what to do with an ARP frame
+ * that arrives on a jack: it is neither forwarded (the flood group holds
+ * the WAN port and nothing else) nor trapped to the CPU, so it is dropped
+ * and the client never sees an answer.
+ */
+static int zx279133_9132_proto_init(struct zx279133_eth *eth)
+{
+	u32 ppu;
+	int ret;
+
+	for (ppu = ZX279133_9132_UNI_PPU_FIRST; ppu <= ZX279133_9132_UNI_PPU_LAST;
+	     ppu++) {
+		ret = zx279133_proto_table_write(eth, ppu,
+						 zx279133_9132_proto_table);
+		if (ret)
+			return ret;
+	}
+
+	ret = zx279133_proto_table_write(eth, ZX279133_9132_CONDUIT_PPU,
+					 zx279133_9132_proto_table);
+	if (ret)
+		return ret;
+
+	dev_info(eth->dev,
+		 "9132 ports %u..%u and %u have the protocol action table (ARP trapped to the CPU)\n",
+		 ZX279133_9132_UNI_PPU_FIRST, ZX279133_9132_UNI_PPU_LAST,
+		 ZX279133_9132_CONDUIT_PPU);
 
 	return 0;
 }
@@ -3573,6 +3651,13 @@ int zx279133_np_prepare(struct zx279133_eth *eth)
 	 * on it either (docs/07 supplement 94).
 	 */
 	ret = zx279133_9132_port_init(eth);
+	if (ret)
+		goto err_route_off;
+	/*
+	 * And the protocol action table, which is what tells the switch to
+	 * trap a frame for the CPU instead of forwarding it to the WAN.
+	 */
+	ret = zx279133_9132_proto_init(eth);
 	if (ret)
 		goto err_route_off;
 	/*
