@@ -1264,8 +1264,9 @@ static ssize_t zx279133_9132_write(struct file *file, const char __user *ubuf,
 	 * The NPPT's ERAM, which is where the tables the switch needs live:
 	 * the multi-forward extension table, the VLAN action table, the port
 	 * type table, the flood destination table and the port isolation
-	 * matrix.  One block is 128 bytes and every table entry uses the
-	 * first four words of its own block.
+	 * matrix.  One block is 128 bits - the address the switch engine
+	 * works in is a bit - and a table entry of 128 bits is one block,
+	 * the first four words of it.
 	 *
 	 *	"er 125 8"			read eight blocks
 	 *	"ew 125 w0 w1 w2 w3"		write one block and read it back
@@ -1586,7 +1587,14 @@ static int zx279133_mf_eram_attr_set(struct zx279133_eth *eth, u32 mem_id,
 				  ZX279133_SMMU0_CMD_READ);
 	if (ret)
 		return ret;
-	data[3] = attr;
+	/*
+	 * The attribute word is the first word of the entry.  The vendor's
+	 * port_attr_def_*_set() helpers read the entry, patch one bit of
+	 * the byte at offset 3 - sa_lookup_learn_en is bit 7 of it - and
+	 * write the entry back, so the word the switch engine reads is
+	 * word 0, not the last one.
+	 */
+	data[0] = attr;
 
 	return zx279133_mf_eram_entry_write(eth, mem_id, data);
 }
@@ -2213,9 +2221,9 @@ static int zx279133_mf_port_startpc_copy(struct zx279133_eth *eth,
 }
 
 /*
- * The NPPT's own protocol table: 16-bit entries, 64 logical ports of 1024
- * entries each, so 16 blocks of 128 bytes per port.  Its base is the one
- * the allocation gave it.
+ * The NPPT's own protocol table: 16-bit entries, 64 logical ports of 128
+ * entries each, so 16 blocks - a block is 128 bits - per port.  Its base
+ * is the one the allocation gave it.
  */
 #define ZX279133_PRO_BLOCKS_PER_PORT	16
 #define ZX279133_LAN_INGRESS_PPU_PORT	0
@@ -2427,20 +2435,24 @@ static int zx279133_spa_pkt_type_runtime(struct zx279133_eth *eth)
  * also select a packet-rate limit set, and their MF extension entries carry
  * the per-port user-defined areas the factory driver copies from its SPA
  * attributes (words 1..3 = attributes 69..71).
+ *
+ * The port attribute word is the first word of the entry, the way the
+ * vendor's port_attr_def_*_set() helpers leave it.
  */
 static const u32 zx279133_lan_vport_mf[][ZX279133_SMMU0_WORDS] = {
-	{ 0, 0x2f235600, 0x00000a38, 0x1c8c2800 },	/* VID 59, lan4 */
-	{ 0, 0x2fc36000, 0x00000a60, 0x1c8c2800 },	/* VID 60, lan3 */
-	{ 0, 0x30636a00, 0x00000a88, 0x1c8c2800 },	/* VID 61, lan2 */
-	{ 0, 0x31037400, 0x00000ab0, 0x1c8c2800 },	/* VID 62, lan1 */
+	{ 0x1c8c2800, 0x2f235600, 0x00000a38, 0 },	/* VID 59, lan4 */
+	{ 0x1c8c2800, 0x2fc36000, 0x00000a60, 0 },	/* VID 60, lan3 */
+	{ 0x1c8c2800, 0x30636a00, 0x00000a88, 0 },	/* VID 61, lan2 */
+	{ 0x1c8c2800, 0x31037400, 0x00000ab0, 0 },	/* VID 62, lan1 */
 };
 
 /* SDT 6: one entry per logical port; bit 31 of word 3 marks a LAN port. */
 #define ZX279133_PORT_TYPE_LAN			BIT(31)
 /*
- * MF extension word 3 of a WAN-type logical port, as the factory system sets
- * it for VID 59 (lan4) when that port becomes its "WAN2": 0x1c8c2800 turns
- * into 0x148e2000, the kind of value of the WAN port itself (0x148e0000).
+ * The port attribute word of a WAN-type logical port, as the factory system
+ * sets it for VID 59 (lan4) when that port becomes its "WAN2": 0x1c8c2800
+ * turns into 0x148e2000, the kind of value of the WAN port itself
+ * (0x148e0000).
  * Measured for VID 59 only; the same flip for 60..62 is an inference.
  */
 #define ZX279133_LAN_VPORT_MF_WAN_FLIP		0x08020800
@@ -2477,7 +2489,7 @@ static int zx279133_lan_vport_mode_write(struct zx279133_eth *eth, u16 vport,
 	memcpy(mf, zx279133_lan_vport_mf[vport - ZX279133_LAN_VPORT_FIRST],
 	       sizeof(mf));
 	if (wan) {
-		mf[3] ^= ZX279133_LAN_VPORT_MF_WAN_FLIP;
+		mf[0] ^= ZX279133_LAN_VPORT_MF_WAN_FLIP;
 		mf[2] |= BIT(0);
 	}
 	ret = zx279133_mf_eram_entry_write(eth, vport, mf);
