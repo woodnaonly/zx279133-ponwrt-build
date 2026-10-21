@@ -259,6 +259,7 @@ struct zx279133_switch {
 	bool serdes_powered;
 	bool usxgmii;
 	bool dsa_registered;
+	bool datapath_ready;
 	u16 saved_vend2_bmcr;
 	u16 saved_vend2_an_ctrl;
 	u16 saved_xpcs_bypass;
@@ -854,6 +855,18 @@ static void zx279133_switch_xmac_restore(struct zx279133_switch *priv)
 static void zx279133_switch_release(void *data)
 {
 	struct zx279133_switch *priv = data;
+
+	/*
+	 * The mirror image of the probe: the NPPT must stop handing frames to
+	 * the conduit before the conduit stops being openable, and the
+	 * datapath must stop being "ready" before it is released.  The order
+	 * is the tree's RTL8372N driver's remove path.
+	 */
+	zx279133_lan_service_set_dsa_active(priv->service, false);
+	if (priv->datapath_ready) {
+		zx279133_lan_service_datapath_set_ready(priv->service, false);
+		priv->datapath_ready = false;
+	}
 
 	zx279133_switch_xmac_restore(priv);
 	zx279133_switch_xpcs_restore(priv);
@@ -1800,6 +1813,36 @@ report:
 		return 0;
 	}
 
+	/*
+	 * The LAN datapath has to be declared ready *before* the DSA switch is
+	 * registered, and this is the tree's RTL8372N driver's order (its
+	 * zx279133_rtl8372n_probe() does the same three steps in this order).
+	 *
+	 * It matters because two things in the parent are gated on it, and
+	 * both of them are the LAN path:
+	 *
+	 *   - zx279133_lan_netdev_open() (the conduit's ndo_open) answers
+	 *     -ENETDOWN unless eth->lan_datapath_ready is set, and DSA's
+	 *     dsa_user_open() opens the conduit before it does anything else.
+	 *     With the flag unset, every user port fails to open with
+	 *     "failed to open conduit lan-cpu0" and the bridge puts the port
+	 *     into the disabled state - which is exactly what the run 102
+	 *     console showed.
+	 *
+	 *   - the IDM receive path drops every frame that comes from the LAN
+	 *     side unless eth->lan_dsa_active is set: "if (lan_source &&
+	 *     !lan_dsa_active) { drop }".  That flag is what tells the NPPT
+	 *     that the DSA conduit is live, and it is what makes the
+	 *     descriptor's source port be turned back into the transport VID
+	 *     the tree's tagger looks for (zx279133_idm_rx_lan_vport(),
+	 *     zx279133_idm_rx_preserve_dsa_vlan()).
+	 *
+	 * Neither call was made here, so the switch registered, the four jacks
+	 * appeared, and not one frame ever moved.
+	 */
+	zx279133_lan_service_datapath_set_ready(priv->service, true);
+	priv->datapath_ready = true;
+
 	ret = zx279133_switch_dsa_register(dev, priv);
 	if (ret) {
 		/*
@@ -1809,8 +1852,13 @@ report:
 		 */
 		dev_err(dev, "the 9132 did not register as a DSA switch: %d\n",
 			ret);
+		zx279133_lan_service_datapath_set_ready(priv->service, false);
+		priv->datapath_ready = false;
 		return 0;
 	}
+
+	/* The conduit is live; the NPPT may hand its frames to it now. */
+	zx279133_lan_service_set_dsa_active(priv->service, true);
 
 	return 0;
 

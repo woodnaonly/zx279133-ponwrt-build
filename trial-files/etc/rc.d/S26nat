@@ -229,6 +229,36 @@ if [ -n "$BR" ]; then
 	echo "trial: nat: br-lan is up; the test PC is in $PC_PORT" >/dev/kmsg
 fi
 
+# What the bridge and the DSA ports look like, on the console.
+#
+# This is printed on purpose and not only because it is useful: everything
+# else in this project reads the board over ssh, and ssh needs the LAN to
+# work - so when the LAN does not work, the console is the only witness
+# there is.  A run that fails at the bridge must still say what the bridge
+# and the ports did.
+say_link() {
+	echo "trial: link: $* " >/dev/kmsg
+}
+for n in $(ls /sys/class/net 2>/dev/null); do
+	[ "$n" = lo ] && continue
+	carrier=$(cat "/sys/class/net/$n/carrier" 2>/dev/null)
+	oper=$(cat "/sys/class/net/$n/operstate" 2>/dev/null)
+	flags=$(cat "/sys/class/net/$n/flags" 2>/dev/null)
+	rx=$(cat "/sys/class/net/$n/statistics/rx_packets" 2>/dev/null)
+	tx=$(cat "/sys/class/net/$n/statistics/tx_packets" 2>/dev/null)
+	br=$(ls "/sys/class/net/$n/brif" 2>/dev/null | tr '\n' ',')
+	slave=$(ls "/sys/class/net/$n/brport" 2>/dev/null | tr '\n' ',')
+	say_link "$n oper=$oper carrier=$carrier flags=$flags rx=$rx tx=$tx brif=$br brport=$slave"
+done
+if [ -n "$BR" ] && [ -d "/sys/class/net/$BR/brif" ]; then
+	for p in $(ls "/sys/class/net/$BR/brif" 2>/dev/null); do
+		state=$(cat "/sys/class/net/$BR/brif/$p/state" 2>/dev/null)
+		say_link "br-lan port $p state=$state"
+	done
+fi
+say_link "addr: $(ip -o -4 addr show 2>/dev/null | tr '\n' ' ')"
+say_link "route: $(ip route show 2>/dev/null | tr '\n' ' ')"
+
 # A forced upstream.  /etc/labwan names the port that is to be the WAN, and
 # "pc" means "the port the test PC is in".  This is the mode the bench needs
 # while it has only one cable: the PC is then the upstream (it runs a DHCP
