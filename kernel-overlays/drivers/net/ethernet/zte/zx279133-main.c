@@ -301,6 +301,54 @@ static void zx279133_red_vendor_fixup(struct zx279133_eth *eth)
 }
 
 /*
+ * The queue manager and the switch's own copy of the configuration, the way
+ * this board's vendor firmware has them.
+ *
+ * The tree's zx279133_tm_prepare() programs both for the SR1010, and the
+ * overlay cannot reach that code.  The RED's half is put back by
+ * zx279133_red_vendor_fixup() above; these are the other two halves.
+ *
+ * They have to come from the same board: the RED, the QMG and the SMCT
+ * between them decide which queue a frame goes to and how long it is, and
+ * the vendor's own numbers are the only set that has ever worked on this
+ * chip.  The tree's numbers belong to a different board with a different
+ * buffer pool, and a RED with one board's queue geometry in front of a QMG
+ * with another's is how a frame ends up at the RED with a length of zero.
+ *
+ * The WOE watermark at 0x20088 is shared with the RED's own copy of it and
+ * is already written by zx279133_red_vendor_fixup().
+ */
+static void zx279133_tm_vendor_fixup(struct zx279133_eth *eth)
+{
+	static const struct {
+		u16 offset;
+		u32 value;
+	} regs[] = {
+		{ ZX279133_QMG_WATERMARK,	ZX279133_QMG_VENDOR_WATERMARK },
+		{ ZX279133_QMG_DESC_OUT,	ZX279133_QMG_VENDOR_DESC_OUT },
+		{ ZX279133_QMG_WOE_OUT,		ZX279133_QMG_VENDOR_WOE_OUT },
+		{ ZX279133_QMG_DESC_IN,		ZX279133_QMG_VENDOR_DESC_IN },
+		{ ZX279133_SMCT_SEL_CFG0,	ZX279133_SMCT_VENDOR_SEL_CFG0 },
+		{ ZX279133_SMCT_COS_TH0,	ZX279133_SMCT_VENDOR_COS_TH0 },
+		{ ZX279133_SMCT_COS_TH0 + 4,	ZX279133_SMCT_VENDOR_COS_TH1 },
+		{ ZX279133_SMCT_COS_TH0 + 8,	ZX279133_SMCT_VENDOR_COS_TH2 },
+		{ ZX279133_SMCT_COS_TH0 + 12,	ZX279133_SMCT_VENDOR_COS_TH3 },
+		{ ZX279133_SMCT_MC_TH,		ZX279133_SMCT_VENDOR_MC_TH },
+		{ ZX279133_SMCT_NP1_TH,		ZX279133_SMCT_VENDOR_NP1_TH },
+		{ ZX279133_SMCT_IDM_SSCH_TH,	ZX279133_SMCT_VENDOR_IDM_SSCH_TH },
+	};
+	unsigned int i;
+
+	for (i = 0; i < ARRAY_SIZE(regs); i++)
+		writel(regs[i].value, eth->base + regs[i].offset);
+
+	/* The eight per-input-port thresholds. */
+	for (i = 0; i < 8; i++)
+		writel(ZX279133_SMCT_VENDOR_INPORT_TH,
+		       eth->base + ZX279133_SMCT_INPORT_TH0 + 4 * i);
+}
+
+/*
  * The register image of the RED, the IDM and the CPU port's MAC, printed once
  * at bring-up.
  *
@@ -384,6 +432,21 @@ static void zx279133_diag_dump(struct zx279133_eth *eth)
 			 idm_offsets[i],
 			 readl(eth->base + ZX279133_IDM_BASE + idm_offsets[i]));
 
+	/*
+	 * The queue manager and the switch's own copy of the configuration.
+	 * Both are printed whole, because both are compared against the
+	 * vendor's board word by word and a missing word is a difference
+	 * too.
+	 */
+	for (i = 0; i < 0x1c; i++)
+		dev_info(eth->dev, "DIAG qmg 0x%05x              = 0x%08x\n",
+			 0x24000 + 4 * i,
+			 readl(eth->base + ZX279133_QMG_RAM_REQ + 4 * i));
+	for (i = 0; i < 0x1c; i++)
+		dev_info(eth->dev, "DIAG smct 0x%05x             = 0x%08x\n",
+			 0xc000 + 4 * i,
+			 readl(eth->base + ZX279133_SMCT_SEL_CFG0 + 4 * i));
+
 	for (i = 0; i < ARRAY_SIZE(queues); i++) {
 		zx279133_red_ind_read(eth, 2, queues[i], data, 1);
 		dev_info(eth->dev, "DIAG red ram2 q%03x           = 0x%08x\n",
@@ -437,6 +500,7 @@ int zx279133_hardware_prepare(struct zx279133_eth *eth)
 		goto err_clk_disable;
 	zx279133_bmu_threshold_fixup(eth);
 	zx279133_red_vendor_fixup(eth);
+	zx279133_tm_vendor_fixup(eth);
 	ret = zx279133_np_prepare(eth);
 	if (ret)
 		goto err_tm_restore;

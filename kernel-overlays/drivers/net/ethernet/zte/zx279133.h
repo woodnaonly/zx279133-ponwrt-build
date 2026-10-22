@@ -166,6 +166,28 @@
 #define ZX279133_QMG_VR_UP_MASK		GENMASK(17, 9)
 #define ZX279133_QMG_VR_DOWN_MASK	GENMASK(8, 0)
 
+/*
+ * The queue manager, the way this board's vendor firmware has it.
+ *
+ * The tree's zx279133_qmg_prepare() writes the SR1010's numbers, and they do
+ * not agree with the RED geometry this board's vendor firmware runs: the
+ * vendor's 0x24014 holds 0x0bb8_0fa0 where the tree writes 0x2bb8_2fa0, and
+ * the same holds for the descriptor counters at 0x24018, 0x24020 and 0x24060.
+ *
+ * The RED and the QMG are the two halves of one queue, so they have to be set
+ * to the same board's numbers.  The RED's half is put back by
+ * zx279133_red_vendor_fixup() in zx279133-main.c; this is the other half.
+ *
+ * The values are the vendor board's own, out of its console dump
+ * (staging/ctl/vendor-serial-mods/tm-qmg.txt, words 0x05, 0x06, 0x08 and
+ * 0x18, and tm-red.txt word 0x22 for the WOE watermark).
+ */
+#define ZX279133_QMG_VENDOR_WATERMARK		0x0bb80fa0
+#define ZX279133_QMG_VENDOR_DESC_OUT		0x80003000
+#define ZX279133_QMG_VENDOR_WOE_OUT		0x80000000
+#define ZX279133_QMG_VENDOR_DESC_IN		0x10001000
+#define ZX279133_QMG_VENDOR_WOE_RED_WATERMARK	0x08bf07ff
+
 #define ZX279133_SOPC_CRC_PADDING	0x343c4
 #define ZX279133_SOPC_FIFO_THRESHOLD	0x343d0
 #define ZX279133_SOPC_CRC_PADDING_MASK	GENMASK(13, 0)
@@ -394,6 +416,34 @@
 #define ZX279133_SMCT_MC_TH_MASK	GENMASK(13, 0)
 #define ZX279133_SMCT_PAIR_PRESERVE_MASK	(GENMASK(31, 30) | GENMASK(15, 14))
 #define ZX279133_SMCT_PAIR_HI_SHIFT	16
+
+/*
+ * The switch's own copy of the configuration, the way this board's vendor
+ * firmware has it.
+ *
+ * The tree's zx279133_smct_prepare() writes the SR1010's thresholds, and this
+ * board's vendor firmware runs different ones: the vendor's per-COS
+ * thresholds at 0xc028..0xc034 are 0x1900_1900, 0x1900_1900, 0x1900_1900 and
+ * 0x1b00_1fff, the multicast threshold at 0xc038 is 0x1fff_0d00, the eight
+ * per-input-port thresholds at 0xc03c..0xc058 are all 0x1fff_1fff, the NP1
+ * threshold at 0xc05c is 0x1d00 and the IDM scheduler threshold at 0xc060 is
+ * 0x1fff_1fff.
+ *
+ * These are the thresholds that decide a frame's colour and its queue, so
+ * they are part of the same set as the RED's and the QMG's.
+ *
+ * The values are the vendor board's own, out of its console dump
+ * (staging/ctl/vendor-serial-mods/nppu-smct.txt, words 0x00, 0x0a..0x18).
+ */
+#define ZX279133_SMCT_VENDOR_SEL_CFG0		0x1e00
+#define ZX279133_SMCT_VENDOR_COS_TH0		0x19001900
+#define ZX279133_SMCT_VENDOR_COS_TH1		0x19001900
+#define ZX279133_SMCT_VENDOR_COS_TH2		0x19001900
+#define ZX279133_SMCT_VENDOR_COS_TH3		0x1b001fff
+#define ZX279133_SMCT_VENDOR_MC_TH		0x1fff0d00
+#define ZX279133_SMCT_VENDOR_INPORT_TH		0x1fff1fff
+#define ZX279133_SMCT_VENDOR_NP1_TH		0x1d00
+#define ZX279133_SMCT_VENDOR_IDM_SSCH_TH	0x1fff1fff
 
 #define ZX279133_ISU_CFG		0x10000
 #define ZX279133_ISU_INIT_REQ		0x10004
