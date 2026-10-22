@@ -154,6 +154,267 @@ static void zx279133_bmu_threshold_fixup(struct zx279133_eth *eth)
 	writel(ZX279133_BMU_BPPI_THRESH_VALUE, eth->base + ZX279133_BMU_BPPI_THRESH);
 }
 
+/*
+ * The RED's indirect access port.
+ *
+ * The tree's zx279133-tm.c has a static copy of this, and so does the tree's
+ * header, but both are in the kernel and not in the overlay, so the overlay
+ * needs its own.  The protocol is the vendor's (np_133.ko's __red_ind_write
+ * and __red_ind_read): the command word goes in first, the data words second,
+ * and the shared auto-gate at NPPT + 0x00b8 bit 10 is cleared around the
+ * access and put back afterwards.
+ */
+static void zx279133_red_ind_write(struct zx279133_eth *eth, u32 ram_id,
+				   u32 addr, const u32 *data, unsigned int count)
+{
+	u32 gate = readl(eth->base + ZX279133_RED_AUTO_GATE_REG);
+	u32 val;
+	unsigned int i;
+
+	if (gate & ZX279133_RED_AUTO_GATE_BIT)
+		writel(gate & ~ZX279133_RED_AUTO_GATE_BIT,
+		       eth->base + ZX279133_RED_AUTO_GATE_REG);
+
+	readl_poll_timeout_atomic(eth->base + ZX279133_RED_IND_DONE, val,
+				  val & ZX279133_RED_IND_DONE_BIT, 10, 200);
+
+	writel(addr | FIELD_PREP(ZX279133_RED_IND_RAM_ID_MASK, ram_id),
+	       eth->base + ZX279133_RED_IND_CMD);
+	for (i = count; i > 0; i--)
+		writel(data[i - 1],
+		       eth->base + ZX279133_RED_IND_DATA + 4 * (i - 1));
+
+	writel(gate, eth->base + ZX279133_RED_AUTO_GATE_REG);
+}
+
+static void zx279133_red_ind_read(struct zx279133_eth *eth, u32 ram_id,
+				  u32 addr, u32 *data, unsigned int count)
+{
+	u32 gate = readl(eth->base + ZX279133_RED_AUTO_GATE_REG);
+	u32 val;
+	unsigned int i;
+
+	if (gate & ZX279133_RED_AUTO_GATE_BIT)
+		writel(gate & ~ZX279133_RED_AUTO_GATE_BIT,
+		       eth->base + ZX279133_RED_AUTO_GATE_REG);
+
+	readl_poll_timeout_atomic(eth->base + ZX279133_RED_IND_DONE, val,
+				  val & ZX279133_RED_IND_DONE_BIT, 10, 200);
+
+	writel(addr | FIELD_PREP(ZX279133_RED_IND_RAM_ID_MASK, ram_id) |
+	       ZX279133_RED_IND_RW_BIT,
+	       eth->base + ZX279133_RED_IND_CMD);
+
+	readl_poll_timeout_atomic(eth->base + ZX279133_RED_IND_DONE, val,
+				  val & ZX279133_RED_IND_DONE_BIT, 10, 200);
+
+	for (i = 0; i < count; i++)
+		data[i] = readl(eth->base + ZX279133_RED_IND_DATA + 4 * i);
+
+	writel(gate, eth->base + ZX279133_RED_AUTO_GATE_REG);
+}
+
+/*
+ * The RED, put the way this board's vendor firmware has it.
+ *
+ * The tree's zx279133_tm_prepare() programs the RED for the SR1010 and the
+ * overlay cannot reach that code, so the whole RED configuration is written
+ * again here, afterwards, with the values the vendor's own board reads back.
+ * The reasoning, and every value, is in the block comment above
+ * ZX279133_RED_ALL_SHARE_MAX in zx279133.h.
+ */
+static void zx279133_red_vendor_fixup(struct zx279133_eth *eth)
+{
+	static const struct {
+		u16 offset;
+		u32 value;
+	} regs[] = {
+		{ ZX279133_RED_CFG,			ZX279133_RED_VENDOR_CFG },
+		{ ZX279133_RED_IN_SHARE_MAX,		ZX279133_RED_VENDOR_IN_SHARE_MAX },
+		{ ZX279133_RED_ALL_SHARE_MAX,		ZX279133_RED_VENDOR_ALL_SHARE_MAX },
+		{ ZX279133_RED_UP_IN_SHARE_MAX,		ZX279133_RED_VENDOR_UP_IN_SHARE_MAX },
+		{ ZX279133_RED_DOWN_IN_SHARE_MAX,	ZX279133_RED_VENDOR_DOWN_IN_SHARE_MAX },
+		{ ZX279133_RED_ALL_OUT_SHARE_MAX,	ZX279133_RED_VENDOR_ALL_OUT_SHARE_MAX },
+		{ ZX279133_RED_DOWN_OUT_MAX,		ZX279133_RED_VENDOR_DOWN_OUT_MAX },
+		{ ZX279133_RED_UP_OUT_MAX,		ZX279133_RED_VENDOR_UP_OUT_MAX },
+		{ ZX279133_RED_DESC_WATERMARK,		ZX279133_RED_VENDOR_DESC_WATERMARK },
+		{ ZX279133_RED_IDM_DESC_WATERMARK,	ZX279133_RED_VENDOR_IDM_DESC_WATERMARK },
+		{ ZX279133_RED_IDM_IN_SHARE_MAX,	ZX279133_RED_VENDOR_IDM_IN_SHARE_MAX },
+		{ ZX279133_RED_WOE_IN_SHARE_MAX,	ZX279133_RED_VENDOR_WOE_IN_SHARE_MAX },
+		{ ZX279133_RED_WOE_OUT_SHARE_MAX,	ZX279133_RED_VENDOR_WOE_OUT_SHARE_MAX },
+		{ ZX279133_RED_NP1_Q0_TH,		ZX279133_RED_VENDOR_NP1_Q0_TH },
+		{ ZX279133_RED_NP1_Q1_TH,		ZX279133_RED_VENDOR_NP1_Q1_TH },
+		{ ZX279133_RED_NP1_DESC_WM,		ZX279133_RED_VENDOR_NP1_DESC_WM },
+	};
+	static const u32 cfg[4] = {
+		0xff803fff, 0x0100ff80, 0x00100200, 0x00000020,
+	};
+	unsigned int i;
+	unsigned int q;
+
+	for (i = 0; i < ARRAY_SIZE(regs); i++)
+		writel(regs[i].value, eth->base + regs[i].offset);
+
+	/* The six NP1 ISU thresholds, q 0..5. */
+	for (i = 0; i < 6; i++)
+		writel(ZX279133_RED_VENDOR_NP1_ISU_TH,
+		       eth->base + ZX279133_RED_NP1_ISU_TH + 4 * i);
+
+	/*
+	 * The queue-buffer geometry.  ram_id 2 is the IN buffer, ram_id 0 the
+	 * OUT buffer, ram_id 4 the full four-word per-queue configuration.
+	 * The vendor writes one RAM at a time, in this order.
+	 */
+	for (q = 0; q < ZX279133_RED_QUEUE_COUNT; q++) {
+		u32 word;
+
+		if (q <= ZX279133_RED_VENDOR_UNI_LAST)
+			word = ZX279133_RED_VENDOR_IN_UNI;
+		else if (q <= ZX279133_RED_VENDOR_PORT_LAST)
+			word = ZX279133_RED_VENDOR_IN_PORT;
+		else if (q == ZX279133_RED_VENDOR_ONE_QUEUE)
+			word = ZX279133_RED_VENDOR_IN_ONE;
+		else
+			word = 0;
+
+		zx279133_red_ind_write(eth, 2, q, &word, 1);
+	}
+
+	for (q = 0; q < ZX279133_RED_QUEUE_COUNT; q++) {
+		u32 word;
+
+		if (q <= ZX279133_RED_VENDOR_UNI_LAST)
+			word = ZX279133_RED_VENDOR_OUT_UNI;
+		else if (q <= ZX279133_RED_VENDOR_PORT_LAST)
+			word = ZX279133_RED_VENDOR_OUT_PORT;
+		else if (q >= ZX279133_RED_VENDOR_OUT_ONE_FIRST &&
+			 q <= ZX279133_RED_VENDOR_OUT_ONE_LAST)
+			word = ZX279133_RED_VENDOR_OUT_ONE;
+		else
+			word = 0;
+
+		zx279133_red_ind_write(eth, 0, q, &word, 1);
+	}
+
+	for (q = 0; q < ZX279133_RED_QUEUE_COUNT; q++)
+		zx279133_red_ind_write(eth, 4, q, cfg, 4);
+}
+
+/*
+ * The register image of the RED, the IDM and the CPU port's MAC, printed once
+ * at bring-up.
+ *
+ * The reason is the bench, not the driver: the smart plug that feeds this
+ * board cuts its power every few minutes, and a trial kernel lives in RAM, so
+ * most boots are over before a shell exists.  Anything that has to be asked
+ * for over the serial console is therefore measured on a random sample of the
+ * boots at best.  Printing the image from the driver puts it in the console
+ * log of *every* boot, and the console log is on the PC, so it survives the
+ * power cut.
+ *
+ * The values to compare against are the vendor board's, in
+ * staging/ctl/vendor-serial-mods/tm-red.txt (the RED block) and
+ * nppu-idm.txt (the IDM block).
+ */
+static void zx279133_diag_dump(struct zx279133_eth *eth)
+{
+	static const struct {
+		u16 offset;
+		const char *name;
+	} regs[] = {
+		{ ZX279133_RED_CFG,			"RED_CFG" },
+		{ ZX279133_RED_IN_SHARE_MAX,		"RED_IN_SHARE_MAX" },
+		{ ZX279133_RED_ALL_SHARE_MAX,		"RED_ALL_SHARE_MAX" },
+		{ ZX279133_RED_UP_IN_SHARE_MAX,		"RED_UP_IN_SHARE_MAX" },
+		{ ZX279133_RED_DOWN_IN_SHARE_MAX,	"RED_DOWN_IN_SHARE_MAX" },
+		{ ZX279133_RED_ALL_OUT_SHARE_MAX,	"RED_ALL_OUT_SHARE_MAX" },
+		{ ZX279133_RED_DOWN_OUT_MAX,		"RED_DOWN_OUT_MAX" },
+		{ ZX279133_RED_UP_OUT_MAX,		"RED_UP_OUT_MAX" },
+		{ ZX279133_RED_DESC_WATERMARK,		"RED_DESC_WATERMARK" },
+		{ ZX279133_RED_IDM_DESC_WATERMARK,	"RED_IDM_DESC_WATERMARK" },
+		{ ZX279133_RED_IDM_IN_SHARE_MAX,		"RED_IDM_IN_SHARE_MAX" },
+		{ ZX279133_RED_WOE_IN_SHARE_MAX,		"RED_WOE_IN_SHARE_MAX" },
+		{ ZX279133_RED_WOE_OUT_SHARE_MAX,	"RED_WOE_OUT_SHARE_MAX" },
+		{ ZX279133_RED_NP1_Q0_TH,		"RED_NP1_Q0_TH" },
+		{ ZX279133_RED_NP1_Q1_TH,		"RED_NP1_Q1_TH" },
+		{ ZX279133_RED_NP1_DESC_WM,		"RED_NP1_DESC_WM" },
+		{ ZX279133_RED_NP1_ISU_TH,		"RED_NP1_ISU_TH0" },
+		{ ZX279133_RED_NP1_ISU_TH + 4,		"RED_NP1_ISU_TH1" },
+		{ ZX279133_RED_NP1_ISU_TH + 8,		"RED_NP1_ISU_TH2" },
+		{ ZX279133_RED_NP1_ISU_TH + 12,		"RED_NP1_ISU_TH3" },
+		{ ZX279133_RED_NP1_ISU_TH + 16,		"RED_NP1_ISU_TH4" },
+		{ ZX279133_RED_NP1_ISU_TH + 20,		"RED_NP1_ISU_TH5" },
+		{ ZX279133_RED_NP1_ISU_TH + 24,		"RED_NP1_ISU_TH6" },
+		{ ZX279133_RED_CPU133_CFG,		"RED_CPU133_CFG" },
+		{ ZX279133_GREG_RED_BUFFER_USABLE,	"RED_BUFFER_USABLE" },
+	};
+	static const u32 idm_offsets[] = {
+		0x0000, 0x0008, 0x000c, 0x0010, 0x0070, 0x0074,
+		0x007c, 0x0090, 0x00c0, 0x0104, 0x0108, 0x010c,
+		0x0110, 0x0118, 0x011c, 0x0408, 0x0418,
+		/* The three RX-ring words, last: they are the ones the debugfs
+		 * "reg" command has never managed to print.
+		 */
+		0x0180, 0x018c, 0x0190,
+	};
+	static const u32 queues[] = {
+		0x000, 0x13f, 0x140, 0x160, 0x17f, 0x180, 0x187, 0x190,
+	};
+	static const u8 no_mac[ETH_ALEN];
+	u32 data[4];
+	unsigned int i;
+
+	dev_info(eth->dev, "DIAG mac %pM\n",
+		 eth->ndev ? eth->ndev->dev_addr : no_mac);
+	if (eth->lan_ndev)
+		dev_info(eth->dev, "DIAG lan mac %pM\n", eth->lan_ndev->dev_addr);
+
+	for (i = 0; i < ARRAY_SIZE(regs); i++)
+		dev_info(eth->dev, "DIAG nppt 0x%05x %-22s = 0x%08x\n",
+			 regs[i].offset, regs[i].name,
+			 readl(eth->base + regs[i].offset));
+
+	for (i = 0; i < ARRAY_SIZE(idm_offsets); i++)
+		dev_info(eth->dev, "DIAG idm 0x%05x              = 0x%08x\n",
+			 idm_offsets[i],
+			 readl(eth->base + ZX279133_IDM_BASE + idm_offsets[i]));
+
+	for (i = 0; i < ARRAY_SIZE(queues); i++) {
+		zx279133_red_ind_read(eth, 2, queues[i], data, 1);
+		dev_info(eth->dev, "DIAG red ram2 q%03x           = 0x%08x\n",
+			 queues[i], data[0]);
+		zx279133_red_ind_read(eth, 0, queues[i], data, 1);
+		dev_info(eth->dev, "DIAG red ram0 q%03x           = 0x%08x\n",
+			 queues[i], data[0]);
+	}
+
+	/* The four internal-PHY MACs and their SOPC publish words. */
+	for (i = 0; i < ZX279133_SMAC_COUNT; i++) {
+		u32 base = ZX279133_SMAC_BASE(i);
+
+		dev_info(eth->dev, "DIAG smac%u an_ctrl  = 0x%08x an_ctrl2 = 0x%08x\n",
+			 i, readl(eth->base + base + ZX279133_SMAC_AN_CTRL),
+			 readl(eth->base + base + ZX279133_SMAC_AN_CTRL2));
+		dev_info(eth->dev, "DIAG smac%u pkt_filt = 0x%08x speed    = 0x%08x\n",
+			 i, readl(eth->base + base + ZX279133_SMAC_PKT_FILTER),
+			 readl(eth->base + base + ZX279133_SMAC_SPEED));
+		dev_info(eth->dev, "DIAG smac%u port_ctl = 0x%08x\n", i,
+			 readl(eth->base + base + ZX279133_SMAC_PORT_CTRL));
+		dev_info(eth->dev, "DIAG sopc%u ready = 0x%08x send = 0x%08x\n", i,
+			 readl(eth->base + ZX279133_SMAC_SOPC_READY_BASE + 4 * i),
+			 readl(eth->base + ZX279133_SMAC_SOPC_SEND_BASE + 4 * i));
+	}
+
+	/* The CPU port's MAC. */
+	dev_info(eth->dev, "DIAG xmac0 tx_ctrl = 0x%08x rx_ctrl = 0x%08x\n",
+		 readl(eth->base + ZX279133_XMAC0_BASE + ZX279133_XMAC_TX_CTRL),
+		 readl(eth->base + ZX279133_XMAC0_BASE + ZX279133_XMAC_RX_CTRL));
+	dev_info(eth->dev, "DIAG xmac0 frame   = 0x%08x mode    = 0x%08x misc   = 0x%08x\n",
+		 readl(eth->base + ZX279133_XMAC0_BASE + ZX279133_XMAC_FRAME_CFG),
+		 readl(eth->base + ZX279133_XMAC0_BASE + ZX279133_XMAC_MODE_CFG),
+		 readl(eth->base + ZX279133_XMAC0_BASE + ZX279133_XMAC_MISC_CFG));
+}
+
 int zx279133_hardware_prepare(struct zx279133_eth *eth)
 {
 	int ret;
@@ -170,6 +431,7 @@ int zx279133_hardware_prepare(struct zx279133_eth *eth)
 	if (ret)
 		goto err_clk_disable;
 	zx279133_bmu_threshold_fixup(eth);
+	zx279133_red_vendor_fixup(eth);
 	ret = zx279133_np_prepare(eth);
 	if (ret)
 		goto err_tm_restore;
@@ -709,6 +971,9 @@ static int zx279133_eth_probe(struct platform_device *pdev)
 				     "failed to populate LAN child devices\n");
 
 	dev_info(dev, "WAN netdev and LAN child devices registered\n");
+
+	/* The register image, printed once, after every driver has had its say. */
+	zx279133_diag_dump(eth);
 
 	return 0;
 }

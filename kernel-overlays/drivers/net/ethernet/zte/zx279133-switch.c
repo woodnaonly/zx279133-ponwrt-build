@@ -703,6 +703,22 @@ static void zx279133_switch_smac_init(struct zx279133_switch *priv)
 					    value | ZX279133_SMAC_PORT_CTRL_BIT);
 
 		/*
+		 * The vendor's nppt_smac_init() pulses this MAC's bit in the
+		 * word at NPPT + 0x343f0 before it publishes the MAC: it sets
+		 * the bit and then clears it again.  The word's steady value on
+		 * the vendor's board is 0, so the pulse is the whole point of
+		 * the two writes - it is the SOPC side's own reset for this
+		 * MAC, in the same way the shared soft-reset word above is the
+		 * SMAC side's.
+		 */
+		value = zx279133_switch_nppt_read(priv,
+						  ZX279133_SMAC_SOPC_PULSE);
+		zx279133_switch_nppt_write(priv, ZX279133_SMAC_SOPC_PULSE,
+					    value | (1u << mac));
+		zx279133_switch_nppt_write(priv, ZX279133_SMAC_SOPC_PULSE,
+					    value);
+
+		/*
 		 * Publish it.  The vendor waits for the ready word, and gives
 		 * up after ten tries and publishes anyway; so does this.
 		 */

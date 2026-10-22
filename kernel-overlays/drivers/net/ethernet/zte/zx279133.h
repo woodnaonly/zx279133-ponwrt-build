@@ -223,7 +223,71 @@
 #define ZX279133_RED_IND_RAM_ID_MASK	GENMASK(24, 22)
 #define ZX279133_RED_AUTO_GATE_REG	0x00b8
 #define ZX279133_RED_AUTO_GATE_BIT	BIT(10)
+#define ZX279133_RED_IND_RW_BIT		BIT(27)
 #define ZX279133_RED_QUEUE_COUNT	401
+
+/*
+ * The RED's configuration as this board's own vendor firmware has it.
+ *
+ * The tree's zx279133-tm.c programs the RED for the SR1010: RED_CFG 0x7e, the
+ * SR1010 share-max numbers and the SR1010 queue-buffer geometry.  This board's
+ * vendor module (np_133.ko) programs something else, and the vendor's board
+ * reads back the values below - staging/ctl/vendor-serial-mods/tm-red.txt, where
+ * the first column is the word index inside the RED block and the NPPT byte
+ * offset is 0x20000 + 4 * word.
+ *
+ * Two of the differences matter for the receive path:
+ *
+ *   - RED_CFG bit 7 is all_active_mode.  The tree writes 0x7e, which sets
+ *     dn/up_share_mode and leaves all_active_mode clear; the vendor writes
+ *     0x9e, the other way round.
+ *   - the queue-buffer geometry.  The tree gives every queue the SR1010's
+ *     numbers; the vendor gives the PON/UNI queues (0x000-0x13f) an IN buffer
+ *     of 0x600 and an OUT buffer of 0x1000, and the port blocks (0x140-0x17f,
+ *     which is where smac0-3 and xmac0 - the CPU port - live) an IN buffer of
+ *     0x300 and an OUT buffer of 0x800.
+ *
+ * The share-max and watermark registers are the ones the vendor's board reads
+ * back; several of them carry bits the vendor never writes (they are the
+ * hardware's reset default), so the whole word is written.
+ */
+#define ZX279133_RED_ALL_SHARE_MAX	0x20050
+#define ZX279133_RED_VENDOR_CFG		0x0000009e
+#define ZX279133_RED_VENDOR_IN_SHARE_MAX	0x00000c00
+#define ZX279133_RED_VENDOR_ALL_SHARE_MAX	0x00002600
+#define ZX279133_RED_VENDOR_UP_IN_SHARE_MAX	0x10000900
+#define ZX279133_RED_VENDOR_DOWN_IN_SHARE_MAX	0x04000500
+#define ZX279133_RED_VENDOR_ALL_OUT_SHARE_MAX	0x00003000
+#define ZX279133_RED_VENDOR_DOWN_OUT_MAX	0x06001000
+#define ZX279133_RED_VENDOR_UP_OUT_MAX	0x14002000
+#define ZX279133_RED_VENDOR_DESC_WATERMARK	0x3f9f3e9f
+#define ZX279133_RED_VENDOR_IDM_DESC_WATERMARK	0x08bf07ff
+#define ZX279133_RED_VENDOR_IDM_IN_SHARE_MAX	0x00000100
+#define ZX279133_RED_VENDOR_WOE_IN_SHARE_MAX	0x01900000
+#define ZX279133_RED_VENDOR_WOE_OUT_SHARE_MAX	0x025807ff
+#define ZX279133_RED_VENDOR_NP1_Q0_TH	0x00100020
+#define ZX279133_RED_VENDOR_NP1_Q1_TH	0x00100020
+#define ZX279133_RED_VENDOR_NP1_DESC_WM	0x00000010
+#define ZX279133_RED_VENDOR_NP1_ISU_TH	0x0005000f
+
+/*
+ * The vendor's queue-buffer words, in the form the indirect port takes:
+ * the IN buffer RAM (ram_id 2) is "guart | (max << 14)" and the OUT buffer RAM
+ * (ram_id 0) is "guart | (max << 12)".
+ */
+#define ZX279133_RED_VENDOR_IN_UNI	0x01800020	/* 0x20 | (0x600 << 14) */
+#define ZX279133_RED_VENDOR_IN_PORT	0x00c00020	/* 0x20 | (0x300 << 14) */
+#define ZX279133_RED_VENDOR_IN_ONE	0x00400020	/* 0x20 | (0x100 << 14) */
+#define ZX279133_RED_VENDOR_OUT_UNI	0x10000040	/* 0x40 | (0x1000 << 12) */
+#define ZX279133_RED_VENDOR_OUT_PORT	0x00800040	/* 0x40 | (0x800 << 12) */
+#define ZX279133_RED_VENDOR_OUT_ONE	0x00400020	/* 0x20 | (0x400 << 12) */
+
+/* The queue ranges the vendor programs. */
+#define ZX279133_RED_VENDOR_UNI_LAST	0x13f
+#define ZX279133_RED_VENDOR_PORT_LAST	0x17f
+#define ZX279133_RED_VENDOR_ONE_QUEUE	0x180
+#define ZX279133_RED_VENDOR_OUT_ONE_FIRST 0x187
+#define ZX279133_RED_VENDOR_OUT_ONE_LAST 0x18c
 
 #define ZX279133_SSCH_CFG		0x2c000
 #define ZX279133_SSCH_AGING_TIME		0x2c004
@@ -612,6 +676,13 @@ static inline u32 zx279133_idm_tx_done_reg(unsigned int queue)
 #define ZX279133_SMAC_UNI_MODE(mac)	(4 * ((mac) + 5))
 #define ZX279133_SMAC_SOPC_READY_BASE	0x34294
 #define ZX279133_SMAC_SOPC_SEND_BASE	0x342b0
+/*
+ * The vendor's nppt_smac_init() pulses this MAC's bit in the word at
+ * NPPT + 0x343f0 (it sets the bit and then clears it again) before it
+ * publishes the MAC.  The word's steady value on the vendor's board is 0
+ * (staging/ctl/vendor-serial-mods/tm-sopc.txt, word 0xfc).
+ */
+#define ZX279133_SMAC_SOPC_PULSE	0x343f0
 #define ZX279133_SMAC_AN_CTRL_VALUE	0x00fa2203
 #define ZX279133_SMAC_AN_CTRL_RESET_VALUE	0x00ba2203
 #define ZX279133_SMAC_AN_CTRL2_VALUE	0x3fff

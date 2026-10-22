@@ -379,13 +379,30 @@
 	 * lane; TX-only again = the MAC bring-up is the second thing that has to
 	 * inherit.
 	 */
-	/* No MAC source yet: SR1010 reads it from an nvmem-layout over its own
-	 * "tags" partition, whose zte,sr1010-tags parser does not describe this
-	 * unit's "parameter tags" layout. With neither nvmem-cells nor a literal
-	 * local-mac-address the driver falls back to a generated random MAC, which
-	 * is usable for the trial - hardcoding D0:45:8D:84:08:FC would only be
-	 * right for this one board.
+	/*
+	 * The board's MAC address.
+	 *
+	 * SR1010 reads its MAC from an nvmem-layout over its own "tags"
+	 * partition, whose zte,sr1010-tags parser does not describe this unit's
+	 * "parameter tags" layout, so there is no nvmem-cells to point at here.
+	 * Without a MAC source the driver falls back to a generated random MAC,
+	 * which is usable for a lab image but not for anything else: the MAC is
+	 * what the 9132's SPA (its MAC table) is programmed with
+	 * (zx279133_program_spa_cpu_mac() writes the netdev's address into the
+	 * SPA's ONU slots) and what the XMAC0 in front of the CPU port
+	 * compares an incoming frame's destination against.  A random address
+	 * therefore makes every frame the outside world sends to this board
+	 * unroutable, which is exactly what the bench saw: the PC's frames
+	 * reached the 9132 and were dropped there, and the RED's counters moved
+	 * while no netdev ever counted a byte.
+	 *
+	 * 3e:8e:98:91:64:2a is the address this board answers on - it is what
+	 * the vendor firmware puts on the wire, and the PC's ARP cache holds it
+	 * for 192.168.9.1.  It is a per-device address, so a build for another
+	 * unit has to have its own; the production answer is to parse the
+	 * vendor's "parameter tags" partition, which is not done yet.
 	 */
+	local-mac-address = [3e 8e 98 91 64 2a];
 	status = "okay";
 
 	/*
