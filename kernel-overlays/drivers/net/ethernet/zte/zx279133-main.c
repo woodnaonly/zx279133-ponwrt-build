@@ -215,6 +215,27 @@ static void zx279133_red_ind_read(struct zx279133_eth *eth, u32 ram_id,
 }
 
 /*
+ * The RED's queue RAMs, for the console.
+ *
+ * The RAMs are reached through the indirect port, so the plain register
+ * console cannot touch them, and they are where the RED's per-queue
+ * geometry lives - the one thing that decides how much room a queue has and
+ * therefore what the RED hands to the queue manager.  These two wrappers are
+ * what the debugfs "redq" commands use.
+ */
+void zx279133_red_ram_write(struct zx279133_eth *eth, u32 ram_id, u32 addr,
+			    const u32 *data, unsigned int count)
+{
+	zx279133_red_ind_write(eth, ram_id, addr, data, count);
+}
+
+void zx279133_red_ram_read(struct zx279133_eth *eth, u32 ram_id, u32 addr,
+			   u32 *data, unsigned int count)
+{
+	zx279133_red_ind_read(eth, ram_id, addr, data, count);
+}
+
+/*
  * The RED, put the way this board's vendor firmware has it.
  *
  * The tree's zx279133_tm_prepare() programs the RED for the SR1010 and the

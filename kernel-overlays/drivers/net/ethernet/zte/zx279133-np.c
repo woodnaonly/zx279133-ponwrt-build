@@ -1730,6 +1730,66 @@ static ssize_t zx279133_9132_write(struct file *file, const char __user *ubuf,
 	}
 
 	/*
+	 * The RED's queue RAMs.
+	 *
+	 * The RED reaches its queues through an indirect port, so the plain
+	 * register console cannot touch them - and they are where the RED's
+	 * per-queue geometry lives, which is what decides how much room a
+	 * queue has and therefore what the RED hands to the queue manager.
+	 * These commands write a value into every queue of one RAM, so that a
+	 * geometry can be changed and the effect watched without a new
+	 * kernel.
+	 *
+	 *	"redq2 <value>"		the IN buffer queue RAM (ram 2)
+	 *	"redq0 <value>"		the OUT buffer queue RAM (ram 0)
+	 *	"redq4 <w0> <w1> <w2> <w3>"	the per-queue config (ram 4)
+	 *	"redqr <ram> <addr> <count>"	read a RAM back
+	 */
+	if (!strcmp(tok, "redq2") || !strcmp(tok, "redq0") ||
+	    !strcmp(tok, "redq4") || !strcmp(tok, "redqr")) {
+		u32 ram_id, addr = 0, count, data[4] = { 0, 0, 0, 0 };
+		unsigned int i, q;
+		bool is_read = tok[4] == 'r';
+
+		tok = zx279133_9132_next_token(&p);
+		if (!tok || kstrtou32(tok, 0, &ram_id))
+			return -EINVAL;
+		if (ram_id > 4)
+			return -EINVAL;
+
+		if (is_read) {
+			tok = zx279133_9132_next_token(&p);
+			if (!tok || kstrtou32(tok, 0, &addr))
+				return -EINVAL;
+			tok = zx279133_9132_next_token(&p);
+			if (!tok || kstrtou32(tok, 0, &count))
+				return -EINVAL;
+			if (!count || count > 4)
+				return -EINVAL;
+			zx279133_red_ram_read(eth, ram_id, addr, data, count);
+			for (i = 0; i < count; i++)
+				pr_info("the RED's queue ram %u at queue %u = 0x%08x\n",
+					ram_id, addr + i, data[i]);
+			return count;
+		}
+
+		count = (ram_id == 4) ? 4 : 1;
+		for (i = 0; i < count; i++) {
+			tok = zx279133_9132_next_token(&p);
+			if (!tok || kstrtou32(tok, 0, &data[i]))
+				return -EINVAL;
+		}
+
+		for (q = 0; q < ZX279133_RED_QUEUE_COUNT; q++)
+			zx279133_red_ram_write(eth, ram_id, q, data, count);
+
+		zx279133_red_ram_read(eth, ram_id, 0, data, count);
+		pr_info("the RED's queue ram %u has been written for %u queues, queue 0 reads 0x%08x\n",
+			ram_id, ZX279133_RED_QUEUE_COUNT, data[0]);
+		return count;
+	}
+
+	/*
 	 * One entry of one ERAM table, by the table's id rather than by its
 	 * base block, so that a table can be read and written the way the
 	 * vendor's own code does it - the entry is merged into the 128-bit

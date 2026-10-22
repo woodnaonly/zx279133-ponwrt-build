@@ -1128,6 +1128,10 @@ zx279133_stats_rx_length_error(struct zx279133_eth *eth, struct net_device *ndev
 
 int zx279133_tm_prepare(struct zx279133_eth *eth);
 void zx279133_tm_restore(struct zx279133_eth *eth);
+void zx279133_red_ram_write(struct zx279133_eth *eth, u32 ram_id, u32 addr,
+			    const u32 *data, unsigned int count);
+void zx279133_red_ram_read(struct zx279133_eth *eth, u32 ram_id, u32 addr,
+			   u32 *data, unsigned int count);
 int zx279133_np_prepare(struct zx279133_eth *eth);
 void zx279133_np_restore(struct zx279133_eth *eth);
 void zx279133_route_set(struct zx279133_eth *eth, bool enabled);
