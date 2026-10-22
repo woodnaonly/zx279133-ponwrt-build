@@ -543,6 +543,29 @@ jobs:
           [ "$bad" = 0 ] || exit 1
           echo "every header the 9132 driver includes is present in the tree"
 
+      # Run 124's lesson: a macro can exist and still be invisible.
+      #
+      # Run 124 spent 78 minutes to fail with nine lines of
+      # "ZX279133_SMAC_COUNT undeclared" in zx279133-switch.c.  The macro was
+      # there, in zx279133.h, in the tree - and switch.c never included that
+      # header, so it could not see it.  The five other driver files do
+      # include it, so they compiled, and the gate above (which only checks
+      # that included headers exist) passed.  Nothing in the build noticed
+      # until the compiler did, one hour in.
+      #
+      # So the check is about reachability, not existence: follow each
+      # driver's #include graph, collect the ZX279133_* macros those headers
+      # define, and report the ones a source uses without being able to see
+      # them.  It runs against the tree with the overlay already copied in,
+      # because that is where the two sets have to meet.
+      - name: "Gate: every macro the 9132 driver uses is reachable"
+        if: steps.pick.outputs.run == 'true'
+        run: |
+          set -e
+          KT=linux-mainline-zte-zxslc-sr1010/linux-$KVER
+          python3 tools/macrocheck.py "$KT" || {
+            echo "::error::a driver file uses a macro it cannot see - see above"; exit 1; }
+
       - name: Cache dl/
         if: steps.pick.outputs.run == 'true' && inputs.clean_cache != 'true'
         uses: actions/cache@v4

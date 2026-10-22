@@ -79,6 +79,7 @@
 #include <net/dsa_zx279133_rtl8372n.h>
 #include <net/switchdev.h>
 
+#include "zx279133.h"
 #include "zx279133-lan.h"
 
 /* XMAC0, the LAN window.  Same offsets the RTL8372N driver uses. */
@@ -628,9 +629,13 @@ static void zx279133_switch_xpcs_restore(struct zx279133_switch *priv)
  * are read, not written, here, and only to show what they are.
  *
  * The reset the vendor pulses in between - a bit of the shared soft-reset
- * word at NPPT + 0x2c0004 - is left out on purpose.  On this board it makes
- * no difference to any of these registers, and that word is shared with the
- * XMAC and the PCS, which are not ours to reset from this path.
+ * word at NPPT + 0x2c0004 - is done here too, in the vendor's order:
+ * an_ctrl goes back to 0x00ba2203, the MAC's bit in that word is cleared for
+ * a moment and set again, and only then does an_ctrl become 0x00fa2203.
+ * The pulse is what clears the MAC's own receive state; without it the block
+ * keeps whatever the power-on reset left in it, and a frame that arrives at
+ * such a MAC is handed on without a length - which is what the switch's
+ * "pktlen0 drop" counter counts.
  *
  * Why this matters: an SMAC is the MAC in front of one of the four internal
  * PHYs, so it is on the path a frame takes out of a LAN port.  With the four
@@ -654,6 +659,38 @@ static void zx279133_switch_smac_init(struct zx279133_switch *priv)
 						  ZX279133_SMAC_UNI_MODE(mac));
 		zx279133_switch_nppt_write(priv, ZX279133_SMAC_UNI_MODE(mac),
 					    value & ~ZX279133_SMAC_UNI_MODE_MASK);
+
+		/*
+		 * The vendor's nppt_smac_init() puts an_ctrl back to
+		 * 0x00ba2203, pulses this MAC's bit in the shared
+		 * soft-reset word at NPPT + 0x2c0004, and only then writes
+		 * the 0x00fa2203 that says "running".
+		 *
+		 * The pulse is the part that matters.  It clears the MAC's
+		 * own receive state - the buffer pointers, the descriptor
+		 * watermarks, the length bookkeeping - and a MAC that was
+		 * never reset keeps whatever the power-on reset left in it.
+		 * A frame that arrives at such a MAC is handed on without
+		 * a length, and the switch drops it: that is what the RED's
+		 * "pktlen0 drop" counter counts, and it is why the
+		 * ingress counter used to move while nothing ever came
+		 * out.
+		 *
+		 * The vendor's smac_reset() reads the word, writes it with
+		 * this MAC's bit cleared, and writes it back with the bit
+		 * set; it touches no other bit, so the XMAC and the PCS
+		 * are not reset from here.
+		 */
+		zx279133_switch_nppt_write(priv, base + ZX279133_SMAC_AN_CTRL,
+					    ZX279133_SMAC_AN_CTRL_RESET_VALUE);
+
+		value = zx279133_switch_nppt_read(priv,
+						  ZX279133_SMAC_RESET_WORD);
+		zx279133_switch_nppt_write(priv, ZX279133_SMAC_RESET_WORD,
+					    value & ~(1u << mac));
+		udelay(100);
+		zx279133_switch_nppt_write(priv, ZX279133_SMAC_RESET_WORD,
+					    value | (1u << mac));
 
 		zx279133_switch_nppt_write(priv, base + ZX279133_SMAC_AN_CTRL,
 					    ZX279133_SMAC_AN_CTRL_VALUE);

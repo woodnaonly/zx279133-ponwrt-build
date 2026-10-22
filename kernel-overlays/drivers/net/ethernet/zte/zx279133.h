@@ -572,7 +572,14 @@ static inline u32 zx279133_idm_tx_done_reg(unsigned int queue)
 #define ZX279133_SMAC_SOPC_READY_BASE	0x34294
 #define ZX279133_SMAC_SOPC_SEND_BASE	0x342b0
 #define ZX279133_SMAC_AN_CTRL_VALUE	0x00fa2203
+#define ZX279133_SMAC_AN_CTRL_RESET_VALUE	0x00ba2203
 #define ZX279133_SMAC_AN_CTRL2_VALUE	0x3fff
+/*
+ * The shared soft-reset word at NPPT + 0x2c0004 carries one bit per block;
+ * the vendor's smac_reset() pulses bit(mac) to reset that MAC and nothing
+ * else, so the XMAC and the PCS are not disturbed by it.
+ */
+#define ZX279133_SMAC_RESET_WORD	0x2c004
 #define ZX279133_SMAC_PKT_FILTER_VALUE	0x80000000
 #define ZX279133_SMAC_SPEED_VALUE	0x00012000
 #define ZX279133_SMAC_PORT_CTRL_BIT	0x200
