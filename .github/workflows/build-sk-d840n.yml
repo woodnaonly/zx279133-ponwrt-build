@@ -37,6 +37,13 @@ on:
       # a fix to them - the DHCP server that never started, for one -
       # could be pushed and would never reach a board.
       - trial-files/**
+      # The gate and the notes are part of the build: tools/macrocheck.py is
+      # a build step (it fails the build when a driver cannot see a macro it
+      # uses), and docs/ hold the measurements the gate is checked against.
+      # They were missing from this list, so run 126 - a fix to the gate
+      # itself - was pushed and never started a build.
+      - tools/**
+      - docs/**
 
 env:
   IW_URL: https://github.com/cnjn/ImmortalWrt

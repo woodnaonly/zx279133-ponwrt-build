@@ -108,8 +108,22 @@
 			no-map;
 		};
 
-		bmu_reserved: buffer@9f100000 {
-			reg = <0x0 0x9f100000 0x0 0x0f00000>;
+		/*
+		 * The BMU's pool: the BPPE tables, the normal buffers, the jumbo
+		 * buffers and the descriptor area, in that order.  Its size has to
+		 * cover ZX279133_BMU_REQUIRED_SIZE (0x101e000), which grew when
+		 * the buffer size went to the vendor's 0x900 bytes.
+		 *
+		 * It used to sit at 0x9f100000, in the top 15 MiB, and it does
+		 * not fit there any more.  The gap between the ramoops area and
+		 * the IDM's pool - 0x9c200000..0x9d700000 - is the only space
+		 * left that the marker test says U-Boot does not own (0x9c000000
+		 * and 0x9d000000 both survived the reboot) and that the trial
+		 * kernel's own text never reaches (trial-kexec.sh caps the
+		 * placement below 0x9c000000).
+		 */
+		bmu_reserved: buffer@9c200000 {
+			reg = <0x0 0x9c200000 0x0 0x1500000>;
 			no-map;
 		};
 

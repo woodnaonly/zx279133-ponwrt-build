@@ -135,6 +135,25 @@ static void zx279133_idm_cci_restore(struct zx279133_eth *eth)
 	regmap_write(eth->idm_cci, 4, eth->idm_cci_saved[1]);
 }
 
+/*
+ * The BMU's BPPI threshold, put back the way the vendor has it.
+ *
+ * The tree's zx279133_bmu_prepare() writes 0x0104c040 into the register at
+ * NPPT + 0x3c004 and then, after it has enabled the BMU, writes 0x01058080
+ * over it.  The vendor's np_133.ko writes 0x0104c040 and leaves it there,
+ * and that is what the vendor's board reads back (staging/ctl/
+ * vendor-serial-mods/tm-bmu.txt, word 1).
+ *
+ * The register holds the buffer pool's low and high thresholds and the
+ * largest burst, so the two values are not the same setting.  The value the
+ * tree writes is a literal in the tree's zx279133-tm.c, which the overlay
+ * cannot reach, so it is put back here.
+ */
+static void zx279133_bmu_threshold_fixup(struct zx279133_eth *eth)
+{
+	writel(ZX279133_BMU_BPPI_THRESH_VALUE, eth->base + ZX279133_BMU_BPPI_THRESH);
+}
+
 int zx279133_hardware_prepare(struct zx279133_eth *eth)
 {
 	int ret;
@@ -150,6 +169,7 @@ int zx279133_hardware_prepare(struct zx279133_eth *eth)
 	ret = zx279133_tm_prepare(eth);
 	if (ret)
 		goto err_clk_disable;
+	zx279133_bmu_threshold_fixup(eth);
 	ret = zx279133_np_prepare(eth);
 	if (ret)
 		goto err_tm_restore;

@@ -46,13 +46,42 @@
 #define zx279133_tx_word4_bit23		0
 #define zx279133_tx_hw_csum		1
 
-#define ZX279133_BMU_REQUIRED_SIZE	0x00ecc000
+/*
+ * The BMU geometry, as the vendor's own board runs it.
+ *
+ * The buffer size in the global register at NPPT + 0x68 (the size of one
+ * normal buffer in the low half, one jumbo buffer in the high half) is not a
+ * free choice: the switch core and the SMAC lay a buffer out with it, and the
+ * mainline driver used to disagree with the vendor on it - 0x840 against
+ * 0x900 bytes - while writing that register twice, with two different
+ * values.  The vendor's value is 0x3f000900: a 0x900 byte normal buffer and a
+ * 0x3f00 byte jumbo one.
+ *
+ * The pool count stays at the mainline's 0x1800 normal buffers, because the
+ * count is a software decision (how many buffers the pool holds) while the
+ * size is a property of the hardware, and 0x1800 * 0x900 still fits in the
+ * reserved area.  What matters is that the two agree with the register.
+ *
+ * Measured on the vendor board on 2026-10-22 (staging/ctl/vendor-serial-mods):
+ *	NPPT + 0x68    = 0x3f000900	the buffer size
+ *	NPPT + 0x6c    = 0x00000801	the usable size
+ *	NPPT + 0x20078 = 0x00000801	the RED's usable size, same constant
+ */
+#define ZX279133_BMU_REQUIRED_SIZE	0x0101e000
 #define ZX279133_SE_HASH_REQUIRED_SIZE	0x01000000
 #define ZX279133_BMU_BPPE_SIZE		0x00020000
+/*
+ * The BMU's BPPI threshold.  The vendor's np_133.ko writes this value and
+ * leaves it there, and the vendor's board reads it back; the tree's
+ * zx279133_bmu_prepare() writes the same value and then overwrites it with
+ * 0x01058080 after it has enabled the BMU, so the fixup in
+ * zx279133_bmu_threshold_fixup() puts it back.
+ */
+#define ZX279133_BMU_BPPI_THRESH_VALUE	0x0104c040
 #define ZX279133_BMU_NORMAL_COUNT	0x00001800
-#define ZX279133_BMU_NORMAL_SIZE		0x00000840
+#define ZX279133_BMU_NORMAL_SIZE		0x00000900
 #define ZX279133_BMU_JUMBO_COUNT		0x00000020
-#define ZX279133_BMU_JUMBO_SIZE		0x00002600
+#define ZX279133_BMU_JUMBO_SIZE		0x00003f00
 #define ZX279133_BMU_DESC_SIZE		0x00200000
 #define ZX279133_BMU_JUMBO_BPPE_OFFSET	0x00010000
 
@@ -69,8 +98,14 @@
 #define ZX279133_GREG_BUFFER_SIZE	0x0068
 #define ZX279133_GREG_BUFFER_USABLE	0x006c
 #define ZX279133_GREG_RED_BUFFER_USABLE	0x20078
-#define ZX279133_GREG_BUFFER_SIZE_VALUE	0x27800940
-#define ZX279133_GREG_BUFFER_USABLE_VALUE 0x00000781
+#define ZX279133_GREG_BUFFER_SIZE_VALUE	0x3f000900
+/*
+ * The usable size.  The vendor's board reads 0x801 here and at the RED's
+ * copy of the same counter (NPPT + 0x20078); the mainline driver used
+ * 0x781 for both, which is a different number of usable buffers than the
+ * vendor's chip hands out.
+ */
+#define ZX279133_GREG_BUFFER_USABLE_VALUE 0x00000801
 #define ZX279133_GREG_SMAC_RUNT_MASK	BIT(18)
 #define ZX279133_GREG_SMAC6_RUNT_MASK	BIT(16)
 #define ZX279133_GREG_XMAC_RUNT_MASK	0x00000410
@@ -166,7 +201,13 @@
 #define ZX279133_RED_NP1_ISU_TH		0x20260
 #define ZX279133_RED_NP1_TH_MASK	GENMASK(13, 0)
 #define ZX279133_RED_NP1_DESC_MASK	GENMASK(15, 0)
-#define ZX279133_RED_NP1_TH_VALUE	272
+/*
+ * The NP1 queue threshold.  The vendor's board reads 0x00100020 at
+ * NPPT + 0x20010, so the threshold itself is 0x20; the mainline driver used
+ * 272 (0x110).  The vendor's np_133.ko never calls the function that writes
+ * this register, so 0x20 is what the hardware comes up with.
+ */
+#define ZX279133_RED_NP1_TH_VALUE	32
 #define ZX279133_RED_NP1_DESC_VALUE	0x100
 #define ZX279133_RED_NP1_ISU_VALUE	15
 
