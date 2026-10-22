@@ -1,9 +1,0 @@
-docs(9132): the bench was addressing the vendor firmware, and the RED drops every frame for a zero length
-
-The static ARP entry the bench installed with "arp -s" landed on the WLAN
-adapter, so the wired adapter kept its own dynamic entry, learned from the
-vendor firmware. Every unicast frame went to the vendor firmware and the
-trial kernel was never addressed. With the entry bound to the wired adapter
-(New-NetNeighbor -InterfaceIndex), the frames reach the RED - and the RED
-drops all of them for a zero length, which the board's own queue geometry is
-the first candidate for.
