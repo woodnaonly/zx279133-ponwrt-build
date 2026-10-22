@@ -33,6 +33,25 @@ import sys
 NAME = re.compile(r'\b(ZX279133_[A-Z0-9_]+)\b')
 # "#define NAME" or "#define NAME(...)" at the start of a line.
 DEFINE = re.compile(r'^\s*#\s*define\s+(ZX279133_[A-Z0-9_]+)', re.M)
+# An enum block, and the names its members carry.
+#
+# Run 126's lesson: a driver does not have to name its constants with
+# #define.  zx279133-netdev.c has seventy-odd statistics counters and
+# zx279133-offload.c has three more, and all of them are enum members:
+#
+#	enum {
+#		ZX279133_STAT_RX_PACKETS,
+#		...
+#		ZX279133_STAT_COUNT,
+#	};
+#
+# A gate that only knows about #define calls every one of them undefined,
+# so it fails the build over a file that compiles perfectly well.  That is
+# what run 126 died of: seventy-one problems, all of them false, and the
+# build never reached the compiler.
+ENUM_BLOCK = re.compile(r'\benum\b[^{]*\{(.*?)\}', re.S)
+# A member of an enum block: a name, an optional "= value", and a comma.
+ENUM_MEMBER = re.compile(r'\b(ZX279133_[A-Z0-9_]+)\s*(?:=[^,}]*)?\s*(?:,|$)', re.M)
 # An #include, quoted or angled.
 INCLUDE = re.compile(r'^\s*#\s*include\s+([<"])([^>"]+)[>"]', re.M)
 
@@ -58,6 +77,20 @@ def strip_comments(text):
     return re.sub(r'//[^\n]*', ' ', text)
 
 
+def defines_in(text):
+    """The ZX279133_* names this text defines.
+
+    A driver names its constants either with #define or with an enum, and
+    both are definitions as far as the compiler is concerned.  Only the
+    first is visible to a search for "#define", which is how run 126 came
+    to fail the build over seventy-one names that were defined all along.
+    """
+    names = set(DEFINE.findall(text))
+    for block in ENUM_BLOCK.findall(text):
+        names.update(ENUM_MEMBER.findall(block))
+    return names
+
+
 class Tree:
     """The tree, with a header index and an #include resolver."""
 
@@ -78,7 +111,7 @@ class Tree:
                     path = os.path.join(dirpath, fn)
                     self.index.setdefault(fn, []).append(path)
                     here = 'driver' if path.startswith(self.driver_dir) else path
-                    for name in DEFINE.findall(self.text(path)):
+                    for name in defines_in(self.text(path)):
                         self.defines_in.setdefault(name, here)
 
     def text(self, path):
@@ -122,7 +155,7 @@ class Tree:
                 continue
             seen.add(cur)
             text = self.text(cur)
-            names.update(DEFINE.findall(text))
+            names.update(defines_in(text))
             for _q, name in INCLUDE.findall(text):
                 child = self.resolve(name, _q == '<', os.path.dirname(cur))
                 if child and child not in seen:
@@ -130,7 +163,7 @@ class Tree:
         return names
 
     def local_defines(self, path):
-        return set(DEFINE.findall(self.text(path)))
+        return defines_in(self.text(path))
 
 
 def main():

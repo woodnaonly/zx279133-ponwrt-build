@@ -565,13 +565,52 @@ jobs:
       # define, and report the ones a source uses without being able to see
       # them.  It runs against the tree with the overlay already copied in,
       # because that is where the two sets have to meet.
+      # The gate is the one thing in this pipeline that can say "no" to a
+      # build, so it has to be right itself.  Runs 124, 125 and 126 each
+      # died on it, in three different ways, and each of those ways was a
+      # bug in the gate rather than in the driver:
+      #
+      #   124: the gate did not exist yet.
+      #   125: its include walk recursed until Python gave up.
+      #   126: it called seventy-one enum members undefined, because it only
+      #         knew about #define, and failed a build over a driver that
+      #         compiles perfectly well.
+      #
+      # So the gate's own test runs first, on every build, and the test is
+      # in the repository - the fixture used to live outside it, which is
+      # why none of the three bugs was caught before it cost an hour.
+      - name: "Gate: the macro gate is right about macros and enum members"
+        if: steps.pick.outputs.run == 'true'
+        run: |
+          set -e
+          python3 tools/test-macrocheck.py
+
       - name: "Gate: every macro the 9132 driver uses is reachable"
         if: steps.pick.outputs.run == 'true'
         run: |
           set -e
           KT=linux-mainline-zte-zxslc-sr1010/linux-$KVER
-          python3 tools/macrocheck.py "$KT" || {
-            echo "::error::a driver file uses a macro it cannot see - see above"; exit 1; }
+          # The problem list goes into the annotation, not only into the job
+          # log: the Actions log endpoints answer 404 to an anonymous
+          # client, so a failure that can only be read there is a failure
+          # that costs the next hour to understand.
+          #
+          # The exit code is kept, not the pipeline's: the gate can fail
+          # either by finding a problem or by dying, and both have to stop
+          # the build.  A `| tee` would hide the second one.
+          set +e
+          python3 tools/macrocheck.py "$KT" > /tmp/macrocheck.txt 2>&1
+          rc=$?
+          set -e
+          cat /tmp/macrocheck.txt
+          if [ "$rc" -ne 0 ]; then
+            grep -E '^  ' /tmp/macrocheck.txt | head -20 | while read -r l; do
+              echo "::error::$l"
+            done
+            echo "::error::a driver file uses a macro it cannot see - see above"
+            exit 1
+          fi
+          echo "every ZX279133_* name a driver file uses is reachable for it"
 
       - name: Cache dl/
         if: steps.pick.outputs.run == 'true' && inputs.clean_cache != 'true'

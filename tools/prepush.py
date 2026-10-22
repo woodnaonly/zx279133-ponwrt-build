@@ -3,7 +3,7 @@
 
     python staging/ctl/prepush.py [repo dir]
 
-Four things a compiler would have caught, that a one hour build cycle should
+Five things a compiler would have caught, that a one hour build cycle should
 not have to:
 
   1. a #define line with two #defines on it.  The preprocessor reads the
@@ -13,16 +13,32 @@ not have to:
      mistake in another shape.
   3. an unbalanced brace, bracket or parenthesis.
   4. a ZX279133_* macro that is used but never defined.
+  5. the CI's own macro gate being wrong.  Runs 124, 125 and 126 each died
+     on that gate, in three different ways, and each of those ways was a
+     bug in the gate rather than in the driver - so the gate's own test
+     runs here too, and, when the tree snapshot is on this PC, the gate
+     itself is run against the overlay the way the CI runs it.
 
 Exit status 0 means clean.
 """
 import os
 import re
+import shutil
+import subprocess
 import sys
+import tempfile
 
 REPO = sys.argv[1] if len(sys.argv) > 1 else os.getcwd()
 ROOTS = ("kernel-overlays", "overlays", "scripts", "templates")
 SKIP_DIRS = {".git", "__pycache__", "node_modules"}
+# The snapshot of the upstream tree this PC keeps next to the repository.
+WORKSPACE = os.path.join(os.path.dirname(os.path.abspath(REPO)), "staging")
+TREE_SNAPSHOT = os.path.join(WORKSPACE, "upstream")
+# A second copy of the tree's files, with their paths flattened into the file
+# names ("include_linux_netdevice.h" for include/linux/netdevice.h).
+TREE_FLAT = os.path.join(WORKSPACE, "tree")
+FLAT_PREFIXES = (("include_", "include"), ("arch_", "arch"),
+                  ("drivers_", "drivers"), ("net_", "net"))
 
 
 def strip_c(src):
@@ -66,12 +82,101 @@ def c_files():
                     yield os.path.join(dirpath, n)
 
 
+def gate_selftest():
+    """The CI's macro gate has to be right before the build can trust it."""
+    t = os.path.join(REPO, "tools", "test-macrocheck.py")
+    if not os.path.exists(t):
+        return 0
+    r = subprocess.run([sys.executable, t], capture_output=True, text=True)
+    if r.returncode != 0:
+        print("prepush: the macro gate's own test failed")
+        print(r.stdout)
+        print(r.stderr)
+        return 1
+    print(r.stdout.strip())
+    return 0
+
+
+def flat_target(name):
+    """Where a flattened tree file belongs, or None if it is not one."""
+    for prefix, top in FLAT_PREFIXES:
+        if name.startswith(prefix):
+            rest = name[len(prefix):]
+            if "." not in rest:
+                return None
+            return os.path.join(top, rest.replace("_", os.sep))
+    return None
+
+
+def gate_against_snapshot():
+    """Run the CI's macro gate against the overlay the way the CI runs it.
+
+    The CI checks the tree *after* the overlay has been copied into it, so
+    the two sets are judged where they meet.  The snapshot of the upstream
+    tree on this PC makes the same judgement possible here, and it is what
+    catches a macro the overlay's files cannot see.
+    """
+    if not os.path.isdir(TREE_SNAPSHOT):
+        print("prepush: no tree snapshot at %s - the CI's macro gate was not "
+              "run here" % TREE_SNAPSHOT)
+        return 0
+    tmp = tempfile.mkdtemp(prefix="prepush-tree-")
+    try:
+        drv = os.path.join(tmp, "drivers", "net", "ethernet", "zte")
+        os.makedirs(drv)
+        for fn in sorted(os.listdir(TREE_SNAPSHOT)):
+            if fn.endswith((".c", ".h")):
+                shutil.copy2(os.path.join(TREE_SNAPSHOT, fn),
+                             os.path.join(drv, fn))
+        # The tree's own headers of the driver directory, and enough of the
+        # rest of the tree for the includes to resolve.
+        if os.path.isdir(TREE_FLAT):
+            for fn in sorted(os.listdir(TREE_FLAT)):
+                src = os.path.join(TREE_FLAT, fn)
+                if not os.path.isfile(src):
+                    continue
+                dst = flat_target(fn)
+                if dst is None:
+                    continue
+                full = os.path.join(tmp, dst)
+                if fn.startswith("drivers_") and full.startswith(drv):
+                    # The driver's own directory: the overlay wins over it.
+                    if not os.path.exists(full):
+                        shutil.copy2(src, full)
+                    continue
+                os.makedirs(os.path.dirname(full), exist_ok=True)
+                shutil.copy2(src, full)
+        over = os.path.join(REPO, "kernel-overlays", "drivers", "net",
+                            "ethernet", "zte")
+        for fn in sorted(os.listdir(over)):
+            if fn.endswith((".c", ".h")):
+                shutil.copy2(os.path.join(over, fn), os.path.join(drv, fn))
+        r = subprocess.run([sys.executable,
+                            os.path.join(REPO, "tools", "macrocheck.py"), tmp],
+                           capture_output=True, text=True)
+        if r.returncode != 0:
+            print("prepush: the CI's macro gate fails on the overlay:")
+            print(r.stdout)
+            print(r.stderr)
+            return 1
+        print(r.stdout.strip().splitlines()[-1])
+        return 0
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def main():
     bad = 0
     files = list(c_files())
     if not files:
         print("prepush: no C files under %s" % REPO)
         return 1
+
+    # The CI's own gate, and the gate's own test, before anything else: a
+    # gate that says "no" to a good build costs an hour, and a gate that
+    # says "yes" to a bad one costs the same.
+    bad += gate_selftest()
+    bad += gate_against_snapshot()
 
     defined = set()
     for f in files:
