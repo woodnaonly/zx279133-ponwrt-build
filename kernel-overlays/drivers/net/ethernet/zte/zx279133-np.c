@@ -1730,6 +1730,66 @@ static ssize_t zx279133_9132_write(struct file *file, const char __user *ubuf,
 	}
 
 	/*
+	 * The BMU's BPPE table.
+	 *
+	 * The table is the map from a buffer index to a buffer, and it is the
+	 * one thing in the RED's input path that no vendor module touches:
+	 * np_133.ko, the vendor kernel and the stock U-Boot all leave it
+	 * alone.  The tree's driver fills it with 16-bit big-endian indices,
+	 * which may or may not be what this chip expects - and a table the
+	 * hardware does not agree with makes the RED resolve a frame to
+	 * nothing.
+	 *
+	 *	"bppd <count>"		read the first entries
+	 *	"bppw <count> <mode>"	write the whole table:
+	 *				0 = 16-bit big endian (the tree's)
+	 *				1 = 16-bit little endian
+	 *				2 = 32-bit little endian
+	 *				3 = all zero
+	 */
+	if (!strcmp(tok, "bppd") || !strcmp(tok, "bppw")) {
+		u32 count = 16, mode = 0, i;
+
+		tok = zx279133_9132_next_token(&p);
+		if (!tok || kstrtou32(tok, 0, &count))
+			return -EINVAL;
+		if (!count || count > 64)
+			return -EINVAL;
+
+		if (!eth->bmu_mem)
+			return -ENODEV;
+
+		if (tok[1] == 'w') {
+			tok = zx279133_9132_next_token(&p);
+			if (!tok || kstrtou32(tok, 0, &mode) || mode > 3)
+				return -EINVAL;
+			for (i = 0; i < ZX279133_BMU_NORMAL_COUNT; i++) {
+				switch (mode) {
+				case 0:
+					iowrite16be(i, eth->bmu_mem + 2 * i);
+					break;
+				case 1:
+					iowrite16le(i, eth->bmu_mem + 2 * i);
+					break;
+				case 2:
+					iowrite32(i, eth->bmu_mem + 4 * i);
+					break;
+				default:
+					iowrite16be(0, eth->bmu_mem + 2 * i);
+					break;
+				}
+			}
+			pr_info("the BPPE table has been written, mode %u\n", mode);
+			return count;
+		}
+
+		for (i = 0; i < count; i++)
+			pr_info("the BPPE table at entry %u = 0x%08x\n", i,
+				readl(eth->bmu_mem + 4 * i));
+		return count;
+	}
+
+	/*
 	 * The RED's queue RAMs.
 	 *
 	 * The RED reaches its queues through an indirect port, so the plain
