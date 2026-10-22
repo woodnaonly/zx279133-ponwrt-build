@@ -181,6 +181,36 @@
 #define ZX279133_RED_UP_OUT_MAX		0x20074
 #define ZX279133_RED_DESC_WATERMARK	0x20084
 #define ZX279133_RED_IDM_DESC_WATERMARK	0x20088
+/*
+ * The RED's drop-enable words and its length filter.
+ *
+ * 0x20038 bit 0 enables the "illegal queue id" drop, 0x2003c bits 1 and 2
+ * enable the "packet length is zero" and the "WOE packet length error"
+ * drops, and 0x2008c bits 0..13 hold the minimum packet length the RED's
+ * length filter accepts.
+ *
+ * np_133.ko never writes any of them - red_set_pkt_len_0_en_cfg(),
+ * red_set_woe_pkt_len_err_drop_en_cfg(), red_set_illegal_qid_drop_cfg() and
+ * red_set_mini_pkt_len() have no caller in np_133.ko or in any other vendor
+ * module - so the vendor's board runs with the hardware's reset defaults:
+ * 0x01, 0x06 and 0x40 (staging/ctl/vendor-serial-mods/tm-red.txt, words 0x0e,
+ * 0x0f and 0x23).
+ *
+ * The mainline board reads exactly the same two words (measured 2026-10-23:
+ * 0x20038 = 0x00000001 and 0x2003c = 0x00000006), so the difference the
+ * "pktlen0 drop" symptom showed is *not* in these words: it is in the length
+ * the RED is handed.  Clearing them does stop the drops, but it only hides
+ * the symptom, so they are left as they are and are printed instead.
+ *
+ * 0x20030 and 0x20034 are the buffer-pool counters the BMU block owns; their
+ * exact meaning is not established yet.  The vendor's board reads 0x3400 and
+ * 0x0000 there, the mainline board 0x1800 and 0x0020.
+ */
+#define ZX279133_RED_DROP_ENABLE	0x20038
+#define ZX279133_RED_LEN_FILTER	0x2003c
+#define ZX279133_RED_MINI_PKT_LEN	0x2008c
+#define ZX279133_RED_POOL_COUNT		0x20030
+#define ZX279133_RED_POOL_COUNT_JUMBO	0x20034
 #define ZX279133_RED_CPU133_CFG		0x2024c
 #define ZX279133_RED_IDM_IN_SHARE_MAX	0x20344
 #define ZX279133_RED_WOE_IN_SHARE_MAX	0x20348

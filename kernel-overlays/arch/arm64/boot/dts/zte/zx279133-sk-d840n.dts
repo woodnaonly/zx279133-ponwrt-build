@@ -396,13 +396,31 @@
 	 * reached the 9132 and were dropped there, and the RED's counters moved
 	 * while no netdev ever counted a byte.
 	 *
-	 * 3e:8e:98:91:64:2a is the address this board answers on - it is what
-	 * the vendor firmware puts on the wire, and the PC's ARP cache holds it
-	 * for 192.168.9.1.  It is a per-device address, so a build for another
-	 * unit has to have its own; the production answer is to parse the
-	 * vendor's "parameter tags" partition, which is not done yet.
+	 * d0:45:8d:84:09:00 is the address this board answers on.  It is the
+	 * address the vendor firmware puts on the wire for 192.168.9.1: the
+	 * vendor's own `ip -o link show` shows eth0 = d0:45:8d:84:08:ff and
+	 * br-lan = d0:45:8d:84:09:00, and 192.168.9.1 lives on br-lan.
+	 *
+	 * Measured on 2026-10-23 with the board running its vendor firmware and
+	 * the PC on its wired adapter:
+	 *
+	 *	arp entry d0:45:8d:84:09:00 -> ping 192.168.9.1: 0% loss
+	 *	arp entry d0:45:8d:84:08:ff -> ping 192.168.9.1: 100% loss
+	 *
+	 * so :09:00 is the address the outside world has to use, and :08:ff is
+	 * eth0's own address and answers for nothing.
+	 *
+	 * The address 3e:8e:98:91:64:2a that this node carried before was not a
+	 * factory address at all: it was read out of one trial boot's
+	 * /proc/net/dev, where the kernel had already made a random one (the
+	 * locally-administered bit is set).  A random address is unroutable from
+	 * the outside, which is what the bench saw.
+	 *
+	 * It is a per-device address, so a build for another unit has to have
+	 * its own; the production answer is to parse the vendor's "parameter
+	 * tags" partition, which is not done yet.
 	 */
-	local-mac-address = [3e 8e 98 91 64 2a];
+	local-mac-address = [d0 45 8d 84 09 00];
 	status = "okay";
 
 	/*
