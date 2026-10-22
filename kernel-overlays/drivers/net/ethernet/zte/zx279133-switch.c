@@ -604,6 +604,96 @@ static void zx279133_switch_xpcs_restore(struct zx279133_switch *priv)
 }
 
 /*
+ * The four internal-PHY MACs, the way the vendor programs them.
+ *
+ * The vendor's nppt_smac_init() (np_133.ko 0xda1c) walks mac 0..3 and, for
+ * each one, whose block lives at NPPT + 0x40000 * (mac + 1), writes:
+ *
+ *	+0x0000  0x00fa2203   the MAC's own control word
+ *	+0x0004  0x3fff
+ *	+0x0b00 |= 0x200
+ *
+ * and then publishes that MAC through the SOPC: it waits for the ready word
+ * at NPPT + 0x34294 + 4 * mac and writes the send-enable at
+ * NPPT + 0x342b0 + 4 * mac.  (The XMAC has its own pair of those words, at
+ * 0x342a4 and 0x342c0; the two groups are four words apart and do not
+ * overlap.)
+ *
+ * Two registers of each block are deliberately left alone.  The vendor also
+ * writes +0x0008 (the packet filter) and +0x000e0 (the speed word), but on
+ * this board those two registers already hold what the vendor's board holds
+ * - 0x80000001 and 0x00011000 - straight out of reset, and writing the
+ * vendor's values over them *destroys* them: the hardware then reads back
+ * 0x80000000 and 0x00010000, with the enable bit and bit 12 gone.  So they
+ * are read, not written, here, and only to show what they are.
+ *
+ * The reset the vendor pulses in between - a bit of the shared soft-reset
+ * word at NPPT + 0x2c0004 - is left out on purpose.  On this board it makes
+ * no difference to any of these registers, and that word is shared with the
+ * XMAC and the PCS, which are not ours to reset from this path.
+ *
+ * Why this matters: an SMAC is the MAC in front of one of the four internal
+ * PHYs, so it is on the path a frame takes out of a LAN port.  With the four
+ * blocks left at their reset value (an_ctrl reads 0x00ba2200) a frame that
+ * arrives from a LAN port stops at the PHY: it never reaches the 9132, the
+ * RED counters stay at zero, the IDM's receive engine is never started and
+ * no receive interrupt is ever raised.
+ */
+static void zx279133_switch_smac_init(struct zx279133_switch *priv)
+{
+	struct device *dev = priv->dev;
+	int mac;
+
+	for (mac = 0; mac < ZX279133_SMAC_COUNT; mac++) {
+		u32 base = ZX279133_SMAC_BASE(mac);
+		u32 value;
+		int tries;
+
+		/* nppt_smac_set_uni_mode(mac, 0). */
+		value = zx279133_switch_nppt_read(priv,
+						  ZX279133_SMAC_UNI_MODE(mac));
+		zx279133_switch_nppt_write(priv, ZX279133_SMAC_UNI_MODE(mac),
+					    value & ~ZX279133_SMAC_UNI_MODE_MASK);
+
+		zx279133_switch_nppt_write(priv, base + ZX279133_SMAC_AN_CTRL,
+					    ZX279133_SMAC_AN_CTRL_VALUE);
+		zx279133_switch_nppt_write(priv, base + ZX279133_SMAC_AN_CTRL2,
+					    ZX279133_SMAC_AN_CTRL2_VALUE);
+
+		value = zx279133_switch_nppt_read(priv,
+						  base + ZX279133_SMAC_PORT_CTRL);
+		zx279133_switch_nppt_write(priv, base + ZX279133_SMAC_PORT_CTRL,
+					    value | ZX279133_SMAC_PORT_CTRL_BIT);
+
+		/*
+		 * Publish it.  The vendor waits for the ready word, and gives
+		 * up after ten tries and publishes anyway; so does this.
+		 */
+		for (tries = 0; tries < 10; tries++) {
+			value = zx279133_switch_nppt_read(priv,
+				ZX279133_SMAC_SOPC_READY_BASE + 4 * mac);
+			if (value & BIT(0))
+				break;
+			usleep_range(1000, 1100);
+		}
+		zx279133_switch_nppt_write(priv,
+					   ZX279133_SMAC_SOPC_SEND_BASE + 4 * mac,
+					   1);
+
+		dev_info(dev,
+			 "SMAC %d programmed: an_ctrl=0x%08x pkt_filter=0x%08x speed=0x%08x ready=0x%08x\n",
+			 mac,
+			 zx279133_switch_nppt_read(priv,
+						   base + ZX279133_SMAC_AN_CTRL),
+			 zx279133_switch_nppt_read(priv,
+						   base + ZX279133_SMAC_PKT_FILTER),
+			 zx279133_switch_nppt_read(priv,
+						   base + ZX279133_SMAC_SPEED),
+			 value);
+	}
+}
+
+/*
  * The XMAC0's own registers, written the way the vendor writes them.
  *
  * The vendor's xamc_init_conf_by_speed() (np_133.ko 0x1a200) is six
@@ -1653,6 +1743,14 @@ static int zx279133_switch_probe(struct platform_device *pdev)
 		return dev_err_probe(dev, ret,
 				     "failed to acquire shared NPPT/IDM datapath\n");
 	priv->datapath_held = true;
+
+	/*
+	 * The four internal-PHY MACs first.  They are the front end of every
+	 * LAN port on this board, and a frame that arrives from a LAN port
+	 * stops at the PHY if they are still at their reset value - which is
+	 * what this driver used to leave them at.
+	 */
+	zx279133_switch_smac_init(priv);
 
 	/*
 	 * The lane, as the bootloader left it.  Nothing here has touched

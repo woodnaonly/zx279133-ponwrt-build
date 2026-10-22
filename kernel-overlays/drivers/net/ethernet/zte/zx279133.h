@@ -549,6 +549,35 @@ static inline u32 zx279133_idm_tx_done_reg(unsigned int queue)
 #define ZX279133_XMAC1_SOPC_DUPLEX_MASK	BIT(5)
 #define ZX279133_XMAC1_SGMII_SPEED	3
 
+/*
+ * The four internal-PHY MACs - the vendor's "smac0..3".  Each one has a
+ * block of its own at NPPT + 0x40000 * (mac + 1), and each one is published
+ * through its own pair of SOPC words.
+ *
+ * These are not the XMACs.  An XMAC is a GMAC that talks to something outside
+ * the chip; an SMAC is the MAC in front of one of the four internal PHYs, and
+ * it is on the path a frame takes out of a LAN port.  The vendor's
+ * nppt_smac_init() programs all four of them, and a frame that arrives from a
+ * LAN port stops at the PHY if they are still at their reset value.
+ */
+#define ZX279133_SMAC_COUNT		4
+#define ZX279133_SMAC_BASE(mac)		(0x40000 * ((mac) + 1))
+#define ZX279133_SMAC_AN_CTRL		0x0000
+#define ZX279133_SMAC_AN_CTRL2		0x0004
+#define ZX279133_SMAC_PKT_FILTER	0x0008
+#define ZX279133_SMAC_SPEED		0x00e0
+#define ZX279133_SMAC_PORT_CTRL		0x0b00
+/* The per-MAC "uni mode" words are absolute: 0x14, 0x18, 0x1c, 0x20. */
+#define ZX279133_SMAC_UNI_MODE(mac)	(4 * ((mac) + 5))
+#define ZX279133_SMAC_SOPC_READY_BASE	0x34294
+#define ZX279133_SMAC_SOPC_SEND_BASE	0x342b0
+#define ZX279133_SMAC_AN_CTRL_VALUE	0x00fa2203
+#define ZX279133_SMAC_AN_CTRL2_VALUE	0x3fff
+#define ZX279133_SMAC_PKT_FILTER_VALUE	0x80000000
+#define ZX279133_SMAC_SPEED_VALUE	0x00012000
+#define ZX279133_SMAC_PORT_CTRL_BIT	0x200
+#define ZX279133_SMAC_UNI_MODE_MASK	0x03800000
+
 #define ZX279133_XPCS_BYPASS_REG	0x8005
 #define ZX279133_XPCS_BYPASS_EN	BIT(4)
 

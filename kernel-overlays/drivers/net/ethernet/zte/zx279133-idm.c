@@ -49,21 +49,6 @@ static u32 zx279133_idm_bp_ring_cfg(u32 bp_depth, u32 free_depth)
 	       (((free_depth >> 12) - 1) << 10) | BIT(8);
 }
 
-static u32 zx279133_idm_rx_count(struct zx279133_eth *eth,
-				 unsigned int queue)
-{
-	void __iomem *idm = eth->base + ZX279133_IDM_BASE;
-
-	/*
-	 * np_133.ko keeps one counter word per RX queue at IDM+0xc4+4*queue:
-	 * bits 15:0 are the packet count and bits 31:16 the descriptor
-	 * budget (idm_pkt_recv_update).  This driver used to read two
-	 * queues out of every word, which gave it the wrong half for every
-	 * queue above zero.
-	 */
-	return readl(idm + 0xc4 + 4 * queue) & GENMASK(15, 0);
-}
-
 static u32 zx279133_idm_rx_page_key(dma_addr_t dma)
 {
 	return lower_32_bits(dma);
@@ -1092,12 +1077,29 @@ static int zx279133_idm_rx_poll_group(struct zx279133_eth *eth,
 			 (ARRAY_SIZE(zx279133_idm_rx_poll_order) - 1);
 		if (!(mask & BIT(queue)))
 			continue;
-		count = zx279133_idm_rx_count(eth, queue);
-		count = min_t(u16, count, budget - work);
-		if (count)
-			work += zx279133_idm_rx_process_queue(eth, napi, queue,
-							      count, &xdp_tx,
-							      &xdp_redirect);
+		/*
+		 * The queue is scanned, not gated on a counter.
+		 *
+		 * This used to read a per-queue packet count out of
+		 * IDM+0xc4+4*queue and only look at the queue when that count
+		 * was non-zero.  Those words are not a packet count on this
+		 * hardware: on this board's own vendor system, receiving
+		 * frames normally, every word from IDM+0xc4 up to IDM+0xfc
+		 * reads back zero - the vendor's own on-demand dump of the
+		 * whole IDM register file has zeros in that range - so the
+		 * gate was never open and no descriptor was ever looked at.
+		 * The gate is gone, and with it the whole RX path's only
+		 * reader.
+		 *
+		 * The scan is cheap: the descriptor ring is stopped by the
+		 * first descriptor whose address is zero, which is exactly
+		 * what an empty queue looks like, so an empty queue costs
+		 * one read and no register write.
+		 */
+		count = min_t(u16, budget - work, ZX279133_IDM_RX_RING_SIZE);
+		work += zx279133_idm_rx_process_queue(eth, napi, queue,
+						      count, &xdp_tx,
+						      &xdp_redirect);
 	}
 	eth->rx_poll_cursor[group] = cursor;
 	if (xdp_tx)
