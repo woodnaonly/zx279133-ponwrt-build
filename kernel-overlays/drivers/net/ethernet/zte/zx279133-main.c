@@ -390,7 +390,9 @@ static int zx279133_eth_probe(struct platform_device *pdev)
 	{
 		size_t rx_descs_size = sizeof(*eth->rx_descs) *
 			ZX279133_IDM_RX_QUEUES * ZX279133_IDM_RX_RING_SIZE;
-		size_t rx_normal_bp_size = ZX279133_IDM_FREE_RING_SIZE;
+		size_t rx_normal_bp_size =
+			(ZX279133_IDM_BP_RING_SIZE +
+			 ZX279133_IDM_JUMBO_BP_RING_SIZE) * sizeof(__be32);
 		size_t tx_descs_size = sizeof(*eth->tx_descs) *
 			ZX279133_IDM_TX_QUEUES * ZX279133_IDM_TX_DEPTH;
 
@@ -403,6 +405,12 @@ static int zx279133_eth_probe(struct platform_device *pdev)
 			return dev_err_probe(dev, -ERANGE,
 					     "RX coherent descriptor rings are above 4GiB\n");
 
+		/*
+		 * The normal and the jumbo buffer-pool rings have to be one
+		 * allocation: the hardware expects the jumbo pool immediately
+		 * after the normal one (idm_rx_bp_init() adds the normal pool
+		 * size to the normal pool base to get the jumbo pool base).
+		 */
 		eth->rx_normal_bp = dmam_alloc_coherent(dev, rx_normal_bp_size,
 							&eth->rx_normal_bp_dma,
 						      GFP_KERNEL);
@@ -412,6 +420,9 @@ static int zx279133_eth_probe(struct platform_device *pdev)
 				  rx_normal_bp_size - 1))
 			return dev_err_probe(dev, -ERANGE,
 					     "RX coherent free ring is above 4GiB\n");
+		eth->rx_jumbo_bp = eth->rx_normal_bp + ZX279133_IDM_BP_RING_SIZE;
+		eth->rx_jumbo_bp_dma = eth->rx_normal_bp_dma +
+				       ZX279133_IDM_BP_RING_SIZE * sizeof(__be32);
 
 		eth->tx_descs = dmam_alloc_coherent(dev, tx_descs_size,
 						    &eth->tx_descs_dma,

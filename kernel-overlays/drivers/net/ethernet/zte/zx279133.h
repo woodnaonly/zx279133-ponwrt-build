@@ -45,7 +45,6 @@
 #define zx279133_tx_pon_control		0x08000000
 #define zx279133_tx_word4_bit23		0
 #define zx279133_tx_hw_csum		1
-#define zx279133_idm_cfg_bit24		0
 
 #define ZX279133_BMU_REQUIRED_SIZE	0x00ecc000
 #define ZX279133_SE_HASH_REQUIRED_SIZE	0x01000000
@@ -420,8 +419,15 @@
 #define ZX279133_IDM_RX_QUEUE		0
 #define ZX279133_IDM_RX_QUEUES		24
 #define ZX279133_IDM_CPU_RX_QUEUES	16
-#define ZX279133_IDM_RX_RING_SIZE	2048
-#define ZX279133_IDM_BP_RING_SIZE	4096
+#define ZX279133_IDM_RX_RING_SIZE	1024
+/*
+ * The two buffer-pool rings the hardware expects, in the stock DT's units
+ * (entries, four bytes each): idm_rx_normal_bp_ring_depth = 0x2000 and
+ * idm_rx_jumbo_bp_ring_depth = 0x1000.  The hardware reads the depth out of
+ * IDM+0x10c / IDM+0x110, so the ring has to be exactly this big.
+ */
+#define ZX279133_IDM_BP_RING_SIZE	8192
+#define ZX279133_IDM_JUMBO_BP_RING_SIZE	4096
 #define ZX279133_IDM_RX_BUFFER_COUNT	2048
 #define ZX279133_IDM_RX_PAGE_MAP_BITS	12
 #define ZX279133_IDM_RX_PAGE_MAP_SIZE	BIT(ZX279133_IDM_RX_PAGE_MAP_BITS)
@@ -439,27 +445,37 @@
 
 /*
  * Vendor idm_init() free-ring layout after the legacy 0x1a0000-byte
- * descriptor region: 0x4000-byte RX normal and jumbo rings, followed by
- * 0x40000-byte TX normal, TX jumbo, and CPU133 extra retrieval rings.
+ * descriptor region.  The stock DT's idm_free_ring_depth is 0x10000 entries,
+ * so a free ring is 0x40000 bytes, and the vendor points IDM+0x118, IDM+0x11c
+ * and IDM+0x408 at three of them, one 0x40000 bytes apart.
  */
-#define ZX279133_IDM_FREE_RING_SIZE	0x4000
+#define ZX279133_IDM_FREE_RING_DEPTH	0x10000
+#define ZX279133_IDM_FREE_RING_SIZE	0x40000
 #define ZX279133_IDM_TX_FREE_RING_SIZE	0x40000
 #define ZX279133_IDM_FREE_RING0	0x1a0000
-#define ZX279133_IDM_FREE_RING1	(ZX279133_IDM_FREE_RING0 + 0x4000)
-#define ZX279133_IDM_FREE_RING2	(ZX279133_IDM_FREE_RING1 + 0x4000)
-#define ZX279133_IDM_FREE_RING3	(ZX279133_IDM_FREE_RING2 + 0x40000)
-#define ZX279133_IDM_FREE_RING4	(ZX279133_IDM_FREE_RING3 + 0x40000)
+#define ZX279133_IDM_FREE_RING1	(ZX279133_IDM_FREE_RING0 + \
+					 ZX279133_IDM_FREE_RING_SIZE)
+#define ZX279133_IDM_FREE_RING2	(ZX279133_IDM_FREE_RING1 + \
+					 ZX279133_IDM_FREE_RING_SIZE)
+#define ZX279133_IDM_FREE_RING3	(ZX279133_IDM_FREE_RING2 + \
+					 ZX279133_IDM_FREE_RING_SIZE)
+#define ZX279133_IDM_FREE_RING4	(ZX279133_IDM_FREE_RING3 + \
+					 ZX279133_IDM_FREE_RING_SIZE)
 #define ZX279133_IDM_REQUIRED_SIZE	(ZX279133_IDM_FREE_RING4 + \
 					 ZX279133_IDM_TX_FREE_RING_SIZE)
 #define ZX279133_IDM_TX_CONTROL		0x00400000
 
 /*
  * Vendor kernel globals (kernel-2b5.elf rodata/BSS):
- * uIDM_RX_QUEUE_DESC_DEPTH = 2048, uIDM_RX_CFG_DEPTH = 1,
  * uNPPT_IDM_DESC_MODE = 0, uIDM_TX_CFG_DEPTH = 0 (no writer found).
+ *
+ * The two RX numbers are the ones this board's own np_133.ko uses and the
+ * ones the hardware agrees with: the stock DT asks for idm_desc_rx_depth
+ * = 0x400 descriptors per queue, the hardware's depth code for 0x400 is 0,
+ * and IDM+0x070 holds the descriptor count minus the 24 queue headers.
  */
-#define ZX279133_IDM_RX_QUEUE_DESC_DEPTH 2048
-#define ZX279133_IDM_RX_CFG_DEPTH	1
+#define ZX279133_IDM_RX_QUEUE_DESC_DEPTH 1024
+#define ZX279133_IDM_RX_CFG_DEPTH	0
 #define ZX279133_IDM_DESC_MODE		0
 #define ZX279133_IDM_TX_CFG_DEPTH	0x400
 
@@ -742,8 +758,10 @@ struct zx279133_eth {
 	struct zx279133_idm_desc *rx_descs;
 	struct zx279133_idm_desc *tx_descs;
 	__be32 *rx_normal_bp;
+	__be32 *rx_jumbo_bp;
 	dma_addr_t rx_descs_dma;
 	dma_addr_t rx_normal_bp_dma;
+	dma_addr_t rx_jumbo_bp_dma;
 	dma_addr_t tx_descs_dma;
 	u16 rx_cons[ZX279133_IDM_RX_QUEUES];
 	u16 rx_bp_prod;

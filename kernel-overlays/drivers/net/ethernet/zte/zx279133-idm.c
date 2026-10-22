@@ -36,17 +36,32 @@ void zx279133_idm_set_masked(struct zx279133_eth *eth, u32 mask, bool masked)
 	writel(value, idm + ZX279133_IDM_INT_MASK);
 }
 
+static u32 zx279133_idm_bp_ring_cfg(u32 bp_depth, u32 free_depth)
+{
+	/*
+	 * idm_rx_bp_init() writes ((bp_depth >> 12) - 1) << 21 into the pool
+	 * size register and idm_rev_bp_init() adds ((free_depth >> 12) - 1)
+	 * << 10, with bit 8 set in both.  The depths are entry counts, and
+	 * the hardware reads them back out of the register to find the ring,
+	 * so a ring that is not this size is a ring the hardware cannot use.
+	 */
+	return (((bp_depth >> 12) - 1) << 21) |
+	       (((free_depth >> 12) - 1) << 10) | BIT(8);
+}
+
 static u32 zx279133_idm_rx_count(struct zx279133_eth *eth,
 				 unsigned int queue)
 {
 	void __iomem *idm = eth->base + ZX279133_IDM_BASE;
-	u32 first, second;
 
-	first = readl(idm + 4 * ((queue >> 1) + 49));
-	second = readl(idm + 4 * ((queue >> 1) + 53));
-	if (queue & 1)
-		return (second & GENMASK(31, 16)) | (first >> 16);
-	return (second << 16) | (first & GENMASK(15, 0));
+	/*
+	 * np_133.ko keeps one counter word per RX queue at IDM+0xc4+4*queue:
+	 * bits 15:0 are the packet count and bits 31:16 the descriptor
+	 * budget (idm_pkt_recv_update).  This driver used to read two
+	 * queues out of every word, which gave it the wrong half for every
+	 * queue above zero.
+	 */
+	return readl(idm + 0xc4 + 4 * queue) & GENMASK(15, 0);
 }
 
 static u32 zx279133_idm_rx_page_key(dma_addr_t dma)
@@ -237,8 +252,23 @@ static unsigned int zx279133_idm_rx_flush_refill(struct zx279133_eth *eth)
 	spin_lock_bh(&eth->rx_buffer_lock);
 	count = eth->rx_refill_pending;
 	if (count) {
+		void __iomem *idm = eth->base + ZX279133_IDM_BASE;
+		u32 i;
+
 		dma_wmb();
-		writel(count, eth->base + ZX279133_IDM_BASE + ZX279133_IDM_BP_REFILL);
+		/*
+		 * The vendor's idm_new_bp_update() does not write the count
+		 * into this register.  It writes one 0x400 pulse per 1024
+		 * buffers, then the two remainders - the normal pool in bits
+		 * 15:0 and the jumbo pool in bits 31:16.  The hardware reads
+		 * the count out of those fields, so writing the count itself
+		 * announces nothing at all, and a count that is a multiple of
+		 * 1024 announces zero buffers.  Without this the hardware
+		 * never learns that there is a pool to receive into.
+		 */
+		for (i = 0; i < (count >> 10); i++)
+			writel(0x400, idm + ZX279133_IDM_BP_REFILL);
+		writel(count & 0x3ff, idm + ZX279133_IDM_BP_REFILL);
 		eth->rx_refill_pending = 0;
 	}
 	spin_unlock_bh(&eth->rx_buffer_lock);
@@ -1056,15 +1086,13 @@ static int zx279133_idm_rx_poll_group(struct zx279133_eth *eth,
 	     scanned < ARRAY_SIZE(zx279133_idm_rx_poll_order) && work < budget;
 	     scanned++) {
 		u8 queue = zx279133_idm_rx_poll_order[cursor];
-		u32 packed;
 		u16 count;
 
 		cursor = (cursor + 1) &
 			 (ARRAY_SIZE(zx279133_idm_rx_poll_order) - 1);
 		if (!(mask & BIT(queue)))
 			continue;
-		packed = zx279133_idm_rx_count(eth, queue & 7);
-		count = queue < 8 ? packed & 0xffff : packed >> 16;
+		count = zx279133_idm_rx_count(eth, queue);
 		count = min_t(u16, count, budget - work);
 		if (count)
 			work += zx279133_idm_rx_process_queue(eth, napi, queue,
@@ -1188,7 +1216,9 @@ int zx279133_idm_rx_prepare(struct zx279133_eth *eth)
 	if (WARN_ON(eth->rx_page_map_count))
 		zx279133_idm_rx_put_active_pages(eth);
 	memset(eth->rx_descs, 0, desc_size);
-	memset(eth->rx_normal_bp, 0, ZX279133_IDM_FREE_RING_SIZE);
+	memset(eth->rx_normal_bp, 0, (ZX279133_IDM_BP_RING_SIZE +
+				      ZX279133_IDM_JUMBO_BP_RING_SIZE) *
+				     sizeof(__be32));
 	memset(eth->rx_cons, 0, sizeof(eth->rx_cons));
 	eth->rx_bp_prod = 0;
 	memset(eth->rx_poll_cursor, 0, sizeof(eth->rx_poll_cursor));
@@ -1412,39 +1442,32 @@ static const u32 zx279133_idm_cfg_offsets[] = {
 };
 
 /*
- * Exact CPU133 vendor-Linux idm_init() register image, recovered from
- * plat_132.ko disassembly and kernel-2b5.elf data:
- *  - control word RMW: |= 0xf0000, (v & 0xf00fffff) | 0xf00000, |= 0x3000,
- *    then = (v & 0x8fffffff) | (uIDM_RX_CFG_DEPTH << 28)
- *  - fixed: 0x054..0x060 watermarks, 0x014..0x034 = 0x800080,
- *    0x038 = 50000, 0x010 = 128, 0x090 = 20, 0x094 = 1,
- *    0x3fc = 0x0f49, 0x074 = 0x210, 0x070 = RX depth - 1,
- *    0x0c0 = descriptor mode, 0x00c = TX config depth << 16, 0x124 = 0,
- *    and the CPU133-only 0x5c0 = 7.
+ * The IDM bring-up register image, taken from this board's own vendor module
+ * (np_133.ko) rather than from plat_132.ko, which is another product's
+ * module and programs the same block differently.
  *
- * One word of that image does not belong to this board, and it is the
- * one that decides where a received frame is reported: 0x014..0x034.
+ * np_133.ko's idm_init() and the three helpers it calls write:
+ *  - the control word: |= 0xf0000, (v & 0xf00fffff) | 0x01f00000, |= 0x1000,
+ *    then idm_rx_desc_init() does (v & 0x8fffffff) | (depth code << 28),
+ *    where the depth code is 0 for the stock DT's 0x400 descriptors per queue.
+ *    From the hardware's reset value that is 0x01ff1007 - the value the
+ *    vendor's own board reads back.
+ *  - the per-queue routing words 0x014..0x034 are left alone; the hardware
+ *    keeps its reset default 0x00010001, which is also what the vendor's
+ *    board reads back, so the driver writes the same value explicitly.
+ *  - 0x010 = g_idm_rx_bp_retev_num_th (0x40), 0x038 = 0x1000,
+ *    0x06c = 0x800, 0x070 = the RX descriptor count (depth - 0x18),
+ *    0x074 = 0, 0x090 = 0, 0x094 = 0, 0x0bc = 0,
+ *    0x0c0 = the descriptor mode, 0x00c = the TX config depth << 16,
+ *    0x124 = 0x80, 0x3fc = 0x0f49, 0x5c0 = 7 and 0x490 = 0.
+ *  - the buffer pools: the RX normal pool base at 0x104, the RX jumbo pool
+ *    base at 0x108, the three free rings at 0x118, 0x11c and 0x408, and the
+ *    two pool-size registers 0x10c and 0x110, which carry the ring depths
+ *    rather than a byte count.
  *
- * Those nine words are the per-queue routing fields of RX queues 6..23
- * - which interrupt group and which thread a queue's completion is
- * reported on.  plat_132.ko writes 0x00800080 into all nine, and so
- * did this driver, from the same source.
- *
- * But plat_132.ko is not this board's module.  The only IDM bring-up on
- * this board is np_133.ko's own idm_init(), and it does not write those
- * nine words at all: the hardware keeps its reset default, which is
- * 0x00010001 - the value U-Boot leaves behind and the value a working
- * board runs with.  The one vendor write in that range is
- * idm_queue_rx_int_num_thread(7, 1), which sets the upper half of 0x014
- * to 1, which is what the reset default already holds.
- *
- * So the driver was stamping a routing field from another platform into
- * a block whose routing the vendor leaves alone, and the driver was
- * using np_133.ko's interrupt-group words at 0x044..0x050 at the same
- * time - words that are derived from the very field that had just been
- * overwritten.  The two halves of the vendor's scheme contradicted each
- * other, and a completion reported on a group that does not exist never
- * reaches the driver at all.
+ * Everything the vendor leaves at its reset value is left there here too:
+ * a register the vendor never writes is a register this driver has no
+ * business writing.
  */
 
 static void zx279133_idm_tx_configure(struct zx279133_eth *eth)
@@ -1458,16 +1481,20 @@ static void zx279133_idm_tx_configure(struct zx279133_eth *eth)
 
 	value = eth->idm_cfg_saved[0];
 	value |= 0x000f0000;
-	value = (value & 0xf00fffff) | 0x00f00000;
-	value |= 0x00003000;
+	/*
+	 * np_133.ko's idm_init() does (v & 0xf00fffff) | 0x01f00000 - bits 20
+	 * through 24, so bit 24 ends up set - and only bit 12 of the two that
+	 * follow, never bit 13.  The proven vendor image reads back 0x01ff1007.
+	 */
+	value = (value & 0xf00fffff) | 0x01f00000;
+	value |= 0x00001000;
 	value = (value & 0x8fffffff) | (ZX279133_IDM_RX_CFG_DEPTH << 28);
-	if (zx279133_idm_cfg_bit24)
-		value |= BIT(24);
 	writel(value, idm + 0x0000);
 
 	writel(lower_32_bits(eth->rx_descs_dma), idm + 0x0008);
 	writel(ZX279133_IDM_TX_CFG_DEPTH << 16, idm + 0x000c);
-	writel(128, idm + 0x0010);
+	/* g_idm_rx_bp_retev_num_th, from the stock DT's bp_retev_num_th. */
+	writel(0x00000040, idm + 0x0010);
 	/*
 	 * The reset default of the per-queue routing words, which is what
 	 * this board's own vendor module leaves them at.  See the comment
@@ -1475,15 +1502,19 @@ static void zx279133_idm_tx_configure(struct zx279133_eth *eth)
 	 */
 	for (i = 0x14; i <= 0x34; i += 4)
 		writel(0x00010001, idm + i);
-	writel(50000, idm + 0x0038);
+	writel(0x00001000, idm + 0x0038);
 	writel(0x06060606, idm + 0x0054);
 	writel(0x00060606, idm + 0x0058);
 	writel(0x07070707, idm + 0x005c);
 	writel(0x07070707, idm + 0x0060);
-	writel(ZX279133_IDM_RX_QUEUE_DESC_DEPTH - 1, idm + 0x0070);
-	writel(0x00000210, idm + 0x0074);
-	writel(20, idm + 0x0090);
-	writel(1, idm + 0x0094);
+	/*
+	 * The RX descriptor count is the per-queue depth minus the 24 queue
+	 * headers (idm_rx_desc_init: sub w1, w1, #0x18), not depth - 1.
+	 */
+	writel(ZX279133_IDM_RX_QUEUE_DESC_DEPTH - 0x18, idm + 0x0070);
+	writel(0, idm + 0x0074);
+	writel(0, idm + 0x0090);
+	writel(0, idm + 0x0094);
 	writel(ZX279133_IDM_DESC_MODE, idm + 0x00c0);
 	/*
 	 * QMG descriptor-read mode. A store-only scan of this board's own np_133.ko
@@ -1516,14 +1547,16 @@ static void zx279133_idm_tx_configure(struct zx279133_eth *eth)
 	writel(0x00000080, idm + 0x0124);
 	writel(0x00000f49, idm + 0x03fc);
 	writel(7, idm + 0x05c0);
+	/* The vendor's bring-up clears the TX queue-8 doorbell. */
+	writel(0, idm + 0x00bc);
 
 	/*
-	 * Remaining vendor idm_init()/idm_cfg_int() register image: the
-	 * interrupt mask/info words, the normal buffer length, the buffer
-	 * pool configuration, and the normal/jumbo/extra free-ring bases. The
-	 * active normal ring is DMA coherent; unused rings retain vendor offsets.
+	 * The interrupt mask.  The vendor's board holds zero here - every
+	 * source is unmasked and idm_int_enable()/idm_int_disable() do the
+	 * read-modify-write from there - so the driver starts from the same
+	 * state instead of masking all 27 sources and unmasking them again.
 	 */
-	writel(0x07ffffff, idm + 0x0040);
+	writel(0, idm + 0x0040);
 	/*
 	 * Source -> IRQ-line routing, copied word for word from this board's working
 	 * vendor 4.19 boot: np_133.ko prints "irq[0..3] sg_idm_irq_mask_conf(0x71ffbfb
@@ -1540,19 +1573,37 @@ static void zx279133_idm_tx_configure(struct zx279133_eth *eth)
 	writel(0x00200000, idm + 0x0048);
 	writel(0x00400000, idm + 0x004c);
 	writel(0x00800404, idm + 0x0050);
-	writel(0x000007c1, idm + 0x006c);
+	writel(0x00000800, idm + 0x006c);
 
+	/*
+	 * The buffer pools.  idm_rx_bp_init() writes the RX normal pool base
+	 * to +0x104 and the RX jumbo pool base - one normal_bp_size further on -
+	 * to +0x108; idm_rev_bp_init() writes the three free rings to +0x118,
+	 * +0x11c and +0x408.  This driver had the jumbo pool pointed at a free
+	 * ring and the free rings shifted by one slot, so the hardware was
+	 * handed a pool base that was not a pool at all.
+	 */
 	writel(lower_32_bits(eth->rx_normal_bp_dma), idm + 0x0104);
+	writel(lower_32_bits(eth->rx_jumbo_bp_dma), idm + 0x0108);
 	writel(lower_32_bits(eth->idm_base + ZX279133_IDM_FREE_RING1),
-	       idm + 0x0108);
-	writel(lower_32_bits(eth->idm_base + ZX279133_IDM_FREE_RING2),
 	       idm + 0x0118);
-	writel(lower_32_bits(eth->idm_base + ZX279133_IDM_FREE_RING3),
+	writel(lower_32_bits(eth->idm_base + ZX279133_IDM_FREE_RING2),
 	       idm + 0x011c);
-	writel(lower_32_bits(eth->idm_base + ZX279133_IDM_FREE_RING4),
+	writel(lower_32_bits(eth->idm_base + ZX279133_IDM_FREE_RING3),
 	       idm + 0x0408);
-	writel(ZX279133_IDM_BP_RING_SIZE, idm + 0x010c);
-	writel(ZX279133_IDM_BP_RING_SIZE, idm + 0x0110);
+	/*
+	 * The two pool-size registers carry the ring depths, not a byte count:
+	 * idm_rx_bp_init() writes ((depth >> 12) - 1) << 21 and idm_rev_bp_init()
+	 * adds ((free_ring_depth >> 12) - 1) << 10, with bit 8 set in both.
+	 * With the stock DT's depths - 0x2000 normal, 0x1000 jumbo, 0x10000 free
+	 * - that is 0x203d00 and 0x3d00, exactly what the vendor's board holds.
+	 */
+	writel(zx279133_idm_bp_ring_cfg(ZX279133_IDM_BP_RING_SIZE,
+					ZX279133_IDM_FREE_RING_DEPTH),
+	       idm + 0x010c);
+	writel(zx279133_idm_bp_ring_cfg(ZX279133_IDM_JUMBO_BP_RING_SIZE,
+					ZX279133_IDM_FREE_RING_DEPTH),
+	       idm + 0x0110);
 	writel(0x00003d00, idm + 0x040c);
 }
 
