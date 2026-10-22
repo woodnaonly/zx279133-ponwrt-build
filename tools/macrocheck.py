@@ -104,19 +104,29 @@ class Tree:
                 return c
         return None
 
-    def reachable_defines(self, path, seen=None):
-        """The ZX279133_* macros this file can see through its includes."""
-        if seen is None:
-            seen = set()
-        if path in seen:
-            return set()
-        seen.add(path)
-        text = self.text(path)
-        names = set(DEFINE.findall(text))
-        for _q, name in INCLUDE.findall(text):
-            child = self.resolve(name, _q == '<', os.path.dirname(path))
-            if child:
-                names |= self.reachable_defines(child, seen)
+    def reachable_defines(self, path):
+        """The ZX279133_* macros this file can see through its includes.
+
+        The walk is iterative on purpose: a kernel driver's include graph is
+        deep (linux/netdevice.h alone reaches hundreds of headers), and a
+        recursive walk of it runs into Python's recursion limit - which is
+        what run 125 did, five minutes into the build, with a traceback
+        instead of a verdict.
+        """
+        names = set()
+        seen = set()
+        stack = [path]
+        while stack:
+            cur = stack.pop()
+            if cur in seen:
+                continue
+            seen.add(cur)
+            text = self.text(cur)
+            names.update(DEFINE.findall(text))
+            for _q, name in INCLUDE.findall(text):
+                child = self.resolve(name, _q == '<', os.path.dirname(cur))
+                if child and child not in seen:
+                    stack.append(child)
         return names
 
     def local_defines(self, path):
