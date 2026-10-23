@@ -4596,6 +4596,98 @@ static int zx279133_ppu_rx_hash_prepare(struct zx279133_eth *eth,
 	return 0;
 }
 
+/*
+ * The board's own port-flow table: the entry program every SPA port runs.
+ *
+ * The PPU microcode carries a port-flow table of its own, and the loader
+ * applies it to the SPA port attributes as it installs the code.  That table
+ * is *board* configuration - it says which of the SoC's internal ports is
+ * the WAN, which four are the UNI jacks, which one the CPU talks to - and the
+ * blob this driver is given carries the one for the board the blob was taken
+ * from.
+ *
+ * The blob in the tree (target/linux/zte/zx279133/firmware/zte/zx279133/
+ * mcode_intel.bin) is the SR1010's.  Its table and this board's differ on
+ * 55 of the 64 ports:
+ *
+ *	port	SR1010		this board
+ *	0	0x00000463	0x0000a6a5
+ *	1..4	0x00008015	0x0000a6a5
+ *	5	0x00008015	0x0000a6a5	(XMAC0: the CPU's conduit)
+ *	6, 7	0x00008015	0x0000a6a5
+ *	8	-		0x00039b11
+ *	10	0x00c0800b	0x0000a6a5
+ *	12	0x00ef8445	0x00009f99
+ *	14	0x00c00459	0x0000a6a5
+ *	15	0x00008001	0x0000a767	(the CPU trap port)
+ *	16..48	0x0000a4d3	0x0000a6a5
+ *	49	0x0000a86d	0x00052825
+ *	50	0x0000a86d	0x00052827
+ *	51..54, 63	0x0000a86d / 0x00008009	- (the vendor configures none)
+ *
+ * The board's own table is the vendor's, and it is the one the vendor's own
+ * board runs: the vendor's blob (etc/mcode/mcode_133.bin, read out of this
+ * board's own flash) carries it, and it agrees with the SPA memory the
+ * vendor's live board has - the four jacks read 0x0000a6a5 and the CPU trap
+ * port reads 0x0000a767 out of the vendor's own tm_debug.
+ *
+ * The driver's own port setup (zx279133_9132_port_words_vendor()) already
+ * writes the vendor's words for the four jacks and for the CPU trap port, so
+ * those were right; every other port kept the SR1010's entry program.  The
+ * port that matters most is 5: XMAC0 is the conduit the CPU talks to the
+ * 9132 through, and it was running an entry program that belongs to another
+ * board.
+ *
+ * So the blob's port-flow tags are not applied at all, and this table is
+ * written instead.  A port the vendor's table does not name keeps whatever
+ * the chip reset left in it, which is what the vendor's board has too - the
+ * vendor's own table does not touch ports 9, 11, 13 or 51..63 either.
+ */
+static const u32 zx279133_9132_port_flow[64] = {
+	/* 0: PON0, the WAN.  1..4: the four UNI jacks. */
+	0x0000a6a5, 0x0000a6a5, 0x0000a6a5, 0x0000a6a5,
+	/* 5: XMAC0, the CPU's conduit.  6: XMAC1.  7: RGMII1. */
+	0x0000a6a5, 0x0000a6a5, 0x0000a6a5, 0x0000a6a5,
+	0x00039b11,		/* 8 */
+	0x00000000,		/* 9: none */
+	0x0000a6a5,		/* 10 */
+	0x00000000,		/* 11: none */
+	0x00009f99,		/* 12 */
+	0x00000000,		/* 13: none */
+	0x0000a6a5,		/* 14 */
+	0x0000a767,		/* 15: the CPU trap port */
+	/* 16..48: the WOE's queue ports. */
+	0x0000a6a5, 0x0000a6a5, 0x0000a6a5, 0x0000a6a5, 0x0000a6a5,
+	0x0000a6a5, 0x0000a6a5, 0x0000a6a5, 0x0000a6a5, 0x0000a6a5,
+	0x0000a6a5, 0x0000a6a5, 0x0000a6a5, 0x0000a6a5, 0x0000a6a5,
+	0x0000a6a5, 0x0000a6a5, 0x0000a6a5, 0x0000a6a5, 0x0000a6a5,
+	0x0000a6a5, 0x0000a6a5, 0x0000a6a5, 0x0000a6a5, 0x0000a6a5,
+	0x0000a6a5, 0x0000a6a5, 0x0000a6a5, 0x0000a6a5, 0x0000a6a5,
+	0x0000a6a5, 0x0000a6a5, 0x0000a6a5,
+	0x00052825,		/* 49 */
+	0x00052827,		/* 50 */
+	/* 51..63: the vendor's board configures none of them. */
+	0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
+	0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
+	0x00000000, 0x00000000, 0x00000000,
+};
+
+static int zx279133_9132_port_flow_apply(struct zx279133_eth *eth)
+{
+	unsigned int i;
+	int ret;
+
+	for (i = 0; i < ARRAY_SIZE(zx279133_9132_port_flow); i++) {
+		if (!zx279133_9132_port_flow[i])
+			continue;
+		ret = zx279133_spa_indirect_write(eth, i, 0,
+						  zx279133_9132_port_flow[i]);
+		if (ret)
+			return ret;
+	}
+	return 0;
+}
+
 static int zx279133_ppu_mcode_prepare(struct zx279133_eth *eth)
 {
 	const struct firmware *fw;
@@ -4714,31 +4806,11 @@ static int zx279133_ppu_mcode_prepare(struct zx279133_eth *eth)
 			break;
 		case ZX279133_MCODE_TAG_PORT_FLOW:
 			/*
-			 * np_download_set_port_flow_table(): the tag updates
-			 * SPA memory address 0 with four read-modify-write
-			 * fields (attr 1 bits 14:1, attr 3 bits 20:15, attr 4
-			 * bits 23:21, attr 0 bit 0). Apply them all in one
-			 * read-modify-write cycle so they do not clobber each
-			 * other.
+			 * The blob's own port-flow table is the board's, and
+			 * this driver is given the blob for a different
+			 * board; see zx279133_9132_port_flow[] above.  The
+			 * board's table is applied after this walk.
 			 */
-			entry = value >> 26;
-			if ((value & BIT(25)) && entry != 62) {
-				u32 v;
-
-				ret = zx279133_spa_indirect_read(eth, entry, 0,
-								 &v);
-				if (ret)
-					goto out_gate;
-				v &= ~(BIT(0) | GENMASK(14, 1) |
-				       GENMASK(20, 15) | GENMASK(23, 21));
-				v |= (value & 0x3fff) << 1;
-				v |= (value >> 16 & 0x3f) << 15;
-				v |= (value >> 22 & 0x7) << 21;
-				v |= BIT(0);
-				ret = zx279133_spa_indirect_write(eth, entry, 0, v);
-				if (ret)
-					goto out_gate;
-			}
 			break;
 		default:
 			break;
@@ -4747,6 +4819,12 @@ static int zx279133_ppu_mcode_prepare(struct zx279133_eth *eth)
 	}
 	if (pkt_type != 512)
 		goto err_layout;
+	/*
+	 * And the board's own port-flow table, which the blob's is not.
+	 */
+	ret = zx279133_9132_port_flow_apply(eth);
+	if (ret)
+		goto out_gate;
 	ret = 0;
 	eth->ppu_mcode_prepared = true;
 	WRITE_ONCE(eth->rx_hash_active, hash);
