@@ -748,6 +748,10 @@ static void zx279133_switch_smac_init(struct zx279133_switch *priv)
 				break;
 			usleep_range(1000, 1100);
 		}
+		if (!(value & BIT(0)))
+			dev_warn(dev,
+				 "SMAC %d never became ready (0x%08x) after the reset pulse at nppt+0x%06x\n",
+				 mac, value, ZX279133_SMAC_RESET_WORD);
 		zx279133_switch_nppt_write(priv,
 					   ZX279133_SMAC_SOPC_SEND_BASE + 4 * mac,
 					   1);
@@ -762,6 +766,30 @@ static void zx279133_switch_smac_init(struct zx279133_switch *priv)
 			 zx279133_switch_nppt_read(priv,
 						   base + ZX279133_SMAC_SPEED),
 			 value);
+	}
+
+	/*
+	 * The SOPC register window, in one line.
+	 *
+	 * Two sources disagree about where the "clear-over-ready" word of an
+	 * internal-PHY MAC lives: np_133.ko's SMAC path reads it at
+	 * nppt+0x34294+4*mac, while the vendor's U-Boot prints
+	 * nppt+0x34000+((mac+0xa9)<<2), which is nppt+0x342a4+4*mac.  The
+	 * window is printed here whole, so the board answers the question
+	 * instead of another argument about it.
+	 */
+	{
+		u32 w[12];
+		u32 i;
+
+		for (i = 0; i < ARRAY_SIZE(w); i++)
+			w[i] = zx279133_switch_nppt_read(priv,
+					ZX279133_SMAC_SOPC_READY_BASE + 4 * i);
+		dev_info(dev,
+			 "SOPC window nppt+0x%06x: 0x%08x 0x%08x 0x%08x 0x%08x 0x%08x 0x%08x 0x%08x 0x%08x 0x%08x 0x%08x 0x%08x 0x%08x\n",
+			 ZX279133_SMAC_SOPC_READY_BASE,
+			 w[0], w[1], w[2], w[3], w[4], w[5],
+			 w[6], w[7], w[8], w[9], w[10], w[11]);
 	}
 }
 

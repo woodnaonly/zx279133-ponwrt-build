@@ -758,7 +758,7 @@ static inline u32 zx279133_idm_tx_done_reg(unsigned int queue)
 #define ZX279133_XMAC_EEE_TIMER_MASK	GENMASK(31, 16)
 #define ZX279133_XMAC_EEE_TIMER_ENABLE	BIT(5)
 #define ZX279133_XMAC_STAT_TX_FRAMES	0x2070
-#define ZX279133_XMAC_STAT_TX_GOOD	0x20b0
+#define ZX279133_XMAC_STAT_TX_GOOD	0x2230
 /* PTP/TOD registers are word-addressed as 0x704c..0x706a by np.ko. */
 #define ZX279133_PTP_AGC_CFG		0x2c0000
 #define ZX279133_PTP_AGC_WORK_CLOCKS	GENMASK(1, 0)
@@ -823,8 +823,16 @@ static inline u32 zx279133_idm_tx_done_reg(unsigned int queue)
  * The shared soft-reset word at NPPT + 0x2c0004 carries one bit per block;
  * the vendor's smac_reset() pulses bit(mac) to reset that MAC and nothing
  * else, so the XMAC and the PCS are not disturbed by it.
+ *
+ * This word used to be spelled 0x2c004 here - sixteen times too low - while
+ * the comment above it, the vendor's U-Boot (which prints the absolute
+ * address 0x192c0004) and the rest of this driver (ZX279133_SYS_SOFT_RESET,
+ * used by tm.c, mac.c and the XMAC0 reset) all said 0x2c0004.  So the pulse
+ * went to an address that is not the register: the four internal-PHY MACs
+ * were never reset, their "clear-over-ready" word stayed 0, none of them
+ * was ever published, and no frame from a LAN jack was ever received.
  */
-#define ZX279133_SMAC_RESET_WORD	0x2c004
+#define ZX279133_SMAC_RESET_WORD	ZX279133_SYS_SOFT_RESET
 #define ZX279133_SMAC_PKT_FILTER_VALUE	0x80000000
 #define ZX279133_SMAC_SPEED_VALUE	0x00012000
 #define ZX279133_SMAC_PORT_CTRL_BIT	0x200
