@@ -304,6 +304,13 @@ adopt_wan() {
 		[ "$q" = "$p" ] && continue
 		lan_list="$lan_list${lan_list:+ }$q"
 	done
+	# The DSA CPU port stays in the bridge: it is the way in and out of
+	# the switch for the router's own traffic, and a bridge without it
+	# forwards between the jacks and never reaches the host.  It is not
+	# one of dsa_ports(), because it is not a jack and is never a WAN
+	# candidate.
+	[ -e /sys/class/net/lan-cpu0 ] && \
+		lan_list="$lan_list${lan_list:+ }lan-cpu0"
 	# The image writes its own configuration in whatever format it uses,
 	# and this one writes it as JSON: /lib/functions/uci-defaults.sh in
 	# this image is built on json_select_object, and the generated
@@ -637,6 +644,12 @@ while true; do
 				[ "$q" = "$p" ] && continue
 				lan_list="$lan_list${lan_list:+ }$q"
 			done
+			# The DSA CPU port stays in the bridge: it is the way in and
+			# out of the switch for the router's own traffic, and a
+			# bridge without it forwards between the jacks and never
+			# reaches the host.
+			[ -e /sys/class/net/lan-cpu0 ] && \
+				lan_list="$lan_list${lan_list:+ }lan-cpu0"
 			if uci -q get network.lan.ports >/dev/null 2>&1; then
 				uci set network.lan.ports="$lan_list" 2>/dev/null
 			else

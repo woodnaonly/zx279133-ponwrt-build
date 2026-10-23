@@ -3124,6 +3124,24 @@ zx279133_proto_table_write(struct zx279133_eth *eth, u32 port,
  * and the value is the action itself - 2 hands the frame to the CPU, 0
  * leaves it to the normal path.  The ports are the 9132's own: 1 to 4 are
  * the four UNI jacks and 5 is the CPU port the SoC talks to.
+ *
+ * The port number in the index is the one thing here that the vendor's own
+ * code does not use consistently.  Its load path (switch.ko's
+ * sw_init_port_protocol_action) writes the table for the RAW switch ports
+ * 0..7, and its run-time path (np_133.ko's zxic_api_set_port_proation)
+ * writes it for the CHIP PPU number, which is the raw number plus one for
+ * 0..6.  The two spaces are one apart, and the table has a group of 128
+ * entries per port, so a frame that arrives on a jack looks up a group that
+ * differs by one whole group between the two readings.
+ *
+ * This driver used to write the chip PPU numbers 1..7 and nothing else,
+ * which leaves the group 0 (raw port 0) empty.  Writing all eight groups
+ * costs 128 entries and covers both readings: the vendor's own table B
+ * goes to 1..7 and to 0x10..0x30, and the group that raw port 0 owns is
+ * covered as well.  A frame that looked up a group this driver had left
+ * empty found no action at all, was neither forwarded nor trapped, and was
+ * dropped inside the chip - which is what the bench saw: the PC's frames
+ * reached the 9132 and no netdev ever counted a byte.
  */
 static int zx279133_9132_proto_init(struct zx279133_eth *eth)
 {
@@ -3136,7 +3154,7 @@ static int zx279133_9132_proto_init(struct zx279133_eth *eth)
 		return -EINVAL;
 	}
 
-	for (port = 1; port <= 7; port++) {
+	for (port = 0; port <= 7; port++) {
 		for (proto = 0; proto < 128; proto++) {
 			u32 action = zx279133_9132_proto_action[proto];
 
@@ -3151,7 +3169,7 @@ static int zx279133_9132_proto_init(struct zx279133_eth *eth)
 	}
 
 	dev_info(eth->dev,
-		 "9132 switch ports 1..7 have the protocol action table at ERAM block %u (ARP trapped to the CPU)\n",
+		 "9132 switch ports 0..7 have the protocol action table at ERAM block %u (ARP trapped to the CPU)\n",
 		 base);
 
 	return 0;

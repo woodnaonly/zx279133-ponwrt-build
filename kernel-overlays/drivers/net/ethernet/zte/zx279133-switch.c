@@ -145,10 +145,29 @@
  * first MAC of the array (0x342a4 / 0x342c0), and nothing in the tree has
  * ever written the array at all - which is what the run-62 counters said:
  * every descriptor completed and not one frame left the MAC.
+ *
+ * How many channels there are was the wrong number for a long time.  The
+ * array is not a run of XMACs: np_133.ko's SMAC side uses the offsets
+ * 0x34294 + 4 * mac and 0x342b0 + 4 * mac for the four internal-PHY MACs,
+ * so the words this driver was reading for "channel 0" are SMAC0's READY
+ * word and SMAC0's SEND word, and the words for "channel 3" are SMAC3's
+ * READY word and a word past the end of the SEND array.
+ *
+ * The XMAC channels are the two the vendor's own XMAC function reaches:
+ * 0x342a4 / 0x342c0 for XMAC0 and 0x342a8 / 0x342c4 for XMAC1.  A third
+ * pair follows at 0x342ac / 0x342c8 for the SMAC on the RGMII port, and
+ * after that the words are not a channel list any more.
+ *
+ * So the count is two, and the "channel 3" this driver used to publish was
+ * a write to 0x342cc - a word outside the array, in the middle of the
+ * SOPC's own register block.  The live board reads 0x342a4 = 0 (XMAC0's
+ * ready bit is not set), 0x342a8 = 1 (XMAC1's is), 0x342b0..0x342bc = 1
+ * (the four SMAC send-enables) and 0x342c0..0x342c8 = 1, which is what the
+ * count of two explains and what the count of four does not.
  */
 #define ZX279133_XMAC_SOPC_READY_BASE	0x342a4
 #define ZX279133_XMAC_SOPC_SEND_BASE	0x342c0
-#define ZX279133_XMAC_SOPC_CHANNELS	4
+#define ZX279133_XMAC_SOPC_CHANNELS	2
 
 /*
  * The XPCS 1G SGMII profile, recovered from the vendor's

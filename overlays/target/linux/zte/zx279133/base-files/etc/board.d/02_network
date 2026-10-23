@@ -95,6 +95,24 @@ skyworth,sk-d840n)
 			lan_ports="$lan_ports${lan_ports:+ }$d"
 		done
 		#
+		# The DSA CPU port has to be in the bridge as well.
+		#
+		# Every frame that comes in on a jack and is meant for the router
+		# itself is delivered to the switch's CPU port, and every frame the
+		# router sends towards a jack leaves through it.  It is a netdev of
+		# its own (lan-cpu0) and the bridge is what the host side of the
+		# switch is attached to - the four user ports are bridges of their
+		# own and the CPU port is not one of them.  A bridge without the
+		# CPU port forwards between the jacks and never reaches the host:
+		# the router's own address is on the bridge, the frames arrive on
+		# the CPU port, and nothing on the CPU port belongs to the bridge,
+		# so they are dropped there and no netdev ever counts a byte.
+		#
+		# Measured on the trial image on 2026-10-23: br-lan carried
+		# lan1, lan2 and lan4, and lan-cpu0 was in no bridge at all.
+		[ -e /sys/class/net/lan-cpu0 ] && \
+			lan_ports="$lan_ports${lan_ports:+ }lan-cpu0"
+		#
 		# The address is set with ucidef_set_interface, not with "uci set":
 		# this image's /lib/functions/uci-defaults.sh is built on
 		# json_select_object and writes /etc/config/network as a JSON
