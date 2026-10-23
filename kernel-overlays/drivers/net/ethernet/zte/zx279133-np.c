@@ -1212,6 +1212,15 @@ static ssize_t zx279133_9132_write(struct file *file, const char __user *ubuf,
 		tok = zx279133_9132_next_token(&p);
 		if (!tok || kstrtou32(tok, 0, &off))
 			return -EINVAL;
+		/*
+		 * The NPPT window is device memory, so a read or a write that
+		 * is not four-byte aligned is an alignment fault, and it takes
+		 * the kernel down with it.  An unaligned offset is refused
+		 * here instead: round 133 read one at +0x40002 and the board
+		 * panicked in the middle of the round.
+		 */
+		if (off & 3)
+			return -EINVAL;
 		if (off >= ZX279133_NPPT_WINDOW_SIZE)
 			return -EINVAL;
 		if (is_dump) {
@@ -1219,6 +1228,8 @@ static ssize_t zx279133_9132_write(struct file *file, const char __user *ubuf,
 			if (!tok || kstrtou32(tok, 0, &n))
 				return -EINVAL;
 			if (!n || n > 256)
+				return -EINVAL;
+			if (off + 4 * n > ZX279133_NPPT_WINDOW_SIZE)
 				return -EINVAL;
 		}
 		if (is_write) {

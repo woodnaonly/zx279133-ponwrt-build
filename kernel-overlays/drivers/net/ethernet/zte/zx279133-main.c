@@ -610,6 +610,15 @@ int zx279133_hardware_prepare(struct zx279133_eth *eth)
 	ret = zx279133_np_prepare(eth);
 	if (ret)
 		goto err_tm_restore;
+	/*
+	 * The NPPT now holds the 9132's configuration and the switch
+	 * driver has programmed the four port MACs into it.  A later
+	 * prepare - the datapath suspend and resume that the RSS and the
+	 * XSK paths ask for - must not reset the NPPT again, because the
+	 * reset would wipe all of that and the switch driver does not run
+	 * a second time.
+	 */
+	eth->nppt_ready = true;
 	zx279133_route_set(eth, true);
 	ret = zx279133_vlan_runtime_prepare(eth);
 	if (ret)

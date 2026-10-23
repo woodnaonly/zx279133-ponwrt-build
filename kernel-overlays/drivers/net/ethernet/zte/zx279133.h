@@ -1107,6 +1107,14 @@ struct zx279133_eth {
 	bool lan_dsa_active;
 	bool serdes_powered;
 	bool np_reset_prepared;
+	/*
+	 * Set once the NPPT has been brought up and the 9132 has been
+	 * configured in it.  A second prepare must not reset the NPPT
+	 * again: the reset wipes the 9132's tables and the four port MACs
+	 * the switch driver programmed, and the switch driver does not run
+	 * a second time.
+	 */
+	bool nppt_ready;
 	bool greg_prepared;
 	bool dma_prepared;
 	bool bmu_prepared;
