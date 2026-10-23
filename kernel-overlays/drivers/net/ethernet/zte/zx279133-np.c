@@ -2438,7 +2438,19 @@ static const u32 zx279133_9132_vendor_words[][2] = {
  *	word9  VLAN filter    0
  *	word10                0x0fa0000e
  *	word13                0x00008008
+ *	word17                0x07c00000
+ *	word18                0x03c00bc0
  *	word19 attribute word 0x00000000   (the jacks have 0x96040001)
+ *
+ * Words 17 and 18 are the port group and the queue base.  Every other port
+ * carries `(group << 24) | (queue base << 16) | (4 TX queues) | (16 RX
+ * queues)` in word 17, where the group is `4 + floor(ram id / 4)` and the
+ * queue base is `0x40 * (ram id % 4)`; the CPU port is the exception, and
+ * its word 17 has no queue-count field at all: it is the group (7) and the
+ * queue base (0xc0) only.  Word 18 is the same base with the group's index
+ * in it.  Read off the vendor's own live board on 2026-10-23 with
+ * `spa_port_attr_trap(cpu)`; the four UNI jacks had been right all along
+ * and these two words were the whole of the difference (docs/69).
  *
  * Evidence: docs/18's table of the vendor board's live SPA memory, and
  * np_133.ko's own per-port init (spa_init, 0x27834) plus the entry-program
@@ -2452,6 +2464,8 @@ static const u32 zx279133_9132_cpu_words[][2] = {
 	{ 9,  0x00000000 },	/* the VLAN filter: none */
 	{ 10, 0x0fa0000e },
 	{ 13, 0x00008008 },
+	{ 17, 0x07c00000 },	/* the port group and the queue base */
+	{ 18, 0x03c00bc0 },
 	{ 19, 0x00000000 },	/* the port attribute word: a trap carries none */
 };
 

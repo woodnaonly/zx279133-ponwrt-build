@@ -1,0 +1,2473 @@
+===== spa_port_attr_pon_0
+[  252.314657] 
+[  252.314657] ******************************************
+[  252.321310] spa spa_port_attr_pon_0 ram_id=0 ram_depth=20 ram_width=32
+[  252.327863] id=0=0x0 (32bit)
+[  252.330738] cnt=20=0x14 (32bit)
+[  252.355712] 
+[  252.357203] spa spa_port_attr_pon_0 (ram_id=0 depth=20 width=32) ram_addr=0 
+[  252.364242] bit[  0 ~  31] val[0]=0xa6a5
+[  252.395707] 
+[  252.397195] spa spa_port_attr_pon_0 (ram_id=0 depth=20 width=32) ram_addr=1 
+[  252.404235] bit[  0 ~  31] val[0]=0x88f
+[  252.435706] 
+[  252.437193] spa spa_port_attr_pon_0 (ram_id=0 depth=20 width=32) ram_addr=2 
+[  252.444232] bit[  0 ~  31] val[0]=0x0
+[  252.475708] 
+[  252.477197] spa spa_port_attr_pon_0 (ram_id=0 depth=20 width=32) ram_addr=3 
+[  252.484236] bit[  0 ~  31] val[0]=0x0
+[  252.515706] 
+[  252.517193] spa spa_port_attr_pon_0 (ram_id=0 depth=20 width=32) ram_addr=4 
+[  252.524232] bit[  0 ~  31] val[0]=0x0
+[  252.555706] 
+[  252.557193] spa spa_port_attr_pon_0 (ram_id=0 depth=20 width=32) ram_addr=5 
+[  252.564232] bit[  0 ~  31] val[0]=0x0
+[  252.595711] 
+[  252.597198] spa spa_port_attr_pon_0 (ram_id=0 depth=20 width=32) ram_addr=6 
+[  252.604237] bit[  0 ~  31] val[0]=0x0
+[  252.635709] 
+[  252.637198] spa spa_port_attr_pon_0 (ram_id=0 depth=20 width=32) ram_addr=7 
+[  252.644460] bit[  0 ~  31] val[0]=0x0
+[  252.675707] 
+[  252.677195] spa spa_port_attr_pon_0 (ram_id=0 depth=20 width=32) ram_addr=8 
+[  252.684455] bit[  0 ~  31] val[0]=0x0
+[  252.715705] 
+[  252.717193] spa spa_port_attr_pon_0 (ram_id=0 depth=20 width=32) ram_addr=9 
+[  252.724454] bit[  0 ~  31] val[0]=0x0
+[  252.755706] 
+[  252.757194] spa spa_port_attr_pon_0 (ram_id=0 depth=20 width=32) ram_addr=10 
+[  252.764542] bit[  0 ~  31] val[0]=0xfa0000e
+[  252.795705] 
+[  252.797193] spa spa_port_attr_pon_0 (ram_id=0 depth=20 width=32) ram_addr=11 
+[  252.804541] bit[  0 ~  31] val[0]=0x0
+[  252.835705] 
+[  252.837193] spa spa_port_attr_pon_0 (ram_id=0 depth=20 width=32) ram_addr=12 
+[  252.844541] bit[  0 ~  31] val[0]=0x0
+[  252.875706] 
+[  252.877194] spa spa_port_attr_pon_0 (ram_id=0 depth=20 width=32) ram_addr=13 
+[  252.884541] bit[  0 ~  31] val[0]=0x8008
+[  252.915713] 
+[  252.917201] spa spa_port_attr_pon_0 (ram_id=0 depth=20 width=32) ram_addr=14 
+[  252.924549] bit[  0 ~  31] val[0]=0x0
+[  252.955705] 
+[  252.957193] spa spa_port_attr_pon_0 (ram_id=0 depth=20 width=32) ram_addr=15 
+[  252.964540] bit[  0 ~  31] val[0]=0x0
+[  252.995706] 
+[  252.997193] spa spa_port_attr_pon_0 (ram_id=0 depth=20 width=32) ram_addr=16 
+[  253.004541] bit[  0 ~  31] val[0]=0x0
+[  253.035705] 
+[  253.037193] spa spa_port_attr_pon_0 (ram_id=0 depth=20 width=32) ram_addr=17 
+[  253.044541] bit[  0 ~  31] val[0]=0x4000000
+[  253.075706] 
+[  253.077193] spa spa_port_attr_pon_0 (ram_id=0 depth=20 width=32) ram_addr=18 
+[  253.084541] bit[  0 ~  31] val[0]=0x800
+[  253.115706] 
+[  253.117194] spa spa_port_attr_pon_0 (ram_id=0 depth=20 width=32) ram_addr=19 
+[  253.124542] bit[  0 ~  31] val[0]=0x90040000
+[  253.128847] cmd success!
+===== spa_port_attr_smac_0
+[  253.136752] 
+[  253.136752] ******************************************
+[  253.143620] spa spa_port_attr_smac_0 ram_id=1 ram_depth=20 ram_width=32
+[  253.150263] id=0=0x0 (32bit)
+[  253.153366] cnt=20=0x14 (32bit)
+[  253.185709] 
+[  253.187201] spa spa_port_attr_smac_0 (ram_id=1 depth=20 width=32) ram_addr=0 
+[  253.194327] bit[  0 ~  31] val[0]=0xa6a5
+[  253.227019] 
+[  253.228528] spa spa_port_attr_smac_0 (ram_id=1 depth=20 width=32) ram_addr=1 
+[  253.235655] bit[  0 ~  31] val[0]=0x88f
+[  253.265778] 
+[  253.267267] spa spa_port_attr_smac_0 (ram_id=1 depth=20 width=32) ram_addr=2 
+[  253.274393] bit[  0 ~  31] val[0]=0x0
+[  253.305707] 
+[  253.307195] spa spa_port_attr_smac_0 (ram_id=1 depth=20 width=32) ram_addr=3 
+[  253.314321] bit[  0 ~  31] val[0]=0x0
+[  253.345708] 
+[  253.347196] spa spa_port_attr_smac_0 (ram_id=1 depth=20 width=32) ram_addr=4 
+[  253.354321] bit[  0 ~  31] val[0]=0x0
+[  253.385706] 
+[  253.387194] spa spa_port_attr_smac_0 (ram_id=1 depth=20 width=32) ram_addr=5 
+[  253.394320] bit[  0 ~  31] val[0]=0x0
+[  253.425705] 
+[  253.427194] spa spa_port_attr_smac_0 (ram_id=1 depth=20 width=32) ram_addr=6 
+[  253.434319] bit[  0 ~  31] val[0]=0x0
+[  253.465714] 
+[  253.467201] spa spa_port_attr_smac_0 (ram_id=1 depth=20 width=32) ram_addr=7 
+[  253.474327] bit[  0 ~  31] val[0]=0x0
+[  253.505710] 
+[  253.507198] spa spa_port_attr_smac_0 (ram_id=1 depth=20 width=32) ram_addr=8 
+[  253.514323] bit[  0 ~  31] val[0]=0x0
+[  253.545727] 
+[  253.547215] spa spa_port_attr_smac_0 (ram_id=1 depth=20 width=32) ram_addr=9 
+[  253.554341] bit[  0 ~  31] val[0]=0x0
+[  253.585705] 
+[  253.587193] spa spa_port_attr_smac_0 (ram_id=1 depth=20 width=32) ram_addr=10 
+[  253.594406] bit[  0 ~  31] val[0]=0xfa0000e
+[  253.625709] 
+[  253.627199] spa spa_port_attr_smac_0 (ram_id=1 depth=20 width=32) ram_addr=11 
+[  253.634632] bit[  0 ~  31] val[0]=0x0
+[  253.665707] 
+[  253.667195] spa spa_port_attr_smac_0 (ram_id=1 depth=20 width=32) ram_addr=12 
+[  253.674627] bit[  0 ~  31] val[0]=0x0
+[  253.705709] 
+[  253.707197] spa spa_port_attr_smac_0 (ram_id=1 depth=20 width=32) ram_addr=13 
+[  253.714630] bit[  0 ~  31] val[0]=0x8008
+[  253.745705] 
+[  253.747193] spa spa_port_attr_smac_0 (ram_id=1 depth=20 width=32) ram_addr=14 
+[  253.754625] bit[  0 ~  31] val[0]=0x0
+[  253.785705] 
+[  253.787194] spa spa_port_attr_smac_0 (ram_id=1 depth=20 width=32) ram_addr=15 
+[  253.794625] bit[  0 ~  31] val[0]=0x0
+[  253.825706] 
+[  253.827194] spa spa_port_attr_smac_0 (ram_id=1 depth=20 width=32) ram_addr=16 
+[  253.834626] bit[  0 ~  31] val[0]=0x0
+[  253.865707] 
+[  253.867195] spa spa_port_attr_smac_0 (ram_id=1 depth=20 width=32) ram_addr=17 
+[  253.874628] bit[  0 ~  31] val[0]=0x4400410
+[  253.905714] 
+[  253.907202] spa spa_port_attr_smac_0 (ram_id=1 depth=20 width=32) ram_addr=18 
+[  253.914634] bit[  0 ~  31] val[0]=0x400840
+[  253.945705] 
+[  253.947193] spa spa_port_attr_smac_0 (ram_id=1 depth=20 width=32) ram_addr=19 
+[  253.954625] bit[  0 ~  31] val[0]=0x96040001
+[  253.958933] cmd success!
+===== spa_port_attr_smac_1
+[  253.966994] 
+[  253.966994] ******************************************
+[  253.973864] spa spa_port_attr_smac_1 ram_id=2 ram_depth=20 ram_width=32
+[  253.980503] id=0=0x0 (32bit)
+[  253.983608] cnt=20=0x14 (32bit)
+[  254.015712] 
+[  254.017203] spa spa_port_attr_smac_1 (ram_id=2 depth=20 width=32) ram_addr=0 
+[  254.024552] bit[  0 ~  31] val[0]=0xa6a5
+[  254.055707] 
+[  254.057195] spa spa_port_attr_smac_1 (ram_id=2 depth=20 width=32) ram_addr=1 
+[  254.064544] bit[  0 ~  31] val[0]=0x88f
+[  254.095705] 
+[  254.097193] spa spa_port_attr_smac_1 (ram_id=2 depth=20 width=32) ram_addr=2 
+[  254.104541] bit[  0 ~  31] val[0]=0x0
+[  254.135705] 
+[  254.137193] spa spa_port_attr_smac_1 (ram_id=2 depth=20 width=32) ram_addr=3 
+[  254.144541] bit[  0 ~  31] val[0]=0x0
+[  254.175706] 
+[  254.177193] spa spa_port_attr_smac_1 (ram_id=2 depth=20 width=32) ram_addr=4 
+[  254.184541] bit[  0 ~  31] val[0]=0x0
+[  254.215707] 
+[  254.217195] spa spa_port_attr_smac_1 (ram_id=2 depth=20 width=32) ram_addr=5 
+[  254.224543] bit[  0 ~  31] val[0]=0x0
+[  254.255732] 
+[  254.257243] spa spa_port_attr_smac_1 (ram_id=2 depth=20 width=32) ram_addr=6 
+[  254.264370] bit[  0 ~  31] val[0]=0x0
+[  254.295709] 
+[  254.297198] spa spa_port_attr_smac_1 (ram_id=2 depth=20 width=32) ram_addr=7 
+[  254.304323] bit[  0 ~  31] val[0]=0x0
+[  254.335709] 
+[  254.337197] spa spa_port_attr_smac_1 (ram_id=2 depth=20 width=32) ram_addr=8 
+[  254.344323] bit[  0 ~  31] val[0]=0x0
+[  254.375705] 
+[  254.377193] spa spa_port_attr_smac_1 (ram_id=2 depth=20 width=32) ram_addr=9 
+[  254.384319] bit[  0 ~  31] val[0]=0x0
+[  254.415710] 
+[  254.417197] spa spa_port_attr_smac_1 (ram_id=2 depth=20 width=32) ram_addr=10 
+[  254.424410] bit[  0 ~  31] val[0]=0xfa0000e
+[  254.455706] 
+[  254.457193] spa spa_port_attr_smac_1 (ram_id=2 depth=20 width=32) ram_addr=11 
+[  254.464406] bit[  0 ~  31] val[0]=0x0
+[  254.495707] 
+[  254.497194] spa spa_port_attr_smac_1 (ram_id=2 depth=20 width=32) ram_addr=12 
+[  254.504406] bit[  0 ~  31] val[0]=0x0
+[  254.535705] 
+[  254.537193] spa spa_port_attr_smac_1 (ram_id=2 depth=20 width=32) ram_addr=13 
+[  254.544405] bit[  0 ~  31] val[0]=0x8008
+[  254.575709] 
+[  254.577199] spa spa_port_attr_smac_1 (ram_id=2 depth=20 width=32) ram_addr=14 
+[  254.584634] bit[  0 ~  31] val[0]=0x0
+[  254.615713] 
+[  254.617202] spa spa_port_attr_smac_1 (ram_id=2 depth=20 width=32) ram_addr=15 
+[  254.624637] bit[  0 ~  31] val[0]=0x0
+[  254.656950] 
+[  254.658439] spa spa_port_attr_smac_1 (ram_id=2 depth=20 width=32) ram_addr=16 
+[  254.665651] bit[  0 ~  31] val[0]=0x0
+[  254.695720] 
+[  254.697209] spa spa_port_attr_smac_1 (ram_id=2 depth=20 width=32) ram_addr=17 
+[  254.704421] bit[  0 ~  31] val[0]=0x4800410
+[  254.735707] 
+[  254.737195] spa spa_port_attr_smac_1 (ram_id=2 depth=20 width=32) ram_addr=18 
+[  254.744408] bit[  0 ~  31] val[0]=0x800880
+[  254.775711] 
+[  254.777199] spa spa_port_attr_smac_1 (ram_id=2 depth=20 width=32) ram_addr=19 
+[  254.784412] bit[  0 ~  31] val[0]=0x96040001
+[  254.788723] cmd success!
+===== spa_port_attr_smac_2
+[  254.797022] 
+[  254.797022] ******************************************
+[  254.803644] spa spa_port_attr_smac_2 ram_id=3 ram_depth=20 ram_width=32
+[  254.810289] id=0=0x0 (32bit)
+[  254.813164] cnt=20=0x14 (32bit)
+[  254.845711] 
+[  254.847201] spa spa_port_attr_smac_2 (ram_id=3 depth=20 width=32) ram_addr=0 
+[  254.854327] bit[  0 ~  31] val[0]=0xa6a5
+[  254.885709] 
+[  254.887196] spa spa_port_attr_smac_2 (ram_id=3 depth=20 width=32) ram_addr=1 
+[  254.894322] bit[  0 ~  31] val[0]=0x88f
+[  254.925711] 
+[  254.927199] spa spa_port_attr_smac_2 (ram_id=3 depth=20 width=32) ram_addr=2 
+[  254.934325] bit[  0 ~  31] val[0]=0x0
+[  254.965708] 
+[  254.967195] spa spa_port_attr_smac_2 (ram_id=3 depth=20 width=32) ram_addr=3 
+[  254.974320] bit[  0 ~  31] val[0]=0x0
+[  255.005706] 
+[  255.007194] spa spa_port_attr_smac_2 (ram_id=3 depth=20 width=32) ram_addr=4 
+[  255.014319] bit[  0 ~  31] val[0]=0x0
+[  255.045705] 
+[  255.047193] spa spa_port_attr_smac_2 (ram_id=3 depth=20 width=32) ram_addr=5 
+[  255.054318] bit[  0 ~  31] val[0]=0x0
+[  255.085707] 
+[  255.087194] spa spa_port_attr_smac_2 (ram_id=3 depth=20 width=32) ram_addr=6 
+[  255.094320] bit[  0 ~  31] val[0]=0x0
+[  255.125706] 
+[  255.127193] spa spa_port_attr_smac_2 (ram_id=3 depth=20 width=32) ram_addr=7 
+[  255.134319] bit[  0 ~  31] val[0]=0x0
+[  255.165706] 
+[  255.167194] spa spa_port_attr_smac_2 (ram_id=3 depth=20 width=32) ram_addr=8 
+[  255.174320] bit[  0 ~  31] val[0]=0x0
+[  255.206944] 
+[  255.208431] spa spa_port_attr_smac_2 (ram_id=3 depth=20 width=32) ram_addr=9 
+[  255.215557] bit[  0 ~  31] val[0]=0x0
+[  255.245759] 
+[  255.247269] spa spa_port_attr_smac_2 (ram_id=3 depth=20 width=32) ram_addr=10 
+[  255.254482] bit[  0 ~  31] val[0]=0xfa0000e
+[  255.285712] 
+[  255.287201] spa spa_port_attr_smac_2 (ram_id=3 depth=20 width=32) ram_addr=11 
+[  255.294415] bit[  0 ~  31] val[0]=0x0
+[  255.325710] 
+[  255.327198] spa spa_port_attr_smac_2 (ram_id=3 depth=20 width=32) ram_addr=12 
+[  255.334411] bit[  0 ~  31] val[0]=0x0
+[  255.365706] 
+[  255.367193] spa spa_port_attr_smac_2 (ram_id=3 depth=20 width=32) ram_addr=13 
+[  255.374405] bit[  0 ~  31] val[0]=0x8008
+[  255.405706] 
+[  255.407193] spa spa_port_attr_smac_2 (ram_id=3 depth=20 width=32) ram_addr=14 
+[  255.414406] bit[  0 ~  31] val[0]=0x0
+[  255.445706] 
+[  255.447194] spa spa_port_attr_smac_2 (ram_id=3 depth=20 width=32) ram_addr=15 
+[  255.454406] bit[  0 ~  31] val[0]=0x0
+[  255.485708] 
+[  255.487196] spa spa_port_attr_smac_2 (ram_id=3 depth=20 width=32) ram_addr=16 
+[  255.494408] bit[  0 ~  31] val[0]=0x0
+[  255.525706] 
+[  255.527194] spa spa_port_attr_smac_2 (ram_id=3 depth=20 width=32) ram_addr=17 
+[  255.534407] bit[  0 ~  31] val[0]=0x4c00410
+[  255.565706] 
+[  255.567193] spa spa_port_attr_smac_2 (ram_id=3 depth=20 width=32) ram_addr=18 
+[  255.574406] bit[  0 ~  31] val[0]=0xc008c0
+[  255.605706] 
+[  255.607194] spa spa_port_attr_smac_2 (ram_id=3 depth=20 width=32) ram_addr=19 
+[  255.614407] bit[  0 ~  31] val[0]=0x96040001
+[  255.618715] cmd success!
+===== spa_port_attr_smac_3
+[  255.626934] 
+[  255.626934] ******************************************
+[  255.633555] spa spa_port_attr_smac_3 ram_id=4 ram_depth=20 ram_width=32
+[  255.640204] id=0=0x0 (32bit)
+[  255.643079] cnt=20=0x14 (32bit)
+[  255.675714] 
+[  255.677204] spa spa_port_attr_smac_3 (ram_id=4 depth=20 width=32) ram_addr=0 
+[  255.684330] bit[  0 ~  31] val[0]=0xa6a5
+[  255.715712] 
+[  255.717200] spa spa_port_attr_smac_3 (ram_id=4 depth=20 width=32) ram_addr=1 
+[  255.724326] bit[  0 ~  31] val[0]=0x88f
+[  255.756946] 
+[  255.758433] spa spa_port_attr_smac_3 (ram_id=4 depth=20 width=32) ram_addr=2 
+[  255.765559] bit[  0 ~  31] val[0]=0x0
+[  255.795705] 
+[  255.797193] spa spa_port_attr_smac_3 (ram_id=4 depth=20 width=32) ram_addr=3 
+[  255.804318] bit[  0 ~  31] val[0]=0x0
+[  255.835705] 
+[  255.837193] spa spa_port_attr_smac_3 (ram_id=4 depth=20 width=32) ram_addr=4 
+[  255.844318] bit[  0 ~  31] val[0]=0x0
+[  255.875707] 
+[  255.877195] spa spa_port_attr_smac_3 (ram_id=4 depth=20 width=32) ram_addr=5 
+[  255.884321] bit[  0 ~  31] val[0]=0x0
+[  255.915706] 
+[  255.917193] spa spa_port_attr_smac_3 (ram_id=4 depth=20 width=32) ram_addr=6 
+[  255.924318] bit[  0 ~  31] val[0]=0x0
+[  255.955717] 
+[  255.957205] spa spa_port_attr_smac_3 (ram_id=4 depth=20 width=32) ram_addr=7 
+[  255.964330] bit[  0 ~  31] val[0]=0x0
+[  255.995707] 
+[  255.997195] spa spa_port_attr_smac_3 (ram_id=4 depth=20 width=32) ram_addr=8 
+[  256.004321] bit[  0 ~  31] val[0]=0x0
+[  256.035706] 
+[  256.037193] spa spa_port_attr_smac_3 (ram_id=4 depth=20 width=32) ram_addr=9 
+[  256.044318] bit[  0 ~  31] val[0]=0x0
+[  256.075705] 
+[  256.077193] spa spa_port_attr_smac_3 (ram_id=4 depth=20 width=32) ram_addr=10 
+[  256.084405] bit[  0 ~  31] val[0]=0xfa0000e
+[  256.115719] 
+[  256.117208] spa spa_port_attr_smac_3 (ram_id=4 depth=20 width=32) ram_addr=11 
+[  256.124644] bit[  0 ~  31] val[0]=0x0
+[  256.155706] 
+[  256.157194] spa spa_port_attr_smac_3 (ram_id=4 depth=20 width=32) ram_addr=12 
+[  256.164628] bit[  0 ~  31] val[0]=0x0
+[  256.195730] 
+[  256.197218] spa spa_port_attr_smac_3 (ram_id=4 depth=20 width=32) ram_addr=13 
+[  256.204652] bit[  0 ~  31] val[0]=0x8008
+[  256.235709] 
+[  256.237197] spa spa_port_attr_smac_3 (ram_id=4 depth=20 width=32) ram_addr=14 
+[  256.244631] bit[  0 ~  31] val[0]=0x0
+[  256.275751] 
+[  256.277260] spa spa_port_attr_smac_3 (ram_id=4 depth=20 width=32) ram_addr=15 
+[  256.284700] bit[  0 ~  31] val[0]=0x0
+[  256.315709] 
+[  256.317199] spa spa_port_attr_smac_3 (ram_id=4 depth=20 width=32) ram_addr=16 
+[  256.324412] bit[  0 ~  31] val[0]=0x0
+[  256.355737] 
+[  256.357226] spa spa_port_attr_smac_3 (ram_id=4 depth=20 width=32) ram_addr=17 
+[  256.364662] bit[  0 ~  31] val[0]=0x5000410
+[  256.395706] 
+[  256.397194] spa spa_port_attr_smac_3 (ram_id=4 depth=20 width=32) ram_addr=18 
+[  256.404628] bit[  0 ~  31] val[0]=0x1000900
+[  256.435744] 
+[  256.437232] spa spa_port_attr_smac_3 (ram_id=4 depth=20 width=32) ram_addr=19 
+[  256.444667] bit[  0 ~  31] val[0]=0x96040001
+[  256.448972] cmd success!
+===== spa_port_attr_xmac_0
+[  256.457027] 
+[  256.457027] ******************************************
+[  256.463899] spa spa_port_attr_xmac_0 ram_id=5 ram_depth=20 ram_width=32
+[  256.470536] id=0=0x0 (32bit)
+[  256.473639] cnt=20=0x14 (32bit)
+[  256.505722] 
+[  256.507213] spa spa_port_attr_xmac_0 (ram_id=5 depth=20 width=32) ram_addr=0 
+[  256.514560] bit[  0 ~  31] val[0]=0xa6a5
+[  256.545707] 
+[  256.547197] spa spa_port_attr_xmac_0 (ram_id=5 depth=20 width=32) ram_addr=1 
+[  256.554323] bit[  0 ~  31] val[0]=0x88f
+[  256.585706] 
+[  256.587194] spa spa_port_attr_xmac_0 (ram_id=5 depth=20 width=32) ram_addr=2 
+[  256.594319] bit[  0 ~  31] val[0]=0x0
+[  256.625706] 
+[  256.627194] spa spa_port_attr_xmac_0 (ram_id=5 depth=20 width=32) ram_addr=3 
+[  256.634320] bit[  0 ~  31] val[0]=0x0
+[  256.665707] 
+[  256.667194] spa spa_port_attr_xmac_0 (ram_id=5 depth=20 width=32) ram_addr=4 
+[  256.674319] bit[  0 ~  31] val[0]=0x0
+[  256.705707] 
+[  256.707195] spa spa_port_attr_xmac_0 (ram_id=5 depth=20 width=32) ram_addr=5 
+[  256.714321] bit[  0 ~  31] val[0]=0x0
+[  256.746944] 
+[  256.748432] spa spa_port_attr_xmac_0 (ram_id=5 depth=20 width=32) ram_addr=6 
+[  256.755557] bit[  0 ~  31] val[0]=0x0
+[  256.785706] 
+[  256.787193] spa spa_port_attr_xmac_0 (ram_id=5 depth=20 width=32) ram_addr=7 
+[  256.794319] bit[  0 ~  31] val[0]=0x0
+[  256.825705] 
+[  256.827193] spa spa_port_attr_xmac_0 (ram_id=5 depth=20 width=32) ram_addr=8 
+[  256.834318] bit[  0 ~  31] val[0]=0x0
+[  256.865707] 
+[  256.867194] spa spa_port_attr_xmac_0 (ram_id=5 depth=20 width=32) ram_addr=9 
+[  256.874320] bit[  0 ~  31] val[0]=0x0
+[  256.905706] 
+[  256.907194] spa spa_port_attr_xmac_0 (ram_id=5 depth=20 width=32) ram_addr=10 
+[  256.914407] bit[  0 ~  31] val[0]=0xfa0000e
+[  256.945705] 
+[  256.947194] spa spa_port_attr_xmac_0 (ram_id=5 depth=20 width=32) ram_addr=11 
+[  256.954406] bit[  0 ~  31] val[0]=0x0
+[  256.985705] 
+[  256.987193] spa spa_port_attr_xmac_0 (ram_id=5 depth=20 width=32) ram_addr=12 
+[  256.994406] bit[  0 ~  31] val[0]=0x0
+[  257.025710] 
+[  257.027198] spa spa_port_attr_xmac_0 (ram_id=5 depth=20 width=32) ram_addr=13 
+[  257.034410] bit[  0 ~  31] val[0]=0x8008
+[  257.065707] 
+[  257.067195] spa spa_port_attr_xmac_0 (ram_id=5 depth=20 width=32) ram_addr=14 
+[  257.074407] bit[  0 ~  31] val[0]=0x0
+[  257.105706] 
+[  257.107193] spa spa_port_attr_xmac_0 (ram_id=5 depth=20 width=32) ram_addr=15 
+[  257.114406] bit[  0 ~  31] val[0]=0x0
+[  257.145705] 
+[  257.147193] spa spa_port_attr_xmac_0 (ram_id=5 depth=20 width=32) ram_addr=16 
+[  257.154406] bit[  0 ~  31] val[0]=0x0
+[  257.186947] 
+[  257.188436] spa spa_port_attr_xmac_0 (ram_id=5 depth=20 width=32) ram_addr=17 
+[  257.195648] bit[  0 ~  31] val[0]=0x5400410
+[  257.225705] 
+[  257.227193] spa spa_port_attr_xmac_0 (ram_id=5 depth=20 width=32) ram_addr=18 
+[  257.234405] bit[  0 ~  31] val[0]=0x1400940
+[  257.265759] 
+[  257.267268] spa spa_port_attr_xmac_0 (ram_id=5 depth=20 width=32) ram_addr=19 
+[  257.274482] bit[  0 ~  31] val[0]=0x96040001
+[  257.278811] cmd success!
+===== spa_port_attr_xmac_1
+[  257.286997] 
+[  257.286997] ******************************************
+[  257.293618] spa spa_port_attr_xmac_1 ram_id=6 ram_depth=20 ram_width=32
+[  257.301565] id=0=0x0 (32bit)
+[  257.304440] cnt=20=0x14 (32bit)
+[  257.335730] 
+[  257.337221] spa spa_port_attr_xmac_1 (ram_id=6 depth=20 width=32) ram_addr=0 
+[  257.344347] bit[  0 ~  31] val[0]=0xa6a5
+[  257.375707] 
+[  257.377195] spa spa_port_attr_xmac_1 (ram_id=6 depth=20 width=32) ram_addr=1 
+[  257.384321] bit[  0 ~  31] val[0]=0x88f
+[  257.415706] 
+[  257.417194] spa spa_port_attr_xmac_1 (ram_id=6 depth=20 width=32) ram_addr=2 
+[  257.424319] bit[  0 ~  31] val[0]=0x0
+[  257.455706] 
+[  257.457193] spa spa_port_attr_xmac_1 (ram_id=6 depth=20 width=32) ram_addr=3 
+[  257.464319] bit[  0 ~  31] val[0]=0x0
+[  257.495709] 
+[  257.497199] spa spa_port_attr_xmac_1 (ram_id=6 depth=20 width=32) ram_addr=4 
+[  257.504548] bit[  0 ~  31] val[0]=0x0
+[  257.535706] 
+[  257.537193] spa spa_port_attr_xmac_1 (ram_id=6 depth=20 width=32) ram_addr=5 
+[  257.544541] bit[  0 ~  31] val[0]=0x0
+[  257.575706] 
+[  257.577194] spa spa_port_attr_xmac_1 (ram_id=6 depth=20 width=32) ram_addr=6 
+[  257.584542] bit[  0 ~  31] val[0]=0x0
+[  257.615705] 
+[  257.617193] spa spa_port_attr_xmac_1 (ram_id=6 depth=20 width=32) ram_addr=7 
+[  257.624541] bit[  0 ~  31] val[0]=0x0
+[  257.655708] 
+[  257.657196] spa spa_port_attr_xmac_1 (ram_id=6 depth=20 width=32) ram_addr=8 
+[  257.664544] bit[  0 ~  31] val[0]=0x0
+[  257.695710] 
+[  257.697198] spa spa_port_attr_xmac_1 (ram_id=6 depth=20 width=32) ram_addr=9 
+[  257.704546] bit[  0 ~  31] val[0]=0x0
+[  257.735706] 
+[  257.737194] spa spa_port_attr_xmac_1 (ram_id=6 depth=20 width=32) ram_addr=10 
+[  257.744629] bit[  0 ~  31] val[0]=0xfa0000e
+[  257.775714] 
+[  257.777203] spa spa_port_attr_xmac_1 (ram_id=6 depth=20 width=32) ram_addr=11 
+[  257.784637] bit[  0 ~  31] val[0]=0x0
+[  257.815708] 
+[  257.817197] spa spa_port_attr_xmac_1 (ram_id=6 depth=20 width=32) ram_addr=12 
+[  257.824410] bit[  0 ~  31] val[0]=0x0
+[  257.855709] 
+[  257.857197] spa spa_port_attr_xmac_1 (ram_id=6 depth=20 width=32) ram_addr=13 
+[  257.864410] bit[  0 ~  31] val[0]=0x8008
+[  257.895707] 
+[  257.897194] spa spa_port_attr_xmac_1 (ram_id=6 depth=20 width=32) ram_addr=14 
+[  257.904407] bit[  0 ~  31] val[0]=0x0
+[  257.935706] 
+[  257.937194] spa spa_port_attr_xmac_1 (ram_id=6 depth=20 width=32) ram_addr=15 
+[  257.944406] bit[  0 ~  31] val[0]=0x0
+[  257.975705] 
+[  257.977193] spa spa_port_attr_xmac_1 (ram_id=6 depth=20 width=32) ram_addr=16 
+[  257.984405] bit[  0 ~  31] val[0]=0x0
+[  258.015707] 
+[  258.017195] spa spa_port_attr_xmac_1 (ram_id=6 depth=20 width=32) ram_addr=17 
+[  258.024407] bit[  0 ~  31] val[0]=0x5800410
+[  258.055706] 
+[  258.057194] spa spa_port_attr_xmac_1 (ram_id=6 depth=20 width=32) ram_addr=18 
+[  258.064406] bit[  0 ~  31] val[0]=0x1800980
+[  258.095706] 
+[  258.097194] spa spa_port_attr_xmac_1 (ram_id=6 depth=20 width=32) ram_addr=19 
+[  258.104407] bit[  0 ~  31] val[0]=0x96040001
+[  258.108711] cmd success!
+===== spa_port_attr_rgmii
+[  258.116997] 
+[  258.116997] ******************************************
+[  258.123617] spa spa_port_attr_rgmii ram_id=7 ram_depth=20 ram_width=32
+[  258.130175] id=0=0x0 (32bit)
+[  258.133050] cnt=20=0x14 (32bit)
+[  258.165730] 
+[  258.167221] spa spa_port_attr_rgmii (ram_id=7 depth=20 width=32) ram_addr=0 
+[  258.174481] bit[  0 ~  31] val[0]=0xa6a5
+[  258.205708] 
+[  258.207196] spa spa_port_attr_rgmii (ram_id=7 depth=20 width=32) ram_addr=1 
+[  258.214235] bit[  0 ~  31] val[0]=0x88f
+[  258.245707] 
+[  258.247195] spa spa_port_attr_rgmii (ram_id=7 depth=20 width=32) ram_addr=2 
+[  258.254234] bit[  0 ~  31] val[0]=0x0
+[  258.287003] 
+[  258.288512] spa spa_port_attr_rgmii (ram_id=7 depth=20 width=32) ram_addr=3 
+[  258.295552] bit[  0 ~  31] val[0]=0x0
+[  258.325713] 
+[  258.327201] spa spa_port_attr_rgmii (ram_id=7 depth=20 width=32) ram_addr=4 
+[  258.334240] bit[  0 ~  31] val[0]=0x0
+[  258.365708] 
+[  258.367196] spa spa_port_attr_rgmii (ram_id=7 depth=20 width=32) ram_addr=5 
+[  258.374234] bit[  0 ~  31] val[0]=0x0
+[  258.405706] 
+[  258.407194] spa spa_port_attr_rgmii (ram_id=7 depth=20 width=32) ram_addr=6 
+[  258.414233] bit[  0 ~  31] val[0]=0x0
+[  258.445706] 
+[  258.447194] spa spa_port_attr_rgmii (ram_id=7 depth=20 width=32) ram_addr=7 
+[  258.454233] bit[  0 ~  31] val[0]=0x0
+[  258.485708] 
+[  258.487195] spa spa_port_attr_rgmii (ram_id=7 depth=20 width=32) ram_addr=8 
+[  258.494234] bit[  0 ~  31] val[0]=0x0
+[  258.525706] 
+[  258.527194] spa spa_port_attr_rgmii (ram_id=7 depth=20 width=32) ram_addr=9 
+[  258.534232] bit[  0 ~  31] val[0]=0x0
+[  258.565705] 
+[  258.567193] spa spa_port_attr_rgmii (ram_id=7 depth=20 width=32) ram_addr=10 
+[  258.574318] bit[  0 ~  31] val[0]=0xfa0000e
+[  258.605710] 
+[  258.607197] spa spa_port_attr_rgmii (ram_id=7 depth=20 width=32) ram_addr=11 
+[  258.614323] bit[  0 ~  31] val[0]=0x0
+[  258.645734] 
+[  258.647222] spa spa_port_attr_rgmii (ram_id=7 depth=20 width=32) ram_addr=12 
+[  258.654348] bit[  0 ~  31] val[0]=0x0
+[  258.685708] 
+[  258.687196] spa spa_port_attr_rgmii (ram_id=7 depth=20 width=32) ram_addr=13 
+[  258.694322] bit[  0 ~  31] val[0]=0x8008
+[  258.726945] 
+[  258.728433] spa spa_port_attr_rgmii (ram_id=7 depth=20 width=32) ram_addr=14 
+[  258.735558] bit[  0 ~  31] val[0]=0x0
+[  258.765719] 
+[  258.767209] spa spa_port_attr_rgmii (ram_id=7 depth=20 width=32) ram_addr=15 
+[  258.774555] bit[  0 ~  31] val[0]=0x0
+[  258.805706] 
+[  258.807194] spa spa_port_attr_rgmii (ram_id=7 depth=20 width=32) ram_addr=16 
+[  258.814540] bit[  0 ~  31] val[0]=0x0
+[  258.845705] 
+[  258.847193] spa spa_port_attr_rgmii (ram_id=7 depth=20 width=32) ram_addr=17 
+[  258.854538] bit[  0 ~  31] val[0]=0x5c00410
+[  258.885710] 
+[  258.887198] spa spa_port_attr_rgmii (ram_id=7 depth=20 width=32) ram_addr=18 
+[  258.894544] bit[  0 ~  31] val[0]=0x1c009c0
+[  258.925713] 
+[  258.927200] spa spa_port_attr_rgmii (ram_id=7 depth=20 width=32) ram_addr=19 
+[  258.934546] bit[  0 ~  31] val[0]=0x96040001
+[  258.938845] cmd success!
+===== spa_port_attr_loop
+[  258.948123] 
+[  258.948123] ******************************************
+[  258.954994] spa spa_port_attr_loop ram_id=8 ram_depth=20 ram_width=32
+[  258.961462] id=0=0x0 (32bit)
+[  258.964567] cnt=20=0x14 (32bit)
+[  258.995709] 
+[  258.997202] spa spa_port_attr_loop (ram_id=8 depth=20 width=32) ram_addr=0 
+[  259.004155] bit[  0 ~  31] val[0]=0x39b11
+[  259.035708] 
+[  259.037196] spa spa_port_attr_loop (ram_id=8 depth=20 width=32) ram_addr=1 
+[  259.044148] bit[  0 ~  31] val[0]=0x88f
+[  259.075706] 
+[  259.077194] spa spa_port_attr_loop (ram_id=8 depth=20 width=32) ram_addr=2 
+[  259.084146] bit[  0 ~  31] val[0]=0x0
+[  259.115706] 
+[  259.117193] spa spa_port_attr_loop (ram_id=8 depth=20 width=32) ram_addr=3 
+[  259.124145] bit[  0 ~  31] val[0]=0x0
+[  259.155732] 
+[  259.157219] spa spa_port_attr_loop (ram_id=8 depth=20 width=32) ram_addr=4 
+[  259.164171] bit[  0 ~  31] val[0]=0x0
+[  259.195706] 
+[  259.197194] spa spa_port_attr_loop (ram_id=8 depth=20 width=32) ram_addr=5 
+[  259.204146] bit[  0 ~  31] val[0]=0x0
+[  259.235714] 
+[  259.237203] spa spa_port_attr_loop (ram_id=8 depth=20 width=32) ram_addr=6 
+[  259.244378] bit[  0 ~  31] val[0]=0x0
+[  259.276966] 
+[  259.278472] spa spa_port_attr_loop (ram_id=8 depth=20 width=32) ram_addr=7 
+[  259.285428] bit[  0 ~  31] val[0]=0x0
+[  259.315714] 
+[  259.317212] spa spa_port_attr_loop (ram_id=8 depth=20 width=32) ram_addr=8 
+[  259.324391] bit[  0 ~  31] val[0]=0x0
+[  259.355707] 
+[  259.357196] spa spa_port_attr_loop (ram_id=8 depth=20 width=32) ram_addr=9 
+[  259.364148] bit[  0 ~  31] val[0]=0x0
+[  259.395714] 
+[  259.397202] spa spa_port_attr_loop (ram_id=8 depth=20 width=32) ram_addr=10 
+[  259.404241] bit[  0 ~  31] val[0]=0xfa0000e
+[  259.435706] 
+[  259.437193] spa spa_port_attr_loop (ram_id=8 depth=20 width=32) ram_addr=11 
+[  259.444232] bit[  0 ~  31] val[0]=0x0
+[  259.475708] 
+[  259.477197] spa spa_port_attr_loop (ram_id=8 depth=20 width=32) ram_addr=12 
+[  259.484458] bit[  0 ~  31] val[0]=0x0
+[  259.515723] 
+[  259.517211] spa spa_port_attr_loop (ram_id=8 depth=20 width=32) ram_addr=13 
+[  259.524472] bit[  0 ~  31] val[0]=0x0
+[  259.555705] 
+[  259.557193] spa spa_port_attr_loop (ram_id=8 depth=20 width=32) ram_addr=14 
+[  259.564454] bit[  0 ~  31] val[0]=0x0
+[  259.595717] 
+[  259.597205] spa spa_port_attr_loop (ram_id=8 depth=20 width=32) ram_addr=15 
+[  259.604467] bit[  0 ~  31] val[0]=0x0
+[  259.635705] 
+[  259.637193] spa spa_port_attr_loop (ram_id=8 depth=20 width=32) ram_addr=16 
+[  259.644454] bit[  0 ~  31] val[0]=0x0
+[  259.675708] 
+[  259.677196] spa spa_port_attr_loop (ram_id=8 depth=20 width=32) ram_addr=17 
+[  259.684236] bit[  0 ~  31] val[0]=0x6000000
+[  259.716946] 
+[  259.718433] spa spa_port_attr_loop (ram_id=8 depth=20 width=32) ram_addr=18 
+[  259.725472] bit[  0 ~  31] val[0]=0x2000a00
+[  259.755705] 
+[  259.757193] spa spa_port_attr_loop (ram_id=8 depth=20 width=32) ram_addr=19 
+[  259.764232] bit[  0 ~  31] val[0]=0x0
+[  259.767922] cmd success!
+===== spa_port_attr_pon_1
+[  259.776384] 
+[  259.776384] ******************************************
+[  259.783253] spa spa_port_attr_pon_1 ram_id=14 ram_depth=20 ram_width=32
+[  259.789893] id=0=0x0 (32bit)
+[  259.792768] cnt=20=0x14 (32bit)
+[  259.825715] 
+[  259.827205] spa spa_port_attr_pon_1 (ram_id=14 depth=20 width=32) ram_addr=0 
+[  259.834551] bit[  0 ~  31] val[0]=0xa6a5
+[  259.865708] 
+[  259.867197] spa spa_port_attr_pon_1 (ram_id=14 depth=20 width=32) ram_addr=1 
+[  259.874542] bit[  0 ~  31] val[0]=0x88e
+[  259.905705] 
+[  259.907194] spa spa_port_attr_pon_1 (ram_id=14 depth=20 width=32) ram_addr=2 
+[  259.914539] bit[  0 ~  31] val[0]=0x0
+[  259.945705] 
+[  259.947193] spa spa_port_attr_pon_1 (ram_id=14 depth=20 width=32) ram_addr=3 
+[  259.954538] bit[  0 ~  31] val[0]=0x0
+[  259.985705] 
+[  259.987193] spa spa_port_attr_pon_1 (ram_id=14 depth=20 width=32) ram_addr=4 
+[  259.994538] bit[  0 ~  31] val[0]=0x0
+[  260.025720] 
+[  260.027208] spa spa_port_attr_pon_1 (ram_id=14 depth=20 width=32) ram_addr=5 
+[  260.034553] bit[  0 ~  31] val[0]=0x0
+[  260.065706] 
+[  260.067194] spa spa_port_attr_pon_1 (ram_id=14 depth=20 width=32) ram_addr=6 
+[  260.074539] bit[  0 ~  31] val[0]=0x0
+[  260.105705] 
+[  260.107193] spa spa_port_attr_pon_1 (ram_id=14 depth=20 width=32) ram_addr=7 
+[  260.114538] bit[  0 ~  31] val[0]=0x0
+[  260.145705] 
+[  260.147193] spa spa_port_attr_pon_1 (ram_id=14 depth=20 width=32) ram_addr=8 
+[  260.154538] bit[  0 ~  31] val[0]=0x0
+[  260.185705] 
+[  260.187193] spa spa_port_attr_pon_1 (ram_id=14 depth=20 width=32) ram_addr=9 
+[  260.194538] bit[  0 ~  31] val[0]=0x0
+[  260.225707] 
+[  260.227195] spa spa_port_attr_pon_1 (ram_id=14 depth=20 width=32) ram_addr=10 
+[  260.234627] bit[  0 ~  31] val[0]=0xfa0000e
+[  260.265707] 
+[  260.267195] spa spa_port_attr_pon_1 (ram_id=14 depth=20 width=32) ram_addr=11 
+[  260.274627] bit[  0 ~  31] val[0]=0x0
+[  260.305734] 
+[  260.307243] spa spa_port_attr_pon_1 (ram_id=14 depth=20 width=32) ram_addr=12 
+[  260.314457] bit[  0 ~  31] val[0]=0x0
+[  260.345710] 
+[  260.347199] spa spa_port_attr_pon_1 (ram_id=14 depth=20 width=32) ram_addr=13 
+[  260.354412] bit[  0 ~  31] val[0]=0x0
+[  260.385708] 
+[  260.387196] spa spa_port_attr_pon_1 (ram_id=14 depth=20 width=32) ram_addr=14 
+[  260.394409] bit[  0 ~  31] val[0]=0x0
+[  260.425708] 
+[  260.427195] spa spa_port_attr_pon_1 (ram_id=14 depth=20 width=32) ram_addr=15 
+[  260.434408] bit[  0 ~  31] val[0]=0x0
+[  260.465706] 
+[  260.467194] spa spa_port_attr_pon_1 (ram_id=14 depth=20 width=32) ram_addr=16 
+[  260.474406] bit[  0 ~  31] val[0]=0x0
+[  260.505706] 
+[  260.507194] spa spa_port_attr_pon_1 (ram_id=14 depth=20 width=32) ram_addr=17 
+[  260.514407] bit[  0 ~  31] val[0]=0x7800000
+[  260.545706] 
+[  260.547193] spa spa_port_attr_pon_1 (ram_id=14 depth=20 width=32) ram_addr=18 
+[  260.554406] bit[  0 ~  31] val[0]=0x3800b80
+[  260.585706] 
+[  260.587193] spa spa_port_attr_pon_1 (ram_id=14 depth=20 width=32) ram_addr=19 
+[  260.594406] bit[  0 ~  31] val[0]=0x0
+[  260.599335] cmd success!
+===== spa_port_attr_trap
+[  260.607507] cmd success!
+===== spa_port_attr_wifi_ssid_0
+[  260.614628] 
+[  260.614628] ******************************************
+[  260.621267] spa spa_port_attr_wifi_ssid_0 ram_id=16 ram_depth=20 ram_width=32
+[  260.628661] id=0=0x0 (32bit)
+[  260.631536] cnt=20=0x14 (32bit)
+[  260.655727] 
+[  260.657220] spa spa_port_attr_wifi_ssid_0 (ram_id=16 depth=20 width=32) ram_addr=0 
+[  260.665094] bit[  0 ~  31] val[0]=0xa6a5
+[  260.695728] 
+[  260.697217] spa spa_port_attr_wifi_ssid_0 (ram_id=16 depth=20 width=32) ram_addr=1 
+[  260.704949] bit[  0 ~  31] val[0]=0x88f
+[  260.735706] 
+[  260.737195] spa spa_port_attr_wifi_ssid_0 (ram_id=16 depth=20 width=32) ram_addr=2 
+[  260.745064] bit[  0 ~  31] val[0]=0x0
+[  260.775706] 
+[  260.777193] spa spa_port_attr_wifi_ssid_0 (ram_id=16 depth=20 width=32) ram_addr=3 
+[  260.785062] bit[  0 ~  31] val[0]=0x0
+[  260.815706] 
+[  260.817194] spa spa_port_attr_wifi_ssid_0 (ram_id=16 depth=20 width=32) ram_addr=4 
+[  260.825063] bit[  0 ~  31] val[0]=0x0
+[  260.855710] 
+[  260.857199] spa spa_port_attr_wifi_ssid_0 (ram_id=16 depth=20 width=32) ram_addr=5 
+[  260.864846] bit[  0 ~  31] val[0]=0x0
+[  260.895709] 
+[  260.897197] spa spa_port_attr_wifi_ssid_0 (ram_id=16 depth=20 width=32) ram_addr=6 
+[  260.904844] bit[  0 ~  31] val[0]=0x0
+[  260.935711] 
+[  260.937200] spa spa_port_attr_wifi_ssid_0 (ram_id=16 depth=20 width=32) ram_addr=7 
+[  260.944846] bit[  0 ~  31] val[0]=0x0
+[  260.975707] 
+[  260.977195] spa spa_port_attr_wifi_ssid_0 (ram_id=16 depth=20 width=32) ram_addr=8 
+[  260.984842] bit[  0 ~  31] val[0]=0x0
+[  261.015705] 
+[  261.017193] spa spa_port_attr_wifi_ssid_0 (ram_id=16 depth=20 width=32) ram_addr=9 
+[  261.024840] bit[  0 ~  31] val[0]=0x0
+[  261.055708] 
+[  261.057195] spa spa_port_attr_wifi_ssid_0 (ram_id=16 depth=20 width=32) ram_addr=10 
+[  261.064929] bit[  0 ~  31] val[0]=0xfa0000e
+[  261.095707] 
+[  261.097194] spa spa_port_attr_wifi_ssid_0 (ram_id=16 depth=20 width=32) ram_addr=11 
+[  261.104928] bit[  0 ~  31] val[0]=0x0
+[  261.135705] 
+[  261.137193] spa spa_port_attr_wifi_ssid_0 (ram_id=16 depth=20 width=32) ram_addr=12 
+[  261.144926] bit[  0 ~  31] val[0]=0x0
+[  261.175705] 
+[  261.177193] spa spa_port_attr_wifi_ssid_0 (ram_id=16 depth=20 width=32) ram_addr=13 
+[  261.184927] bit[  0 ~  31] val[0]=0x8008
+[  261.215710] 
+[  261.217198] spa spa_port_attr_wifi_ssid_0 (ram_id=16 depth=20 width=32) ram_addr=14 
+[  261.224931] bit[  0 ~  31] val[0]=0x0
+[  261.256945] 
+[  261.258432] spa spa_port_attr_wifi_ssid_0 (ram_id=16 depth=20 width=32) ram_addr=15 
+[  261.266184] bit[  0 ~  31] val[0]=0x0
+[  261.295712] 
+[  261.297209] spa spa_port_attr_wifi_ssid_0 (ram_id=16 depth=20 width=32) ram_addr=16 
+[  261.305197] bit[  0 ~  31] val[0]=0x0
+[  261.335711] 
+[  261.337208] spa spa_port_attr_wifi_ssid_0 (ram_id=16 depth=20 width=32) ram_addr=17 
+[  261.344942] bit[  0 ~  31] val[0]=0x8000000
+[  261.375709] 
+[  261.377197] spa spa_port_attr_wifi_ssid_0 (ram_id=16 depth=20 width=32) ram_addr=18 
+[  261.384931] bit[  0 ~  31] val[0]=0x4000c00
+[  261.415707] 
+[  261.417195] spa spa_port_attr_wifi_ssid_0 (ram_id=16 depth=20 width=32) ram_addr=19 
+[  261.424928] bit[  0 ~  31] val[0]=0x90040000
+[  261.429233] cmd success!
+===== spa_port_attr_wifi_ssid_1
+[  261.437681] 
+[  261.437681] ******************************************
+[  261.444629] spa spa_port_attr_wifi_ssid_1 ram_id=17 ram_depth=20 ram_width=32
+[  261.451796] id=0=0x0 (32bit)
+[  261.454902] cnt=20=0x14 (32bit)
+[  261.485737] 
+[  261.487227] spa spa_port_attr_wifi_ssid_1 (ram_id=17 depth=20 width=32) ram_addr=0 
+[  261.495095] bit[  0 ~  31] val[0]=0xa6a5
+[  261.525708] 
+[  261.527197] spa spa_port_attr_wifi_ssid_1 (ram_id=17 depth=20 width=32) ram_addr=1 
+[  261.534844] bit[  0 ~  31] val[0]=0x88f
+[  261.565706] 
+[  261.567194] spa spa_port_attr_wifi_ssid_1 (ram_id=17 depth=20 width=32) ram_addr=2 
+[  261.574841] bit[  0 ~  31] val[0]=0x0
+[  261.605706] 
+[  261.607193] spa spa_port_attr_wifi_ssid_1 (ram_id=17 depth=20 width=32) ram_addr=3 
+[  261.614840] bit[  0 ~  31] val[0]=0x0
+[  261.645706] 
+[  261.647193] spa spa_port_attr_wifi_ssid_1 (ram_id=17 depth=20 width=32) ram_addr=4 
+[  261.654840] bit[  0 ~  31] val[0]=0x0
+[  261.685711] 
+[  261.687199] spa spa_port_attr_wifi_ssid_1 (ram_id=17 depth=20 width=32) ram_addr=5 
+[  261.694845] bit[  0 ~  31] val[0]=0x0
+[  261.725706] 
+[  261.727194] spa spa_port_attr_wifi_ssid_1 (ram_id=17 depth=20 width=32) ram_addr=6 
+[  261.734841] bit[  0 ~  31] val[0]=0x0
+[  261.765706] 
+[  261.767193] spa spa_port_attr_wifi_ssid_1 (ram_id=17 depth=20 width=32) ram_addr=7 
+[  261.774840] bit[  0 ~  31] val[0]=0x0
+[  261.806944] 
+[  261.808432] spa spa_port_attr_wifi_ssid_1 (ram_id=17 depth=20 width=32) ram_addr=8 
+[  261.816092] bit[  0 ~  31] val[0]=0x0
+[  261.845705] 
+[  261.847193] spa spa_port_attr_wifi_ssid_1 (ram_id=17 depth=20 width=32) ram_addr=9 
+[  261.854839] bit[  0 ~  31] val[0]=0x0
+[  261.885706] 
+[  261.887194] spa spa_port_attr_wifi_ssid_1 (ram_id=17 depth=20 width=32) ram_addr=10 
+[  261.894928] bit[  0 ~  31] val[0]=0xfa0000e
+[  261.925706] 
+[  261.927194] spa spa_port_attr_wifi_ssid_1 (ram_id=17 depth=20 width=32) ram_addr=11 
+[  261.934927] bit[  0 ~  31] val[0]=0x0
+[  261.965705] 
+[  261.967193] spa spa_port_attr_wifi_ssid_1 (ram_id=17 depth=20 width=32) ram_addr=12 
+[  261.974926] bit[  0 ~  31] val[0]=0x0
+[  262.005718] 
+[  262.007206] spa spa_port_attr_wifi_ssid_1 (ram_id=17 depth=20 width=32) ram_addr=13 
+[  262.015160] bit[  0 ~  31] val[0]=0x8008
+[  262.045713] 
+[  262.047201] spa spa_port_attr_wifi_ssid_1 (ram_id=17 depth=20 width=32) ram_addr=14 
+[  262.055154] bit[  0 ~  31] val[0]=0x0
+[  262.085706] 
+[  262.087194] spa spa_port_attr_wifi_ssid_1 (ram_id=17 depth=20 width=32) ram_addr=15 
+[  262.095146] bit[  0 ~  31] val[0]=0x0
+[  262.125708] 
+[  262.127196] spa spa_port_attr_wifi_ssid_1 (ram_id=17 depth=20 width=32) ram_addr=16 
+[  262.135148] bit[  0 ~  31] val[0]=0x0
+[  262.165705] 
+[  262.167193] spa spa_port_attr_wifi_ssid_1 (ram_id=17 depth=20 width=32) ram_addr=17 
+[  262.175145] bit[  0 ~  31] val[0]=0x8400000
+[  262.205706] 
+[  262.207194] spa spa_port_attr_wifi_ssid_1 (ram_id=17 depth=20 width=32) ram_addr=18 
+[  262.215147] bit[  0 ~  31] val[0]=0x4400c40
+[  262.245706] 
+[  262.247194] spa spa_port_attr_wifi_ssid_1 (ram_id=17 depth=20 width=32) ram_addr=19 
+[  262.255146] bit[  0 ~  31] val[0]=0x90040000
+[  262.259449] cmd success!
+===== spa_port_attr_wifi_ssid_2
+[  262.268221] 
+[  262.268221] ******************************************
+[  262.274841] spa spa_port_attr_wifi_ssid_2 ram_id=18 ram_depth=20 ram_width=32
+[  262.282015] id=0=0x0 (32bit)
+[  262.284891] cnt=20=0x14 (32bit)
+[  262.315779] 
+[  262.317289] spa spa_port_attr_wifi_ssid_2 (ram_id=18 depth=20 width=32) ram_addr=0 
+[  262.324936] bit[  0 ~  31] val[0]=0xa6a5
+[  262.355766] 
+[  262.357256] spa spa_port_attr_wifi_ssid_2 (ram_id=18 depth=20 width=32) ram_addr=1 
+[  262.365127] bit[  0 ~  31] val[0]=0x88f
+[  262.395724] 
+[  262.397212] spa spa_port_attr_wifi_ssid_2 (ram_id=18 depth=20 width=32) ram_addr=2 
+[  262.405082] bit[  0 ~  31] val[0]=0x0
+[  262.435706] 
+[  262.437194] spa spa_port_attr_wifi_ssid_2 (ram_id=18 depth=20 width=32) ram_addr=3 
+[  262.445062] bit[  0 ~  31] val[0]=0x0
+[  262.475707] 
+[  262.477195] spa spa_port_attr_wifi_ssid_2 (ram_id=18 depth=20 width=32) ram_addr=4 
+[  262.485063] bit[  0 ~  31] val[0]=0x0
+[  262.515726] 
+[  262.517214] spa spa_port_attr_wifi_ssid_2 (ram_id=18 depth=20 width=32) ram_addr=5 
+[  262.525083] bit[  0 ~  31] val[0]=0x0
+[  262.555707] 
+[  262.557195] spa spa_port_attr_wifi_ssid_2 (ram_id=18 depth=20 width=32) ram_addr=6 
+[  262.565063] bit[  0 ~  31] val[0]=0x0
+[  262.595706] 
+[  262.597193] spa spa_port_attr_wifi_ssid_2 (ram_id=18 depth=20 width=32) ram_addr=7 
+[  262.605062] bit[  0 ~  31] val[0]=0x0
+[  262.635705] 
+[  262.637193] spa spa_port_attr_wifi_ssid_2 (ram_id=18 depth=20 width=32) ram_addr=8 
+[  262.645061] bit[  0 ~  31] val[0]=0x0
+[  262.675753] 
+[  262.677242] spa spa_port_attr_wifi_ssid_2 (ram_id=18 depth=20 width=32) ram_addr=9 
+[  262.685111] bit[  0 ~  31] val[0]=0x0
+[  262.715708] 
+[  262.717197] spa spa_port_attr_wifi_ssid_2 (ram_id=18 depth=20 width=32) ram_addr=10 
+[  262.724931] bit[  0 ~  31] val[0]=0xfa0000e
+[  262.755706] 
+[  262.757194] spa spa_port_attr_wifi_ssid_2 (ram_id=18 depth=20 width=32) ram_addr=11 
+[  262.764927] bit[  0 ~  31] val[0]=0x0
+[  262.796945] 
+[  262.798433] spa spa_port_attr_wifi_ssid_2 (ram_id=18 depth=20 width=32) ram_addr=12 
+[  262.806181] bit[  0 ~  31] val[0]=0x0
+[  262.835705] 
+[  262.837193] spa spa_port_attr_wifi_ssid_2 (ram_id=18 depth=20 width=32) ram_addr=13 
+[  262.844926] bit[  0 ~  31] val[0]=0x8008
+[  262.875705] 
+[  262.877193] spa spa_port_attr_wifi_ssid_2 (ram_id=18 depth=20 width=32) ram_addr=14 
+[  262.884926] bit[  0 ~  31] val[0]=0x0
+[  262.915706] 
+[  262.917194] spa spa_port_attr_wifi_ssid_2 (ram_id=18 depth=20 width=32) ram_addr=15 
+[  262.924927] bit[  0 ~  31] val[0]=0x0
+[  262.955705] 
+[  262.957193] spa spa_port_attr_wifi_ssid_2 (ram_id=18 depth=20 width=32) ram_addr=16 
+[  262.964926] bit[  0 ~  31] val[0]=0x0
+[  262.995784] 
+[  262.997272] spa spa_port_attr_wifi_ssid_2 (ram_id=18 depth=20 width=32) ram_addr=17 
+[  263.005006] bit[  0 ~  31] val[0]=0x8800000
+[  263.035706] 
+[  263.037193] spa spa_port_attr_wifi_ssid_2 (ram_id=18 depth=20 width=32) ram_addr=18 
+[  263.044927] bit[  0 ~  31] val[0]=0x4800c80
+[  263.075706] 
+[  263.077193] spa spa_port_attr_wifi_ssid_2 (ram_id=18 depth=20 width=32) ram_addr=19 
+[  263.084927] bit[  0 ~  31] val[0]=0x90040000
+[  263.089235] cmd success!
+===== spa_port_attr_wifi_ssid_3
+[  263.097790] 
+[  263.097790] ******************************************
+[  263.104658] spa spa_port_attr_wifi_ssid_3 ram_id=19 ram_depth=20 ram_width=32
+[  263.111823] id=0=0x0 (32bit)
+[  263.114928] cnt=20=0x14 (32bit)
+[  263.145712] 
+[  263.147204] spa spa_port_attr_wifi_ssid_3 (ram_id=19 depth=20 width=32) ram_addr=0 
+[  263.154851] bit[  0 ~  31] val[0]=0xa6a5
+[  263.185709] 
+[  263.187199] spa spa_port_attr_wifi_ssid_3 (ram_id=19 depth=20 width=32) ram_addr=1 
+[  263.195065] bit[  0 ~  31] val[0]=0x88f
+[  263.225706] 
+[  263.227194] spa spa_port_attr_wifi_ssid_3 (ram_id=19 depth=20 width=32) ram_addr=2 
+[  263.235060] bit[  0 ~  31] val[0]=0x0
+[  263.265705] 
+[  263.267193] spa spa_port_attr_wifi_ssid_3 (ram_id=19 depth=20 width=32) ram_addr=3 
+[  263.275059] bit[  0 ~  31] val[0]=0x0
+[  263.305712] 
+[  263.307201] spa spa_port_attr_wifi_ssid_3 (ram_id=19 depth=20 width=32) ram_addr=4 
+[  263.315067] bit[  0 ~  31] val[0]=0x0
+[  263.345725] 
+[  263.347236] spa spa_port_attr_wifi_ssid_3 (ram_id=19 depth=20 width=32) ram_addr=5 
+[  263.355110] bit[  0 ~  31] val[0]=0x0
+[  263.385708] 
+[  263.387198] spa spa_port_attr_wifi_ssid_3 (ram_id=19 depth=20 width=32) ram_addr=6 
+[  263.394845] bit[  0 ~  31] val[0]=0x0
+[  263.425708] 
+[  263.427196] spa spa_port_attr_wifi_ssid_3 (ram_id=19 depth=20 width=32) ram_addr=7 
+[  263.434842] bit[  0 ~  31] val[0]=0x0
+[  263.465707] 
+[  263.467195] spa spa_port_attr_wifi_ssid_3 (ram_id=19 depth=20 width=32) ram_addr=8 
+[  263.474842] bit[  0 ~  31] val[0]=0x0
+[  263.505706] 
+[  263.507194] spa spa_port_attr_wifi_ssid_3 (ram_id=19 depth=20 width=32) ram_addr=9 
+[  263.514841] bit[  0 ~  31] val[0]=0x0
+[  263.545705] 
+[  263.547193] spa spa_port_attr_wifi_ssid_3 (ram_id=19 depth=20 width=32) ram_addr=10 
+[  263.554927] bit[  0 ~  31] val[0]=0xfa0000e
+[  263.585707] 
+[  263.587195] spa spa_port_attr_wifi_ssid_3 (ram_id=19 depth=20 width=32) ram_addr=11 
+[  263.594928] bit[  0 ~  31] val[0]=0x0
+[  263.625705] 
+[  263.627253] spa spa_port_attr_wifi_ssid_3 (ram_id=19 depth=20 width=32) ram_addr=12 
+[  263.635019] bit[  0 ~  31] val[0]=0x0
+[  263.665721] 
+[  263.667223] spa spa_port_attr_wifi_ssid_3 (ram_id=19 depth=20 width=32) ram_addr=13 
+[  263.674957] bit[  0 ~  31] val[0]=0x8008
+[  263.705748] 
+[  263.707239] spa spa_port_attr_wifi_ssid_3 (ram_id=19 depth=20 width=32) ram_addr=14 
+[  263.714973] bit[  0 ~  31] val[0]=0x0
+[  263.745733] 
+[  263.747223] spa spa_port_attr_wifi_ssid_3 (ram_id=19 depth=20 width=32) ram_addr=15 
+[  263.754957] bit[  0 ~  31] val[0]=0x0
+[  263.785787] 
+[  263.787298] spa spa_port_attr_wifi_ssid_3 (ram_id=19 depth=20 width=32) ram_addr=16 
+[  263.795487] bit[  0 ~  31] val[0]=0x0
+[  263.825741] 
+[  263.827246] spa spa_port_attr_wifi_ssid_3 (ram_id=19 depth=20 width=32) ram_addr=17 
+[  263.835018] bit[  0 ~  31] val[0]=0x8c00000
+[  263.865723] 
+[  263.867228] spa spa_port_attr_wifi_ssid_3 (ram_id=19 depth=20 width=32) ram_addr=18 
+[  263.874963] bit[  0 ~  31] val[0]=0x4c00cc0
+[  263.905713] 
+[  263.907202] spa spa_port_attr_wifi_ssid_3 (ram_id=19 depth=20 width=32) ram_addr=19 
+[  263.914935] bit[  0 ~  31] val[0]=0x90040000
+[  263.919247] cmd success!
+===== spa_port_attr_wifi_ssid_4
+[  263.929634] 
+[  263.929634] ******************************************
+[  263.936301] spa spa_port_attr_wifi_ssid_4 ram_id=20 ram_depth=20 ram_width=32
+[  263.943481] id=0=0x0 (32bit)
+[  263.946378] cnt=20=0x14 (32bit)
+[  263.975753] 
+[  263.977245] spa spa_port_attr_wifi_ssid_4 (ram_id=20 depth=20 width=32) ram_addr=0 
+[  263.984892] bit[  0 ~  31] val[0]=0xa6a5
+[  264.015765] 
+[  264.017276] spa spa_port_attr_wifi_ssid_4 (ram_id=20 depth=20 width=32) ram_addr=1 
+[  264.024923] bit[  0 ~  31] val[0]=0x88f
+[  264.055728] 
+[  264.057221] spa spa_port_attr_wifi_ssid_4 (ram_id=20 depth=20 width=32) ram_addr=2 
+[  264.065094] bit[  0 ~  31] val[0]=0x0
+[  264.095718] 
+[  264.097208] spa spa_port_attr_wifi_ssid_4 (ram_id=20 depth=20 width=32) ram_addr=3 
+[  264.105079] bit[  0 ~  31] val[0]=0x0
+[  264.135709] 
+[  264.137199] spa spa_port_attr_wifi_ssid_4 (ram_id=20 depth=20 width=32) ram_addr=4 
+[  264.145069] bit[  0 ~  31] val[0]=0x0
+[  264.175709] 
+[  264.177199] spa spa_port_attr_wifi_ssid_4 (ram_id=20 depth=20 width=32) ram_addr=5 
+[  264.185069] bit[  0 ~  31] val[0]=0x0
+[  264.215718] 
+[  264.217216] spa spa_port_attr_wifi_ssid_4 (ram_id=20 depth=20 width=32) ram_addr=6 
+[  264.224863] bit[  0 ~  31] val[0]=0x0
+[  264.255716] 
+[  264.257211] spa spa_port_attr_wifi_ssid_4 (ram_id=20 depth=20 width=32) ram_addr=7 
+[  264.265084] bit[  0 ~  31] val[0]=0x0
+[  264.275791] product_type_check
+[  264.295710] 
+[  264.297200] spa spa_port_attr_wifi_ssid_4 (ram_id=20 depth=20 width=32) ram_addr=8 
+[  264.305070] bit[  0 ~  31] val[0]=0x0
+[  264.336027] 
+[  264.337521] spa spa_port_attr_wifi_ssid_4 (ram_id=20 depth=20 width=32) ram_addr=9 
+[  264.345398] bit[  0 ~  31] val[0]=0x0
+[  264.375724] 
+[  264.377238] spa spa_port_attr_wifi_ssid_4 (ram_id=20 depth=20 width=32) ram_addr=10 
+[  264.384979] bit[  0 ~  31] val[0]=0xfa0000e
+[  264.415731] 
+[  264.417227] spa spa_port_attr_wifi_ssid_4 (ram_id=20 depth=20 width=32) ram_addr=11 
+[  264.424967] bit[  0 ~  31] val[0]=0x0
+[  264.455721] 
+[  264.457216] spa spa_port_attr_wifi_ssid_4 (ram_id=20 depth=20 width=32) ram_addr=12 
+[  264.464955] bit[  0 ~  31] val[0]=0x0
+[  264.495722] 
+[  264.497212] spa spa_port_attr_wifi_ssid_4 (ram_id=20 depth=20 width=32) ram_addr=13 
+[  264.505169] bit[  0 ~  31] val[0]=0x8008
+[  264.535708] 
+[  264.537197] spa spa_port_attr_wifi_ssid_4 (ram_id=20 depth=20 width=32) ram_addr=14 
+[  264.545153] bit[  0 ~  31] val[0]=0x0
+[  264.575708] 
+[  264.577197] spa spa_port_attr_wifi_ssid_4 (ram_id=20 depth=20 width=32) ram_addr=15 
+[  264.585153] bit[  0 ~  31] val[0]=0x0
+[  264.615708] 
+[  264.617197] spa spa_port_attr_wifi_ssid_4 (ram_id=20 depth=20 width=32) ram_addr=16 
+[  264.625153] bit[  0 ~  31] val[0]=0x0
+[  264.655748] 
+[  264.657257] spa spa_port_attr_wifi_ssid_4 (ram_id=20 depth=20 width=32) ram_addr=17 
+[  264.665221] bit[  0 ~  31] val[0]=0x9000000
+[  264.695726] 
+[  264.697222] spa spa_port_attr_wifi_ssid_4 (ram_id=20 depth=20 width=32) ram_addr=18 
+[  264.705184] bit[  0 ~  31] val[0]=0x5000d00
+[  264.735718] 
+[  264.737209] spa spa_port_attr_wifi_ssid_4 (ram_id=20 depth=20 width=32) ram_addr=19 
+[  264.745167] bit[  0 ~  31] val[0]=0x90040000
+[  264.749470] cmd success!
+===== spa_port_attr_wifi_ssid_5
+[  264.760547] 
+[  264.760547] ******************************************
+[  264.767431] spa spa_port_attr_wifi_ssid_5 ram_id=21 ram_depth=20 ram_width=32
+[  264.774805] id=0=0x0 (32bit)
+[  264.777695] cnt=20=0x14 (32bit)
+[  264.805746] 
+[  264.807238] spa spa_port_attr_wifi_ssid_5 (ram_id=21 depth=20 width=32) ram_addr=0 
+[  264.815110] bit[  0 ~  31] val[0]=0xa6a5
+[  264.845711] 
+[  264.847200] spa spa_port_attr_wifi_ssid_5 (ram_id=21 depth=20 width=32) ram_addr=1 
+[  264.855067] bit[  0 ~  31] val[0]=0x88f
+[  264.885709] 
+[  264.887198] spa spa_port_attr_wifi_ssid_5 (ram_id=21 depth=20 width=32) ram_addr=2 
+[  264.895065] bit[  0 ~  31] val[0]=0x0
+[  264.925726] 
+[  264.927216] spa spa_port_attr_wifi_ssid_5 (ram_id=21 depth=20 width=32) ram_addr=3 
+[  264.935084] bit[  0 ~  31] val[0]=0x0
+[  264.965707] 
+[  264.967196] spa spa_port_attr_wifi_ssid_5 (ram_id=21 depth=20 width=32) ram_addr=4 
+[  264.975063] bit[  0 ~  31] val[0]=0x0
+[  265.005718] 
+[  265.007207] spa spa_port_attr_wifi_ssid_5 (ram_id=21 depth=20 width=32) ram_addr=5 
+[  265.015074] bit[  0 ~  31] val[0]=0x0
+[  265.045708] 
+[  265.047197] spa spa_port_attr_wifi_ssid_5 (ram_id=21 depth=20 width=32) ram_addr=6 
+[  265.055064] bit[  0 ~  31] val[0]=0x0
+[  265.085709] 
+[  265.087198] spa spa_port_attr_wifi_ssid_5 (ram_id=21 depth=20 width=32) ram_addr=7 
+[  265.095064] bit[  0 ~  31] val[0]=0x0
+[  265.125724] 
+[  265.127213] spa spa_port_attr_wifi_ssid_5 (ram_id=21 depth=20 width=32) ram_addr=8 
+[  265.135080] bit[  0 ~  31] val[0]=0x0
+[  265.165708] 
+[  265.167198] spa spa_port_attr_wifi_ssid_5 (ram_id=21 depth=20 width=32) ram_addr=9 
+[  265.175070] bit[  0 ~  31] val[0]=0x0
+[  265.205736] 
+[  265.207245] spa spa_port_attr_wifi_ssid_5 (ram_id=21 depth=20 width=32) ram_addr=10 
+[  265.215207] bit[  0 ~  31] val[0]=0xfa0000e
+[  265.245713] 
+[  265.247204] spa spa_port_attr_wifi_ssid_5 (ram_id=21 depth=20 width=32) ram_addr=11 
+[  265.255161] bit[  0 ~  31] val[0]=0x0
+[  265.285709] 
+[  265.287199] spa spa_port_attr_wifi_ssid_5 (ram_id=21 depth=20 width=32) ram_addr=12 
+[  265.295154] bit[  0 ~  31] val[0]=0x0
+[  265.325720] 
+[  265.327210] spa spa_port_attr_wifi_ssid_5 (ram_id=21 depth=20 width=32) ram_addr=13 
+[  265.335163] bit[  0 ~  31] val[0]=0x8008
+[  265.368925] 
+[  265.370435] spa spa_port_attr_wifi_ssid_5 (ram_id=21 depth=20 width=32) ram_addr=14 
+[  265.378445] bit[  0 ~  31] val[0]=0x0
+[  265.405773] 
+[  265.407283] spa spa_port_attr_wifi_ssid_5 (ram_id=21 depth=20 width=32) ram_addr=15 
+[  265.415245] bit[  0 ~  31] val[0]=0x0
+[  265.445714] 
+[  265.447204] spa spa_port_attr_wifi_ssid_5 (ram_id=21 depth=20 width=32) ram_addr=16 
+[  265.455159] bit[  0 ~  31] val[0]=0x0
+[  265.485718] 
+[  265.487208] spa spa_port_attr_wifi_ssid_5 (ram_id=21 depth=20 width=32) ram_addr=17 
+[  265.495163] bit[  0 ~  31] val[0]=0x9400000
+[  265.525733] 
+[  265.527222] spa spa_port_attr_wifi_ssid_5 (ram_id=21 depth=20 width=32) ram_addr=18 
+[  265.535176] bit[  0 ~  31] val[0]=0x5400d40
+[  265.565707] 
+[  265.567196] spa spa_port_attr_wifi_ssid_5 (ram_id=21 depth=20 width=32) ram_addr=19 
+[  265.575149] bit[  0 ~  31] val[0]=0x90040000
+[  265.579451] cmd success!
+===== spa_port_attr_wifi_ssid_6
+[  265.590543] 
+[  265.590543] ******************************************
+[  265.597428] spa spa_port_attr_wifi_ssid_6 ram_id=22 ram_depth=20 ram_width=32
+[  265.604795] id=0=0x0 (32bit)
+[  265.607685] cnt=20=0x14 (32bit)
+[  265.635778] 
+[  265.637269] spa spa_port_attr_wifi_ssid_6 (ram_id=22 depth=20 width=32) ram_addr=0 
+[  265.645139] bit[  0 ~  31] val[0]=0xa6a5
+[  265.675713] 
+[  265.677202] spa spa_port_attr_wifi_ssid_6 (ram_id=22 depth=20 width=32) ram_addr=1 
+[  265.685072] bit[  0 ~  31] val[0]=0x88f
+[  265.725761] 
+[  265.727281] spa spa_port_attr_wifi_ssid_6 (ram_id=22 depth=20 width=32) ram_addr=2 
+[  265.734938] bit[  0 ~  31] val[0]=0x0
+[  265.765751] 
+[  265.767247] spa spa_port_attr_wifi_ssid_6 (ram_id=22 depth=20 width=32) ram_addr=3 
+[  265.775308] bit[  0 ~  31] val[0]=0x0
+[  265.805751] 
+[  265.807257] spa spa_port_attr_wifi_ssid_6 (ram_id=22 depth=20 width=32) ram_addr=4 
+[  265.815131] bit[  0 ~  31] val[0]=0x0
+[  265.845727] 
+[  265.847228] spa spa_port_attr_wifi_ssid_6 (ram_id=22 depth=20 width=32) ram_addr=5 
+[  265.855100] bit[  0 ~  31] val[0]=0x0
+[  265.885708] 
+[  265.887196] spa spa_port_attr_wifi_ssid_6 (ram_id=22 depth=20 width=32) ram_addr=6 
+[  265.895063] bit[  0 ~  31] val[0]=0x0
+[  265.925709] 
+[  265.927197] spa spa_port_attr_wifi_ssid_6 (ram_id=22 depth=20 width=32) ram_addr=7 
+[  265.935063] bit[  0 ~  31] val[0]=0x0
+[  265.965705] 
+[  265.967194] spa spa_port_attr_wifi_ssid_6 (ram_id=22 depth=20 width=32) ram_addr=8 
+[  265.975059] bit[  0 ~  31] val[0]=0x0
+[  266.005705] 
+[  266.007193] spa spa_port_attr_wifi_ssid_6 (ram_id=22 depth=20 width=32) ram_addr=9 
+[  266.015059] bit[  0 ~  31] val[0]=0x0
+[  266.045705] 
+[  266.047193] spa spa_port_attr_wifi_ssid_6 (ram_id=22 depth=20 width=32) ram_addr=10 
+[  266.055146] bit[  0 ~  31] val[0]=0xfa0000e
+[  266.085705] 
+[  266.087193] spa spa_port_attr_wifi_ssid_6 (ram_id=22 depth=20 width=32) ram_addr=11 
+[  266.095145] bit[  0 ~  31] val[0]=0x0
+[  266.125705] 
+[  266.127193] spa spa_port_attr_wifi_ssid_6 (ram_id=22 depth=20 width=32) ram_addr=12 
+[  266.135146] bit[  0 ~  31] val[0]=0x0
+[  266.165705] 
+[  266.167193] spa spa_port_attr_wifi_ssid_6 (ram_id=22 depth=20 width=32) ram_addr=13 
+[  266.175145] bit[  0 ~  31] val[0]=0x8008
+[  266.205706] 
+[  266.207194] spa spa_port_attr_wifi_ssid_6 (ram_id=22 depth=20 width=32) ram_addr=14 
+[  266.215147] bit[  0 ~  31] val[0]=0x0
+[  266.245712] 
+[  266.247200] spa spa_port_attr_wifi_ssid_6 (ram_id=22 depth=20 width=32) ram_addr=15 
+[  266.255153] bit[  0 ~  31] val[0]=0x0
+[  266.285706] 
+[  266.287194] spa spa_port_attr_wifi_ssid_6 (ram_id=22 depth=20 width=32) ram_addr=16 
+[  266.295146] bit[  0 ~  31] val[0]=0x0
+[  266.325710] 
+[  266.327200] spa spa_port_attr_wifi_ssid_6 (ram_id=22 depth=20 width=32) ram_addr=17 
+[  266.334934] bit[  0 ~  31] val[0]=0x9800000
+[  266.365709] 
+[  266.367197] spa spa_port_attr_wifi_ssid_6 (ram_id=22 depth=20 width=32) ram_addr=18 
+[  266.374930] bit[  0 ~  31] val[0]=0x5800d80
+[  266.405758] 
+[  266.407267] spa spa_port_attr_wifi_ssid_6 (ram_id=22 depth=20 width=32) ram_addr=19 
+[  266.415001] bit[  0 ~  31] val[0]=0x90040000
+[  266.419319] cmd success!
+===== spa_port_attr_wifi_ssid_7
+[  266.427351] 
+[  266.427351] ******************************************
+[  266.433972] spa spa_port_attr_wifi_ssid_7 ram_id=23 ram_depth=20 ram_width=32
+[  266.441183] id=0=0x0 (32bit)
+[  266.444059] cnt=20=0x14 (32bit)
+[  266.475711] 
+[  266.477202] spa spa_port_attr_wifi_ssid_7 (ram_id=23 depth=20 width=32) ram_addr=0 
+[  266.484849] bit[  0 ~  31] val[0]=0xa6a5
+[  266.515708] 
+[  266.517199] spa spa_port_attr_wifi_ssid_7 (ram_id=23 depth=20 width=32) ram_addr=1 
+[  266.525068] bit[  0 ~  31] val[0]=0x88f
+[  266.555706] 
+[  266.557194] spa spa_port_attr_wifi_ssid_7 (ram_id=23 depth=20 width=32) ram_addr=2 
+[  266.565063] bit[  0 ~  31] val[0]=0x0
+[  266.595706] 
+[  266.597195] spa spa_port_attr_wifi_ssid_7 (ram_id=23 depth=20 width=32) ram_addr=3 
+[  266.605063] bit[  0 ~  31] val[0]=0x0
+[  266.635710] 
+[  266.637198] spa spa_port_attr_wifi_ssid_7 (ram_id=23 depth=20 width=32) ram_addr=4 
+[  266.645066] bit[  0 ~  31] val[0]=0x0
+[  266.675726] 
+[  266.677214] spa spa_port_attr_wifi_ssid_7 (ram_id=23 depth=20 width=32) ram_addr=5 
+[  266.685083] bit[  0 ~  31] val[0]=0x0
+[  266.715712] 
+[  266.717201] spa spa_port_attr_wifi_ssid_7 (ram_id=23 depth=20 width=32) ram_addr=6 
+[  266.725070] bit[  0 ~  31] val[0]=0x0
+[  266.755707] 
+[  266.757195] spa spa_port_attr_wifi_ssid_7 (ram_id=23 depth=20 width=32) ram_addr=7 
+[  266.765064] bit[  0 ~  31] val[0]=0x0
+[  266.795706] 
+[  266.797194] spa spa_port_attr_wifi_ssid_7 (ram_id=23 depth=20 width=32) ram_addr=8 
+[  266.805062] bit[  0 ~  31] val[0]=0x0
+[  266.835745] 
+[  266.837233] spa spa_port_attr_wifi_ssid_7 (ram_id=23 depth=20 width=32) ram_addr=9 
+[  266.845102] bit[  0 ~  31] val[0]=0x0
+[  266.875705] 
+[  266.877193] spa spa_port_attr_wifi_ssid_7 (ram_id=23 depth=20 width=32) ram_addr=10 
+[  266.885149] bit[  0 ~  31] val[0]=0xfa0000e
+[  266.915710] 
+[  266.917199] spa spa_port_attr_wifi_ssid_7 (ram_id=23 depth=20 width=32) ram_addr=11 
+[  266.924933] bit[  0 ~  31] val[0]=0x0
+[  266.955706] 
+[  266.957194] spa spa_port_attr_wifi_ssid_7 (ram_id=23 depth=20 width=32) ram_addr=12 
+[  266.964927] bit[  0 ~  31] val[0]=0x0
+[  266.995706] 
+[  266.997194] spa spa_port_attr_wifi_ssid_7 (ram_id=23 depth=20 width=32) ram_addr=13 
+[  267.004927] bit[  0 ~  31] val[0]=0x8008
+[  267.035709] 
+[  267.037198] spa spa_port_attr_wifi_ssid_7 (ram_id=23 depth=20 width=32) ram_addr=14 
+[  267.044931] bit[  0 ~  31] val[0]=0x0
+[  267.075707] 
+[  267.077195] spa spa_port_attr_wifi_ssid_7 (ram_id=23 depth=20 width=32) ram_addr=15 
+[  267.084928] bit[  0 ~  31] val[0]=0x0
+[  267.115707] 
+[  267.117195] spa spa_port_attr_wifi_ssid_7 (ram_id=23 depth=20 width=32) ram_addr=16 
+[  267.124928] bit[  0 ~  31] val[0]=0x0
+[  267.155706] 
+[  267.157194] spa spa_port_attr_wifi_ssid_7 (ram_id=23 depth=20 width=32) ram_addr=17 
+[  267.164928] bit[  0 ~  31] val[0]=0x9c00000
+[  267.196945] 
+[  267.198433] spa spa_port_attr_wifi_ssid_7 (ram_id=23 depth=20 width=32) ram_addr=18 
+[  267.206180] bit[  0 ~  31] val[0]=0x5c00dc0
+[  267.235712] 
+[  267.237201] spa spa_port_attr_wifi_ssid_7 (ram_id=23 depth=20 width=32) ram_addr=19 
+[  267.245157] bit[  0 ~  31] val[0]=0x90040000
+[  267.249458] cmd success!
+===== spa_port_attr_wifi_ssid_8
+[  267.258057] 
+[  267.258057] ******************************************
+[  267.264679] spa spa_port_attr_wifi_ssid_8 ram_id=24 ram_depth=20 ram_width=32
+[  267.271865] id=0=0x0 (32bit)
+[  267.274740] cnt=20=0x14 (32bit)
+[  267.306974] 
+[  267.308464] spa spa_port_attr_wifi_ssid_8 (ram_id=24 depth=20 width=32) ram_addr=0 
+[  267.316155] bit[  0 ~  31] val[0]=0xa6a5
+[  267.345708] 
+[  267.347196] spa spa_port_attr_wifi_ssid_8 (ram_id=24 depth=20 width=32) ram_addr=1 
+[  267.354843] bit[  0 ~  31] val[0]=0x88f
+[  267.385708] 
+[  267.387198] spa spa_port_attr_wifi_ssid_8 (ram_id=24 depth=20 width=32) ram_addr=2 
+[  267.395065] bit[  0 ~  31] val[0]=0x0
+[  267.425736] 
+[  267.427246] spa spa_port_attr_wifi_ssid_8 (ram_id=24 depth=20 width=32) ram_addr=3 
+[  267.435119] bit[  0 ~  31] val[0]=0x0
+[  267.465718] 
+[  267.467207] spa spa_port_attr_wifi_ssid_8 (ram_id=24 depth=20 width=32) ram_addr=4 
+[  267.475073] bit[  0 ~  31] val[0]=0x0
+[  267.505709] 
+[  267.507198] spa spa_port_attr_wifi_ssid_8 (ram_id=24 depth=20 width=32) ram_addr=5 
+[  267.514846] bit[  0 ~  31] val[0]=0x0
+[  267.545709] 
+[  267.547198] spa spa_port_attr_wifi_ssid_8 (ram_id=24 depth=20 width=32) ram_addr=6 
+[  267.554844] bit[  0 ~  31] val[0]=0x0
+[  267.585706] 
+[  267.587194] spa spa_port_attr_wifi_ssid_8 (ram_id=24 depth=20 width=32) ram_addr=7 
+[  267.594840] bit[  0 ~  31] val[0]=0x0
+[  267.625710] 
+[  267.627197] spa spa_port_attr_wifi_ssid_8 (ram_id=24 depth=20 width=32) ram_addr=8 
+[  267.634844] bit[  0 ~  31] val[0]=0x0
+[  267.665705] 
+[  267.667193] spa spa_port_attr_wifi_ssid_8 (ram_id=24 depth=20 width=32) ram_addr=9 
+[  267.674839] bit[  0 ~  31] val[0]=0x0
+[  267.705705] 
+[  267.707193] spa spa_port_attr_wifi_ssid_8 (ram_id=24 depth=20 width=32) ram_addr=10 
+[  267.714927] bit[  0 ~  31] val[0]=0xfa0000e
+[  267.745708] 
+[  267.747197] spa spa_port_attr_wifi_ssid_8 (ram_id=24 depth=20 width=32) ram_addr=11 
+[  267.755151] bit[  0 ~  31] val[0]=0x0
+[  267.785709] 
+[  267.787197] spa spa_port_attr_wifi_ssid_8 (ram_id=24 depth=20 width=32) ram_addr=12 
+[  267.795151] bit[  0 ~  31] val[0]=0x0
+[  267.825708] 
+[  267.827196] spa spa_port_attr_wifi_ssid_8 (ram_id=24 depth=20 width=32) ram_addr=13 
+[  267.835149] bit[  0 ~  31] val[0]=0x8008
+[  267.865705] 
+[  267.867193] spa spa_port_attr_wifi_ssid_8 (ram_id=24 depth=20 width=32) ram_addr=14 
+[  267.875145] bit[  0 ~  31] val[0]=0x0
+[  267.905705] 
+[  267.907193] spa spa_port_attr_wifi_ssid_8 (ram_id=24 depth=20 width=32) ram_addr=15 
+[  267.915146] bit[  0 ~  31] val[0]=0x0
+[  267.945707] 
+[  267.947196] spa spa_port_attr_wifi_ssid_8 (ram_id=24 depth=20 width=32) ram_addr=16 
+[  267.955149] bit[  0 ~  31] val[0]=0x0
+[  267.985707] 
+[  267.987195] spa spa_port_attr_wifi_ssid_8 (ram_id=24 depth=20 width=32) ram_addr=17 
+[  267.995148] bit[  0 ~  31] val[0]=0xa000000
+[  268.025713] 
+[  268.027201] spa spa_port_attr_wifi_ssid_8 (ram_id=24 depth=20 width=32) ram_addr=18 
+[  268.035154] bit[  0 ~  31] val[0]=0x6000e00
+[  268.065705] 
+[  268.067194] spa spa_port_attr_wifi_ssid_8 (ram_id=24 depth=20 width=32) ram_addr=19 
+[  268.075147] bit[  0 ~  31] val[0]=0x90040000
+[  268.079445] cmd success!
+===== spa_port_attr_wifi_ssid_9
+[  268.087990] 
+[  268.087990] ******************************************
+[  268.094611] spa spa_port_attr_wifi_ssid_9 ram_id=25 ram_depth=20 ram_width=32
+[  268.101789] id=0=0x0 (32bit)
+[  268.104664] cnt=20=0x14 (32bit)
+[  268.135713] 
+[  268.137205] spa spa_port_attr_wifi_ssid_9 (ram_id=25 depth=20 width=32) ram_addr=0 
+[  268.145076] bit[  0 ~  31] val[0]=0xa6a5
+[  268.175707] 
+[  268.177196] spa spa_port_attr_wifi_ssid_9 (ram_id=25 depth=20 width=32) ram_addr=1 
+[  268.184843] bit[  0 ~  31] val[0]=0x88f
+[  268.215707] 
+[  268.217196] spa spa_port_attr_wifi_ssid_9 (ram_id=25 depth=20 width=32) ram_addr=2 
+[  268.225066] bit[  0 ~  31] val[0]=0x0
+[  268.255707] 
+[  268.257195] spa spa_port_attr_wifi_ssid_9 (ram_id=25 depth=20 width=32) ram_addr=3 
+[  268.265064] bit[  0 ~  31] val[0]=0x0
+[  268.295710] 
+[  268.297199] spa spa_port_attr_wifi_ssid_9 (ram_id=25 depth=20 width=32) ram_addr=4 
+[  268.305068] bit[  0 ~  31] val[0]=0x0
+[  268.335707] 
+[  268.337195] spa spa_port_attr_wifi_ssid_9 (ram_id=25 depth=20 width=32) ram_addr=5 
+[  268.345064] bit[  0 ~  31] val[0]=0x0
+[  268.375708] 
+[  268.377197] spa spa_port_attr_wifi_ssid_9 (ram_id=25 depth=20 width=32) ram_addr=6 
+[  268.385066] bit[  0 ~  31] val[0]=0x0
+[  268.415706] 
+[  268.417201] spa spa_port_attr_wifi_ssid_9 (ram_id=25 depth=20 width=32) ram_addr=7 
+[  268.425101] bit[  0 ~  31] val[0]=0x0
+[  268.455715] 
+[  268.457213] spa spa_port_attr_wifi_ssid_9 (ram_id=25 depth=20 width=32) ram_addr=8 
+[  268.464860] bit[  0 ~  31] val[0]=0x0
+[  268.495710] 
+[  268.497199] spa spa_port_attr_wifi_ssid_9 (ram_id=25 depth=20 width=32) ram_addr=9 
+[  268.505068] bit[  0 ~  31] val[0]=0x0
+[  268.535707] 
+[  268.537196] spa spa_port_attr_wifi_ssid_9 (ram_id=25 depth=20 width=32) ram_addr=10 
+[  268.544930] bit[  0 ~  31] val[0]=0xfa0000e
+[  268.575706] 
+[  268.577194] spa spa_port_attr_wifi_ssid_9 (ram_id=25 depth=20 width=32) ram_addr=11 
+[  268.584927] bit[  0 ~  31] val[0]=0x0
+[  268.615708] 
+[  268.617195] spa spa_port_attr_wifi_ssid_9 (ram_id=25 depth=20 width=32) ram_addr=12 
+[  268.624929] bit[  0 ~  31] val[0]=0x0
+[  268.655705] 
+[  268.657193] spa spa_port_attr_wifi_ssid_9 (ram_id=25 depth=20 width=32) ram_addr=13 
+[  268.664926] bit[  0 ~  31] val[0]=0x8008
+[  268.695710] 
+[  268.697198] spa spa_port_attr_wifi_ssid_9 (ram_id=25 depth=20 width=32) ram_addr=14 
+[  268.704931] bit[  0 ~  31] val[0]=0x0
+[  268.736945] 
+[  268.738433] spa spa_port_attr_wifi_ssid_9 (ram_id=25 depth=20 width=32) ram_addr=15 
+[  268.746191] bit[  0 ~  31] val[0]=0x0
+[  268.775706] 
+[  268.777194] spa spa_port_attr_wifi_ssid_9 (ram_id=25 depth=20 width=32) ram_addr=16 
+[  268.784927] bit[  0 ~  31] val[0]=0x0
+[  268.815706] 
+[  268.817194] spa spa_port_attr_wifi_ssid_9 (ram_id=25 depth=20 width=32) ram_addr=17 
+[  268.824928] bit[  0 ~  31] val[0]=0xa400000
+[  268.855707] 
+[  268.857195] spa spa_port_attr_wifi_ssid_9 (ram_id=25 depth=20 width=32) ram_addr=18 
+[  268.864929] bit[  0 ~  31] val[0]=0x6400e40
+[  268.895706] 
+[  268.897193] spa spa_port_attr_wifi_ssid_9 (ram_id=25 depth=20 width=32) ram_addr=19 
+[  268.904927] bit[  0 ~  31] val[0]=0x90040000
+[  268.909223] cmd success!
+===== spa_port_attr_wifi_ssid_10
+[  269.695147] bit[  0 ~  31] val[0]=0x4400c40
+[  269.726949] 
+[  269.728438] spa spa_port_attr_wifi_ssid_1 (ram_id=17 depth=20 width=32) ram_addr=19 
+[  269.736188] bit[  0 ~  31] val[0]=0x90040000
+[  269.740460] 
+[  269.740460] ******************************************
+[  269.747079] spa spa_port_attr_wifi_ssid_10 ram_id=26 ram_depth=20 ram_width=32
+[  269.754302] id=0=0x0 (32bit)
+[  269.757191] cnt=20=0x14 (32bit)
+[  269.785707] 
+[  269.787195] spa spa_port_attr_wifi_ssid_10 (ram_id=26 depth=20 width=32) ram_addr=0 
+[  269.794928] bit[  0 ~  31] val[0]=0xa6a5
+[  269.825706] 
+[  269.827194] spa spa_port_attr_wifi_ssid_10 (ram_id=26 depth=20 width=32) ram_addr=1 
+[  269.834927] bit[  0 ~  31] val[0]=0x88f
+[  269.865727] 
+[  269.867215] spa spa_port_attr_wifi_ssid_10 (ram_id=26 depth=20 width=32) ram_addr=2 
+[  269.874949] bit[  0 ~  31] val[0]=0x0
+[  269.905706] 
+[  269.907194] spa spa_port_attr_wifi_ssid_10 (ram_id=26 depth=20 width=32) ram_addr=3 
+[  269.914927] bit[  0 ~  31] val[0]=0x0
+[  269.946947] 
+[  269.948435] spa spa_port_attr_wifi_ssid_10 (ram_id=26 depth=20 width=32) ram_addr=4 
+[  269.956182] bit[  0 ~  31] val[0]=0x0
+[  269.985707] 
+[  269.987195] spa spa_port_attr_wifi_ssid_10 (ram_id=26 depth=20 width=32) ram_addr=5 
+[  269.994928] bit[  0 ~  31] val[0]=0x0
+[  270.025705] 
+[  270.027193] spa spa_port_attr_wifi_ssid_10 (ram_id=26 depth=20 width=32) ram_addr=6 
+[  270.034926] bit[  0 ~  31] val[0]=0x0
+[  270.065706] 
+[  270.067194] spa spa_port_attr_wifi_ssid_10 (ram_id=26 depth=20 width=32) ram_addr=7 
+[  270.074927] bit[  0 ~  31] val[0]=0x0
+[  270.105705] 
+[  270.107193] spa spa_port_attr_wifi_ssid_10 (ram_id=26 depth=20 width=32) ram_addr=8 
+[  270.114926] bit[  0 ~  31] val[0]=0x0
+[  270.145707] 
+[  270.147195] spa spa_port_attr_wifi_ssid_10 (ram_id=26 depth=20 width=32) ram_addr=9 
+[  270.154929] bit[  0 ~  31] val[0]=0x0
+[  270.185709] 
+[  270.187198] spa spa_port_attr_wifi_ssid_10 (ram_id=26 depth=20 width=32) ram_addr=10 
+[  270.195238] bit[  0 ~  31] val[0]=0xfa0000e
+[  270.225711] 
+[  270.227200] spa spa_port_attr_wifi_ssid_10 (ram_id=26 depth=20 width=32) ram_addr=11 
+[  270.235020] bit[  0 ~  31] val[0]=0x0
+[  270.265706] 
+[  270.267195] spa spa_port_attr_wifi_ssid_10 (ram_id=26 depth=20 width=32) ram_addr=12 
+[  270.275015] bit[  0 ~  31] val[0]=0x0
+[  270.305705] 
+[  270.307193] spa spa_port_attr_wifi_ssid_10 (ram_id=26 depth=20 width=32) ram_addr=13 
+[  270.315013] bit[  0 ~  31] val[0]=0x8008
+[  270.345705] 
+[  270.347194] spa spa_port_attr_wifi_ssid_10 (ram_id=26 depth=20 width=32) ram_addr=14 
+[  270.355014] bit[  0 ~  31] val[0]=0x0
+[  270.386956] 
+[  270.388444] spa spa_port_attr_wifi_ssid_10 (ram_id=26 depth=20 width=32) ram_addr=15 
+[  270.396281] bit[  0 ~  31] val[0]=0x0
+[  270.425706] 
+[  270.427194] spa spa_port_attr_wifi_ssid_10 (ram_id=26 depth=20 width=32) ram_addr=16 
+[  270.435014] bit[  0 ~  31] val[0]=0x0
+[  270.465732] 
+[  270.467242] spa spa_port_attr_wifi_ssid_10 (ram_id=26 depth=20 width=32) ram_addr=17 
+[  270.475063] bit[  0 ~  31] val[0]=0xa800000
+[  270.505716] 
+[  270.507205] spa spa_port_attr_wifi_ssid_10 (ram_id=26 depth=20 width=32) ram_addr=18 
+[  270.515026] bit[  0 ~  31] val[0]=0x6800e80
+[  270.545706] 
+[  270.547195] spa spa_port_attr_wifi_ssid_10 (ram_id=26 depth=20 width=32) ram_addr=19 
+[  270.555015] bit[  0 ~  31] val[0]=0x90040000
+[  270.559314] cmd success!
+===== spa_port_attr_wifi_ssid_11
+[  271.344927] bit[  0 ~  31] val[0]=0x4400c40
+[  271.376944] 
+[  271.378432] spa spa_port_attr_wifi_ssid_1 (ram_id=17 depth=20 width=32) ram_addr=19 
+[  271.386180] bit[  0 ~  31] val[0]=0x90040000
+[  271.390451] 
+[  271.390451] ******************************************
+[  271.397083] spa spa_port_attr_wifi_ssid_11 ram_id=27 ram_depth=20 ram_width=32
+[  271.404304] id=0=0x0 (32bit)
+[  271.407194] cnt=20=0x14 (32bit)
+[  271.435707] 
+[  271.437195] spa spa_port_attr_wifi_ssid_11 (ram_id=27 depth=20 width=32) ram_addr=0 
+[  271.444928] bit[  0 ~  31] val[0]=0xa6a5
+[  271.475725] 
+[  271.477234] spa spa_port_attr_wifi_ssid_11 (ram_id=27 depth=20 width=32) ram_addr=1 
+[  271.484968] bit[  0 ~  31] val[0]=0x88f
+[  271.515709] 
+[  271.517198] spa spa_port_attr_wifi_ssid_11 (ram_id=27 depth=20 width=32) ram_addr=2 
+[  271.524932] bit[  0 ~  31] val[0]=0x0
+[  271.555709] 
+[  271.557197] spa spa_port_attr_wifi_ssid_11 (ram_id=27 depth=20 width=32) ram_addr=3 
+[  271.564931] bit[  0 ~  31] val[0]=0x0
+[  271.596947] 
+[  271.598435] spa spa_port_attr_wifi_ssid_11 (ram_id=27 depth=20 width=32) ram_addr=4 
+[  271.606182] bit[  0 ~  31] val[0]=0x0
+[  271.635705] 
+[  271.637193] spa spa_port_attr_wifi_ssid_11 (ram_id=27 depth=20 width=32) ram_addr=5 
+[  271.644926] bit[  0 ~  31] val[0]=0x0
+[  271.675705] 
+[  271.677193] spa spa_port_attr_wifi_ssid_11 (ram_id=27 depth=20 width=32) ram_addr=6 
+[  271.684927] bit[  0 ~  31] val[0]=0x0
+[  271.715707] 
+[  271.717195] spa spa_port_attr_wifi_ssid_11 (ram_id=27 depth=20 width=32) ram_addr=7 
+[  271.724928] bit[  0 ~  31] val[0]=0x0
+[  271.755710] 
+[  271.757198] spa spa_port_attr_wifi_ssid_11 (ram_id=27 depth=20 width=32) ram_addr=8 
+[  271.764931] bit[  0 ~  31] val[0]=0x0
+[  271.795706] 
+[  271.797194] spa spa_port_attr_wifi_ssid_11 (ram_id=27 depth=20 width=32) ram_addr=9 
+[  271.804928] bit[  0 ~  31] val[0]=0x0
+[  271.835711] 
+[  271.837199] spa spa_port_attr_wifi_ssid_11 (ram_id=27 depth=20 width=32) ram_addr=10 
+[  271.845019] bit[  0 ~  31] val[0]=0xfa0000e
+[  271.875706] 
+[  271.877193] spa spa_port_attr_wifi_ssid_11 (ram_id=27 depth=20 width=32) ram_addr=11 
+[  271.885014] bit[  0 ~  31] val[0]=0x0
+[  271.915707] 
+[  271.917195] spa spa_port_attr_wifi_ssid_11 (ram_id=27 depth=20 width=32) ram_addr=12 
+[  271.925015] bit[  0 ~  31] val[0]=0x0
+[  271.955706] 
+[  271.957193] spa spa_port_attr_wifi_ssid_11 (ram_id=27 depth=20 width=32) ram_addr=13 
+[  271.965014] bit[  0 ~  31] val[0]=0x8008
+[  271.995706] 
+[  271.997194] spa spa_port_attr_wifi_ssid_11 (ram_id=27 depth=20 width=32) ram_addr=14 
+[  272.005014] bit[  0 ~  31] val[0]=0x0
+[  272.036944] 
+[  272.038432] spa spa_port_attr_wifi_ssid_11 (ram_id=27 depth=20 width=32) ram_addr=15 
+[  272.046266] bit[  0 ~  31] val[0]=0x0
+[  272.075705] 
+[  272.077193] spa spa_port_attr_wifi_ssid_11 (ram_id=27 depth=20 width=32) ram_addr=16 
+[  272.085014] bit[  0 ~  31] val[0]=0x0
+[  272.115783] 
+[  272.117271] spa spa_port_attr_wifi_ssid_11 (ram_id=27 depth=20 width=32) ram_addr=17 
+[  272.125092] bit[  0 ~  31] val[0]=0xac00000
+[  272.155706] 
+[  272.157194] spa spa_port_attr_wifi_ssid_11 (ram_id=27 depth=20 width=32) ram_addr=18 
+[  272.165014] bit[  0 ~  31] val[0]=0x6c00ec0
+[  272.195729] 
+[  272.197217] spa spa_port_attr_wifi_ssid_11 (ram_id=27 depth=20 width=32) ram_addr=19 
+[  272.205037] bit[  0 ~  31] val[0]=0x90040000
+[  272.209334] cmd success!
+===== spa_port_attr_wifi_ssid_12
+[  272.994927] bit[  0 ~  31] val[0]=0x4400c40
+[  273.026951] 
+[  273.028438] spa spa_port_attr_wifi_ssid_1 (ram_id=17 depth=20 width=32) ram_addr=19 
+[  273.036186] bit[  0 ~  31] val[0]=0x90040000
+[  273.040462] 
+[  273.040462] ******************************************
+[  273.047081] spa spa_port_attr_wifi_ssid_12 ram_id=28 ram_depth=20 ram_width=32
+[  273.054303] id=0=0x0 (32bit)
+[  273.057192] cnt=20=0x14 (32bit)
+[  273.085705] 
+[  273.087193] spa spa_port_attr_wifi_ssid_12 (ram_id=28 depth=20 width=32) ram_addr=0 
+[  273.094927] bit[  0 ~  31] val[0]=0xa6a5
+[  273.125705] 
+[  273.127193] spa spa_port_attr_wifi_ssid_12 (ram_id=28 depth=20 width=32) ram_addr=1 
+[  273.134927] bit[  0 ~  31] val[0]=0x88f
+[  273.165707] 
+[  273.167195] spa spa_port_attr_wifi_ssid_12 (ram_id=28 depth=20 width=32) ram_addr=2 
+[  273.174928] bit[  0 ~  31] val[0]=0x0
+[  273.205707] 
+[  273.207194] spa spa_port_attr_wifi_ssid_12 (ram_id=28 depth=20 width=32) ram_addr=3 
+[  273.214928] bit[  0 ~  31] val[0]=0x0
+[  273.246949] 
+[  273.248438] spa spa_port_attr_wifi_ssid_12 (ram_id=28 depth=20 width=32) ram_addr=4 
+[  273.256194] bit[  0 ~  31] val[0]=0x0
+[  273.285718] 
+[  273.287207] spa spa_port_attr_wifi_ssid_12 (ram_id=28 depth=20 width=32) ram_addr=5 
+[  273.294941] bit[  0 ~  31] val[0]=0x0
+[  273.325708] 
+[  273.327196] spa spa_port_attr_wifi_ssid_12 (ram_id=28 depth=20 width=32) ram_addr=6 
+[  273.334929] bit[  0 ~  31] val[0]=0x0
+[  273.365706] 
+[  273.367194] spa spa_port_attr_wifi_ssid_12 (ram_id=28 depth=20 width=32) ram_addr=7 
+[  273.374928] bit[  0 ~  31] val[0]=0x0
+[  273.405707] 
+[  273.407195] spa spa_port_attr_wifi_ssid_12 (ram_id=28 depth=20 width=32) ram_addr=8 
+[  273.414928] bit[  0 ~  31] val[0]=0x0
+[  273.445709] 
+[  273.447197] spa spa_port_attr_wifi_ssid_12 (ram_id=28 depth=20 width=32) ram_addr=9 
+[  273.454931] bit[  0 ~  31] val[0]=0x0
+[  273.485759] 
+[  273.487267] spa spa_port_attr_wifi_ssid_12 (ram_id=28 depth=20 width=32) ram_addr=10 
+[  273.495088] bit[  0 ~  31] val[0]=0xfa0000e
+[  273.525713] 
+[  273.527203] spa spa_port_attr_wifi_ssid_12 (ram_id=28 depth=20 width=32) ram_addr=11 
+[  273.535246] bit[  0 ~  31] val[0]=0x0
+[  273.565708] 
+[  273.567197] spa spa_port_attr_wifi_ssid_12 (ram_id=28 depth=20 width=32) ram_addr=12 
+[  273.575018] bit[  0 ~  31] val[0]=0x0
+[  273.605706] 
+[  273.607194] spa spa_port_attr_wifi_ssid_12 (ram_id=28 depth=20 width=32) ram_addr=13 
+[  273.615014] bit[  0 ~  31] val[0]=0x8008
+[  273.645706] 
+[  273.647194] spa spa_port_attr_wifi_ssid_12 (ram_id=28 depth=20 width=32) ram_addr=14 
+[  273.655014] bit[  0 ~  31] val[0]=0x0
+[  273.686949] 
+[  273.688437] spa spa_port_attr_wifi_ssid_12 (ram_id=28 depth=20 width=32) ram_addr=15 
+[  273.696271] bit[  0 ~  31] val[0]=0x0
+[  273.725705] 
+[  273.727193] spa spa_port_attr_wifi_ssid_12 (ram_id=28 depth=20 width=32) ram_addr=16 
+[  273.735013] bit[  0 ~  31] val[0]=0x0
+[  273.765705] 
+[  273.767193] spa spa_port_attr_wifi_ssid_12 (ram_id=28 depth=20 width=32) ram_addr=17 
+[  273.775013] bit[  0 ~  31] val[0]=0xb000000
+[  273.805708] 
+[  273.807197] spa spa_port_attr_wifi_ssid_12 (ram_id=28 depth=20 width=32) ram_addr=18 
+[  273.815237] bit[  0 ~  31] val[0]=0x7000f00
+[  273.845708] 
+[  273.847196] spa spa_port_attr_wifi_ssid_12 (ram_id=28 depth=20 width=32) ram_addr=19 
+[  273.855237] bit[  0 ~  31] val[0]=0x90040000
+[  273.859537] cmd success!
+===== spa_port_attr_wifi_ssid_13
+[  274.644928] bit[  0 ~  31] val[0]=0x4400c40
+[  274.676949] 
+[  274.678437] spa spa_port_attr_wifi_ssid_1 (ram_id=17 depth=20 width=32) ram_addr=19 
+[  274.686185] bit[  0 ~  31] val[0]=0x90040000
+[  274.690458] 
+[  274.690458] ******************************************
+[  274.697077] spa spa_port_attr_wifi_ssid_13 ram_id=29 ram_depth=20 ram_width=32
+[  274.704300] id=0=0x0 (32bit)
+[  274.707189] cnt=20=0x14 (32bit)
+[  274.735706] 
+[  274.737193] spa spa_port_attr_wifi_ssid_13 (ram_id=29 depth=20 width=32) ram_addr=0 
+[  274.744927] bit[  0 ~  31] val[0]=0xa6a5
+[  274.775705] 
+[  274.777193] spa spa_port_attr_wifi_ssid_13 (ram_id=29 depth=20 width=32) ram_addr=1 
+[  274.784927] bit[  0 ~  31] val[0]=0x88f
+[  274.815707] 
+[  274.817197] spa spa_port_attr_wifi_ssid_13 (ram_id=29 depth=20 width=32) ram_addr=2 
+[  274.825153] bit[  0 ~  31] val[0]=0x0
+[  274.855706] 
+[  274.857194] spa spa_port_attr_wifi_ssid_13 (ram_id=29 depth=20 width=32) ram_addr=3 
+[  274.865150] bit[  0 ~  31] val[0]=0x0
+[  274.895717] 
+[  274.897205] spa spa_port_attr_wifi_ssid_13 (ram_id=29 depth=20 width=32) ram_addr=4 
+[  274.905161] bit[  0 ~  31] val[0]=0x0
+[  274.935705] 
+[  274.937194] spa spa_port_attr_wifi_ssid_13 (ram_id=29 depth=20 width=32) ram_addr=5 
+[  274.945149] bit[  0 ~  31] val[0]=0x0
+[  274.975705] 
+[  274.977193] spa spa_port_attr_wifi_ssid_13 (ram_id=29 depth=20 width=32) ram_addr=6 
+[  274.985149] bit[  0 ~  31] val[0]=0x0
+[  275.015706] 
+[  275.017195] spa spa_port_attr_wifi_ssid_13 (ram_id=29 depth=20 width=32) ram_addr=7 
+[  275.025151] bit[  0 ~  31] val[0]=0x0
+[  275.055707] 
+[  275.057195] spa spa_port_attr_wifi_ssid_13 (ram_id=29 depth=20 width=32) ram_addr=8 
+[  275.065150] bit[  0 ~  31] val[0]=0x0
+[  275.095705] 
+[  275.097193] spa spa_port_attr_wifi_ssid_13 (ram_id=29 depth=20 width=32) ram_addr=9 
+[  275.105149] bit[  0 ~  31] val[0]=0x0
+[  275.135705] 
+[  275.137193] spa spa_port_attr_wifi_ssid_13 (ram_id=29 depth=20 width=32) ram_addr=10 
+[  275.145236] bit[  0 ~  31] val[0]=0xfa0000e
+[  275.175705] 
+[  275.177194] spa spa_port_attr_wifi_ssid_13 (ram_id=29 depth=20 width=32) ram_addr=11 
+[  275.185236] bit[  0 ~  31] val[0]=0x0
+[  275.215705] 
+[  275.217193] spa spa_port_attr_wifi_ssid_13 (ram_id=29 depth=20 width=32) ram_addr=12 
+[  275.225235] bit[  0 ~  31] val[0]=0x0
+[  275.255707] 
+[  275.257195] spa spa_port_attr_wifi_ssid_13 (ram_id=29 depth=20 width=32) ram_addr=13 
+[  275.265237] bit[  0 ~  31] val[0]=0x8008
+[  275.295706] 
+[  275.297193] spa spa_port_attr_wifi_ssid_13 (ram_id=29 depth=20 width=32) ram_addr=14 
+[  275.305235] bit[  0 ~  31] val[0]=0x0
+[  275.335713] 
+[  275.337202] spa spa_port_attr_wifi_ssid_13 (ram_id=29 depth=20 width=32) ram_addr=15 
+[  275.345244] bit[  0 ~  31] val[0]=0x0
+[  275.375706] 
+[  275.377194] spa spa_port_attr_wifi_ssid_13 (ram_id=29 depth=20 width=32) ram_addr=16 
+[  275.385236] bit[  0 ~  31] val[0]=0x0
+[  275.415713] 
+[  275.417201] spa spa_port_attr_wifi_ssid_13 (ram_id=29 depth=20 width=32) ram_addr=17 
+[  275.425244] bit[  0 ~  31] val[0]=0xb400000
+[  275.455707] 
+[  275.457196] spa spa_port_attr_wifi_ssid_13 (ram_id=29 depth=20 width=32) ram_addr=18 
+[  275.465016] bit[  0 ~  31] val[0]=0x7400f40
+[  275.495706] 
+[  275.497195] spa spa_port_attr_wifi_ssid_13 (ram_id=29 depth=20 width=32) ram_addr=19 
+[  275.505015] bit[  0 ~  31] val[0]=0x90040000
+[  275.509318] cmd success!
+===== spa_port_attr_wifi_ssid_14
+[  276.295152] bit[  0 ~  31] val[0]=0x4400c40
+[  276.325720] 
+[  276.327208] spa spa_port_attr_wifi_ssid_1 (ram_id=17 depth=20 width=32) ram_addr=19 
+[  276.335161] bit[  0 ~  31] val[0]=0x90040000
+[  276.339449] 
+[  276.339449] ******************************************
+[  276.346293] spa spa_port_attr_wifi_ssid_14 ram_id=30 ram_depth=20 ram_width=32
+[  276.353733] id=0=0x0 (32bit)
+[  276.356622] cnt=20=0x14 (32bit)
+[  276.385707] 
+[  276.387196] spa spa_port_attr_wifi_ssid_14 (ram_id=30 depth=20 width=32) ram_addr=0 
+[  276.395149] bit[  0 ~  31] val[0]=0xa6a5
+[  276.425709] 
+[  276.427198] spa spa_port_attr_wifi_ssid_14 (ram_id=30 depth=20 width=32) ram_addr=1 
+[  276.434932] bit[  0 ~  31] val[0]=0x88f
+[  276.465707] 
+[  276.467196] spa spa_port_attr_wifi_ssid_14 (ram_id=30 depth=20 width=32) ram_addr=2 
+[  276.475149] bit[  0 ~  31] val[0]=0x0
+[  276.505706] 
+[  276.507194] spa spa_port_attr_wifi_ssid_14 (ram_id=30 depth=20 width=32) ram_addr=3 
+[  276.515147] bit[  0 ~  31] val[0]=0x0
+[  276.545738] 
+[  276.547247] spa spa_port_attr_wifi_ssid_14 (ram_id=30 depth=20 width=32) ram_addr=4 
+[  276.555207] bit[  0 ~  31] val[0]=0x0
+[  276.585710] 
+[  276.587201] spa spa_port_attr_wifi_ssid_14 (ram_id=30 depth=20 width=32) ram_addr=5 
+[  276.594935] bit[  0 ~  31] val[0]=0x0
+[  276.625724] 
+[  276.627213] spa spa_port_attr_wifi_ssid_14 (ram_id=30 depth=20 width=32) ram_addr=6 
+[  276.635166] bit[  0 ~  31] val[0]=0x0
+[  276.665725] 
+[  276.667214] spa spa_port_attr_wifi_ssid_14 (ram_id=30 depth=20 width=32) ram_addr=7 
+[  276.675167] bit[  0 ~  31] val[0]=0x0
+[  276.705705] 
+[  276.707194] spa spa_port_attr_wifi_ssid_14 (ram_id=30 depth=20 width=32) ram_addr=8 
+[  276.715161] bit[  0 ~  31] val[0]=0x0
+[  276.745705] 
+[  276.747193] spa spa_port_attr_wifi_ssid_14 (ram_id=30 depth=20 width=32) ram_addr=9 
+[  276.755146] bit[  0 ~  31] val[0]=0x0
+[  276.785706] 
+[  276.787193] spa spa_port_attr_wifi_ssid_14 (ram_id=30 depth=20 width=32) ram_addr=10 
+[  276.795233] bit[  0 ~  31] val[0]=0xfa0000e
+[  276.825708] 
+[  276.827197] spa spa_port_attr_wifi_ssid_14 (ram_id=30 depth=20 width=32) ram_addr=11 
+[  276.835018] bit[  0 ~  31] val[0]=0x0
+[  276.865718] 
+[  276.867207] spa spa_port_attr_wifi_ssid_14 (ram_id=30 depth=20 width=32) ram_addr=12 
+[  276.875247] bit[  0 ~  31] val[0]=0x0
+[  276.905706] 
+[  276.907194] spa spa_port_attr_wifi_ssid_14 (ram_id=30 depth=20 width=32) ram_addr=13 
+[  276.915234] bit[  0 ~  31] val[0]=0x8008
+[  276.945707] 
+[  276.947195] spa spa_port_attr_wifi_ssid_14 (ram_id=30 depth=20 width=32) ram_addr=14 
+[  276.955234] bit[  0 ~  31] val[0]=0x0
+[  276.985706] 
+[  276.987194] spa spa_port_attr_wifi_ssid_14 (ram_id=30 depth=20 width=32) ram_addr=15 
+[  276.995233] bit[  0 ~  31] val[0]=0x0
+[  277.025706] 
+[  277.027194] spa spa_port_attr_wifi_ssid_14 (ram_id=30 depth=20 width=32) ram_addr=16 
+[  277.035233] bit[  0 ~  31] val[0]=0x0
+[  277.065705] 
+[  277.067193] spa spa_port_attr_wifi_ssid_14 (ram_id=30 depth=20 width=32) ram_addr=17 
+[  277.075241] bit[  0 ~  31] val[0]=0xb800000
+[  277.105713] 
+[  277.107201] spa spa_port_attr_wifi_ssid_14 (ram_id=30 depth=20 width=32) ram_addr=18 
+[  277.115241] bit[  0 ~  31] val[0]=0x7800f80
+[  277.145705] 
+[  277.147193] spa spa_port_attr_wifi_ssid_14 (ram_id=30 depth=20 width=32) ram_addr=19 
+[  277.155232] bit[  0 ~  31] val[0]=0x90040000
+[  277.159537] cmd success!
+===== spa_port_attr_wifi_ssid_15
+[  277.944927] bit[  0 ~  31] val[0]=0x4400c40
+[  277.976949] 
+[  277.978437] spa spa_port_attr_wifi_ssid_1 (ram_id=17 depth=20 width=32) ram_addr=19 
+[  277.986184] bit[  0 ~  31] val[0]=0x90040000
+[  277.990463] 
+[  277.990463] ******************************************
+[  277.997082] spa spa_port_attr_wifi_ssid_15 ram_id=31 ram_depth=20 ram_width=32
+[  278.004304] id=0=0x0 (32bit)
+[  278.007193] cnt=20=0x14 (32bit)
+[  278.035707] 
+[  278.037195] spa spa_port_attr_wifi_ssid_15 (ram_id=31 depth=20 width=32) ram_addr=0 
+[  278.044928] bit[  0 ~  31] val[0]=0xa6a5
+[  278.075706] 
+[  278.077194] spa spa_port_attr_wifi_ssid_15 (ram_id=31 depth=20 width=32) ram_addr=1 
+[  278.084927] bit[  0 ~  31] val[0]=0x88f
+[  278.115706] 
+[  278.117194] spa spa_port_attr_wifi_ssid_15 (ram_id=31 depth=20 width=32) ram_addr=2 
+[  278.124927] bit[  0 ~  31] val[0]=0x0
+[  278.155705] 
+[  278.157193] spa spa_port_attr_wifi_ssid_15 (ram_id=31 depth=20 width=32) ram_addr=3 
+[  278.164927] bit[  0 ~  31] val[0]=0x0
+[  278.195790] 
+[  278.197280] spa spa_port_attr_wifi_ssid_15 (ram_id=31 depth=20 width=32) ram_addr=4 
+[  278.205236] bit[  0 ~  31] val[0]=0x0
+[  278.235710] 
+[  278.237198] spa spa_port_attr_wifi_ssid_15 (ram_id=31 depth=20 width=32) ram_addr=5 
+[  278.245154] bit[  0 ~  31] val[0]=0x0
+[  278.275709] 
+[  278.277197] spa spa_port_attr_wifi_ssid_15 (ram_id=31 depth=20 width=32) ram_addr=6 
+[  278.285153] bit[  0 ~  31] val[0]=0x0
+[  278.315705] 
+[  278.317194] spa spa_port_attr_wifi_ssid_15 (ram_id=31 depth=20 width=32) ram_addr=7 
+[  278.325149] bit[  0 ~  31] val[0]=0x0
+[  278.355706] 
+[  278.357193] spa spa_port_attr_wifi_ssid_15 (ram_id=31 depth=20 width=32) ram_addr=8 
+[  278.365148] bit[  0 ~  31] val[0]=0x0
+[  278.395706] 
+[  278.397194] spa spa_port_attr_wifi_ssid_15 (ram_id=31 depth=20 width=32) ram_addr=9 
+[  278.405149] bit[  0 ~  31] val[0]=0x0
+[  278.435708] 
+[  278.437197] spa spa_port_attr_wifi_ssid_15 (ram_id=31 depth=20 width=32) ram_addr=10 
+[  278.445018] bit[  0 ~  31] val[0]=0xfa0000e
+[  278.475707] 
+[  278.477195] spa spa_port_attr_wifi_ssid_15 (ram_id=31 depth=20 width=32) ram_addr=11 
+[  278.485015] bit[  0 ~  31] val[0]=0x0
+[  278.515709] 
+[  278.517197] spa spa_port_attr_wifi_ssid_15 (ram_id=31 depth=20 width=32) ram_addr=12 
+[  278.525017] bit[  0 ~  31] val[0]=0x0
+[  278.555759] 
+[  278.557269] spa spa_port_attr_wifi_ssid_15 (ram_id=31 depth=20 width=32) ram_addr=13 
+[  278.565323] bit[  0 ~  31] val[0]=0x8008
+[  278.595709] 
+[  278.597200] spa spa_port_attr_wifi_ssid_15 (ram_id=31 depth=20 width=32) ram_addr=14 
+[  278.605020] bit[  0 ~  31] val[0]=0x0
+[  278.636967] 
+[  278.638456] spa spa_port_attr_wifi_ssid_15 (ram_id=31 depth=20 width=32) ram_addr=15 
+[  278.646291] bit[  0 ~  31] val[0]=0x0
+[  278.675706] 
+[  278.677193] spa spa_port_attr_wifi_ssid_15 (ram_id=31 depth=20 width=32) ram_addr=16 
+[  278.685014] bit[  0 ~  31] val[0]=0x0
+[  278.715706] 
+[  278.717193] spa spa_port_attr_wifi_ssid_15 (ram_id=31 depth=20 width=32) ram_addr=17 
+[  278.725013] bit[  0 ~  31] val[0]=0xbc00000
+[  278.755722] 
+[  278.757211] spa spa_port_attr_wifi_ssid_15 (ram_id=31 depth=20 width=32) ram_addr=18 
+[  278.765253] bit[  0 ~  31] val[0]=0x7c00fc0
+[  278.795709] 
+[  278.797197] spa spa_port_attr_wifi_ssid_15 (ram_id=31 depth=20 width=32) ram_addr=19 
+[  278.805018] bit[  0 ~  31] val[0]=0x90040000
+[  278.809312] cmd success!
+===== spa_port_attr_wifi_ssid_16
+[  279.595195] bit[  0 ~  31] val[0]=0x4400c40
+[  279.626965] 
+[  279.628455] spa spa_port_attr_wifi_ssid_1 (ram_id=17 depth=20 width=32) ram_addr=19 
+[  279.636223] bit[  0 ~  31] val[0]=0x90040000
+[  279.640500] 
+[  279.640500] ******************************************
+[  279.647122] spa spa_port_attr_wifi_ssid_16 ram_id=32 ram_depth=20 ram_width=32
+[  279.654349] id=0=0x0 (32bit)
+[  279.657238] cnt=20=0x14 (32bit)
+[  279.685708] 
+[  279.687197] spa spa_port_attr_wifi_ssid_16 (ram_id=32 depth=20 width=32) ram_addr=0 
+[  279.694930] bit[  0 ~  31] val[0]=0xa6a5
+[  279.725707] 
+[  279.727195] spa spa_port_attr_wifi_ssid_16 (ram_id=32 depth=20 width=32) ram_addr=1 
+[  279.734929] bit[  0 ~  31] val[0]=0x88f
+[  279.765706] 
+[  279.767194] spa spa_port_attr_wifi_ssid_16 (ram_id=32 depth=20 width=32) ram_addr=2 
+[  279.774927] bit[  0 ~  31] val[0]=0x0
+[  279.805705] 
+[  279.807193] spa spa_port_attr_wifi_ssid_16 (ram_id=32 depth=20 width=32) ram_addr=3 
+[  279.814927] bit[  0 ~  31] val[0]=0x0
+[  279.846948] 
+[  279.848436] spa spa_port_attr_wifi_ssid_16 (ram_id=32 depth=20 width=32) ram_addr=4 
+[  279.856184] bit[  0 ~  31] val[0]=0x0
+[  279.885705] 
+[  279.887193] spa spa_port_attr_wifi_ssid_16 (ram_id=32 depth=20 width=32) ram_addr=5 
+[  279.894926] bit[  0 ~  31] val[0]=0x0
+[  279.925706] 
+[  279.927194] spa spa_port_attr_wifi_ssid_16 (ram_id=32 depth=20 width=32) ram_addr=6 
+[  279.934927] bit[  0 ~  31] val[0]=0x0
+[  279.965706] 
+[  279.967194] spa spa_port_attr_wifi_ssid_16 (ram_id=32 depth=20 width=32) ram_addr=7 
+[  279.974927] bit[  0 ~  31] val[0]=0x0
+[  280.005705] 
+[  280.007193] spa spa_port_attr_wifi_ssid_16 (ram_id=32 depth=20 width=32) ram_addr=8 
+[  280.014926] bit[  0 ~  31] val[0]=0x0
+[  280.045707] 
+[  280.047195] spa spa_port_attr_wifi_ssid_16 (ram_id=32 depth=20 width=32) ram_addr=9 
+[  280.054928] bit[  0 ~  31] val[0]=0x0
+[  280.085707] 
+[  280.087195] spa spa_port_attr_wifi_ssid_16 (ram_id=32 depth=20 width=32) ram_addr=10 
+[  280.095015] bit[  0 ~  31] val[0]=0xfa0000e
+[  280.125705] 
+[  280.127193] spa spa_port_attr_wifi_ssid_16 (ram_id=32 depth=20 width=32) ram_addr=11 
+[  280.135013] bit[  0 ~  31] val[0]=0x0
+[  280.165707] 
+[  280.167195] spa spa_port_attr_wifi_ssid_16 (ram_id=32 depth=20 width=32) ram_addr=12 
+[  280.175015] bit[  0 ~  31] val[0]=0x0
+[  280.205717] 
+[  280.207205] spa spa_port_attr_wifi_ssid_16 (ram_id=32 depth=20 width=32) ram_addr=13 
+[  280.215025] bit[  0 ~  31] val[0]=0x8008
+[  280.245705] 
+[  280.247193] spa spa_port_attr_wifi_ssid_16 (ram_id=32 depth=20 width=32) ram_addr=14 
+[  280.255013] bit[  0 ~  31] val[0]=0x0
+[  280.286944] 
+[  280.288432] spa spa_port_attr_wifi_ssid_16 (ram_id=32 depth=20 width=32) ram_addr=15 
+[  280.296266] bit[  0 ~  31] val[0]=0x0
+[  280.325707] 
+[  280.327194] spa spa_port_attr_wifi_ssid_16 (ram_id=32 depth=20 width=32) ram_addr=16 
+[  280.335014] bit[  0 ~  31] val[0]=0x0
+[  280.365707] 
+[  280.367195] spa spa_port_attr_wifi_ssid_16 (ram_id=32 depth=20 width=32) ram_addr=17 
+[  280.375015] bit[  0 ~  31] val[0]=0xc000000
+[  280.405706] 
+[  280.407194] spa spa_port_attr_wifi_ssid_16 (ram_id=32 depth=20 width=32) ram_addr=18 
+[  280.415014] bit[  0 ~  31] val[0]=0x8001000
+[  280.445717] 
+[  280.447206] spa spa_port_attr_wifi_ssid_16 (ram_id=32 depth=20 width=32) ram_addr=19 
+[  280.455247] bit[  0 ~  31] val[0]=0x90040000
+[  280.459541] cmd success!
+===== spa_port_attr_wifi_ssid_17
+[  281.245234] bit[  0 ~  31] val[0]=0x4400c40
+[  281.275706] 
+[  281.277194] spa spa_port_attr_wifi_ssid_1 (ram_id=17 depth=20 width=32) ram_addr=19 
+[  281.285150] bit[  0 ~  31] val[0]=0x90040000
+[  281.289441] 
+[  281.289441] ******************************************
+[  281.296278] spa spa_port_attr_wifi_ssid_17 ram_id=33 ram_depth=20 ram_width=32
+[  281.303721] id=0=0x0 (32bit)
+[  281.306610] cnt=20=0x14 (32bit)
+[  281.335706] 
+[  281.337194] spa spa_port_attr_wifi_ssid_17 (ram_id=33 depth=20 width=32) ram_addr=0 
+[  281.345150] bit[  0 ~  31] val[0]=0xa6a5
+[  281.375705] 
+[  281.377193] spa spa_port_attr_wifi_ssid_17 (ram_id=33 depth=20 width=32) ram_addr=1 
+[  281.385149] bit[  0 ~  31] val[0]=0x88f
+[  281.415705] 
+[  281.417193] spa spa_port_attr_wifi_ssid_17 (ram_id=33 depth=20 width=32) ram_addr=2 
+[  281.425153] bit[  0 ~  31] val[0]=0x0
+[  281.455706] 
+[  281.457194] spa spa_port_attr_wifi_ssid_17 (ram_id=33 depth=20 width=32) ram_addr=3 
+[  281.465150] bit[  0 ~  31] val[0]=0x0
+[  281.496950] 
+[  281.498439] spa spa_port_attr_wifi_ssid_17 (ram_id=33 depth=20 width=32) ram_addr=4 
+[  281.506198] bit[  0 ~  31] val[0]=0x0
+[  281.535720] 
+[  281.537209] spa spa_port_attr_wifi_ssid_17 (ram_id=33 depth=20 width=32) ram_addr=5 
+[  281.545166] bit[  0 ~  31] val[0]=0x0
+[  281.575706] 
+[  281.577201] spa spa_port_attr_wifi_ssid_17 (ram_id=33 depth=20 width=32) ram_addr=6 
+[  281.585187] bit[  0 ~  31] val[0]=0x0
+[  281.615714] 
+[  281.617213] spa spa_port_attr_wifi_ssid_17 (ram_id=33 depth=20 width=32) ram_addr=7 
+[  281.624946] bit[  0 ~  31] val[0]=0x0
+[  281.655725] 
+[  281.657214] spa spa_port_attr_wifi_ssid_17 (ram_id=33 depth=20 width=32) ram_addr=8 
+[  281.665170] bit[  0 ~  31] val[0]=0x0
+[  281.695705] 
+[  281.697193] spa spa_port_attr_wifi_ssid_17 (ram_id=33 depth=20 width=32) ram_addr=9 
+[  281.705148] bit[  0 ~  31] val[0]=0x0
+[  281.735705] 
+[  281.737194] spa spa_port_attr_wifi_ssid_17 (ram_id=33 depth=20 width=32) ram_addr=10 
+[  281.745236] bit[  0 ~  31] val[0]=0xfa0000e
+[  281.775706] 
+[  281.777194] spa spa_port_attr_wifi_ssid_17 (ram_id=33 depth=20 width=32) ram_addr=11 
+[  281.785237] bit[  0 ~  31] val[0]=0x0
+[  281.815705] 
+[  281.817194] spa spa_port_attr_wifi_ssid_17 (ram_id=33 depth=20 width=32) ram_addr=12 
+[  281.825236] bit[  0 ~  31] val[0]=0x0
+[  281.855707] 
+[  281.857196] spa spa_port_attr_wifi_ssid_17 (ram_id=33 depth=20 width=32) ram_addr=13 
+[  281.865017] bit[  0 ~  31] val[0]=0x8008
+[  281.895719] 
+[  281.897207] spa spa_port_attr_wifi_ssid_17 (ram_id=33 depth=20 width=32) ram_addr=14 
+[  281.905250] bit[  0 ~  31] val[0]=0x0
+[  281.935706] 
+[  281.937194] spa spa_port_attr_wifi_ssid_17 (ram_id=33 depth=20 width=32) ram_addr=15 
+[  281.945237] bit[  0 ~  31] val[0]=0x0
+[  281.975713] 
+[  281.977201] spa spa_port_attr_wifi_ssid_17 (ram_id=33 depth=20 width=32) ram_addr=16 
+[  281.985244] bit[  0 ~  31] val[0]=0x0
+[  282.015709] 
+[  282.017197] spa spa_port_attr_wifi_ssid_17 (ram_id=33 depth=20 width=32) ram_addr=17 
+[  282.025239] bit[  0 ~  31] val[0]=0xc400000
+[  282.055707] 
+[  282.057195] spa spa_port_attr_wifi_ssid_17 (ram_id=33 depth=20 width=32) ram_addr=18 
+[  282.065238] bit[  0 ~  31] val[0]=0x8401040
+[  282.095705] 
+[  282.097193] spa spa_port_attr_wifi_ssid_17 (ram_id=33 depth=20 width=32) ram_addr=19 
+[  282.105235] bit[  0 ~  31] val[0]=0x90040000
+[  282.109525] cmd success!
+===== spa_port_attr_wifi_ssid_18
+[  282.894929] bit[  0 ~  31] val[0]=0x4400c40
+[  282.926945] 
+[  282.928433] spa spa_port_attr_wifi_ssid_1 (ram_id=17 depth=20 width=32) ram_addr=19 
+[  282.936190] bit[  0 ~  31] val[0]=0x90040000
+[  282.940467] 
+[  282.940467] ******************************************
+[  282.947086] spa spa_port_attr_wifi_ssid_18 ram_id=34 ram_depth=20 ram_width=32
+[  282.954308] id=0=0x0 (32bit)
+[  282.957197] cnt=20=0x14 (32bit)
+[  282.985710] 
+[  282.987198] spa spa_port_attr_wifi_ssid_18 (ram_id=34 depth=20 width=32) ram_addr=0 
+[  282.994931] bit[  0 ~  31] val[0]=0xa6a5
+[  283.025706] 
+[  283.027194] spa spa_port_attr_wifi_ssid_18 (ram_id=34 depth=20 width=32) ram_addr=1 
+[  283.034927] bit[  0 ~  31] val[0]=0x88f
+[  283.065709] 
+[  283.067198] spa spa_port_attr_wifi_ssid_18 (ram_id=34 depth=20 width=32) ram_addr=2 
+[  283.075151] bit[  0 ~  31] val[0]=0x0
+[  283.105710] 
+[  283.107198] spa spa_port_attr_wifi_ssid_18 (ram_id=34 depth=20 width=32) ram_addr=3 
+[  283.115151] bit[  0 ~  31] val[0]=0x0
+[  283.145706] 
+[  283.147194] spa spa_port_attr_wifi_ssid_18 (ram_id=34 depth=20 width=32) ram_addr=4 
+[  283.155147] bit[  0 ~  31] val[0]=0x0
+[  283.185706] 
+[  283.187194] spa spa_port_attr_wifi_ssid_18 (ram_id=34 depth=20 width=32) ram_addr=5 
+[  283.195146] bit[  0 ~  31] val[0]=0x0
+[  283.225705] 
+[  283.227193] spa spa_port_attr_wifi_ssid_18 (ram_id=34 depth=20 width=32) ram_addr=6 
+[  283.235146] bit[  0 ~  31] val[0]=0x0
+[  283.265705] 
+[  283.267193] spa spa_port_attr_wifi_ssid_18 (ram_id=34 depth=20 width=32) ram_addr=7 
+[  283.275146] bit[  0 ~  31] val[0]=0x0
+[  283.305712] 
+[  283.307200] spa spa_port_attr_wifi_ssid_18 (ram_id=34 depth=20 width=32) ram_addr=8 
+[  283.315153] bit[  0 ~  31] val[0]=0x0
+[  283.345705] 
+[  283.347193] spa spa_port_attr_wifi_ssid_18 (ram_id=34 depth=20 width=32) ram_addr=9 
+[  283.355146] bit[  0 ~  31] val[0]=0x0
+[  283.385709] 
+[  283.387197] spa spa_port_attr_wifi_ssid_18 (ram_id=34 depth=20 width=32) ram_addr=10 
+[  283.395237] bit[  0 ~  31] val[0]=0xfa0000e
+[  283.425705] 
+[  283.427193] spa spa_port_attr_wifi_ssid_18 (ram_id=34 depth=20 width=32) ram_addr=11 
+[  283.435233] bit[  0 ~  31] val[0]=0x0
+[  283.465718] 
+[  283.467207] spa spa_port_attr_wifi_ssid_18 (ram_id=34 depth=20 width=32) ram_addr=12 
+[  283.475028] bit[  0 ~  31] val[0]=0x0
+[  283.505709] 
+[  283.507198] spa spa_port_attr_wifi_ssid_18 (ram_id=34 depth=20 width=32) ram_addr=13 
+[  283.515238] bit[  0 ~  31] val[0]=0x8008
+[  283.545707] 
+[  283.547196] spa spa_port_attr_wifi_ssid_18 (ram_id=34 depth=20 width=32) ram_addr=14 
+[  283.555016] bit[  0 ~  31] val[0]=0x0
+[  283.586949] 
+[  283.588437] spa spa_port_attr_wifi_ssid_18 (ram_id=34 depth=20 width=32) ram_addr=15 
+[  283.596278] bit[  0 ~  31] val[0]=0x0
+[  283.625724] 
+[  283.627234] spa spa_port_attr_wifi_ssid_18 (ram_id=34 depth=20 width=32) ram_addr=16 
+[  283.635281] bit[  0 ~  31] val[0]=0x0
+[  283.665708] 
+[  283.667199] spa spa_port_attr_wifi_ssid_18 (ram_id=34 depth=20 width=32) ram_addr=17 
+[  283.675019] bit[  0 ~  31] val[0]=0xc800000
+[  283.705708] 
+[  283.707197] spa spa_port_attr_wifi_ssid_18 (ram_id=34 depth=20 width=32) ram_addr=18 
+[  283.715017] bit[  0 ~  31] val[0]=0x8801080
+[  283.745711] 
+[  283.747199] spa spa_port_attr_wifi_ssid_18 (ram_id=34 depth=20 width=32) ram_addr=19 
+[  283.755019] bit[  0 ~  31] val[0]=0x90040000
+[  283.759309] cmd success!
+===== spa_port_attr_wifi_ssid_19
+[  284.545157] bit[  0 ~  31] val[0]=0x4400c40
+[  284.575706] 
+[  284.577195] spa spa_port_attr_wifi_ssid_1 (ram_id=17 depth=20 width=32) ram_addr=19 
+[  284.585150] bit[  0 ~  31] val[0]=0x90040000
+[  284.589444] 
+[  284.589444] ******************************************
+[  284.596282] spa spa_port_attr_wifi_ssid_19 ram_id=35 ram_depth=20 ram_width=32
+[  284.603724] id=0=0x0 (32bit)
+[  284.606625] cnt=20=0x14 (32bit)
+[  284.635727] 
+[  284.637236] spa spa_port_attr_wifi_ssid_19 (ram_id=35 depth=20 width=32) ram_addr=0 
+[  284.644970] bit[  0 ~  31] val[0]=0xa6a5
+[  284.675710] 
+[  284.677200] spa spa_port_attr_wifi_ssid_19 (ram_id=35 depth=20 width=32) ram_addr=1 
+[  284.685157] bit[  0 ~  31] val[0]=0x88f
+[  284.715707] 
+[  284.717195] spa spa_port_attr_wifi_ssid_19 (ram_id=35 depth=20 width=32) ram_addr=2 
+[  284.724929] bit[  0 ~  31] val[0]=0x0
+[  284.755706] 
+[  284.757194] spa spa_port_attr_wifi_ssid_19 (ram_id=35 depth=20 width=32) ram_addr=3 
+[  284.764928] bit[  0 ~  31] val[0]=0x0
+[  284.796946] 
+[  284.798434] spa spa_port_attr_wifi_ssid_19 (ram_id=35 depth=20 width=32) ram_addr=4 
+[  284.806181] bit[  0 ~  31] val[0]=0x0
+[  284.835709] 
+[  284.837199] spa spa_port_attr_wifi_ssid_19 (ram_id=35 depth=20 width=32) ram_addr=5 
+[  284.845155] bit[  0 ~  31] val[0]=0x0
+[  284.875707] 
+[  284.877195] spa spa_port_attr_wifi_ssid_19 (ram_id=35 depth=20 width=32) ram_addr=6 
+[  284.884929] bit[  0 ~  31] val[0]=0x0
+[  284.915708] 
+[  284.917196] spa spa_port_attr_wifi_ssid_19 (ram_id=35 depth=20 width=32) ram_addr=7 
+[  284.924930] bit[  0 ~  31] val[0]=0x0
+[  284.955705] 
+[  284.957193] spa spa_port_attr_wifi_ssid_19 (ram_id=35 depth=20 width=32) ram_addr=8 
+[  284.964926] bit[  0 ~  31] val[0]=0x0
+[  284.995708] 
+[  284.997196] spa spa_port_attr_wifi_ssid_19 (ram_id=35 depth=20 width=32) ram_addr=9 
+[  285.004929] bit[  0 ~  31] val[0]=0x0
+[  285.035706] 
+[  285.037194] spa spa_port_attr_wifi_ssid_19 (ram_id=35 depth=20 width=32) ram_addr=10 
+[  285.045014] bit[  0 ~  31] val[0]=0xfa0000e
+[  285.075710] 
+[  285.077198] spa spa_port_attr_wifi_ssid_19 (ram_id=35 depth=20 width=32) ram_addr=11 
+[  285.085019] bit[  0 ~  31] val[0]=0x0
+[  285.115705] 
+[  285.117192] spa spa_port_attr_wifi_ssid_19 (ram_id=35 depth=20 width=32) ram_addr=12 
+[  285.125013] bit[  0 ~  31] val[0]=0x0
+[  285.155706] 
+[  285.157194] spa spa_port_attr_wifi_ssid_19 (ram_id=35 depth=20 width=32) ram_addr=13 
+[  285.165015] bit[  0 ~  31] val[0]=0x8008
+[  285.195705] 
+[  285.197194] spa spa_port_attr_wifi_ssid_19 (ram_id=35 depth=20 width=32) ram_addr=14 
+[  285.205013] bit[  0 ~  31] val[0]=0x0
+[  285.235713] 
+[  285.237202] spa spa_port_attr_wifi_ssid_19 (ram_id=35 depth=20 width=32) ram_addr=15 
+[  285.245244] bit[  0 ~  31] val[0]=0x0
+[  285.275706] 
+[  285.277194] spa spa_port_attr_wifi_ssid_19 (ram_id=35 depth=20 width=32) ram_addr=16 
+[  285.285236] bit[  0 ~  31] val[0]=0x0
+[  285.315713] 
+[  285.317201] spa spa_port_attr_wifi_ssid_19 (ram_id=35 depth=20 width=32) ram_addr=17 
+[  285.325244] bit[  0 ~  31] val[0]=0xcc00000
+[  285.355705] 
+[  285.357194] spa spa_port_attr_wifi_ssid_19 (ram_id=35 depth=20 width=32) ram_addr=18 
+[  285.365236] bit[  0 ~  31] val[0]=0x8c010c0
+[  285.395724] 
+[  285.397213] spa spa_port_attr_wifi_ssid_19 (ram_id=35 depth=20 width=32) ram_addr=19 
+[  285.405256] bit[  0 ~  31] val[0]=0x90040000
+[  285.409544] cmd success!
+===== spa_port_attr_wifi_ssid_20
+[  286.194942] bit[  0 ~  31] val[0]=0x4800c80
+[  286.226949] 
+[  286.228437] spa spa_port_attr_wifi_ssid_2 (ram_id=18 depth=20 width=32) ram_addr=19 
+[  286.236184] bit[  0 ~  31] val[0]=0x90040000
+[  286.240463] 
+[  286.240463] ******************************************
+[  286.247082] spa spa_port_attr_wifi_ssid_20 ram_id=36 ram_depth=20 ram_width=32
+[  286.254304] id=0=0x0 (32bit)
+[  286.257193] cnt=20=0x14 (32bit)
+[  286.285705] 
+[  286.287194] spa spa_port_attr_wifi_ssid_20 (ram_id=36 depth=20 width=32) ram_addr=0 
+[  286.294927] bit[  0 ~  31] val[0]=0xa6a5
+[  286.325707] 
+[  286.327194] spa spa_port_attr_wifi_ssid_20 (ram_id=36 depth=20 width=32) ram_addr=1 
+[  286.334927] bit[  0 ~  31] val[0]=0x88f
+[  286.365705] 
+[  286.367193] spa spa_port_attr_wifi_ssid_20 (ram_id=36 depth=20 width=32) ram_addr=2 
+[  286.374926] bit[  0 ~  31] val[0]=0x0
+[  286.405705] 
+[  286.407193] spa spa_port_attr_wifi_ssid_20 (ram_id=36 depth=20 width=32) ram_addr=3 
+[  286.414927] bit[  0 ~  31] val[0]=0x0
+[  286.446944] 
+[  286.448432] spa spa_port_attr_wifi_ssid_20 (ram_id=36 depth=20 width=32) ram_addr=4 
+[  286.456179] bit[  0 ~  31] val[0]=0x0
+[  286.485788] 
+[  286.487277] spa spa_port_attr_wifi_ssid_20 (ram_id=36 depth=20 width=32) ram_addr=5 
+[  286.495010] bit[  0 ~  31] val[0]=0x0
+[  286.525710] 
+[  286.527198] spa spa_port_attr_wifi_ssid_20 (ram_id=36 depth=20 width=32) ram_addr=6 
+[  286.534932] bit[  0 ~  31] val[0]=0x0
+[  286.565708] 
+[  286.567196] spa spa_port_attr_wifi_ssid_20 (ram_id=36 depth=20 width=32) ram_addr=7 
+[  286.574929] bit[  0 ~  31] val[0]=0x0
+[  286.605705] 
+[  286.607193] spa spa_port_attr_wifi_ssid_20 (ram_id=36 depth=20 width=32) ram_addr=8 
+[  286.614927] bit[  0 ~  31] val[0]=0x0
+[  286.645733] 
+[  286.647242] spa spa_port_attr_wifi_ssid_20 (ram_id=36 depth=20 width=32) ram_addr=9 
+[  286.654977] bit[  0 ~  31] val[0]=0x0
+[  286.685710] 
+[  286.687200] spa spa_port_attr_wifi_ssid_20 (ram_id=36 depth=20 width=32) ram_addr=10 
+[  286.695242] bit[  0 ~  31] val[0]=0xfa0000e
+[  286.725707] 
+[  286.727196] spa spa_port_attr_wifi_ssid_20 (ram_id=36 depth=20 width=32) ram_addr=11 
+[  286.735017] bit[  0 ~  31] val[0]=0x0
+[  286.765707] 
+[  286.767195] spa spa_port_attr_wifi_ssid_20 (ram_id=36 depth=20 width=32) ram_addr=12 
+[  286.775015] bit[  0 ~  31] val[0]=0x0
+[  286.805706] 
+[  286.807193] spa spa_port_attr_wifi_ssid_20 (ram_id=36 depth=20 width=32) ram_addr=13 
+[  286.815014] bit[  0 ~  31] val[0]=0x8008
+[  286.845707] 
+[  286.847195] spa spa_port_attr_wifi_ssid_20 (ram_id=36 depth=20 width=32) ram_addr=14 
+[  286.855015] bit[  0 ~  31] val[0]=0x0
+[  286.886957] 
+[  286.888445] spa spa_port_attr_wifi_ssid_20 (ram_id=36 depth=20 width=32) ram_addr=15 
+[  286.896283] bit[  0 ~  31] val[0]=0x0
+[  286.925705] 
+[  286.927193] spa spa_port_attr_wifi_ssid_20 (ram_id=36 depth=20 width=32) ram_addr=16 
+[  286.935013] bit[  0 ~  31] val[0]=0x0
+[  286.965705] 
+[  286.967193] spa spa_port_attr_wifi_ssid_20 (ram_id=36 depth=20 width=32) ram_addr=17 
+[  286.975014] bit[  0 ~  31] val[0]=0xd000000
+[  287.005706] 
+[  287.007194] spa spa_port_attr_wifi_ssid_20 (ram_id=36 depth=20 width=32) ram_addr=18 
+[  287.015014] bit[  0 ~  31] val[0]=0x9001100
+[  287.045705] 
+[  287.047194] spa spa_port_attr_wifi_ssid_20 (ram_id=36 depth=20 width=32) ram_addr=19 
+[  287.055014] bit[  0 ~  31] val[0]=0x90040000
+[  287.059310] cmd success!
+===== spa_port_attr_wifi_ssid_21
+[  287.844927] bit[  0 ~  31] val[0]=0x4800c80
+[  287.876946] 
+[  287.878434] spa spa_port_attr_wifi_ssid_2 (ram_id=18 depth=20 width=32) ram_addr=19 
+[  287.886192] bit[  0 ~  31] val[0]=0x90040000
+[  287.890472] 
+[  287.890472] ******************************************
+[  287.897102] spa spa_port_attr_wifi_ssid_21 ram_id=37 ram_depth=20 ram_width=32
+[  287.904323] id=0=0x0 (32bit)
+[  287.907213] cnt=20=0x14 (32bit)
+[  287.935708] 
+[  287.937196] spa spa_port_attr_wifi_ssid_21 (ram_id=37 depth=20 width=32) ram_addr=0 
+[  287.944929] bit[  0 ~  31] val[0]=0xa6a5
+[  287.975706] 
+[  287.977193] spa spa_port_attr_wifi_ssid_21 (ram_id=37 depth=20 width=32) ram_addr=1 
+[  287.984927] bit[  0 ~  31] val[0]=0x88f
+[  288.015706] 
+[  288.017193] spa spa_port_attr_wifi_ssid_21 (ram_id=37 depth=20 width=32) ram_addr=2 
+[  288.024926] bit[  0 ~  31] val[0]=0x0
+[  288.055705] 
+[  288.057193] spa spa_port_attr_wifi_ssid_21 (ram_id=37 depth=20 width=32) ram_addr=3 
+[  288.064926] bit[  0 ~  31] val[0]=0x0
+[  288.096948] 
+[  288.098436] spa spa_port_attr_wifi_ssid_21 (ram_id=37 depth=20 width=32) ram_addr=4 
+[  288.106183] bit[  0 ~  31] val[0]=0x0
+[  288.135705] 
+[  288.137193] spa spa_port_attr_wifi_ssid_21 (ram_id=37 depth=20 width=32) ram_addr=5 
+[  288.144926] bit[  0 ~  31] val[0]=0x0
+[  288.175706] 
+[  288.177194] spa spa_port_attr_wifi_ssid_21 (ram_id=37 depth=20 width=32) ram_addr=6 
+[  288.184928] bit[  0 ~  31] val[0]=0x0
+[  288.215707] 
+[  288.217196] spa spa_port_attr_wifi_ssid_21 (ram_id=37 depth=20 width=32) ram_addr=7 
+[  288.224929] bit[  0 ~  31] val[0]=0x0
+[  288.255706] 
+[  288.257193] spa spa_port_attr_wifi_ssid_21 (ram_id=37 depth=20 width=32) ram_addr=8 
+[  288.264927] bit[  0 ~  31] val[0]=0x0
+[  288.295705] 
+[  288.297193] spa spa_port_attr_wifi_ssid_21 (ram_id=37 depth=20 width=32) ram_addr=9 
+[  288.304926] bit[  0 ~  31] val[0]=0x0
+[  288.335706] 
+[  288.337193] spa spa_port_attr_wifi_ssid_21 (ram_id=37 depth=20 width=32) ram_addr=10 
+[  288.345013] bit[  0 ~  31] val[0]=0xfa0000e
+[  288.375705] 
+[  288.377193] spa spa_port_attr_wifi_ssid_21 (ram_id=37 depth=20 width=32) ram_addr=11 
+[  288.385013] bit[  0 ~  31] val[0]=0x0
+[  288.415705] 
+[  288.417194] spa spa_port_attr_wifi_ssid_21 (ram_id=37 depth=20 width=32) ram_addr=12 
+[  288.425013] bit[  0 ~  31] val[0]=0x0
+[  288.455705] 
+[  288.457193] spa spa_port_attr_wifi_ssid_21 (ram_id=37 depth=20 width=32) ram_addr=13 
+[  288.465014] bit[  0 ~  31] val[0]=0x8008
+[  288.495708] 
+[  288.497196] spa spa_port_attr_wifi_ssid_21 (ram_id=37 depth=20 width=32) ram_addr=14 
+[  288.505016] bit[  0 ~  31] val[0]=0x0
+[  288.535710] 
+[  288.537200] spa spa_port_attr_wifi_ssid_21 (ram_id=37 depth=20 width=32) ram_addr=15 
+[  288.545243] bit[  0 ~  31] val[0]=0x0
+[  288.575707] 
+[  288.577195] spa spa_port_attr_wifi_ssid_21 (ram_id=37 depth=20 width=32) ram_addr=16 
+[  288.585016] bit[  0 ~  31] val[0]=0x0
+[  288.615706] 
+[  288.617194] spa spa_port_attr_wifi_ssid_21 (ram_id=37 depth=20 width=32) ram_addr=17 
+[  288.625014] bit[  0 ~  31] val[0]=0xd400000
+[  288.655778] 
+[  288.657291] spa spa_port_attr_wifi_ssid_21 (ram_id=37 depth=20 width=32) ram_addr=18 
+[  288.665360] bit[  0 ~  31] val[0]=0x9401140
+[  288.695708] 
+[  288.697199] spa spa_port_attr_wifi_ssid_21 (ram_id=37 depth=20 width=32) ram_addr=19 
+[  288.705243] bit[  0 ~  31] val[0]=0x90040000
+[  288.709538] cmd success!
+===== spa_port_attr_wifi_ssid_22
+[  289.494930] bit[  0 ~  31] val[0]=0x4800c80
+[  289.526944] 
+[  289.528432] spa spa_port_attr_wifi_ssid_2 (ram_id=18 depth=20 width=32) ram_addr=19 
+[  289.536180] bit[  0 ~  31] val[0]=0x90040000
+[  289.540465] 
+[  289.540465] ******************************************
+[  289.547085] spa spa_port_attr_wifi_ssid_22 ram_id=38 ram_depth=20 ram_width=32
+[  289.554304] id=0=0x0 (32bit)
+[  289.557192] cnt=20=0x14 (32bit)
+[  289.585708] 
+[  289.587197] spa spa_port_attr_wifi_ssid_22 (ram_id=38 depth=20 width=32) ram_addr=0 
+[  289.595150] bit[  0 ~  31] val[0]=0xa6a5
+[  289.625706] 
+[  289.627195] spa spa_port_attr_wifi_ssid_22 (ram_id=38 depth=20 width=32) ram_addr=1 
+[  289.635148] bit[  0 ~  31] val[0]=0x88f
+[  289.665757] 
+[  289.667267] spa spa_port_attr_wifi_ssid_22 (ram_id=38 depth=20 width=32) ram_addr=2 
+[  289.675231] bit[  0 ~  31] val[0]=0x0
+[  289.705710] 
+[  289.707200] spa spa_port_attr_wifi_ssid_22 (ram_id=38 depth=20 width=32) ram_addr=3 
+[  289.714934] bit[  0 ~  31] val[0]=0x0
+[  289.745756] 
+[  289.747245] spa spa_port_attr_wifi_ssid_22 (ram_id=38 depth=20 width=32) ram_addr=4 
+[  289.755199] bit[  0 ~  31] val[0]=0x0
+[  289.785706] 
+[  289.787194] spa spa_port_attr_wifi_ssid_22 (ram_id=38 depth=20 width=32) ram_addr=5 
+[  289.795147] bit[  0 ~  31] val[0]=0x0
+[  289.825706] 
+[  289.827194] spa spa_port_attr_wifi_ssid_22 (ram_id=38 depth=20 width=32) ram_addr=6 
+[  289.835161] bit[  0 ~  31] val[0]=0x0
+[  289.865705] 
+[  289.867193] spa spa_port_attr_wifi_ssid_22 (ram_id=38 depth=20 width=32) ram_addr=7 
+[  289.875146] bit[  0 ~  31] val[0]=0x0
+[  289.905707] 
+[  289.907196] spa spa_port_attr_wifi_ssid_22 (ram_id=38 depth=20 width=32) ram_addr=8 
+[  289.914930] bit[  0 ~  31] val[0]=0x0
+[  289.945706] 
+[  289.947194] spa spa_port_attr_wifi_ssid_22 (ram_id=38 depth=20 width=32) ram_addr=9 
+[  289.954928] bit[  0 ~  31] val[0]=0x0
+[  289.985706] 
+[  289.987194] spa spa_port_attr_wifi_ssid_22 (ram_id=38 depth=20 width=32) ram_addr=10 
+[  289.995014] bit[  0 ~  31] val[0]=0xfa0000e
+[  290.025706] 
+[  290.027194] spa spa_port_attr_wifi_ssid_22 (ram_id=38 depth=20 width=32) ram_addr=11 
+[  290.035014] bit[  0 ~  31] val[0]=0x0
+[  290.065705] 
+[  290.067193] spa spa_port_attr_wifi_ssid_22 (ram_id=38 depth=20 width=32) ram_addr=12 
+[  290.075012] bit[  0 ~  31] val[0]=0x0
+[  290.105706] 
+[  290.107193] spa spa_port_attr_wifi_ssid_22 (ram_id=38 depth=20 width=32) ram_addr=13 
+[  290.115014] bit[  0 ~  31] val[0]=0x8008
+[  290.145706] 
+[  290.147195] spa spa_port_attr_wifi_ssid_22 (ram_id=38 depth=20 width=32) ram_addr=14 
+[  290.155015] bit[  0 ~  31] val[0]=0x0
+[  290.186944] 
+[  290.188432] spa spa_port_attr_wifi_ssid_22 (ram_id=38 depth=20 width=32) ram_addr=15 
+[  290.196276] bit[  0 ~  31] val[0]=0x0
+[  290.225707] 
+[  290.227195] spa spa_port_attr_wifi_ssid_22 (ram_id=38 depth=20 width=32) ram_addr=16 
+[  290.235015] bit[  0 ~  31] val[0]=0x0
+[  290.265723] 
+[  290.267211] spa spa_port_attr_wifi_ssid_22 (ram_id=38 depth=20 width=32) ram_addr=17 
+[  290.275031] bit[  0 ~  31] val[0]=0xd800000
+[  290.305706] 
+[  290.307194] spa spa_port_attr_wifi_ssid_22 (ram_id=38 depth=20 width=32) ram_addr=18 
+[  290.315014] bit[  0 ~  31] val[0]=0x9801180
+[  290.345705] 
+[  290.347193] spa spa_port_attr_wifi_ssid_22 (ram_id=38 depth=20 width=32) ram_addr=19 
+[  290.355013] bit[  0 ~  31] val[0]=0x90040000
+[  290.359383] cmd success!
+===== spa_port_attr_wifi_ssid_23
+[  291.144931] bit[  0 ~  31] val[0]=0x4800c80
+[  291.176945] 
+[  291.178433] spa spa_port_attr_wifi_ssid_2 (ram_id=18 depth=20 width=32) ram_addr=19 
+[  291.186180] bit[  0 ~  31] val[0]=0x90040000
+[  291.190461] 
+[  291.190461] ******************************************
+[  291.197080] spa spa_port_attr_wifi_ssid_23 ram_id=39 ram_depth=20 ram_width=32
+[  291.204303] id=0=0x0 (32bit)
+[  291.207192] cnt=20=0x14 (32bit)
+[  291.235713] 
+[  291.237203] spa spa_port_attr_wifi_ssid_23 (ram_id=39 depth=20 width=32) ram_addr=0 
+[  291.245160] bit[  0 ~  31] val[0]=0xa6a5
+[  291.275706] 
+[  291.277194] spa spa_port_attr_wifi_ssid_23 (ram_id=39 depth=20 width=32) ram_addr=1 
+[  291.285150] bit[  0 ~  31] val[0]=0x88f
+[  291.315707] 
+[  291.317195] spa spa_port_attr_wifi_ssid_23 (ram_id=39 depth=20 width=32) ram_addr=2 
+[  291.325151] bit[  0 ~  31] val[0]=0x0
+[  291.355706] 
+[  291.357193] spa spa_port_attr_wifi_ssid_23 (ram_id=39 depth=20 width=32) ram_addr=3 
+[  291.365149] bit[  0 ~  31] val[0]=0x0
+[  291.395708] 
+[  291.397195] spa spa_port_attr_wifi_ssid_23 (ram_id=39 depth=20 width=32) ram_addr=4 
+[  291.405150] bit[  0 ~  31] val[0]=0x0
+[  291.435710] 
+[  291.437198] spa spa_port_attr_wifi_ssid_23 (ram_id=39 depth=20 width=32) ram_addr=5 
+[  291.445153] bit[  0 ~  31] val[0]=0x0
+[  291.475705] 
+[  291.477193] spa spa_port_attr_wifi_ssid_23 (ram_id=39 depth=20 width=32) ram_addr=6 
+[  291.485149] bit[  0 ~  31] val[0]=0x0
+[  291.515713] 
+[  291.517201] spa spa_port_attr_wifi_ssid_23 (ram_id=39 depth=20 width=32) ram_addr=7 
+[  291.525156] bit[  0 ~  31] val[0]=0x0
+[  291.555708] 
+[  291.557197] spa spa_port_attr_wifi_ssid_23 (ram_id=39 depth=20 width=32) ram_addr=8 
+[  291.565153] bit[  0 ~  31] val[0]=0x0
+[  291.595706] 
+[  291.597194] spa spa_port_attr_wifi_ssid_23 (ram_id=39 depth=20 width=32) ram_addr=9 
+[  291.605150] bit[  0 ~  31] val[0]=0x0
+[  291.635724] 
+[  291.637213] spa spa_port_attr_wifi_ssid_23 (ram_id=39 depth=20 width=32) ram_addr=10 
+[  291.645255] bit[  0 ~  31] val[0]=0xfa0000e
+[  291.675707] 
+[  291.677204] spa spa_port_attr_wifi_ssid_23 (ram_id=39 depth=20 width=32) ram_addr=11 
+[  291.685029] bit[  0 ~  31] val[0]=0x0
+[  291.715728] 
+[  291.717225] spa spa_port_attr_wifi_ssid_23 (ram_id=39 depth=20 width=32) ram_addr=12 
+[  291.725045] bit[  0 ~  31] val[0]=0x0
+[  291.755707] 
+[  291.757196] spa spa_port_attr_wifi_ssid_23 (ram_id=39 depth=20 width=32) ram_addr=13 
+[  291.765016] bit[  0 ~  31] val[0]=0x8008
+[  291.795753] 
+[  291.797243] spa spa_port_attr_wifi_ssid_23 (ram_id=39 depth=20 width=32) ram_addr=14 
+[  291.805285] bit[  0 ~  31] val[0]=0x0
+[  291.836953] 
+[  291.838442] spa spa_port_attr_wifi_ssid_23 (ram_id=39 depth=20 width=32) ram_addr=15 
+[  291.846278] bit[  0 ~  31] val[0]=0x0
+[  291.875706] 
+[  291.877194] spa spa_port_attr_wifi_ssid_23 (ram_id=39 depth=20 width=32) ram_addr=16 
+[  291.885014] bit[  0 ~  31] val[0]=0x0
+[  291.915706] 
+[  291.917195] spa spa_port_attr_wifi_ssid_23 (ram_id=39 depth=20 width=32) ram_addr=17 
+[  291.925015] bit[  0 ~  31] val[0]=0xdc00000
+[  291.955718] 
+[  291.957206] spa spa_port_attr_wifi_ssid_23 (ram_id=39 depth=20 width=32) ram_addr=18 
+[  291.965026] bit[  0 ~  31] val[0]=0x9c011c0
+[  291.995705] 
+[  291.997193] spa spa_port_attr_wifi_ssid_23 (ram_id=39 depth=20 width=32) ram_addr=19 
+[  292.005014] bit[  0 ~  31] val[0]=0x90040000
+[  292.009307] cmd success!
+===== spa_port_attr_wifi_woe
+[  292.018559] 
+[  292.018559] ******************************************
+[  292.025429] spa spa_port_attr_wifi_woe ram_id=49 ram_depth=20 ram_width=32
+[  292.032340] id=0=0x0 (32bit)
+[  292.035442] cnt=20=0x14 (32bit)
+[  292.065710] 
+[  292.067202] spa spa_port_attr_wifi_woe (ram_id=49 depth=20 width=32) ram_addr=0 
+[  292.074589] bit[  0 ~  31] val[0]=0xe52825
+[  292.105708] 
+[  292.107196] spa spa_port_attr_wifi_woe (ram_id=49 depth=20 width=32) ram_addr=1 
+[  292.114582] bit[  0 ~  31] val[0]=0x88f
+[  292.145706] 
+[  292.147194] spa spa_port_attr_wifi_woe (ram_id=49 depth=20 width=32) ram_addr=2 
+[  292.154580] bit[  0 ~  31] val[0]=0x0
+[  292.185706] 
+[  292.187194] spa spa_port_attr_wifi_woe (ram_id=49 depth=20 width=32) ram_addr=3 
+[  292.194580] bit[  0 ~  31] val[0]=0x0
+[  292.225706] 
+[  292.227194] spa spa_port_attr_wifi_woe (ram_id=49 depth=20 width=32) ram_addr=4 
+[  292.234580] bit[  0 ~  31] val[0]=0x0
+[  292.265705] 
+[  292.267193] spa spa_port_attr_wifi_woe (ram_id=49 depth=20 width=32) ram_addr=5 
+[  292.274579] bit[  0 ~  31] val[0]=0x0
+[  292.305730] 
+[  292.307218] spa spa_port_attr_wifi_woe (ram_id=49 depth=20 width=32) ram_addr=6 
+[  292.314604] bit[  0 ~  31] val[0]=0x0
+[  292.345711] 
+[  292.347199] spa spa_port_attr_wifi_woe (ram_id=49 depth=20 width=32) ram_addr=7 
+[  292.354585] bit[  0 ~  31] val[0]=0x0
+[  292.386945] 
+[  292.388433] spa spa_port_attr_wifi_woe (ram_id=49 depth=20 width=32) ram_addr=8 
+[  292.395833] bit[  0 ~  31] val[0]=0x0
+[  292.425705] 
+[  292.427192] spa spa_port_attr_wifi_woe (ram_id=49 depth=20 width=32) ram_addr=9 
+[  292.434578] bit[  0 ~  31] val[0]=0x0
+[  292.465705] 
+[  292.467193] spa spa_port_attr_wifi_woe (ram_id=49 depth=20 width=32) ram_addr=10 
+[  292.474666] bit[  0 ~  31] val[0]=0xfa0000e
+[  292.505707] 
+[  292.507195] spa spa_port_attr_wifi_woe (ram_id=49 depth=20 width=32) ram_addr=11 
+[  292.514668] bit[  0 ~  31] val[0]=0x0
+[  292.545711] 
+[  292.547200] spa spa_port_attr_wifi_woe (ram_id=49 depth=20 width=32) ram_addr=12 
+[  292.554673] bit[  0 ~  31] val[0]=0x0
+[  292.585709] 
+[  292.587197] spa spa_port_attr_wifi_woe (ram_id=49 depth=20 width=32) ram_addr=13 
+[  292.594670] bit[  0 ~  31] val[0]=0x8008
+[  292.625707] 
+[  292.627195] spa spa_port_attr_wifi_woe (ram_id=49 depth=20 width=32) ram_addr=14 
+[  292.634668] bit[  0 ~  31] val[0]=0x0
+[  292.665709] 
+[  292.667196] spa spa_port_attr_wifi_woe (ram_id=49 depth=20 width=32) ram_addr=15 
+[  292.674669] bit[  0 ~  31] val[0]=0x0
+[  292.705730] 
+[  292.707240] spa spa_port_attr_wifi_woe (ram_id=49 depth=20 width=32) ram_addr=16 
+[  292.714713] bit[  0 ~  31] val[0]=0x0
+[  292.745710] 
+[  292.747202] spa spa_port_attr_wifi_woe (ram_id=49 depth=20 width=32) ram_addr=17 
+[  292.754895] bit[  0 ~  31] val[0]=0x10400000
+[  292.785707] 
+[  292.787196] spa spa_port_attr_wifi_woe (ram_id=49 depth=20 width=32) ram_addr=18 
+[  292.794670] bit[  0 ~  31] val[0]=0xc401440
+[  292.826947] 
+[  292.828435] spa spa_port_attr_wifi_woe (ram_id=49 depth=20 width=32) ram_addr=19 
+[  292.835922] bit[  0 ~  31] val[0]=0x0
+[  292.839584] cmd success!
+===== spa_port_attr_vir_err
+[  292.848090] 
+[  292.848090] ******************************************
+[  292.854960] spa spa_port_attr_vir_err ram_id=63 ram_depth=20 ram_width=32
+[  292.861778] id=0=0x0 (32bit)
+[  292.864883] cnt=20=0x14 (32bit)
+[  292.895713] 
+[  292.897205] spa spa_port_attr_vir_err (ram_id=63 depth=20 width=32) ram_addr=0 
+[  292.904729] bit[  0 ~  31] val[0]=0x0
+[  292.936963] 
+[  292.938453] spa spa_port_attr_vir_err (ram_id=63 depth=20 width=32) ram_addr=1 
+[  292.945770] bit[  0 ~  31] val[0]=0x88f
+[  292.975708] 
+[  292.977197] spa spa_port_attr_vir_err (ram_id=63 depth=20 width=32) ram_addr=2 
+[  292.984496] bit[  0 ~  31] val[0]=0x0
+[  293.015706] 
+[  293.017194] spa spa_port_attr_vir_err (ram_id=63 depth=20 width=32) ram_addr=3 
+[  293.024493] bit[  0 ~  31] val[0]=0x0
+[  293.055706] 
+[  293.057194] spa spa_port_attr_vir_err (ram_id=63 depth=20 width=32) ram_addr=4 
+[  293.064494] bit[  0 ~  31] val[0]=0x0
+[  293.095707] 
+[  293.097195] spa spa_port_attr_vir_err (ram_id=63 depth=20 width=32) ram_addr=5 
+[  293.104494] bit[  0 ~  31] val[0]=0x0
+[  293.135715] 
+[  293.137203] spa spa_port_attr_vir_err (ram_id=63 depth=20 width=32) ram_addr=6 
+[  293.144502] bit[  0 ~  31] val[0]=0x0
+[  293.175711] 
+[  293.177199] spa spa_port_attr_vir_err (ram_id=63 depth=20 width=32) ram_addr=7 
+[  293.184498] bit[  0 ~  31] val[0]=0x0
+[  293.215706] 
+[  293.217194] spa spa_port_attr_vir_err (ram_id=63 depth=20 width=32) ram_addr=8 
+[  293.224493] bit[  0 ~  31] val[0]=0x0
+[  293.255706] 
+[  293.257193] spa spa_port_attr_vir_err (ram_id=63 depth=20 width=32) ram_addr=9 
+[  293.264493] bit[  0 ~  31] val[0]=0x0
+[  293.295705] 
+[  293.297193] spa spa_port_attr_vir_err (ram_id=63 depth=20 width=32) ram_addr=10 
+[  293.304579] bit[  0 ~  31] val[0]=0xfa0000e
+[  293.335707] 
+[  293.337194] spa spa_port_attr_vir_err (ram_id=63 depth=20 width=32) ram_addr=11 
+[  293.344581] bit[  0 ~  31] val[0]=0x0
+[  293.376944] 
+[  293.378432] spa spa_port_attr_vir_err (ram_id=63 depth=20 width=32) ram_addr=12 
+[  293.385831] bit[  0 ~  31] val[0]=0x0
+[  293.415706] 
+[  293.417194] spa spa_port_attr_vir_err (ram_id=63 depth=20 width=32) ram_addr=13 
+[  293.424580] bit[  0 ~  31] val[0]=0x0
+[  293.455706] 
+[  293.457194] spa spa_port_attr_vir_err (ram_id=63 depth=20 width=32) ram_addr=14 
+[  293.464580] bit[  0 ~  31] val[0]=0x0
+[  293.495706] 
+[  293.497194] spa spa_port_attr_vir_err (ram_id=63 depth=20 width=32) ram_addr=15 
+[  293.504580] bit[  0 ~  31] val[0]=0x0
+[  293.535706] 
+[  293.537194] spa spa_port_attr_vir_err (ram_id=63 depth=20 width=32) ram_addr=16 
+[  293.544580] bit[  0 ~  31] val[0]=0x0
+[  293.575708] 
+[  293.577197] spa spa_port_attr_vir_err (ram_id=63 depth=20 width=32) ram_addr=17 
+[  293.584584] bit[  0 ~  31] val[0]=0x13c00000
+[  293.615706] 
+[  293.617194] spa spa_port_attr_vir_err (ram_id=63 depth=20 width=32) ram_addr=18 
+[  293.624580] bit[  0 ~  31] val[0]=0xfc017c0
+[  293.655709] 
+[  293.657197] spa spa_port_attr_vir_err (ram_id=63 depth=20 width=32) ram_addr=19 
+[  293.664583] bit[  0 ~  31] val[0]=0x0
+[  293.668258] cmd success!
+
+===== stderr =====

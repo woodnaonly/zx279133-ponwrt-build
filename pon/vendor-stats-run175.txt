@@ -1,0 +1,356 @@
+===== the statistics window
+[  794.488000] [start_statistics_write] start statistics
+[  817.235738] product_type_check
+[  824.498016] ######## Quick Analyse ########
+[  824.502204] upeth all pkt cnt(32bit)                          0
+[  824.508141] dneth all pkt cnt(32bit)                          0
+[  824.514052] dnponmac mux uni pkt cnt(32bit)                   0
+[  824.519974] pon_dn_in_all_err(32bit)                   0
+[  824.525276] ------------------------------------
+[  824.529894] ######## PON UP MODULE ########
+[  824.534069] upeth all byte cnt(64bit)                           0
+[  824.540171] upeth len min_63 pkt cnt(32bit)                   0
+[  824.546092] upeth len 64 pkt cnt(32bit)                       0
+[  824.552002] upeth len 65_127 pkt cnt(32bit)                   0
+[  824.557922] upeth len 128_255 pkt cnt(32bit)                  0
+[  824.563833] upeth len 256_511 pkt cnt(32bit)                  0
+[  824.570993] upeth len 512_1023 pkt cnt(32bit)                 0
+[  824.576914] upeth len 1024_1518 pkt cnt(32bit)                0
+[  824.582824] upeth len 1519_max pkt cnt(32bit)                 0
+[  824.588743] 
+[  824.590225] ######## PON DN MODULE ########
+[  824.594399] dneth all byte cnt(64bit)                         0
+[  824.600331] dnponmac mux brd pkt cnt(32bit)                   0
+[  824.606252] dnponmac mux mul pkt cnt(32bit)                   0
+[  824.612162] dneth len min_63 pkt cnt(32bit)                   0
+[  824.618082] dneth len 64 pkt cnt(32bit)                       0
+[  824.623993] dneth len 65_127 pkt cnt(32bit)                   0
+[  824.629941] dneth len 128_255 pkt cnt(32bit)                  0
+[  824.635864] dneth len 256_511 pkt cnt(32bit)                  0
+[  824.641774] dneth len 512_1023 pkt cnt(32bit)                 0
+[  824.647695] dneth len 1024_1518 pkt cnt(32bit)                0
+[  824.653605] dneth len 1519_max pkt cnt(32bit)                 0
+[  824.659525] dneth crc err cnt(32bit)                          0
+[  824.665436] dneth len err cnt(32bit)                          0
+[  824.671356] dneth port err cnt(32bit)                         0
+[  824.678515] dnponmac_port_crc_err_cnt(32bit)                         0
+[  824.685034] dnponmac_port_bip_err_cnt(32bit)                         0
+[  824.691564] dnponmac_port_fec_reccode_cnt(32bit)                     0
+[  824.698095] dnponmac_port_fec_unreccode_cnt(32bit)                   0
+[  824.704611] 
+[  824.706103] ######## WAN ID ########
+[  824.709676] WanIdName                  1               2              3              4              5              6              7              8
+[  824.722809] -----------------------------------------------------------------------------------------------------------------------------------------------------
+[  824.737239] ######## WAN ID MODULE ########
+[  824.741419] wanid stat up cnt(64bit)    0               0               0               0               0               0               0               0               
+[  824.756470] wanid stat dn cnt(64bit)    0               0               0               0               0               0               0               0               
+[  824.771503] 
+[  824.772985] ######## SMAC ########
+[  824.776402] PortName                     smac0           smac1           smac2           smac3           xmac0           xmac1           
+[  824.789992] ----------------------------------------Quick Analyse------------------------------------------------------------------------------------
+[  824.803386] up frame total pkt(32bit)    0               21              0               0               0               0               
+[  824.815740] up all pkt(32bit)            0               21              0               0               0               0               
+[  824.828088] up unicast pkt(32bit)        0               21              0               0               0               0               
+[  824.840436] dn all pkt(32bit)            0               21              10              0               0               0               
+[  824.852788] dn unicast pkt(32bit)        0               21              0               0               0               0               
+[  824.865138] up error pkt(32bit)          0               0               0               0               0               0               
+[  824.877491] dn error pkt(32bit)          0               0               0               0               0               0               
+[  824.889847] -----------------------------------------------------------------------------------------------------------------------------
+[  824.903434] up multicast pkt(32bit)      0               0               0               0               0               0               
+[  824.915791] up broadcast pkt(32bit)      0               0               0               0               0               0               
+[  824.928139] up undersize 64 pkt(32bit)   0               0               0               0               0               0               
+[  824.940486] up 64 pkt(32bit)             0               1               0               0               0               0               
+[  824.952838] up 65to127 pkt(32bit)        0               20              0               0               0               0               
+[  824.965188] up 128to255 pkt(32bit)       0               0               0               0               0               0               
+[  824.977569] up 256to511 pkt(32bit)       0               0               0               0               0               0               
+[  824.989942] up 512to1023 pkt(32bit)      0               0               0               0               0               0               
+[  825.002298] up 1024tomax pkt(32bit)      0               0               0               0               0               0               
+[  825.015904] up oversize pkt(32bit)       0               0               0               0               0               0               
+[  825.028257] up all err cnt(32bit)        0               0               0               0               0               0               
+[  825.040606] up crc err cnt(32bit)        0               0               0               0               0               0               
+[  825.052953] up align err cnt(32bit)      0               0               0               0               0               0               
+[  825.065305] up len err cnt(32bit)        0               0               0               0               0               0               
+[  825.077656] up over flow err cnt(32bit)  0               0               0               0               0               0               
+[  825.090007] up watchdog err cnt(32bit)   0               0               0               0               0               0               
+[  825.102358] -----------------------------------------------------------------------------------------------------------------------------
+[  825.114711] PortName                     smac0           smac1           smac2           smac3           xmac0           xmac1           
+[  825.127062] -----------------------------------------------------------------------------------------------------------------------------
+[  825.139423] dn multicast pkt(32bit)      0               0               0               0               0               0               
+[  825.151771] dn broadcast pkt(32bit)      0               0               10              0               0               0               
+[  825.164123] dn undersize 64 pkt(32bit)   0               0               0               0               0               0               
+[  825.176477] dn 64 pkt(32bit)             0               1               0               0               0               0               
+[  825.188825] dn 65to127 pkt(32bit)        0               20              0               0               0               0               
+[  825.201176] dn 128to255 pkt(32bit)       0               0               0               0               0               0               
+[  825.213524] dn 256to511 pkt(32bit)       0               0               10              0               0               0               
+[  825.225878] dn 512to1023 pkt(32bit)      0               0               0               0               0               0               
+[  825.238226] dn 1024tomax pkt(32bit       0               0               0               0               0               0               
+[  825.250573] dn oversize pkt(32bit)       0               0               0               0               0               0               
+[  825.262925] dn excession fail pkt(32bit) 0               0               0               0               0               0               
+[  825.275275] dn late fail pkt(32bit)      0               0               0               0               0               0               
+[  825.287627] dn single fail pkt(32bit)    0               0               0               0               0               0               
+[  825.299978] dn multiple fail pkt(32bit)  0               0               0               0               0               0               
+[  825.312325] dn deferred fail pkt(32bit)  0               0               0               0               0               0               
+[  825.324678] dn macerror fail pkt(32bit)  0               0               0               0               0               0               
+[  825.337031] dn carrier fail pkt(32bit)   0               0               0               0               0               0               
+[  825.349376] 
+[  825.350860] ######## NPPU MODULE ########
+[  825.354868] *********************************************Quick Analyse*************************************************
+[  825.365655] nppu_all_drop_cnt                     0
+[  825.370540] -----------------------------------------------------------------------------------------------------------
+[  825.381320] ######## SDET ########
+[  825.384723] PortName                     smac0           smac1           smac2           smac3           xmac0           xmac1           rgmii           pon0(10G)       pon1(1G)
+[  825.400549] -------------------------------------------------------------------------------------------------------------------------------------------------
+[  825.414636] in_sop_cnt(16bit)            0               21              0               0               0               0               0               0               0               
+[  825.431156] in_eop_cnt(16bit)            0               21              0               0               0               0               0               0               0               
+[  825.447679] success_in_eop_cnt(16bit)    0               21              0               0               0               0               0               0               0               
+[  825.464199] success_out_eop_cnt(16bit)   0               21              0               0               0               0               0               0               0               
+[  825.480721] oam_trap_flag_cnt(16bit)     0               0               0               0               0               0               0               0               0               
+[  825.497242] hd_trap_flag_cnt(16bit)      0               0               0               0               0               0               0               0               0               
+[  825.513762] out_drop_eop_cnt(16bit)      0               0               0               0               0               0               0               0               0               
+[  825.530282] out_mac_err_eop_cnt(16bit)   0               0               0               0               0               0               0               0               0               
+[  825.546804] pkt_len_long_err_cnt(16bit)  0               0               0               0               0               0               0               0               0               
+[  825.563325] pkt_len_short_err_cnt(16bit) 0               0               0               0               0               0               0               0               0               
+[  825.579848] pkt_len_vld_err_cnt(16bit)   0               0               0               0               0               0               0               0               0               
+[  825.596368] err_flag(16bit)              0               0               0               0               0               0               0               0               0               
+[  825.612888] fifo_full_drop_eop_cnt(32bit)0               0               0               0               0               0               0               0               0               
+[  825.629399] 
+[  825.630881] 
+[  825.632362] ######## SIPC ########
+[  825.635764] smac in byte cnt(rc)(32bit)                  1540
+[  825.641501] ponmac in byte cnt(rc)(32bit)                   0
+[  825.647247] idm ptl in pkt cnt(16bit)                      31
+[  825.652984] idm ptl in burst cnt(16bit)                    51
+[  825.658730] woe0 in pkt cnt(16bit)                          0
+[  825.664467] woe0 in burst cnt(16bit)                        0
+[  825.670214] sopc in pkt cnt(16bit)                          0
+[  825.675959] sopc in burst cnt(16bit)                        0
+[  825.681696] sipc to spa pkt cnt(16bit)                     52
+[  825.687442] sipc2sipa no eop err cnt(18bit)                 0
+[  825.693178] sipc2sipa no sop err cnt(18bit)                 0
+[  825.698923] 
+[  825.700405] ######## SPA ########
+[  825.703711] SIPC2SPA SOP CNT(8bit)                         52
+[  825.709457] SIPC2SPA EOP CNT(8bit)                         52
+[  825.715193] SPA2SMCT SOP CNT(8bit)                         52
+[  825.720940] SPA2SMCT EOP CNT(8bit)                         52
+[  825.726686] SPA L3 EN PKT CNT(32bit)                        0
+[  825.732422] SIPC2SPA PKT CNT(16bit)                        52
+[  825.738168] SPA2SMCT PKT CNT(16bit)                        52
+[  825.743905] SPA2ISU  DESC CNT(16bit)                       52
+[  825.749651] SMCT2SPA DESC CNT(16bit)                       52
+[  825.755387] SPA CRC ERR DROP CNT(16bit)                     0
+[  825.761133] SPA PON  IN ERR CNT(16bit)                      0
+[  825.766880] SPA SIPC IN DROP CNT(16bit)                     0
+[  825.772616] SPA PKT FILTER CNT(16bit)                       0
+[  825.778362] SIPC2SPA SLICE CNT(32bit)                      72
+[  825.784099] SPA2SMCT SLICE CNT(32bit)                     124
+[  825.789843] 
+[  825.791328] ##############################SPA DOWNSTREAM############################
+[  825.799158] DN_MUL_CNT(32bit)                               0
+[  825.804894] DN_UNICAST_CNT(32bit)                           0
+[  825.810640] DN_BRD_CNT(32bit)                               0
+[  825.816384] 
+[  825.817870] ##############################SPA TAG PKT############################
+[  825.825429] UNTAG CNT(16bit)                               21
+[  825.831175] PRI-TAG CNT(16bit)                              0
+[  825.836921] Single-TAG CNT(16bit)                           0
+[  825.842657] Double-TAG CNT(16bit)                           0
+[  825.848403] Three-TAG CNT(16bit)                            0
+[  825.854140] Four-TAG CNT(16bit)                             0
+[  825.859883] 
+[  825.861365] ######## SMCT ########
+[  825.864758] spa drop cnt(8bit)                              0
+[  825.870504] smct drop cnt(8bit)                             0
+[  825.876250] dma drop sop cnt(8bit)                          0
+[  825.881986] dma drop eop cnt(8bit)                          0
+[  825.887731] 
+[  825.889213] ######## ISU ########
+[  825.892519] spa in cnt(32bit)                              52
+[  825.898265] ppu in cnt(32bit)                               0
+[  825.904002] out to odma cnt(32bit)                          0
+[  825.909748] out to ppu unicast cnt(32bit)                       52
+[  825.915929] out to ppu multicast cnt(32bit)                        0
+[  825.922271] 
+[  825.923753] ######## ODMA ########
+[  825.927156] isu in cnt(32bit)                               0
+[  825.932892] ppu in cnt(32bit)                              52
+[  825.938638] read smct cnt(32bit)                           52
+[  825.944375] out to red cnt(32bit)                          52
+[  825.950119] 
+[  825.951603] ######## PPU ########
+[  825.954917] ClusterName                  cluster0        cluster1        cluster2        cluster3        cluster4        cluster5        cluster6        cluster7
+[  825.969354] -----------------------------------------------------------------------------------------------------------------------------------------------------
+[  825.983780] ######## PPU MODULE ########
+[  825.987738] mf in vld cnt(64bit)             48              56              56              56              56              48              48              48              
+[  826.003237] mf in sop cnt(64bit)             6               7               7               7               7               6               6               6               
+[  826.018721] mf in eop cnt(64bit)             6               7               7               7               7               6               6               6               
+[  826.034200] mf out vld cnt(64bit)            48              56              56              56              56              48              48              48              
+[  826.049680] mf out sop cnt(64bit)            6               7               7               7               7               6               6               6               
+[  826.065158] mf out eop cnt(64bit)            6               7               7               7               7               6               6               6               
+[  826.080631] 
+[  826.082122] *********************************************Quick Analyse*************************************************
+[  826.092905] mcode_all_drop_cnt                     0
+[  826.097874] -----------------------------------------------------------------------------------------------------------
+[  826.108654] ######## MCODE ########
+[  826.112136] port id  2 input uni cnt(32bit)                       21
+[  826.118492] port id 15 input uni cnt(32bit)                       21
+[  826.124838] port id 15 input brd cnt(32bit)                       10
+[  826.131198] omci dn cnt(32bit)                                     0
+[  826.137555] omci up cnt(32bit)                                     0
+[  826.143901] in brd ratelimit drop cnt(32bit)                       0
+[  826.150255] in mul ratelimit drop cnt(32bit)                       0
+[  826.156609] in port ratelimit drop cnt(32bit)                      0
+[  826.162953] tag filter drop cnt(32bit)                             0
+[  826.169308] ip limit drop cnt(32bit)                               0
+[  826.175652] ip ratelimit drop cnt(32bit)                           0
+[  826.182007] input vlan check drop cnt(32bit)                       0
+[  826.188362] mac sa lookup fail cnt(32bit)                          0
+[  826.194706] mac unknown sa ratelimit drop cnt(32bit)               0
+[  826.201061] mac sa ctrl drop cnt(32bit)                            0
+[  826.207415] mac da lookup fail cnt(32bit)                          0
+[  826.213760] mac unknown da ratelimit drop cnt(32bit)               0
+[  826.220113] mac da ctrl drop cnt(32bit)                            0
+[  826.226468] protocol action drop cnt(32bit)                        0
+[  826.232812] protocol action trap cnt(32bit)                       21
+[  826.239167] protocol trap ratelimit drop cnt(32bit)                0
+[  826.245511] trap queue ratelimit drop cnt(32bit)                   0
+[  826.251866] mul flood disable drop cnt(32bit)                      0
+[  826.258220] brd flood disable drop cnt(32bit)                      0
+[  826.264565] dup copy fail drop cnt(32bit)                          0
+[  826.270920] dup err drop cnt(32bit)                                0
+[  826.277274] acl table look up miss cnt(32bit)                      0
+[  826.283619] acl table ratelimit drop cnt(32bit)                    0
+[  826.289973] acl table action drop cnt(32bit)                       0
+[  826.296327] acl table look up miss drop cnt(32bit)                 0
+[  826.302672] fast ip frag trap cnt(32bit)                           0
+[  826.309026] fast table look up miss cnt(32bit)                     0
+[  826.315371] fast table ratelimit drop cnt(32bit)                   0
+[  826.321725] fast table action drop cnt(32bit)                      0
+[  826.328081] fast table mtu action drop cnt(32bit)                  0
+[  826.334426] fast table look up miss drop cnt(32bit)                0
+[  826.340780] mul ip table look up miss cnt(32bit)                   0
+[  826.347134] mul src filter drop cnt(32bit)                         0
+[  826.353479] mul src_filter unhit fwd cnt(32bit)                    0
+[  826.359833] mul src filter fwd cnt(32bit)                          0
+[  826.366187] out vlan check drop cnt(32bit)                         0
+[  826.372532] sfu table look miss cnt(32bit)                         0
+[  826.378886] sfu action drop cnt(32bit)                             0
+[  826.385231] sfu mtu drop cnt(32bit)                                0
+[  826.391586] sfu ratelimit drop cnt(32bit)                          0
+[  826.397940] upponmac mux unipkt cnt(32bit)                         0
+[  826.404285] upponmac mux brdpkt cnt(32bit)                         0
+[  826.410639] upponmac mux mulpkt cnt(32bit)                         0
+[  826.416995] port id  2 output uni cnt(32bit)                      21
+[  826.423340] port id  3 output brd cnt(32bit)                      10
+[  826.429696] port id 15 output uni cnt(32bit)                      21
+[  826.436053] 
+[  826.437537] ######## TM MODULE ########
+[  826.441371] *********************************************Quick Analyse*************************************************
+[  826.452153] tm_all_drop_cnt                     0
+[  826.456862] -----------------------------------------------------------------------------------------------------------
+[  826.467641] ######## RED ########
+[  826.470946] ######## RED IN FWD ########
+[  826.474859] in fwd cnt(32bit)                              52
+[  826.480605] in idm fwd cnt(32bit)                          21
+[  826.486351] in woe0 fwd cnt(32bit)                          0
+[  826.492088] in woe1 fwd cnt(32bit)                          0
+[  826.497833] in np1 fwd cnt(32bit)                           0
+[  826.503570] in up fwd cnt(24bit)                            0
+[  826.509316] in dn fwd cnt(24bit)                           31
+[  826.515051] ######## RED OUT FWD ########
+[  826.519061] out fwd cnt(32bit)                             52
+[  826.524798] out idm fwd cnt(32bit)                         21
+[  826.530544] out woe0 fwd cnt(32bit)                         0
+[  826.536290] out woe1 fwd cnt(32bit)                         0
+[  826.542026] out np1 fwd cnt(32bit)                          0
+[  826.547772] out up fwd cnt(24bit)                           0
+[  826.553509] out dn fwd cnt(24bit)                          31
+[  826.559255] ######## RED IN DROP ########
+[  826.563255] in drop cnt(32bit)                              0
+[  826.569001] in idm drop cnt(32bit)                          0
+[  826.574738] in woe0 drop cnt(32bit)                         0
+[  826.580484] in woe1 drop cnt(32bit)                         0
+[  826.586230] in np1 drop cnt(32bit)                          0
+[  826.591967] in up drop cnt(8bit)                            0
+[  826.597713] in dn drop cnt(8bit)                            0
+[  826.603449] ######## RED OUT DROP ########
+[  826.607545] out drop cnt(32bit)                             0
+[  826.613282] out idm drop cnt(32bit)                         0
+[  826.619028] out woe0 drop cnt(32bit)                        0
+[  826.624764] out woe1 drop cnt(32bit)                        0
+[  826.630510] out np1 drop cnt(32bit)                         0
+[  826.636256] out up drop cnt(8bit)                           0
+[  826.641992] out dn drop cnt(8bit)                           0
+[  826.647736] 
+[  826.649217] ######## QMG ########
+[  826.652523] enq drop pkt cnt(16bit)                         0
+[  826.658269] queue0 drop cnt(8bit)                           0
+[  826.664005] queue1 drop cnt(8bit)                           0
+[  826.669752] queue2 drop cnt(8bit)                           0
+[  826.675489] queue3 drop cnt(8bit)                           0
+[  826.681235] queue4 drop cnt(8bit)                           0
+[  826.686981] queue5 drop cnt(8bit)                           0
+[  826.692718] queue6 drop cnt(8bit)                           0
+[  826.698464] queue6 drop cnt(8bit)                           0
+[  826.704199] 
+[  826.705680] ######## USCH ########
+[  826.709082] usch to uopc cpu omci cnt (16bit)               0
+[  826.714819] tx enq cnt(qmg to usch 8bit)                    0
+[  826.720564] tx deq cnt(usch to uopc 8bit)                   0
+[  826.726311] tx queue req cnt(8bit)                          0
+[  826.732047] qmg tx ack cnt(8bit)                            0
+[  826.737793] qmg to usch vld cnt(8bit)                       0
+[  826.743530] tcont wr cnt(usch wr tcont 8bit)                0
+[  826.749276] mac to usch afull cnt(8bit)                     0
+[  826.755010] 
+[  826.756502] ######## SSCH ########
+[  826.759903] PortName                         UNI0            UNI1            UNI2            UNI3            UNI4            UNI5            UNI6            LOOPBACK
+[  826.774685] -----------------------------------------------------------------------------------------------------------------------------------------------------
+[  826.789121] sqmg ack cnt (8bit)              0               21              10              0               0               0               0               0               
+[  826.804596] ssch req cnt (ssch to sqmg 8bit) 0               21              10              0               0               0               0               0               
+[  826.820078] ssch deq cnt (ssch to sopc 8bit) 0               21              10              0               0               0               0               0               
+[  826.835556] ssch enq cnt (sqmg to ssch 8bit) 0               21              10              0               0               0               0               0               
+[  826.851030] sqmg ack cnt (8bit)                            31
+[  826.856776] ssch req cnt (ssch to sqmg 8bit)               31
+[  826.862513] ssch deq cnt (ssch to sopc 8bit)               31
+[  826.868260] ssch enq cnt (sqmg to ssch 8bit)               31
+[  826.873995] 
+[  826.875476] ######## WSCH ########
+[  826.878879] wsch enq cnt (8bit)                             21
+[  826.884703] wsch2qmg req cnt (8bit)                         21
+[  826.890535] qmg2wsch ack cnt (8bit)                         21
+[  826.896369] qmg2wsch vld cnt (8bit)                         21
+[  826.902192] qmg2sch fail cnt (8bit)                          0
+[  826.908025] np1 vld cnt (8bit)                               0
+[  826.913848] idm vld cnt (8bit)                              21
+[  826.919681] burst eop np1 cnt (8bit)                         0
+[  826.925505] burst eop idm cnt (8bit)                        21
+[  826.931338] burst sop np1 cnt (8bit)                         0
+[  826.937171] burst sop idm cnt (8bit)                        21
+[  826.942992] 
+[  826.944474] ######## UOPC ########
+[  826.947877] rx usch pkt cnt (8bit)                          0
+[  826.953614] rx src len (16bit)                              0
+[  826.959360] txd oct cnt (rc 64bit)                          0
+[  826.965097] txd frm cnt (rc 32bit)                          0
+[  826.970843] txd uni frm cnt (rc 32bit)                      0
+[  826.976589] omci pkt cnt (rc 32bit)                         0
+[  826.982326] fwd no omci cnt(16bit)                          0
+[  826.988072] 
+[  826.989554] ######## SOPC ########
+[  826.992954] PortName                     smac0           smac1           smac2           smac3           smac4           smac5           smac6
+[  827.005761] ----------------------------------------------------------------------------------------------------------------------------------
+[  827.018553] sopc2smac uni sop cnt(8bit)      0               21              10              0               0               0               0               
+[  827.032639] sopc2smac uni eop cnt(8bit)      0               21              10              0               0               0               0               
+[  827.046727] req2smac  uni sop cnt(8bit)      0               21              10              0               0               0               0               
+[  827.060816] req2smac  uni eop cnt(8bit)      0               21              10              0               0               0               0               
+[  827.074903] sopc2soam uni sop cnt(8bit)      0               0               0               0               0               0               0               
+[  827.088992] sopc2soam uni eop cnt(8bit)      0               0               0               0               0               0               0               
+[  827.103075] sopc2sipc sop cnt(8bit)                         0
+[  827.108821] sopc2sipc eop cnt(8bit)                         0
+[  827.114557] req2sipc sop cnt(8bit)                          0
+[  827.120304] req2sipc eop cnt(8bit)                          0
+[  827.126049] sopc2soam eop cnt(16bit)                        0
+[  827.131784] 
+[  827.133269] [stop_statistics_write] stop statistics
+===== done
