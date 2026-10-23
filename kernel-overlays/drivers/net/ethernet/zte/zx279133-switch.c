@@ -707,7 +707,16 @@ static void zx279133_switch_smac_init(struct zx279133_switch *priv)
 						  ZX279133_SMAC_RESET_WORD);
 		zx279133_switch_nppt_write(priv, ZX279133_SMAC_RESET_WORD,
 					    value & ~(1u << mac));
-		udelay(100);
+		/*
+		 * The vendor's smac_reset() waits __const_udelay(1718000)
+		 * between the two writes - about 1.7 ms - and the MAC's own
+		 * reset takes that long.  A tenth of a millisecond is not
+		 * enough: the MAC is programmed again while its reset is
+		 * still running, and its "clear-over-ready" word never comes
+		 * up.  On the live board the same pulse, done by hand with
+		 * seconds in between, did bring the word up.
+		 */
+		usleep_range(1718, 1818);
 		zx279133_switch_nppt_write(priv, ZX279133_SMAC_RESET_WORD,
 					    value | (1u << mac));
 
@@ -715,6 +724,10 @@ static void zx279133_switch_smac_init(struct zx279133_switch *priv)
 					    ZX279133_SMAC_AN_CTRL_VALUE);
 		zx279133_switch_nppt_write(priv, base + ZX279133_SMAC_AN_CTRL2,
 					    ZX279133_SMAC_AN_CTRL2_VALUE);
+		zx279133_switch_nppt_write(priv, base + ZX279133_SMAC_PKT_FILTER,
+					    ZX279133_SMAC_PKT_FILTER_VALUE);
+		zx279133_switch_nppt_write(priv, base + ZX279133_SMAC_SPEED,
+					    ZX279133_SMAC_SPEED_VALUE);
 
 		value = zx279133_switch_nppt_read(priv,
 						  base + ZX279133_SMAC_PORT_CTRL);
@@ -722,20 +735,17 @@ static void zx279133_switch_smac_init(struct zx279133_switch *priv)
 					    value | ZX279133_SMAC_PORT_CTRL_BIT);
 
 		/*
-		 * The vendor's nppt_smac_init() pulses this MAC's bit in the
-		 * word at NPPT + 0x343f0 before it publishes the MAC: it sets
-		 * the bit and then clears it again.  The word's steady value on
-		 * the vendor's board is 0, so the pulse is the whole point of
-		 * the two writes - it is the SOPC side's own reset for this
-		 * MAC, in the same way the shared soft-reset word above is the
-		 * SMAC side's.
+		 * The word at NPPT + 0x343f0 is a bitmap of the MACs that run
+		 * in half duplex: bit(mac) is the four SMACs', bit(mac+4) the
+		 * XMACs'.  The vendor's nppt_smac_init() clears this MAC's bit
+		 * once and leaves it cleared, so the MAC runs full duplex.
+		 * This driver used to set the bit and set it back, which left
+		 * the MAC exactly where the vendor leaves it - in half duplex.
 		 */
 		value = zx279133_switch_nppt_read(priv,
 						  ZX279133_SMAC_SOPC_PULSE);
 		zx279133_switch_nppt_write(priv, ZX279133_SMAC_SOPC_PULSE,
-					    value | (1u << mac));
-		zx279133_switch_nppt_write(priv, ZX279133_SMAC_SOPC_PULSE,
-					    value);
+					    value & ~(1u << mac));
 
 		/*
 		 * Publish it.  The vendor waits for the ready word, and gives
@@ -755,6 +765,16 @@ static void zx279133_switch_smac_init(struct zx279133_switch *priv)
 		zx279133_switch_nppt_write(priv,
 					   ZX279133_SMAC_SOPC_SEND_BASE + 4 * mac,
 					   1);
+
+		/*
+		 * The vendor's last write to this MAC is an_ctrl |= 2, after
+		 * the send-enable.  The MAC has to be told again that it is
+		 * running, and this is where the vendor says so.
+		 */
+		value = zx279133_switch_nppt_read(priv,
+						  base + ZX279133_SMAC_AN_CTRL);
+		zx279133_switch_nppt_write(priv, base + ZX279133_SMAC_AN_CTRL,
+					    value | 2);
 
 		dev_info(dev,
 			 "SMAC %d programmed: an_ctrl=0x%08x pkt_filter=0x%08x speed=0x%08x ready=0x%08x\n",
