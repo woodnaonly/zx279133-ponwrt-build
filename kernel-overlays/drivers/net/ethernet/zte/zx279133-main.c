@@ -602,6 +602,35 @@ static void zx279133_diag_dump(struct zx279133_eth *eth)
 		 readl(eth->base + ZX279133_XMAC0_BASE + ZX279133_XMAC_MISC_CFG));
 }
 
+/*
+ * Write the vendor's configuration of the RED, the queue manager and the
+ * switch's own copy of it.
+ *
+ * The configuration is written once when the hardware is prepared, and again
+ * here - after every driver has had its say.  The reason is that the LAN
+ * child devices are probed after this one, and the switch driver resets the
+ * chip's MACs while it does that: the reset word at NPPT + 0x2c0004 is
+ * pulsed per module, and a pulse that lands on the traffic manager takes
+ * the RED's configuration with it.
+ *
+ * Measured 2026-10-23: the register image the driver prints at the end of
+ * its own probe - which is *after* the LAN devices have been probed - reads
+ * the RED's configuration word as 0x7e, the value the tree's own
+ * zx279133_red_prepare() writes, even though every constant in zx279133.h
+ * names the vendor's value and the vendor's board reads 0x9e.  Written by
+ * hand on the board at any later moment, the same register keeps the value
+ * that is written into it, so the write itself is not the problem: the
+ * configuration has to be written after the last reset, not before it.
+ */
+void zx279133_nppt_vendor_reconfigure(struct zx279133_eth *eth)
+{
+	u32 gate = zx279133_red_gate_clear(eth);
+
+	zx279133_red_vendor_fixup(eth);
+	zx279133_tm_vendor_fixup(eth);
+	zx279133_red_gate_restore(eth, gate);
+}
+
 int zx279133_hardware_prepare(struct zx279133_eth *eth)
 {
 	int ret;
@@ -1217,6 +1246,14 @@ static int zx279133_eth_probe(struct platform_device *pdev)
 				     "failed to populate LAN child devices\n");
 
 	dev_info(dev, "WAN netdev and LAN child devices registered\n");
+
+	/*
+	 * The LAN child devices - the switch - have just been probed, and
+	 * they reset the chip's MACs on the way, which takes the traffic
+	 * manager's configuration with it.  So the vendor's configuration is
+	 * written again, here, after every driver has had its say.
+	 */
+	zx279133_nppt_vendor_reconfigure(eth);
 
 	/* The register image, printed once, after every driver has had its say. */
 	zx279133_diag_dump(eth);

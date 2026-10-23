@@ -1311,6 +1311,7 @@ int zx279133_get_ts_info(struct net_device *ndev,
 
 int zx279133_hardware_prepare(struct zx279133_eth *eth);
 void zx279133_hardware_unprepare(struct zx279133_eth *eth);
+void zx279133_nppt_vendor_reconfigure(struct zx279133_eth *eth);
 void zx279133_shutdown(struct zx279133_eth *eth);
 extern const struct ethtool_ops zx279133_ethtool_ops;
 extern const struct net_device_ops zx279133_netdev_ops;
