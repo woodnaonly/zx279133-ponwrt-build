@@ -3470,15 +3470,23 @@ static int zx279133_9132_isolate_init(struct zx279133_eth *eth)
 	/*
 	 * The index is src | (dst << 6), so the 64 sources of one
 	 * destination are 64 consecutive bits and two destinations share a
-	 * 128-bit window.  One read and one write per window is enough: the
-	 * diagonal of destination 2w is bit 2w of the window and the
-	 * diagonal of destination 2w+1 is bit w+65 of it.
+	 * 128-bit window.  One read and one write per window is enough.
+	 *
+	 * Destination 2w owns the first half of the window: its source s is
+	 * bit s of it, so its diagonal (src == dst) is bit 2w.
+	 *
+	 * Destination 2w+1 owns the second half: its source s is bit 64+s of
+	 * the window, so its diagonal is bit 64 + 2w + 1 = 2w + 65.  It was
+	 * written as w + 65, which is the diagonal of destination 2w+1 only
+	 * for w == 0; for every other w it left the diagonal of the odd
+	 * destinations clear and set a bit that belongs to some other pair -
+	 * (8, 15) among them, which is a port and the CPU's own.
 	 */
 	for (w = 0; w < 32; w++) {
 		u32 window[ZX279133_SMMU0_WORDS];
 		u32 addr = (base << 7) + (w << 7);
 		u32 b0 = 2 * w;
-		u32 b1 = w + 65;
+		u32 b1 = 2 * w + 65;
 
 		ret = zx279133_smmu0_read(eth, addr, window, ARRAY_SIZE(window),
 					  ZX279133_SMMU0_CMD_READ);

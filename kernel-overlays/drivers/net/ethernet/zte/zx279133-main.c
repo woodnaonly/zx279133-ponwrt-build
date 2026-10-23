@@ -270,11 +270,54 @@ static void zx279133_red_vendor_fixup(struct zx279133_eth *eth)
 	static const u32 cfg[4] = {
 		0xff803fff, 0x0100ff80, 0x00100200, 0x00000020,
 	};
+	/*
+	 * What the tree's restore would write back.  The tree's
+	 * zx279133_red_prepare() saves what it reads before it writes, and
+	 * zx279133_red_restore() writes the saved values back, so an
+	 * unprepare puts the tree's own words into the RED - including the
+	 * configuration word without all_active_mode.  The saved arrays
+	 * belong to the tree's header, but this overlay replaces that
+	 * header, so the values a restore would write are the vendor's
+	 * here.
+	 */
+	static const struct {
+		u32 index;
+		u32 value;
+	} saved[] = {
+		{ ZX279133_RED_SAVED_CFG,			ZX279133_RED_VENDOR_CFG },
+		{ ZX279133_RED_SAVED_IN_SHARE_MAX,		ZX279133_RED_VENDOR_IN_SHARE_MAX },
+		{ ZX279133_RED_SAVED_CPU133_CFG,		ZX279133_RED_VENDOR_CPU133_CFG },
+		{ ZX279133_RED_SAVED_IDM_IN_SHARE_MAX,	ZX279133_RED_VENDOR_IDM_IN_SHARE_MAX },
+		{ ZX279133_RED_SAVED_WOE_IN_SHARE_MAX,	ZX279133_RED_VENDOR_WOE_IN_SHARE_MAX },
+		{ ZX279133_RED_SAVED_UP_IN_SHARE_MAX,	ZX279133_RED_VENDOR_UP_IN_SHARE_MAX },
+		{ ZX279133_RED_SAVED_DOWN_IN_SHARE_MAX,	ZX279133_RED_VENDOR_DOWN_IN_SHARE_MAX },
+		{ ZX279133_RED_SAVED_UP_OUT_MAX,		ZX279133_RED_VENDOR_UP_OUT_MAX },
+		{ ZX279133_RED_SAVED_DOWN_OUT_MAX,		ZX279133_RED_VENDOR_DOWN_OUT_MAX },
+		{ ZX279133_RED_SAVED_ALL_OUT_SHARE_MAX,	ZX279133_RED_VENDOR_ALL_OUT_SHARE_MAX },
+		{ ZX279133_RED_SAVED_WOE_OUT_SHARE_MAX,	ZX279133_RED_VENDOR_WOE_OUT_SHARE_MAX },
+		{ ZX279133_RED_SAVED_DESC_WATERMARK,	ZX279133_RED_VENDOR_DESC_WATERMARK },
+		{ ZX279133_RED_SAVED_IDM_DESC_WATERMARK,	ZX279133_RED_VENDOR_IDM_DESC_WATERMARK },
+	};
 	unsigned int i;
 	unsigned int q;
 
 	for (i = 0; i < ARRAY_SIZE(regs); i++)
 		writel(regs[i].value, eth->base + regs[i].offset);
+
+	for (i = 0; i < ARRAY_SIZE(saved); i++)
+		eth->red_saved[saved[i].index] = saved[i].value;
+
+	/* And the same for the NP1 thresholds, which have their own array. */
+	eth->red_np1_saved[ZX279133_RED_NP1_SAVED_Q0_TH] =
+		ZX279133_RED_VENDOR_NP1_Q0_TH;
+	for (i = 0; i < 5; i++)
+		eth->red_np1_saved[ZX279133_RED_NP1_SAVED_Q1_TH + i] =
+			ZX279133_RED_VENDOR_NP1_Q1_TH;
+	eth->red_np1_saved[ZX279133_RED_NP1_SAVED_DESC_WM] =
+		ZX279133_RED_VENDOR_NP1_DESC_WM;
+	for (i = 0; i < 6; i++)
+		eth->red_np1_saved[ZX279133_RED_NP1_SAVED_ISU_TH + i] =
+			ZX279133_RED_VENDOR_NP1_ISU_TH;
 
 	/* The six NP1 ISU thresholds, q 0..5. */
 	for (i = 0; i < 6; i++)
@@ -507,6 +550,30 @@ static void zx279133_diag_dump(struct zx279133_eth *eth)
 int zx279133_hardware_prepare(struct zx279133_eth *eth)
 {
 	int ret;
+
+	/*
+	 * The tree's zx279133_tm_prepare() begins by resetting the whole
+	 * NPPT - it clears SDET_RESET_N and PON_RESET_N - and the 9132's
+	 * configuration lives inside that NPPT: the protocol action table,
+	 * the outport map, the trap's own words, the isolation matrix.  So a
+	 * second prepare that fails anywhere after that reset leaves the
+	 * chip with no configuration at all, and no frame ever reaches the
+	 * CPU.
+	 *
+	 * Run 133 measured exactly that.  The driver printed the whole 9132
+	 * set-up once, at probe time, and the board's own diagnostic dump -
+	 * printed at the end of the same probe - read the RED's
+	 * configuration word as the vendor's 0x9e.  Thirty-four seconds
+	 * later the board read back the tree's 0x7e, which only
+	 * zx279133_red_prepare() ever writes, and not one counter in the
+	 * chip moved while the PC pinged for six minutes.
+	 *
+	 * So the prepare has to be the one that already ran.  A prepare
+	 * after an unprepare is still a full one, because
+	 * zx279133_hardware_unprepare() clears the flag.
+	 */
+	if (READ_ONCE(eth->hardware_prepared))
+		return 0;
 
 	ret = zx279133_idm_cci_enable(eth);
 	if (ret)

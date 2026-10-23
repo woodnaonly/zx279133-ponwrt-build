@@ -97,7 +97,42 @@ the drop happening on the destination-address match, before the frame is
 queued anywhere, and it is a second reason the earlier rounds could not see
 a frame arrive no matter what the driver was told to program.
 
-## 5. The address is still a per-device address
+## 5. Run 133 says the address is not the problem any more
+
+**Corrected 2026-10-23, after run 133.** The measurement above was made on
+run 127, and run 133 answers differently:
+
+```
+ZZLINK eth0             UP   d0:45:8d:84:09:00
+ZZLINK lan-cpu0         UP   d0:45:8d:84:09:00
+ZZLINK lan1@lan-cpu0  LOWERLAYERDOWN d0:45:8d:84:09:00
+ZZLINK lan2@lan-cpu0    UP   d0:45:8d:84:09:00
+ZZLINK lan3@lan-cpu0  LOWERLAYERDOWN d0:45:8d:84:09:00
+ZZLINK lan4@lan-cpu0  LOWERLAYERDOWN d0:45:8d:84:09:00
+ZZLINK br-lan           UP   d0:45:8d:84:09:00
+```
+
+Every netdev on the board carries the board's own address, the DSA CPU port
+included, and the bridge takes it from there.  The kernel's own diagnostic
+dump agrees: `DIAG mac d0:45:8d:84:09:00` and `DIAG lan mac
+d0:45:8d:84:09:00`.
+
+The property has been on `&nppt` since the overlay's first commit
+(`646c3b9`), so the address was never missing from the tree - the random
+address of run 127 was something else, and whatever it was, it is not what
+run 133 shows.
+
+**So the address mismatch is not why run 133's counters do not move.**  On
+run 133 the PC's frame reaches the board with the right destination address,
+the bridge has the right address, and the switch's own counters stay exactly
+where they were for the whole round.
+
+The `lan_cpu` property added in this commit is kept, because it makes the
+address explicit rather than inherited, and because an explicit address on
+the CPU port is what the DSA framework expects.  It is not the fix for
+anything.
+
+## 6. The address is still a per-device address
 
 `d0:45:8d:84:09:00` is this unit's address, read out of the vendor
 firmware's own configuration. A build for another unit has to have its own;

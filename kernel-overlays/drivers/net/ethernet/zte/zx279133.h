@@ -266,6 +266,32 @@
 #define ZX279133_RED_CFG_MASK		GENMASK(7, 0)
 #define ZX279133_RED_SHARE14_MASK	GENMASK(13, 0)
 #define ZX279133_RED_SHARE15_MASK	GENMASK(14, 0)
+
+/*
+ * The tree's zx279133_red_offsets[] and zx279133_red_np1_offsets[] arrays
+ * are in the tree's own file, but the header that names their entries is
+ * this overlay's, so the order of the saved-value arrays is known here.
+ * A restore writes the saved values back, so the saved values are what
+ * the chip would be left with if the hardware were ever unprepared.
+ */
+#define ZX279133_RED_SAVED_CFG			0
+#define ZX279133_RED_SAVED_IN_SHARE_MAX		1
+#define ZX279133_RED_SAVED_CPU133_CFG		2
+#define ZX279133_RED_SAVED_IDM_IN_SHARE_MAX	3
+#define ZX279133_RED_SAVED_WOE_IN_SHARE_MAX	4
+#define ZX279133_RED_SAVED_UP_IN_SHARE_MAX	5
+#define ZX279133_RED_SAVED_DOWN_IN_SHARE_MAX	6
+#define ZX279133_RED_SAVED_UP_OUT_MAX		7
+#define ZX279133_RED_SAVED_DOWN_OUT_MAX		8
+#define ZX279133_RED_SAVED_ALL_OUT_SHARE_MAX	9
+#define ZX279133_RED_SAVED_WOE_OUT_SHARE_MAX	10
+#define ZX279133_RED_SAVED_DESC_WATERMARK	11
+#define ZX279133_RED_SAVED_IDM_DESC_WATERMARK	12
+
+#define ZX279133_RED_NP1_SAVED_Q0_TH		0
+#define ZX279133_RED_NP1_SAVED_Q1_TH		1
+#define ZX279133_RED_NP1_SAVED_DESC_WM		6
+#define ZX279133_RED_NP1_SAVED_ISU_TH		7
 #define ZX279133_RED_LOW16_MASK		GENMASK(15, 0)
 
 /*
@@ -331,6 +357,7 @@
  */
 #define ZX279133_RED_ALL_SHARE_MAX	0x20050
 #define ZX279133_RED_VENDOR_CFG		0x0000009e
+#define ZX279133_RED_VENDOR_CPU133_CFG	0x000a0001
 #define ZX279133_RED_VENDOR_IN_SHARE_MAX	0x00000c00
 #define ZX279133_RED_VENDOR_ALL_SHARE_MAX	0x00002600
 #define ZX279133_RED_VENDOR_UP_IN_SHARE_MAX	0x10000900
