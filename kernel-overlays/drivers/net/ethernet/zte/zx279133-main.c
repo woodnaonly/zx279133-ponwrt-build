@@ -584,8 +584,26 @@ int zx279133_hardware_prepare(struct zx279133_eth *eth)
 		goto err_cci_restore;
 
 	ret = zx279133_tm_prepare(eth);
-	if (ret)
-		goto err_clk_disable;
+	if (ret) {
+		/*
+		 * The tree's zx279133_tm_prepare() resets the NPPT on the way
+		 * in, so a failure here leaves the chip reset - and the 9132
+		 * lives in that NPPT.  Giving up at this point leaves the
+		 * board with no switch configuration at all, which is what
+		 * run 133 did: the second prepare, the one the RSS and XSK
+		 * paths ask for when they resume the data path, failed after
+		 * the reset, and from then on no frame from a jack reached
+		 * the CPU.
+		 *
+		 * So the vendor's configuration and the 9132's own set-up
+		 * are written anyway.  They are what the chip needs to move a
+		 * frame, and they do not depend on the traffic manager having
+		 * come up.
+		 */
+		dev_warn(eth->dev,
+			 "the traffic manager's prepare failed (%d); the vendor's configuration is written anyway\n",
+			 ret);
+	}
 	zx279133_bmu_threshold_fixup(eth);
 	zx279133_red_vendor_fixup(eth);
 	zx279133_tm_vendor_fixup(eth);
