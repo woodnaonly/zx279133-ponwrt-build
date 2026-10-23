@@ -2516,10 +2516,27 @@ static int zx279133_9132_port_words_vendor(struct zx279133_eth *eth, u32 ppu)
 static int zx279133_9132_mf_mirror(struct zx279133_eth *eth, u32 ppu)
 {
 	u32 flood = ppu - 1;
+	u32 attr = ZX279133_9132_VENDOR_ATTR_WORD;
 	int ret;
 
-	ret = zx279133_mf_eram_attr_set(eth, ppu,
-					 ZX279133_9132_VENDOR_ATTR_WORD);
+	/*
+	 * The CPU trap is a sink, and the vendor's own board reads **zero** in
+	 * its copy of the attribute word - the trap does not learn, does not
+	 * look the destination address up, and takes no part in the flood
+	 * groups (staging/ctl/re-cpu-trap-attr.md, and the vendor's own
+	 * port_attr_def_init(), which clears SPA register 19 on all 64 ports
+	 * and never gives the trap anything else).
+	 *
+	 * The jacks' value here is worse than different: with learning on, a
+	 * frame the trap receives because its destination was unknown is
+	 * learned *onto the trap*, and the frame the board then sends back to
+	 * that client is looked up and found on the trap - so it leaves by
+	 * the trap again and never reaches the jack.
+	 */
+	if (ppu == ZX279133_9132_CONDUIT_PPU)
+		attr = 0x00000000;
+
+	ret = zx279133_mf_eram_attr_set(eth, ppu, attr);
 	if (ret)
 		return ret;
 

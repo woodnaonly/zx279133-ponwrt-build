@@ -473,6 +473,26 @@
 	 */
 	lan_cpu: ethernet-lan-cpu {
 		compatible = "zte,zx279133-lan-conduit";
+
+		/*
+		 * The address the board answers on, and the one the vendor
+		 * firmware puts on the wire for 192.168.9.1: d0:45:8d:84:09:00.
+		 *
+		 * It has to be *here* and not on the parent.  The driver reads it
+		 * with of_get_ethdev_address(dev->of_node, ndev), and dev->of_node
+		 * is this node - the one the driver probes.  With the property
+		 * on the parent the read fails and the driver falls back to
+		 * eth_hw_addr_random(), so the board answers on a different
+		 * address on every boot.  The address then never reaches the
+		 * switch's own table, a frame addressed to it finds no entry,
+		 * and the switch floods it - and the CPU trap is in no flood
+		 * group, so the frame is dropped inside the chip: the RED's
+		 * counters move and no netdev ever counts a byte.
+		 *
+		 * Measured 2026-10-23: with the vendor firmware the same PC
+		 * reaches 192.168.9.1 with 0% loss on this address.
+		 */
+		local-mac-address = [d0 45 8d 84 09 00];
 	};
 
 	switch {

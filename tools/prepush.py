@@ -220,6 +220,40 @@ def main():
                       % (os.path.relpath(f, REPO), open_ch, depth, minimum))
                 bad += 1
 
+    # The kernel's own byte-order accessors.
+    #
+    # Linux has iowrite8/16/32/64 and ioread8/16/32/64 in the machine's own
+    # byte order, and iowrite16be/32be/64be and ioread16be/32be/64be for the
+    # other one.  It has **no little-endian variants at all**: there is
+    # nothing named iowrite16le.  A call to one of those is a compile error,
+    # and the only thing that can catch it is the CI's module build - an hour
+    # and twenty minutes after the push.  run130 lost a whole cycle to
+    # iowrite16le() that way, and run131 and run132 inherited it.
+    #
+    # The width and the "be" suffix are the only two things that can be
+    # checked here without the tree's headers, and they are enough: the
+    # missing names are exactly the ones with an "le" suffix.
+    io_re = re.compile(r'\b(io(?:read|write))(\d+)(be|le)?\s*\(')
+    io_widths = (8, 16, 32, 64)
+    for f in files:
+        if not f.endswith('.c'):
+            continue
+        text = strip_c(open(f, encoding='utf-8', errors='replace').read())
+        for ln, line in enumerate(text.splitlines(), 1):
+            for m in io_re.finditer(line):
+                name = "%s%s%s" % (m.group(1), m.group(2), m.group(3) or '')
+                if m.group(3) == 'le':
+                    print("%s:%d: %s does not exist: the kernel has no "
+                          "little-endian variant of the byte-order accessors "
+                          "(use writew()/readw() with cpu_to_le16())"
+                          % (os.path.relpath(f, REPO), ln, name))
+                    bad += 1
+                elif int(m.group(2)) not in io_widths:
+                    print("%s:%d: %s does not exist: the byte-order accessors "
+                          "are 8, 16, 32 and 64 bits wide"
+                          % (os.path.relpath(f, REPO), ln, name))
+                    bad += 1
+
     used = {}
     for f in files:
         if not f.endswith('.c'):
@@ -236,7 +270,6 @@ def main():
             print("%s:%d: note: %s is not defined in this repo (the tree's "
                   "own header may have it)" % (os.path.relpath(f, REPO), ln,
                                                name))
-
     print("prepush: %d files, %d problems" % (len(files), bad))
     return 1 if bad else 0
 
