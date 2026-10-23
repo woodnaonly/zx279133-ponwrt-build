@@ -122,23 +122,75 @@ never published, so it never takes a frame off its PHY - and that is
 exactly what was measured: every physical port's RX counter sat at zero
 while the PC's TX bytes climbed.
 
-### 3.1 Where the ready word lives
+### 3.1 Where the ready word lives - settled
 
-Two sources disagree and the disagreement is still open:
+Two sources disagreed: `np_133.ko`'s SMAC path and the vendor's U-Boot
+seemed to read the "clear-over-ready" word of the same MAC at two
+different addresses. The reverse engineering of `np_133.ko` (see
+`staging/ctl/re-smac-ready-20261023.md`) settles it: the two are two
+different functions that print the same format string.
 
-  * `np_133.ko`'s SMAC path reads it at nppt + 0x34294 + 4*mac, and the
-    send-enable at nppt + 0x342b0 + 4*mac. This is what the driver uses.
-  * The vendor's U-Boot prints the address as nppt + 0x34000 + ((mac +
-    0xa9) << 2) = nppt + **0x342a4** + 4*mac, and the send-enable at
-    nppt + 0x342c0 + 4*mac.
+  * `nppt_smac_init()` (.text 0xcf8c) reads the ready word at
+    nppt+0x34294+4*mac and writes the send-enable at nppt+0x342b0+4*mac -
+    the four internal-PHY MACs, mac 0..3. **This is what this driver uses.**
+  * `xmac_sopc_send_enable()` (.text 0x1ac70) uses the indices 0xa9 and
+    0xb0, which are nppt+0x342a4+4*n and nppt+0x342c0+4*n - the XMAC group
+    (XMAC0, XMAC1, the RGMII MAC).
 
-A consistent reading of both is one array of "clear-over-ready" words
-indexed by a global MAC id - ids 0..3 are the four internal-PHY SMACs,
-id 4 is XMAC0 (0x342a4), id 5 is XMAC1 (0x342a8), id 6 is the RGMII MAC
-(0x342ac) - with the send-enable array at 0x342b0 + 4*id following the same
-order. Under that reading U-Boot's "mac" is not the same index as
-`np_133.ko`'s. The driver now prints the whole window
-(nppt+0x34294 .. nppt+0x342c0) on every boot, so the board settles it.
+The live board agrees: after a reset pulse at nppt+0x2c0004, the words at
+0x34294, 0x34298 and 0x342a0 come up to 1, and the ones at 0x342a4,
+0x342a8 and 0x342ac do not.
+
+The other address in the vendor's log, 0x6ed54a3d, is not an address at
+all: it is a hashed `%p` pointer (`kptr_restrict`), 32 bits wide, not four
+byte aligned, and different on every boot. The real address is the one
+U-Boot prints, 0x192c0004.
+
+### 3.2 The vendor's smac_init, write for write
+
+`np_133.ko`'s `nppt_smac_init()` (0xda1c) does this for each MAC, in
+program order:
+
+| # | register | value |
+|---|---|---|
+| 1 | nppt+0x14+4*mac | (v & 0xfc7fffff) \| 0 - the uni mode |
+| 2 | SMAC+0x00 | 0xba2203 - stop the MAC |
+| 3 | nppt+0x2c0004 | pulse bit(mac) - reset the MAC |
+| 5 | SMAC+0x00 | 0xfa2203 - run it |
+| 6 | SMAC+0x04 | 0x3fff |
+| 7 | SMAC+0x08 | 0x80000000 - the packet filter |
+| 8 | SMAC+0xb00 | \|= 0x200 - the port control |
+| 9 | SMAC+0xe0 | 0x00011200 - the speed/duplex word |
+| 11 | nppt+0x343f0 | v & ~(1 << mac) - full duplex |
+| 12 | read nppt+0x34294+4*mac, write 1 to nppt+0x342b0+4*mac | publish |
+| 15 | SMAC+0x00 | \|= 2 |
+
+Four things in this driver did not match it, and every one of them is on
+the MAC's receive path:
+
+  * **The reset pulse waited 100 us.** The vendor's `smac_reset()` (0xd29c)
+    waits `__const_udelay(1718000)` - about 1.7 ms - between the two
+    writes. The same pulse, done by hand on the live board with seconds
+    in between, did bring the ready word up; with a tenth of a
+    millisecond it never came up at all.
+  * **The word at nppt+0x343f0 is a half-duplex bitmap**, bit(mac) for
+    the SMACs and bit(mac+4) for the XMACs. The vendor clears the MAC's
+    bit once and leaves it cleared. This driver set the bit and set it
+    back, which leaves the MAC in half duplex.
+  * **The packet filter and the speed/duplex word were never written** at
+    all, and the value that was defined for the latter, 0x00012000, is
+    not the vendor's 0x00011200.
+  * **The vendor's last write to the MAC is an_ctrl |= 2**, after the
+    send-enable.
+
+The same reverse engineering also says that the vendor's own Linux never
+writes the XMAC0 block at boot: the only writer of it is
+`xamc_init_conf_by_speed()` (0x1a200), and the two call sites in
+`nppt_smac_init()` that reach it are inside a `g_hol_enable` branch that
+this board does not take (the log says "hol not enable"). So the XMAC0 on
+the vendor's board is what the bootloader left it, and the run-137 change
+that pulses XMAC0's reset bit before programming it is not something the
+vendor does.
 
 ## 4. What was changed
 

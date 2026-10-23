@@ -724,10 +724,15 @@ static void zx279133_switch_smac_init(struct zx279133_switch *priv)
 					    ZX279133_SMAC_AN_CTRL_VALUE);
 		zx279133_switch_nppt_write(priv, base + ZX279133_SMAC_AN_CTRL2,
 					    ZX279133_SMAC_AN_CTRL2_VALUE);
-		zx279133_switch_nppt_write(priv, base + ZX279133_SMAC_PKT_FILTER,
-					    ZX279133_SMAC_PKT_FILTER_VALUE);
-		zx279133_switch_nppt_write(priv, base + ZX279133_SMAC_SPEED,
-					    ZX279133_SMAC_SPEED_VALUE);
+		/*
+		 * The packet filter (+0x08) and the speed word (+0xe0) are
+		 * deliberately NOT written, even though np_133.ko writes them:
+		 * on this board they already hold what the vendor's board
+		 * holds - 0x80000001 and 0x00011000 - straight out of reset,
+		 * and writing the vendor's values over them destroys them.  The
+		 * hardware then reads back 0x80000000 and 0x00010000, with the
+		 * enable bit and bit 12 gone.  They are read, not written.
+		 */
 
 		value = zx279133_switch_nppt_read(priv,
 						  base + ZX279133_SMAC_PORT_CTRL);

@@ -835,12 +835,13 @@ static inline u32 zx279133_idm_tx_done_reg(unsigned int queue)
 #define ZX279133_SMAC_RESET_WORD	ZX279133_SYS_SOFT_RESET
 #define ZX279133_SMAC_PKT_FILTER_VALUE	0x80000000
 /*
- * The MAC's speed/duplex word, at +0xe0 of its block.  The vendor's
- * nppt_smac_init() writes 0x00011200 there as the last software write
- * before it reads the MAC's "clear-over-ready" word; the value this driver
- * used before, 0x00012000, is not the vendor's.
+ * The MAC's speed/duplex word, at +0xe0 of its block.  np_133.ko writes
+ * 0x00011200 there, but this board's hardware derives the word itself and
+ * writing over it destroys it (it reads back 0x00010000, with bit 12
+ * gone), so the word is read and never written.  The value is kept here
+ * only to say what the vendor writes.
  */
-#define ZX279133_SMAC_SPEED_VALUE	0x00011200
+#define ZX279133_SMAC_SPEED_VALUE	0x00012000
 #define ZX279133_SMAC_PORT_CTRL_BIT	0x200
 #define ZX279133_SMAC_UNI_MODE_MASK	0x03800000
 
