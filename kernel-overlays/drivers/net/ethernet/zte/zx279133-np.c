@@ -2402,11 +2402,43 @@ static void zx279133_9132_port_words_read(struct zx279133_eth *eth)
  */
 static const u32 zx279133_9132_vendor_words[][2] = {
 	{ 0,  0x0000a6a5 },	/* the port's entry program */
+	{ 1,  0x0000088f },
 	{ 2,  0x00000000 },	/* the untag SVID: none */
 	{ 9,  0x00000000 },	/* the VLAN filter: none */
 	{ 10, 0x0fa0000e },
 	{ 13, 0x00008008 },
 	{ 19, ZX279133_9132_VENDOR_ATTR_WORD },	/* the port attribute word */
+};
+
+/*
+ * The CPU trap's own words.
+ *
+ * The vendor's board reads these out of the trap port's SPA memory, and they
+ * are *not* the ones the four jacks carry: the trap port runs a different
+ * entry program, and its port attribute word is zero, because a trap port is
+ * a sink - it has no traffic of its own to learn or forward.
+ *
+ *	word0  entry program   0x0000a767   (the jacks have 0x0000a6a5)
+ *	word1                 0x0000088f
+ *	word2  untag SVID     0
+ *	word9  VLAN filter    0
+ *	word10                0x0fa0000e
+ *	word13                0x00008008
+ *	word19 attribute word 0x00000000   (the jacks have 0x96040001)
+ *
+ * Evidence: docs/18's table of the vendor board's live SPA memory, and
+ * np_133.ko's own per-port init (spa_init, 0x27834) plus the entry-program
+ * descriptor it decodes out of the microcode blob (np_downlaod_mcode,
+ * 0xf1550, and the setter at 0xf141c).
+ */
+static const u32 zx279133_9132_cpu_words[][2] = {
+	{ 0,  0x0000a767 },	/* the trap port's own entry program */
+	{ 1,  0x0000088f },
+	{ 2,  0x00000000 },	/* the untag SVID: none */
+	{ 9,  0x00000000 },	/* the VLAN filter: none */
+	{ 10, 0x0fa0000e },
+	{ 13, 0x00008008 },
+	{ 19, 0x00000000 },	/* the port attribute word: a trap carries none */
 };
 
 /*
@@ -2430,6 +2462,19 @@ static int zx279133_9132_port_words_vendor(struct zx279133_eth *eth, u32 ppu)
 	u32 flood = ppu - 1;
 	u32 i;
 	int ret;
+
+	/* The CPU trap has its own words, and no flood groups: it is a sink. */
+	if (ppu == ZX279133_9132_CONDUIT_PPU) {
+		for (i = 0; i < ARRAY_SIZE(zx279133_9132_cpu_words); i++) {
+			ret = zx279133_spa_indirect_write(eth, ppu,
+						zx279133_9132_cpu_words[i][0],
+						zx279133_9132_cpu_words[i][1]);
+			if (ret)
+				return ret;
+		}
+
+		return 0;
+	}
 
 	if (flood >= ARRAY_SIZE(zx279133_9132_vendor_flood))
 		return 0;
