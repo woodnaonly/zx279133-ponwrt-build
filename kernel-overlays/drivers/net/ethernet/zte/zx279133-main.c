@@ -155,6 +155,50 @@ static void zx279133_bmu_threshold_fixup(struct zx279133_eth *eth)
 }
 
 /*
+ * The 9132's configuration words are behind an "auto" gate.
+ *
+ * NPPT + 0x00b8 bit 10 is that gate: while it is set, the chip manages
+ * those words itself and a write to them is dropped.  The vendor's own
+ * indirect access clears the gate around the access and puts it back
+ * afterwards (np_133.ko's __red_ind_write), and this driver's copy of that
+ * protocol does the same - but only for the indirect access.  The direct
+ * writes of the RED's, the queue manager's and the switch's configuration
+ * were all made with the gate still set, so the chip kept its own values.
+ *
+ * Measured 2026-10-23: every constant in zx279133.h that names a vendor
+ * value *is* the vendor's value - 0x9e for the RED's configuration word,
+ * 0x3f9f3e9f for the descriptor watermark, 0x08bf07ff for the IDM's, 0x0bb80fa0
+ * for the queue manager's watermark, 0x1e00 for the switch's selection
+ * configuration - and the board read back something else for every one of
+ * them: 0x7e, 0x60002000, 0x5e000500, 0x2bb82fa0, 0x1f00.  Ninety-two words
+ * differed between the two live boards (staging/ctl/tmp_livediff2.py), and
+ * every one of them was a word this driver writes with the gate set.
+ *
+ * The gate is therefore cleared once around the configuration and put back
+ * afterwards.  The indirect writes inside the RED's own fixup nest in it:
+ * they read the gate, find bit 10 already clear, and write the value they
+ * read back, so they leave the gate exactly as they found it.
+ */
+static u32 zx279133_red_gate_clear(struct zx279133_eth *eth)
+{
+	u32 gate = readl(eth->base + ZX279133_RED_AUTO_GATE_REG);
+
+	if (gate & ZX279133_RED_AUTO_GATE_BIT) {
+		writel(gate & ~ZX279133_RED_AUTO_GATE_BIT,
+		       eth->base + ZX279133_RED_AUTO_GATE_REG);
+		return gate;
+	}
+
+	return 0;
+}
+
+static void zx279133_red_gate_restore(struct zx279133_eth *eth, u32 gate)
+{
+	if (gate)
+		writel(gate, eth->base + ZX279133_RED_AUTO_GATE_REG);
+}
+
+/*
  * The RED's indirect access port.
  *
  * The tree's zx279133-tm.c has a static copy of this, and so does the tree's
@@ -180,9 +224,20 @@ static void zx279133_red_ind_write(struct zx279133_eth *eth, u32 ram_id,
 
 	writel(addr | FIELD_PREP(ZX279133_RED_IND_RAM_ID_MASK, ram_id),
 	       eth->base + ZX279133_RED_IND_CMD);
-	for (i = count; i > 0; i--)
-		writel(data[i - 1],
-		       eth->base + ZX279133_RED_IND_DATA + 4 * (i - 1));
+	/*
+	 * The data words go in the order they come out, first word first.
+	 *
+	 * They used to go in the other way round (data[count-1] into the
+	 * lowest data register), which put the RED's four-word per-queue
+	 * configuration into the chip reversed: the queue's first word ended
+	 * up in its fourth place.  The vendor's own board says which way
+	 * round it is: its last indirect access is a four-word write of the
+	 * queue configuration, and the data registers still hold those four
+	 * words afterwards - in order, first word in the lowest register.
+	 * (staging/ctl/vendor-live-full.json, the red module's words 7..10.)
+	 */
+	for (i = 0; i < count; i++)
+		writel(data[i], eth->base + ZX279133_RED_IND_DATA + 4 * i);
 
 	writel(gate, eth->base + ZX279133_RED_AUTO_GATE_REG);
 }
@@ -550,6 +605,7 @@ static void zx279133_diag_dump(struct zx279133_eth *eth)
 int zx279133_hardware_prepare(struct zx279133_eth *eth)
 {
 	int ret;
+	u32 gate;
 
 	/*
 	 * The tree's zx279133_tm_prepare() begins by resetting the whole
@@ -605,8 +661,14 @@ int zx279133_hardware_prepare(struct zx279133_eth *eth)
 			 ret);
 	}
 	zx279133_bmu_threshold_fixup(eth);
+	/*
+	 * The RED's, the queue manager's and the switch's configuration all
+	 * sit behind the auto-gate, so they are written with it clear.
+	 */
+	gate = zx279133_red_gate_clear(eth);
 	zx279133_red_vendor_fixup(eth);
 	zx279133_tm_vendor_fixup(eth);
+	zx279133_red_gate_restore(eth, gate);
 	ret = zx279133_np_prepare(eth);
 	if (ret)
 		goto err_tm_restore;
