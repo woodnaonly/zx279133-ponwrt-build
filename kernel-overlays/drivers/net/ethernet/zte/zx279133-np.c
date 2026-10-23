@@ -3157,6 +3157,43 @@ zx279133_proto_table_write(struct zx279133_eth *eth, u32 port,
  * dropped inside the chip - which is what the bench saw: the PC's frames
  * reached the 9132 and no netdev ever counted a byte.
  */
+/*
+ * One protocol action, in every port group the port has.
+ *
+ * The 9132 numbers its ports in three banks: a port p is also p + 0x10 and
+ * p + 0x20.  The vendor's own flood words say so - a port p carries the
+ * flood group ids p<<6, (p+0x10)<<6 and (p+0x20)<<6, and those ids are the
+ * port numbers multiplied by 64 - and the protocol action table is indexed
+ * by (port << 7) | protocol, so a frame that arrives on a jack looks its
+ * action up in one of three groups.
+ *
+ * The vendor's load path writes all of them: the groups 0..7 and the groups
+ * 0x10..0x30.  This driver wrote the groups 0..7 only, so the groups a frame
+ * really looks up were empty - and a frame that finds no action is neither
+ * forwarded nor trapped, it is dropped inside the chip.  That is what the
+ * bench saw: the frame arrived at the SMAC, the SDET, the SIPC, the SPA and
+ * the SMCT, and the SMCT never handed it on, because it had no action for
+ * it.
+ */
+static int zx279133_9132_proto_action_set(struct zx279133_eth *eth, u32 port,
+					  u32 proto, u32 action)
+{
+	static const u32 bank[] = { 0x00, 0x10, 0x20 };
+	u32 b;
+	int ret;
+
+	for (b = 0; b < ARRAY_SIZE(bank); b++) {
+		ret = zx279133_eram_table_set_bits(eth,
+					ZX279133_SWITCH_PROTO_SDT_ID,
+					proto | ((port + bank[b]) << 7), 2,
+					action);
+		if (ret)
+			return ret;
+	}
+
+	return 0;
+}
+
 static int zx279133_9132_proto_init(struct zx279133_eth *eth)
 {
 	u32 base = zx279133_eram_base_of(ZX279133_SWITCH_PROTO_SDT_ID);
@@ -3174,9 +3211,8 @@ static int zx279133_9132_proto_init(struct zx279133_eth *eth)
 
 			if (action == 0xff)
 				continue;
-			ret = zx279133_eram_table_set_bits(eth,
-					ZX279133_SWITCH_PROTO_SDT_ID,
-					proto | (port << 7), 2, action);
+			ret = zx279133_9132_proto_action_set(eth, port, proto,
+							     action);
 			if (ret)
 				return ret;
 		}
