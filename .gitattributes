@@ -101,8 +101,23 @@ trial-files/** text eol=lf
 # Measured on the delivered copy before committing: 104 files, CR total = 0.
 tests/** text eol=lf
 
-# The only two binaries in the repository. Each blob holds ~26k NUL bytes and 86 CR bytes,
-# and a fresh clone reproduces the same 86, so autocrlf has not damaged them and there is no
-# bug to fix here. -text is a lock, not a repair: it stops a future renormalise pass or a
-# forced `git add -f` from reading those CR bytes as line endings and rewriting a device tree.
+# The two device trees, and the third binary added below.
+#
+# The two DTBs each hold ~26k NUL bytes and 86 CR bytes, and a fresh clone reproduces the
+# same 86, so autocrlf has not damaged them and there is no bug to fix here. -text is a
+# lock, not a repair: it stops a future renormalise pass or a forced `git add -f` from
+# reading those CR bytes as line endings and rewriting a device tree.
 dtb/** -text
+
+# The board's own PPU microcode, at the path the kernel's CONFIG_EXTRA_FIRMWARE names.
+#
+# This is a binary that the directory-wide `overlays/** text eol=lf` rule above would
+# otherwise rewrite: the blob is 103456 bytes of tagged instruction stream with 98 CR
+# bytes in it, and those CRs are part of the microcode rather than line endings.  A
+# CRLF checkout would change the file's CRC32 from 0xc839b946 to something else, and
+# the driver gates the accelerated PPU path on that CRC - so the damage would not
+# show up as a failed build, it would show up as a board that receives no frames.
+#
+# The rule is as narrow as the file it protects: one path, not the directory, and it
+# has to come after the `overlays/**` rule because the last matching rule wins.
+overlays/target/linux/zte/zx279133/firmware/** -text -diff

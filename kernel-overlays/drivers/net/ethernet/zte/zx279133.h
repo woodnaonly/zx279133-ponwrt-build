@@ -624,6 +624,27 @@
 #define ZX279133_MCODE_TAG_SKIP		0xdddddddd
 #define ZX279133_MCODE_TAG_VERSION	0xaaaaaaaa
 #define ZX279133_MCODE_TAG_PORT_FLOW	0xbbbbbbbb
+/*
+ * The CRC32 of the PPU microcode this board runs.
+ *
+ * The blob in the tree is the vendor's own mcode_133.bin for this board.
+ * The blob that used to be there was the SR1010's, and a PPU running the
+ * SR1010's microcode does not forward frames: the datapath stalls inside
+ * the PPU and the board receives nothing at all.  Nothing about that
+ * failure looks like a firmware problem from the outside - the driver
+ * loads the blob, the PPU reports a version, and the counters simply
+ * stop - so the driver checks the CRC and says so.
+ */
+#define ZX279133_MCODE_BOARD_CRC	0xc839b946
+/*
+ * The CRC32 of the one blob the RX-hash hook may be installed on.
+ *
+ * The hook rewrites four instructions at an offset inside the blob's
+ * instruction stream, so it only means anything in the blob it was
+ * written against.  The vendor does not patch this board's blob either:
+ * the vendor's PPU takes its hash from the SE hardware hash table.
+ */
+#define ZX279133_MCODE_RX_HASH_CRC	0xef1d7647
 
 #define ZX279133_IDM_BASE		0x280000
 #define ZX279133_IDM_TX_BASE		0x0004

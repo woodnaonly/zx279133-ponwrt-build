@@ -26,7 +26,7 @@
 
 static bool rx_hash = true;
 module_param(rx_hash, bool, 0444);
-MODULE_PARM_DESC(rx_hash, "Enable guarded RX flow hashing for the calibrated PPU firmware");
+MODULE_PARM_DESC(rx_hash, "Enable guarded RX flow hashing; the hook is installed only on the one PPU blob it was calibrated against");
 static bool rx_hash_ipv6 = true;
 module_param(rx_hash_ipv6, bool, 0444);
 MODULE_PARM_DESC(rx_hash_ipv6, "Enable IPv6 tuple hashing with the calibrated RX hash programs");
@@ -4694,7 +4694,7 @@ static int zx279133_ppu_mcode_prepare(struct zx279133_eth *eth)
 	const u8 *p;
 	const u8 *end;
 	u32 lo[4], hi[4];
-	u32 first, inst_num, tag, value, entry, pkt_type, i;
+	u32 first, inst_num, tag, value, entry, pkt_type, i, blob_crc;
 	u32 agclk;
 	bool hash;
 	int ret;
@@ -4718,10 +4718,16 @@ static int zx279133_ppu_mcode_prepare(struct zx279133_eth *eth)
 	    inst_num * 8 + 16 > fw->size)
 		goto err_fw;
 	first = ALIGN(first, 4);
+	blob_crc = crc32_le(~0U, fw->data, fw->size) ^ ~0U;
 	hash = rx_hash && fw->size == 103456 &&
-	       (crc32_le(~0U, fw->data, fw->size) ^ ~0U) == 0xef1d7647;
+	       blob_crc == ZX279133_MCODE_RX_HASH_CRC;
 	if (rx_hash && !hash)
-		dev_warn(eth->dev, "uncalibrated PPU firmware; retaining native RX queues\n");
+		dev_info(eth->dev,
+			 "the board's own PPU firmware is loaded; the RX-hash hook, which belongs to another blob, is not installed\n");
+	if (fw->size == 103456 && blob_crc != ZX279133_MCODE_BOARD_CRC)
+		dev_warn(eth->dev,
+			 "the PPU firmware is not this board's own (crc32 0x%08x, expected 0x%08x): the PPU will not forward frames\n",
+			 blob_crc, ZX279133_MCODE_BOARD_CRC);
 
 	agclk = readl(eth->pps_base + ZX279133_PPU_AGCLK_CFG);
 	if (agclk & ZX279133_PPU_CORE_AGCLK)

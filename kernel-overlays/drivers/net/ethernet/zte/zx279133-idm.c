@@ -17,6 +17,7 @@
 #include <linux/udp.h>
 #include <linux/unaligned.h>
 
+#include <net/dsa.h>
 #include <net/ip.h>
 #include <net/page_pool/helpers.h>
 #include <net/xdp.h>
@@ -823,6 +824,8 @@ xsk_recycle:
 deliver_skb:
 		if (skb) {
 			struct net_device *rx_ndev = ndev;
+			struct dsa_port *cpu_dp = NULL;
+			struct sk_buff *tagged = NULL;
 			bool lan_dsa_active;
 
 			lan_dsa_active = READ_ONCE(eth->lan_dsa_active);
@@ -864,6 +867,38 @@ deliver_skb:
 				 */
 				if (!dsa_header)
 					zx279133_idm_rx_put_vlan(skb, transport_vid);
+				/*
+				 * The tag says which of the switch's ports the
+				 * frame came in on, and the tagger is what turns
+				 * that into the port's netdev.
+				 *
+				 * The four jacks are DSA user ports: they are
+				 * the host's way in and out of the switch, and
+				 * a frame that is not handed to them never
+				 * reaches the host at all.  It is handed to the
+				 * *conduit* instead - with the transport tag
+				 * still on it - the frame arrives at the
+				 * network stack with a VLAN tag no VLAN
+				 * device claims, and the stack drops it
+				 * before the IP layer ever sees it: the
+				 * board's own address is on the bridge, the
+				 * bridge's ports are the jacks, and nothing
+				 * in between ever hands the frame over.
+				 *
+				 * The CPU port's receive function is the
+				 * tree's own tagger
+				 * (net_dsa_tag_zx279133_rtl8372n.c): it reads
+				 * the tag, sets skb->dev to the port the
+				 * frame came in on, and takes the tag off.
+				 *
+				 * Only the tag this driver put there itself
+				 * is handed to it: the tagger reads the tag
+				 * out of the frame, and a frame that carries
+				 * its own header in the data is not the
+				 * shape the tagger reads.
+				 */
+				if (!dsa_header)
+					cpu_dp = eth->lan_ndev->dsa_ptr;
 			}
 			if (!xdp_ran && (rx_ndev->features & NETIF_F_RXCSUM) &&
 			    zx279133_idm_rx_parsed(word1, lan_source) &&
@@ -883,8 +918,39 @@ deliver_skb:
 				u64_stats_inc(&stats->rx_hw_hash_packets);
 			}
 			skb_record_rx_queue(skb, eth->xsk_pool ? 0 : (queue & 7) >> 2);
-			skb->protocol = eth_type_trans(skb, rx_ndev);
-			napi_gro_receive(napi, skb);
+			if (cpu_dp && cpu_dp->rcv) {
+				tagged = cpu_dp->rcv(skb, eth->lan_ndev);
+				if (!tagged || !tagged->dev) {
+					/* The tagger does not free what it
+					 * rejects: every one of its error
+					 * paths returns NULL and leaves the
+					 * buffer alone.
+					 */
+					zx279133_stats_rx_dropped(eth, eth->lan_ndev);
+					dev_kfree_skb_any(tagged ? tagged : skb);
+					goto release_desc;
+				}
+				/*
+				 * eth_type_trans() answers ETH_P_XDSA when
+				 * the device it is handed is a DSA
+				 * conduit: the conduit does not know what
+				 * the frame is - the tagger does.  The
+				 * tagger has put the frame on the port it
+				 * came in on, and that port, not the
+				 * conduit, is the device the frame
+				 * belongs to now, so the protocol is read
+				 * there.  It is read there and nowhere
+				 * else: eth_type_trans() pulls the MAC
+				 * header off the frame, and it may only
+				 * be done once.
+				 */
+				tagged->protocol = eth_type_trans(tagged,
+								  tagged->dev);
+				netif_receive_skb(tagged);
+			} else {
+				skb->protocol = eth_type_trans(skb, rx_ndev);
+				napi_gro_receive(napi, skb);
+			}
 			dev_sw_netstats_rx_add(rx_ndev, len);
 		}
 		goto release_desc;
