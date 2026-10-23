@@ -1749,6 +1749,7 @@ static ssize_t zx279133_9132_write(struct file *file, const char __user *ubuf,
 	 */
 	if (!strcmp(tok, "bppd") || !strcmp(tok, "bppw")) {
 		u32 count = 16, mode = 0, i;
+		bool write_it = tok[1] == 'w';
 
 		tok = zx279133_9132_next_token(&p);
 		if (!tok || kstrtou32(tok, 0, &count))
@@ -1759,23 +1760,25 @@ static ssize_t zx279133_9132_write(struct file *file, const char __user *ubuf,
 		if (!eth->bmu_mem)
 			return -ENODEV;
 
-		if (tok[1] == 'w') {
+		if (write_it) {
 			tok = zx279133_9132_next_token(&p);
 			if (!tok || kstrtou32(tok, 0, &mode) || mode > 3)
 				return -EINVAL;
 			for (i = 0; i < ZX279133_BMU_NORMAL_COUNT; i++) {
 				switch (mode) {
 				case 0:
-					iowrite16be(i, eth->bmu_mem + 2 * i);
+					writew(cpu_to_be16(i), eth->bmu_mem + 2 * i);
 					break;
 				case 1:
-					iowrite16le(i, eth->bmu_mem + 2 * i);
+					writew(cpu_to_le16(i), eth->bmu_mem + 2 * i);
 					break;
 				case 2:
-					iowrite32(i, eth->bmu_mem + 4 * i);
+					writew(cpu_to_le16(i), eth->bmu_mem + 4 * i);
+					writew(cpu_to_le16(i >> 16),
+						eth->bmu_mem + 4 * i + 2);
 					break;
 				default:
-					iowrite16be(0, eth->bmu_mem + 2 * i);
+					writew(0, eth->bmu_mem + 2 * i);
 					break;
 				}
 			}

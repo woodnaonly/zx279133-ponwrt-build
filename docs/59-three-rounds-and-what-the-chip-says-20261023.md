@@ -163,6 +163,24 @@ to prove is not worth the power window. From run130 on, the RED's
 configuration, the outport map and the trap port's words are all in the
 kernel itself, so the acceptance round only reads.
 
+### 1.9 The eighth failure: the build itself did not compile
+
+`run130` never shipped an image: it failed in the kernel module build. The
+driver used `iowrite16le()`, and **the Linux kernel has no such function** -
+`include/linux/io.h` provides `iowrite8/16/32` in the machine's own byte
+order and `iowrite16be/32be` for the other one, and nothing else. The line is
+now `writew(cpu_to_le16(x), p)` / `writew(cpu_to_be16(x), p)`.
+
+`run131` and `run132` were pushed on top of `run130` and inherited the same
+line, so neither of them could have shipped either. The releases page still
+ends at `run129`.
+
+The lesson is about the gate, not about the line: `tools/prepush.py` checks
+that every `ZX279133_*` macro a driver uses is visible, and it checks enum
+members, and it says nothing about whether a *kernel* function exists. A
+function that does not exist is a compile error that only the CI's module
+build can catch, one hour and twenty minutes later.
+
 ---
 
 ## 2. What the chip's own registers say
