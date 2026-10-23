@@ -639,13 +639,12 @@ static void zx279133_switch_xpcs_restore(struct zx279133_switch *priv)
  * 0x342a4 and 0x342c0; the two groups are four words apart and do not
  * overlap.)
  *
- * Two registers of each block are deliberately left alone.  The vendor also
- * writes +0x0008 (the packet filter) and +0x000e0 (the speed word), but on
- * this board those two registers already hold what the vendor's board holds
- * - 0x80000001 and 0x00011000 - straight out of reset, and writing the
- * vendor's values over them *destroys* them: the hardware then reads back
- * 0x80000000 and 0x00010000, with the enable bit and bit 12 gone.  So they
- * are read, not written, here, and only to show what they are.
+ * Two registers of each block were left alone until now.  The vendor writes
+ * +0x0008 (the packet filter) twice and +0x000e0 (the speed word) once,
+ * after the reset pulse, and this driver used to skip both of them because
+ * the hardware seemed to "destroy" them.  It does not: the two bits that
+ * disappear are write-one-to-clear, and the vendor's own board ends up with
+ * the same values.  The writes are made here now, with the vendor's values.
  *
  * The reset the vendor pulses in between - a bit of the shared soft-reset
  * word at NPPT + 0x2c0004 - is done here too, in the vendor's order:
@@ -725,19 +724,35 @@ static void zx279133_switch_smac_init(struct zx279133_switch *priv)
 		zx279133_switch_nppt_write(priv, base + ZX279133_SMAC_AN_CTRL2,
 					    ZX279133_SMAC_AN_CTRL2_VALUE);
 		/*
-		 * The packet filter (+0x08) and the speed word (+0xe0) are
-		 * deliberately NOT written, even though np_133.ko writes them:
-		 * on this board they already hold what the vendor's board
-		 * holds - 0x80000001 and 0x00011000 - straight out of reset,
-		 * and writing the vendor's values over them destroys them.  The
-		 * hardware then reads back 0x80000000 and 0x00010000, with the
-		 * enable bit and bit 12 gone.  They are read, not written.
+		 * The packet filter (+0x08) and the speed word (+0xe0), with the
+		 * vendor's values, in the vendor's order: the filter first, then
+		 * the port control word, then the speed word, all of them after
+		 * the reset pulse.
+		 *
+		 * np_133.ko writes the filter twice.  The first write goes into
+		 * a MAC that has only just come out of its reset, so it does not
+		 * stick; the second one does.
+		 *
+		 * The words look as if they were being "destroyed" before: the
+		 * filter read back 0x80000000 instead of 0x80000001 and the
+		 * speed word read back 0x00010000 instead of 0x00011000.  Both
+		 * are write-one-to-clear bits, and the vendor's own board ends
+		 * up with the same values, because the vendor's dump of the
+		 * block was taken before its Linux driver wrote it.  So the
+		 * writes are made here too, and the read-back is printed.
 		 */
+		zx279133_switch_nppt_write(priv, base + ZX279133_SMAC_PKT_FILTER,
+					    ZX279133_SMAC_PKT_FILTER_VALUE);
+		zx279133_switch_nppt_write(priv, base + ZX279133_SMAC_PKT_FILTER,
+					    ZX279133_SMAC_PKT_FILTER_VALUE);
 
 		value = zx279133_switch_nppt_read(priv,
 						  base + ZX279133_SMAC_PORT_CTRL);
 		zx279133_switch_nppt_write(priv, base + ZX279133_SMAC_PORT_CTRL,
 					    value | ZX279133_SMAC_PORT_CTRL_BIT);
+
+		zx279133_switch_nppt_write(priv, base + ZX279133_SMAC_SPEED,
+					    ZX279133_SMAC_SPEED_VALUE);
 
 		/*
 		 * The word at NPPT + 0x343f0 is a bitmap of the MACs that run
@@ -753,20 +768,30 @@ static void zx279133_switch_smac_init(struct zx279133_switch *priv)
 					    value & ~(1u << mac));
 
 		/*
-		 * Publish it.  The vendor waits for the ready word, and gives
-		 * up after ten tries and publishes anyway; so does this.
+		 * Publish it.  The vendor waits for the ready word - ten tries,
+		 * 4.29 ms apart - and gives up after ten tries and publishes
+		 * anyway; so does this.
+		 *
+		 * When the ready word does come up, the vendor waits another
+		 * 4.29 ms before it writes the send-enable, and writes the
+		 * send-enable twice.  Both are done here.
 		 */
 		for (tries = 0; tries < 10; tries++) {
 			value = zx279133_switch_nppt_read(priv,
 				ZX279133_SMAC_SOPC_READY_BASE + 4 * mac);
 			if (value & BIT(0))
 				break;
-			usleep_range(1000, 1100);
+			usleep_range(4200, 4400);
 		}
 		if (!(value & BIT(0)))
 			dev_warn(dev,
 				 "SMAC %d never became ready (0x%08x) after the reset pulse at nppt+0x%06x\n",
 				 mac, value, ZX279133_SMAC_RESET_WORD);
+		else
+			usleep_range(4200, 4400);
+		zx279133_switch_nppt_write(priv,
+					   ZX279133_SMAC_SOPC_SEND_BASE + 4 * mac,
+					   1);
 		zx279133_switch_nppt_write(priv,
 					   ZX279133_SMAC_SOPC_SEND_BASE + 4 * mac,
 					   1);
@@ -782,7 +807,7 @@ static void zx279133_switch_smac_init(struct zx279133_switch *priv)
 					    value | 2);
 
 		dev_info(dev,
-			 "SMAC %d programmed: an_ctrl=0x%08x pkt_filter=0x%08x speed=0x%08x ready=0x%08x\n",
+			 "SMAC %d programmed: an_ctrl=0x%08x pkt_filter=0x%08x speed=0x%08x ready=0x%08x send=0x%08x\n",
 			 mac,
 			 zx279133_switch_nppt_read(priv,
 						   base + ZX279133_SMAC_AN_CTRL),
@@ -790,7 +815,10 @@ static void zx279133_switch_smac_init(struct zx279133_switch *priv)
 						   base + ZX279133_SMAC_PKT_FILTER),
 			 zx279133_switch_nppt_read(priv,
 						   base + ZX279133_SMAC_SPEED),
-			 value);
+			 value,
+			 zx279133_switch_nppt_read(priv,
+						   ZX279133_SMAC_SOPC_SEND_BASE +
+						   4 * mac));
 	}
 
 	/*

@@ -833,15 +833,29 @@ static inline u32 zx279133_idm_tx_done_reg(unsigned int queue)
  * was ever published, and no frame from a LAN jack was ever received.
  */
 #define ZX279133_SMAC_RESET_WORD	ZX279133_SYS_SOFT_RESET
-#define ZX279133_SMAC_PKT_FILTER_VALUE	0x80000000
+/*
+ * The MAC's packet-filter word, at +0x08 of its block.  np_133.ko writes
+ * 0x80000001 there, twice, after the reset pulse.
+ *
+ * This driver used to skip the write because on this board the hardware
+ * derived the word itself and writing over it "destroyed" it: the word read
+ * back 0x80000000 instead of 0x80000001.  That is not destruction, it is a
+ * write-one-to-clear bit - the same thing happens to the speed word's bit 12
+ * - and the vendor's own board ends up with the same value, because the
+ * vendor's dump of the block was taken before its Linux driver wrote it.
+ * So the vendor's write is made here as well, and the read-back is printed.
+ */
+#define ZX279133_SMAC_PKT_FILTER_VALUE	0x80000001
 /*
  * The MAC's speed/duplex word, at +0xe0 of its block.  np_133.ko writes
- * 0x00011200 there, but this board's hardware derives the word itself and
- * writing over it destroys it (it reads back 0x00010000, with bit 12
- * gone), so the word is read and never written.  The value is kept here
- * only to say what the vendor writes.
+ * 0x00011200 there - the word the hardware already holds (0x00011000) with
+ * bit 9 set - after the reset pulse.
+ *
+ * The value used to be spelled 0x00012000 here, which is not what the vendor
+ * writes: bit 9 and bit 12 differ.  The experiments that "proved" the word
+ * must not be written used that wrong constant.
  */
-#define ZX279133_SMAC_SPEED_VALUE	0x00012000
+#define ZX279133_SMAC_SPEED_VALUE	0x00011200
 #define ZX279133_SMAC_PORT_CTRL_BIT	0x200
 #define ZX279133_SMAC_UNI_MODE_MASK	0x03800000
 
