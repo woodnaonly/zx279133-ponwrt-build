@@ -120,6 +120,49 @@ The board is idle when the prompt is there **and the console has gone
 quiet**, so the runner now waits for a second of silence after the prompt
 before it sends the next line.
 
+### 1.7 The sixth failure: a command that prints nothing looks idle
+
+The "one second of silence" rule is right for a command that prints
+something and wrong for a command that prints nothing for a while. `sleep 40`
+prints nothing, so the runner decided the board was idle one second into it
+and sent the next line while the sleep was still running; the two lines
+interleaved on the wire. Measured 2026-10-23 at 09:31:07.
+
+The silence window is now a parameter (`QUIET`, default 1 s) and a command
+that has to be waited out has to print something more often than `QUIET`
+seconds. The G2 acceptance round waits with a loop that prints one line every
+five seconds and runs with `QUIET=6`.
+
+### 1.8 The seventh failure: the run-time experiment ran on the wrong kernel
+
+The round that was supposed to write the vendor's outport map at run time ran
+on `sk-d840n-initramfs-run127.itb`, and that kernel's `debugfs` file has no
+`es`/`eg` commands - they are newer than run127. Every one of the 64 writes
+answered
+
+```
+-ash: es: not found
+```
+
+so the outport map was never written and the round measured the same thing
+twice.
+
+What the round *did* prove is worth keeping:
+
+* the SPA indirect write path works on the board: `sp 15 0 0x0000a767` and
+  the six other words of the trap port read back exactly as written, so the
+  trap port's own entry program can be put into the chip at run time;
+* the RED's `0x20004` was written to 0x9e and the out buffer queue words to
+  the vendor's values, and the counters did not move: `0x201c0` (the IDM's
+  forwarded count) stayed 0, `0x20210` (the RED's forwarded count) stayed 0,
+  while `0x20204` and `0x20214` grew by the same amount as the number of
+  packets the PC sent.
+
+A run-time experiment on a kernel that is older than the fix it is supposed
+to prove is not worth the power window. From run130 on, the RED's
+configuration, the outport map and the trap port's words are all in the
+kernel itself, so the acceptance round only reads.
+
 ---
 
 ## 2. What the chip's own registers say
@@ -176,6 +219,24 @@ RAM, its OUT buffer RAM and its per-queue configuration are the *tree's*
 SR1010 values, not the vendor's. An experiment that wants the vendor's RED
 has to write all of them at run time; it cannot assume the kernel already
 did it. Run130 is the first run where the overlay writes them itself.
+
+---
+
+### 2.3 The RED's configuration word: the bit that explains every symptom
+
+`0x20004` is the RED's configuration word. The vendor's board reads 0x9e and
+the mainline tree writes 0x7e. The difference is bit 7, `all_active_mode`:
+with the bit clear, a queue that is not explicitly activated is never
+scheduled, so a frame that arrives on the 9132's queue stays inside the RED
+and is never handed to the IDM.
+
+That is exactly what the board did: the RED's ingress counter rose, the IDM's
+forwarded count stayed at 0, and nothing ever reached the network stack.
+`staging/ctl/re-conduit-qid.md` §4.2 reached the same conclusion from the
+vendor's own code before this was measured.
+
+`run130` is the first build that writes the vendor's `0x9e`, so every
+measurement taken on run127 or older says nothing about the current driver.
 
 ---
 
@@ -292,11 +353,12 @@ and the entry program comes out of the microcode blob
 
 | # | question | why it is open | how it closes |
 |---|---|---|---|
-| Q1 | does the vendor's RED configuration alone make the LAN path work? | the experiment that would answer it has now failed twice for harness reasons; the third attempt runs on 2026-10-23 at 08:00 | the round writes the vendor's `RED_CFG`, share maxima, watermarks, ISU thresholds and all three queue RAMs at run time, then the CPU port and the flood groups, then reads the counters |
+| Q1 | does the vendor's RED configuration alone make the LAN path work? | the run-time experiment that would answer it failed for harness reasons seven times (§1.1-§1.8); the last attempt also ran on a kernel older than the fix | closed by the acceptance round on run132: the kernel carries the vendor's RED configuration itself, so the round only reads the counters |
 | Q2 | which of the four UNI jacks is the right transmit target per client? | the driver has one global `lan_tx_port`; the vendor picks the target from the frame | the DSA tagger has to carry the target port to the conduit - the shape of that change is a separate piece of work |
 | Q3 | the ERAM 0x1f flood group's entry index convention | our driver uses `p << 6` as an entry index; the vendor's `se_eram_table_set(0x1f, group_id, 1, &port_id)` uses the group id directly | the vendor's own write sites, decoded (in progress) |
 | Q4 | whether the vendor's per-queue share list differs from the built-in default | the vendor reads nine `g_red_*_share_max` globals that the stock board leaves undefined; the built-in defaults it falls back to are exactly what the driver writes | the vendor's own board prints "default val is -1" for each of them, which is the fallback, not an override |
 | Q5 | the BMU pool geometry (0x1800 vs the vendor's 0x3400) | the pools are laid out by the switch core from a global register, and the vendor's geometry needs about 32 MB of reserved memory, which collides with the IDM region | the reserved-memory map has to move; separate work |
+| Q6 | the trap port's copy of the attribute word in the MF table | the SPA copy is 0x00000000 on the vendor's board (docs/18) and so is the one this driver writes, but `zx279133_9132_mf_mirror()` writes 0x96040001 into ERAM table 0x7d for **every** port, the trap included | read the trap's entry back on the acceptance round (`er`/`eg` on the MF table); if the round passes, the difference is harmless and the driver should still be made to match the vendor |
 
 ---
 
