@@ -1951,9 +1951,27 @@ static int zx279133_switch_probe(struct platform_device *pdev)
 	 * and stopped there, the XMAC's own transmit counter stayed at zero,
 	 * and nothing at all crossed the lane in either direction.
 	 *
-	 * So the XMAC is programmed in this branch as well.  What is not
-	 * repeated is the reset: the soft reset word is shared with the PCS,
-	 * and the XMAC is at its reset state already.
+	 * So the XMAC is programmed in this branch as well.  What used to be
+	 * left out here was the reset, on the grounds that "the soft reset
+	 * word is shared with the PCS, and the XMAC is at its reset state
+	 * already".  The word is shared, but the bit is not: XMAC0's reset
+	 * is bit 10 of it and pulsing that bit touches the XMAC alone, which
+	 * is why the non-inheriting branch below can pulse it without
+	 * touching the PCS.
+	 *
+	 * The reset is what the board was missing.  A MAC that has never
+	 * been reset since the bootloader handed it over has not attached
+	 * its output queue, and the vendor's own code says so: the MAC is
+	 * published only after its own "clear-over-ready" word says it is
+	 * ready, and on the live board that word for XMAC0 (NPPT + 0x342a4)
+	 * reads 0 while XMAC1's (0x342a8) reads 1.  A frame that the stack
+	 * queued therefore sat in the IDM's descriptor ring with nobody to
+	 * take it: the board's own counter said fifty-one packets sent,
+	 * the XMAC's transmit counter said zero, and nothing crossed the
+	 * lane in either direction.  The vendor's bootloader does reset
+	 * XMAC0 before it configures it ("xmac 0 speed set 2 in sgmii"), and
+	 * so does the vendor's own Linux, whose XMAC0 control words read
+	 * zero because they were reset and never programmed again.
 	 */
 	zx279133_switch_lane_snapshot(priv, "pre-pcs");
 	status = zx279133_switch_nppt_read(priv, ZX279133_NPPT_XPCS0_STATUS);
@@ -1962,7 +1980,7 @@ static int zx279133_switch_probe(struct platform_device *pdev)
 			 "the bootloader left the PCS link up (0x%04x); inheriting it\n",
 			 status);
 		zx279133_switch_sopc_publish(priv);
-		zx279133_switch_xmac_configure(priv, false);
+		zx279133_switch_xmac_configure(priv, true);
 		goto report;
 	}
 
