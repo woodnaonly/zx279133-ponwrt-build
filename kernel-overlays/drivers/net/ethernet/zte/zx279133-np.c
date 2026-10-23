@@ -2412,7 +2412,9 @@ static const u32 zx279133_9132_vendor_words[][2] = {
 /*
  * The flood words, per port: the first is the broadcast flood word and the
  * second the unknown-unicast / multicast one.  PPU 1..4 are the four UNI
- * jacks and PPU 5 is XMAC0, the 9132's CPU port.
+ * jacks and PPU 5 is XMAC0; both carry the vendor's own values.  The CPU is
+ * the trap port 15 and has no flood groups of its own - it is a sink - so
+ * there is no entry for it here.
  */
 static const u32 zx279133_9132_vendor_flood[6][2] = {
 	{ 0x04400410, 0x00400840 },
@@ -2430,7 +2432,7 @@ static int zx279133_9132_port_words_vendor(struct zx279133_eth *eth, u32 ppu)
 	int ret;
 
 	if (flood >= ARRAY_SIZE(zx279133_9132_vendor_flood))
-		flood = 0;
+		return 0;
 
 	for (i = 0; i < ARRAY_SIZE(zx279133_9132_vendor_words); i++) {
 		ret = zx279133_spa_indirect_write(eth, ppu,
@@ -2594,8 +2596,8 @@ static int zx279133_9132_flood_cpu_port(struct zx279133_eth *eth)
 /*
  * Bring up the 9132's UNI ports and its CPU port.
  *
- * The CPU port is PPU 5, which is XMAC0, the 9132 side of the SGMII link to
- * the SoC's own MAC.  Every frame between the CPU and the jacks crosses it.
+ * The CPU port is PPU 15, the trap the SoC reaches the 9132 through.  Every
+ * frame between the CPU and the jacks crosses it.
  */
 static int zx279133_9132_port_init(struct zx279133_eth *eth)
 {
@@ -2630,11 +2632,10 @@ static int zx279133_9132_port_init(struct zx279133_eth *eth)
 	}
 
 	/*
-	 * The conduit: PPU 5, which is XMAC0, the 9132 side of the SGMII link
-	 * to the SoC's own MAC.  Every frame between the CPU and the jacks
-	 * crosses it, and the vendor's own working value for it is the same
-	 * as for the four jacks - entry program 0xa6a5, no SVID, the same
-	 * attribute word.
+	 * The CPU port: PPU 15, the trap the SoC reaches the 9132 through.
+	 * Every frame between the CPU and the jacks crosses it, and the
+	 * vendor's own working value for a port's words is the same as for the
+	 * four jacks - entry program 0xa6a5, no SVID, the same attribute word.
 	 */
 	ret = zx279133_9132_port_words_vendor(eth, ZX279133_9132_CONDUIT_PPU);
 	if (ret)
@@ -2644,7 +2645,7 @@ static int zx279133_9132_port_init(struct zx279133_eth *eth)
 	if (ret)
 		return ret;
 	dev_info(eth->dev,
-		 "9132 PPU %u (the DSA conduit) attribute word %08x\n",
+		 "9132 PPU %u (the CPU trap) attribute word %08x\n",
 		 ZX279133_9132_CONDUIT_PPU, attr);
 
 	/* And the copy of it in the table the switch engine reads. */
@@ -3142,15 +3143,47 @@ static const u8 zx279133_9132_reason_qid[128] = {
  * The vendor's ERAM 0x27 - the outport map - in full.
  *
  * The index is the outport, 0 to 63, and the entry is 16 bits: the real port
- * in bits 0..5 and the queue id in bits 6..14.  The vendor's
- * outport_and_real_port_map_table_init() writes all 64 of them, with the
- * real port 15 everywhere and the queue id 0x1a3 (419) by default; four
- * outports are the exceptions: the CPU's own outport 15 goes to queue 0x193
- * (403), and 49, 50 and 51 go to 0x1b1 (433), 0x1b3 (435) and 0x1b5 (437).
+ * in bits 0..5 and the queue id in bits 6..14.
+ *
+ * The vendor's outport_and_real_port_map_table_init() (np_133.ko 0xc06c8)
+ * writes all 64 entries, and it does *not* put the real port 15 everywhere:
+ *
+ *   outport  0..14  ->  real port = outport,  queue id = 0
+ *   outport 15      ->  real port = 15,        queue id = 0x193 (403)
+ *   outport 16..23  ->  real port = 15,        queue id = 0x1a3 (419) + delta
+ *   outport 24..48  ->  real port = outport,  queue id = 0
+ *   outport 49      ->  real port = 49,        queue id = 0x1b1 (433)
+ *   outport 50      ->  real port = 50,        queue id = 0x1b3 (435)
+ *   outport 51      ->  real port = 51,        queue id = 0x1b5 (437)
+ *   outport 52..63  ->  real port = outport,  queue id = 0
+ *
+ * This driver used to write the real port 15 everywhere and the queue id
+ * 0x1a3 everywhere, which is what the vendor's *print* says - but the print
+ * only covers outports 16..23 (the ones that are the IDM's own), so the
+ * other 61 entries were read off the wrong line of the log.
+ *
+ * Both columns matter.  The queue id 0x1a3 is 419, which is outside the
+ * RED's 401 queues (0..400), so a frame the switch egresses on any outport
+ * other than 15..23 was given a queue the RED cannot deliver on - which is
+ * what the RED's `req_que_disc` and `drop_pkt` flags report.  And the real
+ * port is the physical port the frame leaves by: a frame the 9132 forwards
+ * to a UNI jack was aimed at the CPU trap instead.
  */
-#define ZX279133_VENDOR_OUTPORT_REAL_PORT	0x0f
-#define ZX279133_VENDOR_OUTPORT_DEFAULT_QID	0x1a3
+#define ZX279133_VENDOR_OUTPORT_CPU_REAL_PORT	0x0f
+#define ZX279133_VENDOR_OUTPORT_IDM_FIRST	0x10
+#define ZX279133_VENDOR_OUTPORT_IDM_LAST	0x17
+#define ZX279133_VENDOR_OUTPORT_IDM_QID		0x1a3
 #define ZX279133_VENDOR_OUTPORT_CPU_QID	0x193
+
+static u32 zx279133_9132_outport_real(u32 outport)
+{
+	/* The CPU trap and the IDM's own outports all leave by port 15. */
+	if (outport >= ZX279133_VENDOR_OUTPORT_CPU_REAL_PORT &&
+	    outport <= ZX279133_VENDOR_OUTPORT_IDM_LAST)
+		return ZX279133_VENDOR_OUTPORT_CPU_REAL_PORT;
+
+	return outport;
+}
 
 static u32 zx279133_9132_outport_qid(u32 outport)
 {
@@ -3164,7 +3197,15 @@ static u32 zx279133_9132_outport_qid(u32 outport)
 	case 0x33:
 		return 0x1b5;
 	default:
-		return ZX279133_VENDOR_OUTPORT_DEFAULT_QID;
+		/*
+		 * The IDM's own outports get the base queue plus a per-port
+		 * delta the vendor reads out of a table it fills at run time;
+		 * the delta is zero here, which is the base value.
+		 */
+		if (outport >= ZX279133_VENDOR_OUTPORT_IDM_FIRST &&
+		    outport <= ZX279133_VENDOR_OUTPORT_IDM_LAST)
+			return ZX279133_VENDOR_OUTPORT_IDM_QID;
+		return 0;
 	}
 }
 
@@ -3256,7 +3297,7 @@ static int zx279133_9132_outport_map_init(struct zx279133_eth *eth)
 			u32 value;
 
 			outport = block * 8 + i;
-			value = ZX279133_VENDOR_OUTPORT_REAL_PORT |
+			value = zx279133_9132_outport_real(outport) |
 				(zx279133_9132_outport_qid(outport) << 6);
 			if (i & 1)
 				words[i / 2] |= value << 16;

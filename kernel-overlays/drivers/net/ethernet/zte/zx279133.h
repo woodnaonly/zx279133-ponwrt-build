@@ -23,7 +23,17 @@
 /* Validated WAN/LAN hardware constants. */
 #define ZX279133_IDM_CPU_TX_FIRST	1
 #define zx279133_tx_port		6
-#define ZX279133_LAN_TX_PORT		5
+/*
+ * The chip port the LAN path's transmit descriptors name.
+ *
+ * The vendor's IDM transmit descriptors carry the *target UNI jack's* chip
+ * port in the output-port field - 1..4, never 5 - and the 9132's chip
+ * ports are its SPA memory ids: PPU 1..4 are the four jacks.  This board's
+ * DSA map puts PPU 2 behind DSA port 5 (lan2), which is the jack the test
+ * PC is plugged into.  The old value 5 was XMAC0, a 10G SerDes MAC that has
+ * no peer on this board and that the vendor never programs.
+ */
+#define ZX279133_LAN_TX_PORT		2
 #define ZX279133_LAN_RX_QUEUE_COUNT	8
 #define ZX279133_LAN_TRANSPORT_VID_MIN	59
 #define ZX279133_LAN_TRANSPORT_VID_MAX	62
@@ -32,17 +42,33 @@
 #define ZX279133_LAN_MAX_MTU		(ZX279133_MAX_MTU + VLAN_HLEN)
 /*
  * The 9132's per-port attribute memories (the SPA memory ids, which are the
- * chip's own port numbers): 1..4 are the four UNI jacks and 5 is XMAC0, the
- * 9132's CPU port - the one the DSA conduit talks to.
+ * chip's own port numbers): 1..4 are the four UNI jacks, 5 is XMAC0 and 15
+ * is the CPU.
+ *
+ * The CPU is the trap port, not a MAC.  The vendor prints the namespace
+ * itself - print_p_port(), np_133.ko 0xf6c80: "SPA_CPU_MEMID = 0xf" - and
+ * its IDM transmit descriptors carry inport = 0x0f, while the outport map
+ * sends dest_port 15 to the CPU's queue 0x193.  PPU 5 is XMAC0, the 10G
+ * SerDes MAC, which on this board has no peer: the vendor's board reads zero
+ * in its registers, because the vendor never programs the block.
  */
 #define ZX279133_9132_UNI_PPU_FIRST	1
 #define ZX279133_9132_UNI_PPU_LAST	4
-#define ZX279133_9132_CONDUIT_PPU	5
+#define ZX279133_9132_CONDUIT_PPU	15
 #define ZX279133_TX_RECLAIM_DELAY_MS	10
 #define ZX279133_DATAPATH_USER_WAN	BIT(0)
 #define ZX279133_DATAPATH_USER_LAN	BIT(1)
 #define zx279133_tx_selector		0x0f
 #define zx279133_tx_pon_control		0x08000000
+/*
+ * The fourth metadata word of the IDM transmit descriptor on the LAN path.
+ *
+ * The vendor's own dump_desc_tx() calls this word the GEM port's LLID id
+ * plus its queue id.  The vendor writes 0x003e0000 on its LAN path and
+ * 0x1f568623 on its PON path; this driver wrote the PON value on both,
+ * which is a PON control word in a LAN descriptor.
+ */
+#define ZX279133_LAN_TX_WORD4		0x003e0000
 #define zx279133_tx_word4_bit23		0
 #define zx279133_tx_hw_csum		1
 
@@ -896,11 +922,11 @@ struct zx279133_eth {
 	 *
 	 * The descriptor's byte 0x0a holds the output port in bits 0..5 and the
 	 * "output port valid" flag in bit 6 (the vendor's own dump_desc_tx()
-	 * names both).  The vendor's LAN path writes 1 there - smac_0, the
-	 * first UNI jack - and never 5, which is xmac_0, the 9132's own CPU
-	 * port; this driver has always written 5.  Which of the two the chip
-	 * needs is still the open question, so the value is a knob the
-	 * debugfs "txp" command can turn while the question is open.
+	 * names both).  The vendor's LAN path writes the *target UNI jack's*
+	 * chip port there - 1..4 - and never 5, which is xmac_0, a 10G SerDes
+	 * MAC that has no peer on this board and that the vendor never
+	 * programs.  The value starts at ZX279133_LAN_TX_PORT and the debugfs
+	 * "txp" command can still turn it while the per-jack case is open.
 	 */
 	u8 lan_tx_port;
 	/*
@@ -908,9 +934,10 @@ struct zx279133_eth {
 	 *
 	 * The vendor's own dump_desc_tx() calls this word the GEM port's LLID
 	 * id plus its queue id.  The vendor's LAN path writes 0x003e0000 there
-	 * and its PON path writes 0x1f568623; this driver has always written
-	 * zx279133_tx_pon_control (0x08000000) on both.  The debugfs "tx4"
-	 * command turns it while the question is open.
+	 * and its PON path writes 0x1f568623; this driver used to write
+	 * zx279133_tx_pon_control (0x08000000) on both, which is a PON
+	 * control word in a LAN descriptor.  The debugfs "tx4" command can
+	 * still turn it while the question is open.
 	 */
 	u32 lan_tx_word4;
 	/*

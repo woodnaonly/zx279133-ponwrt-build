@@ -633,7 +633,7 @@ static int zx279133_eth_probe(struct platform_device *pdev)
 	eth->dev = dev;
 	eth->ndev = ndev;
 	eth->lan_tx_port = ZX279133_LAN_TX_PORT;
-	eth->lan_tx_word4 = zx279133_tx_pon_control;
+	eth->lan_tx_word4 = ZX279133_LAN_TX_WORD4;
 	eth->lan_untag_svid = false;
 	ndev->tstats = devm_netdev_alloc_pcpu_stats(dev,
 						    struct pcpu_sw_netstats);
