@@ -721,7 +721,39 @@ xsk_recycle:
 		if (replacement) {
 			refill++;
 		}
-		page_pool_dma_sync_for_cpu(zx279133_rx_page_pool(page), page, 0, len);
+		/*
+		 * The frame is where the descriptor says it is: the hardware
+		 * wrote it at page + ZX279133_IDM_RX_PAYLOAD_OFFSET, which is
+		 * the address the buffer pointer ring was given
+		 * (__zx279133_idm_rx_post_page() hands out
+		 * page_pool_get_dma_addr(page) + PAYLOAD_OFFSET).
+		 *
+		 * So the range the CPU has to be given back is that one, and
+		 * not the first len bytes of the page.  The two are the same
+		 * range only for a frame of at least PAYLOAD_OFFSET bytes, and
+		 * every frame on this wire is shorter than that: an ARP
+		 * request is 60 bytes and a ping is 98.  Syncing [0, len)
+		 * therefore invalidated nothing the stack is about to read,
+		 * and the stack read the page's old contents instead of the
+		 * frame the hardware had just written - whatever those pages
+		 * held before, which on this board is the initramfs' text.
+		 *
+		 * That is not a guess about the symptom: it is what the
+		 * measurement showed.  The board's bridge learned source
+		 * MAC addresses that were ASCII ("small", ".rx_ta", "let
+		 * di"), the board's own ARP table never got the test PC's
+		 * address out of the frames it received, and the counters
+		 * were perfect the whole time - the frames arrived, they
+		 * were counted, and they were not the frames.
+		 *
+		 * The pool is created with PP_FLAG_DMA_MAP and without
+		 * PP_FLAG_DMA_SYNC_CPU, and its device-side sync only runs
+		 * when a page goes back to the pool, which for a received
+		 * frame is after the stack has read it.  So this is the one
+		 * place where the frame has to be made visible to the CPU.
+		 */
+		page_pool_dma_sync_for_cpu(zx279133_rx_page_pool(page), page,
+					   ZX279133_IDM_RX_PAYLOAD_OFFSET, len);
 		zx279133_idm_rx_prefetch_payload(page);
 		data = page_address(page) + ZX279133_IDM_RX_PAYLOAD_OFFSET;
 
