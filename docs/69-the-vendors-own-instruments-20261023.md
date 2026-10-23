@@ -246,6 +246,29 @@ driver has no name for: `echo -r sdet reg=0 cnt=64` and
 (`sdet` 0x800, `sipc` 0x1000, in word indices, so 0x2000 and 0x4000 in
 bytes).
 
+Two doors that turned out to be walls, so that nobody walks into them
+again:
+
+* **`/proc/pon/switch_debug/sw_smi_read_sw_reg` cannot read the 9132.**
+  Its write takes `addr=0x...`, it parses the address, and then it answers
+  **"not support now!"** - it is the path to an external SMI switch chip
+  (an RTL8xxx on the PON side), not to the 9132's own registers.  It reads
+  nothing on this board.
+* **`sw_port_statistics1_get` .. `statistics5_get` are a stub here.**  All
+  thirty-five ports and all five groups read zero while the PC's frames
+  pass, which is what docs/41 recorded.  The vendor's own per-jack
+  counters do not exist on this board; the numbers in section 2 come from
+  `start_statistics` instead.
+
+The SDT dump - `echo -ind_ram sdet` - prints the SDET module's registers,
+not the ERAM tables.  Its 384 words are in `pon/vendor-sdt-run175.txt`;
+the ones that are not zero are reg 0x10 (0xfa0001f), reg 0x11
+(**0x7e800001** - the same 0x7e as the SR1010's RED_CFG, in a different
+word), reg 0x13..0x16 (0x842 each), reg 0x4c..0x4f (counters), reg 0x60 and
+0x61 (0x3d003d), reg 0x64 (0x1a) and a set of 0x1c0080 / 0xc0080 words.
+That is another block this driver addresses and has never compared word for
+word.
+
 ## 5. Files
 
 | file | what |
@@ -253,10 +276,15 @@ bytes).
 | `pon/vendor-red-run175.txt` | the vendor's RED block, all 256 registers |
 | `pon/vendor-stats-run175.txt` | the vendor's statistics window under PC traffic |
 | `pon/vendor-spa-attr-run175.txt` | the vendor's 37 SPA per-port attribute RAMs |
+| `pon/vendor-sdt-run175.txt` | the vendor's SDET block, 384 registers |
 | `pon/vendor-env-primary.bin` | the U-Boot environment as it stands in mtd1 |
 | `pon/vendor-env-backup.bin` | the copy at the second offset |
 | `staging/ctl/vendor_trap.sh` | reads the CPU port's twenty words |
 | `staging/ctl/vendor_stats.sh` | opens and closes the statistics window |
 | `staging/ctl/vendor_mods.sh` | dumps red, sdet, smac and sipc |
 | `staging/ctl/vendor_red.sh` | dumps the whole RED block |
+| `staging/ctl/vendor_sdt.sh` | dumps the SDET block |
+| `staging/ctl/vendor_portstats.sh` | reads the vendor's per-port statistics |
+| `staging/ctl/vendor_smi.sh` | tries the vendor's SMI register reader |
 | `staging/ctl/env_probe.sh` | finds the U-Boot environment |
+| `staging/ctl/usbportcycle.ps1` | power-cycles one USB hub port |
