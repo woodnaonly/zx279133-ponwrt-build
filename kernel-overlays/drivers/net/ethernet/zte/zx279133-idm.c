@@ -899,8 +899,9 @@ xsk_recycle:
 			 * The page is read back through the CPU, so it has
 			 * to be given back to the CPU first - otherwise the
 			 * scan prints the old contents and says nothing.
-			 * The BMU's pool is mapped as device memory, so it
-			 * is read as it is; there is nothing to sync.
+			 * The BMU's pool is mapped write-combined, which on
+			 * this architecture is Normal non-cacheable memory,
+			 * so it is read as it is; there is nothing to sync.
 			 */
 			page_pool_dma_sync_for_cpu(zx279133_rx_page_pool(page),
 						   page, 0, PAGE_SIZE);

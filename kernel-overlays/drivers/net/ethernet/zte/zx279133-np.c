@@ -1792,6 +1792,11 @@ static ssize_t zx279133_9132_write(struct file *file, const char __user *ubuf,
 			return count;
 		}
 		pr_info("rx frame at %08x, %u bytes\n", (u32)dma, len);
+		/* The hardware wrote the frame before it wrote the
+		 * descriptor, but a read of device memory is not ordered
+		 * against the other reads that led here.
+		 */
+		dma_rmb();
 		for (i = 0; i < len; i += 16) {
 			char out[2 * 16 + 1];
 			unsigned int j;
