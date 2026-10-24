@@ -694,6 +694,22 @@
 #define ZX279133_IDM_RX_BUFFER_SIZE	(ZX279133_IDM_RX_BUFFER_COUNT * \
 					 ZX279133_IDM_RX_BUFFER_STRIDE)
 #define ZX279133_IDM_RX_PAYLOAD_OFFSET	XDP_PACKET_HEADROOM
+/*
+ * Where the hardware puts the frame inside the buffer it was given.
+ *
+ * The descriptor's address is the *buffer*, and the frame is 128 bytes
+ * further in: the switch engine keeps an area of its own in front of
+ * the frame it has parsed, and the IDM copies the lot into the buffer
+ * the driver posted.  The descriptor's length counts the frame only.
+ *
+ * Measured on this board (run 160's diagnostic, the frame read out of
+ * the page the descriptor named): an ARP request and an IP/UDP frame
+ * both landed at buffer + 0x80, and the bytes in front of them were
+ * whatever the page had held before - zeros in one run, 0xff in
+ * another.  So the driver read a buffer that had never been written,
+ * and every frame it handed up was that buffer's leftovers.
+ */
+#define ZX279133_IDM_RX_FRAME_OFFSET	0x80
 #define ZX279133_MAX_MTU		ZX279133_LAN_USER_MAX_MTU
 #define ZX279133_IDM_RX_FRAME_LIMIT	(ZX279133_MAX_MTU + ETH_HLEN + \
 					 VLAN_HLEN)

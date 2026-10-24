@@ -62,7 +62,8 @@ static unsigned int zx279133_idm_rx_page_slot(u32 key)
 
 static void zx279133_idm_rx_prefetch_payload(struct page *page)
 {
-	u8 *data = page_address(page) + ZX279133_IDM_RX_PAYLOAD_OFFSET;
+	u8 *data = page_address(page) + ZX279133_IDM_RX_PAYLOAD_OFFSET +
+		   ZX279133_IDM_RX_FRAME_OFFSET;
 
 	prefetch(data);
 	prefetch(data + L1_CACHE_BYTES);
@@ -582,6 +583,28 @@ static void zx279133_idm_dump_frame(const char *tag, const u8 *p,
 }
 
 /*
+ * Where the Ethernet header is inside the buffer.
+ *
+ * The frame is not at the head of the buffer: the hardware writes it
+ * 128 bytes past the address the descriptor names.  This is what the
+ * diagnostic uses to say so - it scans the buffer and reports the first
+ * offset that holds an Ethernet header, next to the offset the driver
+ * expects.  A frame that lands somewhere else shows up as a mismatch.
+ */
+static int zx279133_idm_rx_find_header(const u8 *p, unsigned int size)
+{
+	unsigned int off;
+
+	for (off = 0; off + ETH_HLEN <= size; off += 2) {
+		u16 type = get_unaligned_be16(p + off + 2 * ETH_ALEN);
+
+		if (type >= ETH_P_802_3_MIN && (type >> 8) != 0xff)
+			return (int)off;
+	}
+	return -1;
+}
+
+/*
  * Find the frames the switch's engine wrote, in the BMU's own buffer pool.
  *
  * The test PC sends broadcasts, so a frame starts with six 0xff bytes.  The
@@ -674,10 +697,12 @@ static void zx279133_idm_give_frame_back(struct zx279133_eth *eth,
 #if defined(CONFIG_HAS_DMA) && defined(CONFIG_DMA_NEED_SYNC)
 	__dma_sync_single_for_cpu(eth->dev,
 				   page_pool_get_dma_addr(page) +
-				   ZX279133_IDM_RX_PAYLOAD_OFFSET,
+				   ZX279133_IDM_RX_PAYLOAD_OFFSET +
+				   ZX279133_IDM_RX_FRAME_OFFSET,
 				   len, DMA_FROM_DEVICE);
 #else
-	page_pool_dma_sync_for_cpu(zx279133_rx_page_pool(page), page, 0, len);
+	page_pool_dma_sync_for_cpu(zx279133_rx_page_pool(page), page,
+				   ZX279133_IDM_RX_FRAME_OFFSET, len);
 #endif
 }
 
@@ -897,7 +922,8 @@ xsk_recycle:
 		 */
 		zx279133_idm_give_frame_back(eth, page, len);
 		zx279133_idm_rx_prefetch_payload(page);
-		data = page_address(page) + ZX279133_IDM_RX_PAYLOAD_OFFSET;
+		data = page_address(page) + ZX279133_IDM_RX_PAYLOAD_OFFSET +
+			ZX279133_IDM_RX_FRAME_OFFSET;
 
 		/*
 		 * The frame's bytes, on request.
@@ -931,6 +957,18 @@ xsk_recycle:
 			WRITE_ONCE(eth->rx_dump_dma, dma);
 			WRITE_ONCE(eth->rx_dump_len, len);
 			pr_info("rx frame: at %08x\n", (u32)dma);
+			/*
+			 * Where the frame is inside the buffer.  The driver
+			 * reads it at a fixed offset, so this says whether
+			 * that offset is the right one.
+			 */
+			pr_info("rx frame: header at +%d (the driver reads +%d)\n",
+				zx279133_idm_rx_find_header(
+					page_address(page) +
+					ZX279133_IDM_RX_PAYLOAD_OFFSET,
+					ZX279133_RX_PAGE_SIZE -
+					ZX279133_IDM_RX_PAYLOAD_OFFSET),
+				ZX279133_IDM_RX_FRAME_OFFSET);
 			/*
 			 * Whether the CPU's cache has been given back at
 			 * all.  If the device is marked coherent, or the
@@ -1004,7 +1042,8 @@ xsk_recycle:
 				xdp_init_buff(&xdp, ZX279133_RX_PAGE_SIZE,
 					      &eth->xdp_rxq[(queue & 7) >> 2]);
 				xdp_prepare_buff(&xdp, page_address(page),
-						 ZX279133_IDM_RX_PAYLOAD_OFFSET,
+						 ZX279133_IDM_RX_PAYLOAD_OFFSET +
+						 ZX279133_IDM_RX_FRAME_OFFSET,
 						 len, false);
 				xdp_ran = true;
 				act = bpf_prog_run_xdp(xdp_prog, &xdp);
