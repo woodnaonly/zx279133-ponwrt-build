@@ -555,6 +555,33 @@ static void zx279133_idm_dump_nonzero(const char *tag, const u8 *p,
 }
 
 /*
+ * Print the first bytes of a frame.
+ *
+ * The console's receive FIFO is sixteen words deep, so a long line loses
+ * bytes; every line printed here is kept short.
+ */
+static void zx279133_idm_dump_frame(const char *tag, const u8 *p,
+				    unsigned int len)
+{
+	static const char hex[] = "0123456789abcdef";
+	unsigned int i, n = len < 64 ? len : 64;
+
+	if (n < 16)
+		n = 16;
+	for (i = 0; i < n; i += 16) {
+		char out[2 * 16 + 1];
+		unsigned int j;
+
+		for (j = 0; j < 16; j++) {
+			out[j * 2] = hex[p[i + j] >> 4];
+			out[j * 2 + 1] = hex[p[i + j] & 0xf];
+		}
+		out[2 * 16] = 0;
+		pr_info("%s +%03x: %s\n", tag, i, out);
+	}
+}
+
+/*
  * Find the frames the switch's engine wrote, in the BMU's own buffer pool.
  *
  * The test PC sends broadcasts, so a frame starts with six 0xff bytes.  The
@@ -877,6 +904,7 @@ xsk_recycle:
 			 */
 			WRITE_ONCE(eth->rx_dump_dma, dma);
 			WRITE_ONCE(eth->rx_dump_len, len);
+			pr_info("rx frame: at %08x\n", (u32)dma);
 			/*
 			 * Whether the CPU's cache has been given back at
 			 * all.  If the device is marked coherent, or the
@@ -888,6 +916,30 @@ xsk_recycle:
 			pr_info("rx frame: need_sync %u skip_sync %u\n",
 				dma_dev_need_sync(eth->dev) ? 1U : 0U,
 				eth->dev->dma_skip_sync ? 1U : 0U);
+			/*
+			 * The frame, twice.
+			 *
+			 * "frame" is what the data path read: the range the
+			 * pool's helper gave back, and nothing else.
+			 * "raw" is the same bytes after the whole page has
+			 * been given back whatever the device's own flags
+			 * say - the low-level call, not the one that checks
+			 * them.  So the two together say which of the two
+			 * possible faults this is: the frame is in memory
+			 * and the CPU was looking at a stale copy of it, or
+			 * the frame is not in that page at all.
+			 *
+			 * Both are printed here, inside the receive path,
+			 * because the page is handed back to the pool as
+			 * soon as the stack is done with it - a console
+			 * command that read the same page afterwards would
+			 * read whichever frame came next.
+			 */
+			zx279133_idm_dump_frame("frame", data, len);
+			__dma_sync_single_for_cpu(eth->dev,
+						 page_pool_get_dma_addr(page),
+						 PAGE_SIZE, DMA_FROM_DEVICE);
+			zx279133_idm_dump_frame("raw", data, len);
 			/*
 			 * Where the frame is.  The bytes the driver reads
 			 * are not the frame - they are whatever the page

@@ -123,22 +123,45 @@ would have scanned it did not compile. The scan is still in the tree, and
 it now reads the pool through `readb()` rather than through a pointer
 cast out of `__iomem`.
 
-The new part is the `rxu` command. It reads the bytes of the frame that
-`rxb` printed through a **device-memory mapping** of the same physical
-address - a mapping with no cache line in it at all - so for the first
-time the two possibilities can be told apart:
+The new part is the second view of the frame. `rxb` prints the frame
+**twice**:
 
-| `rxb` says | `rxu` says | what it means |
-|---|---|---|
-| the frame | the frame | the data path works; the fault was elsewhere |
-| zeros | the frame | the CPU's cache was stale; the invalidation has to be forced |
-| zeros | zeros | the frame really is not in that buffer, and the pool scan says where it is |
+| line | what it is |
+|---|---|
+| `frame` | the bytes the data path read - the range the pool's helper gave back, and nothing else |
+| `raw` | the same bytes after the whole page has been given back by the low-level call, the one that does not check the device's own flags |
 
-`rxb` also prints whether the kernel will do the invalidation at all
+and it prints, before them, whether the kernel will invalidate at all
 (`dma_dev_need_sync()`, and the device's `dma_skip_sync`), because if the
 device is taken to be coherent, or the kernel was built without
-`CONFIG_DMA_NEED_SYNC`, the call is a no-op and the frame is lost in a way
-no counter shows.
+`CONFIG_DMA_NEED_SYNC`, the call is a no-op and the frame is lost in a
+way no counter shows.
+
+So the two views say which of the two faults this is:
+
+| `frame` | `raw` | what it means |
+|---|---|---|
+| zeros | the frame | the CPU's cache was stale; the invalidation has to be forced |
+| zeros | zeros | the frame really is not in that buffer, and the pool scan says where it is |
+| the frame | the frame | the data path is right; the fault was elsewhere |
+
+Both views are taken **inside the receive path**, and that is not a
+detail: the page is handed back to the pool as soon as the stack is done
+with it, so a console command that read the same page afterwards would
+read whichever frame came next. For the same reason the earlier idea of
+reading the page through an `ioremap()` was dropped - this architecture
+refuses to map RAM as device memory at all - and the invalidation is
+what does the work.
+
+## What the vendor's own module says about the cache
+
+The vendor's module carries two wrappers of its own,
+`zxOsCacheInv` and `zxOsCacheFlush`, and it calls them in exactly two
+places: `se_ddr_data_read()` and `se_ddr_data_write()`, the two helpers
+that read and write the switch engine's own DDR window. That is the
+hardware's window and not the host's receive buffers, so it does not
+settle this by itself, but it does say that the vendor does not trust
+the CPU's cache against this chip.
 
 ## What was ruled out on the way
 
