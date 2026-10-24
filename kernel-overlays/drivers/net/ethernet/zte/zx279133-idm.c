@@ -524,6 +524,37 @@ static bool zx279133_idm_rx_l4_valid(struct sk_buff *skb)
 	return false;
 }
 
+/*
+ * Print the non-zero sixteen-byte blocks of a memory range.
+ *
+ * The console's receive FIFO is sixteen words deep, so a long line loses
+ * bytes; and a whole page printed sixteen bytes at a time would be two
+ * hundred lines.  The blocks that are not zero are the ones that say
+ * something, so those are the ones that are printed.
+ */
+static void zx279133_idm_dump_nonzero(const char *tag, const u8 *p,
+				      unsigned int size)
+{
+	static const char hex[] = "0123456789abcdef";
+	unsigned int off;
+
+	for (off = 0; off + 16 <= size; off += 16) {
+		char out[2 * 16 + 1];
+		bool zero = true;
+		unsigned int j;
+
+		for (j = 0; j < 16; j++) {
+			out[j * 2] = hex[p[off + j] >> 4];
+			out[j * 2 + 1] = hex[p[off + j] & 0xf];
+			if (p[off + j])
+				zero = false;
+		}
+		out[2 * 16] = 0;
+		if (!zero)
+			pr_info("%s +%04x: %s\n", tag, off, out);
+	}
+}
+
 static int zx279133_idm_rx_process_queue(struct zx279133_eth *eth,
 					 struct napi_struct *napi,
 					 unsigned int queue, u16 count,
@@ -639,11 +670,6 @@ static int zx279133_idm_rx_process_queue(struct zx279133_eth *eth,
 
 			xsk_buff_set_size(xdp, len);
 			xsk_buff_dma_sync_for_cpu(xdp);
-			/* The hardware writes the frame 0x40 bytes into the
-			 * buffer it was given, so that is where the frame is -
-			 * and the XDP program has to see the frame too.
-			 */
-			xdp->data += ZX279133_IDM_RX_FRAME_OFFSET;
 			data = xdp->data;
 			if (!lan_source)
 				xdp_prog = rcu_dereference_bh(eth->xdp_prog);
@@ -759,11 +785,9 @@ xsk_recycle:
 		 * place where the frame has to be made visible to the CPU.
 		 */
 		page_pool_dma_sync_for_cpu(zx279133_rx_page_pool(page), page,
-					   ZX279133_IDM_RX_PAYLOAD_OFFSET +
-					   ZX279133_IDM_RX_FRAME_OFFSET, len);
+					   ZX279133_IDM_RX_PAYLOAD_OFFSET, len);
 		zx279133_idm_rx_prefetch_payload(page);
-		data = page_address(page) + ZX279133_IDM_RX_PAYLOAD_OFFSET +
-			ZX279133_IDM_RX_FRAME_OFFSET;
+		data = page_address(page) + ZX279133_IDM_RX_PAYLOAD_OFFSET;
 
 		/*
 		 * The frame's bytes, on request.
@@ -778,10 +802,6 @@ xsk_recycle:
 		 *	"rxb"	arm it; the next frame received is printed
 		 */
 		if (unlikely(READ_ONCE(eth->rx_dump))) {
-			static const char hex[] = "0123456789abcdef";
-			const u8 *bytes = data;
-			unsigned int i, n = len < 128 ? len : 128;
-
 			pr_info("rx frame: dma %08x len %u word1 %08x meta0 %08x\n",
 				lower_32_bits(dma), len, word1,
 				le32_to_cpu(READ_ONCE(desc->metadata[0])));
@@ -789,20 +809,32 @@ xsk_recycle:
 				le32_to_cpu(READ_ONCE(desc->metadata[1])),
 				le32_to_cpu(READ_ONCE(desc->metadata[2])),
 				le32_to_cpu(READ_ONCE(desc->metadata[3])));
-			/* Sixteen bytes to a line: the console's receive FIFO is
-			 * sixteen words deep, and a long line loses bytes.
+			/*
+			 * Where the frame is.  The bytes the driver reads
+			 * are not the frame - they are whatever the page
+			 * held before - so the whole page is scanned, and
+			 * so is the start of the BMU's own buffer pool,
+			 * which is where the switch's engine writes the
+			 * frames it has parsed.
+			 *
+			 * Both are read back through the CPU, and neither
+			 * mapping is coherent, so both have to be given
+			 * back to the CPU first - otherwise the scan
+			 * prints the old contents and says nothing.
 			 */
-			for (i = 0; i < n; i += 16) {
-				char out[2 * 16 + 1];
-				unsigned int j, m = (n - i) < 16 ? (n - i) : 16;
-
-				for (j = 0; j < m; j++) {
-					out[j * 2] = hex[bytes[i + j] >> 4];
-					out[j * 2 + 1] = hex[bytes[i + j] & 0xf];
-				}
-				out[m * 2] = 0;
-				pr_info("rx frame +%03u: %s\n", i, out);
-			}
+			page_pool_dma_sync_for_cpu(zx279133_rx_page_pool(page),
+						   page, 0, PAGE_SIZE);
+			dma_sync_single_range_for_cpu(eth->dev,
+						     eth->bmu_base +
+						     ZX279133_BMU_BPPE_SIZE,
+						     4 * ZX279133_BMU_NORMAL_SIZE,
+						     DMA_BIDIRECTIONAL);
+			zx279133_idm_dump_nonzero("page", page_address(page),
+						  ZX279133_RX_PAGE_SIZE);
+			zx279133_idm_dump_nonzero("bmu",
+				(const u8 *)eth->bmu_mem +
+				ZX279133_BMU_BPPE_SIZE,
+				4 * ZX279133_BMU_NORMAL_SIZE);
 			WRITE_ONCE(eth->rx_dump, 0);
 		}
 
@@ -817,8 +849,7 @@ xsk_recycle:
 				xdp_init_buff(&xdp, ZX279133_RX_PAGE_SIZE,
 					      &eth->xdp_rxq[(queue & 7) >> 2]);
 				xdp_prepare_buff(&xdp, page_address(page),
-						 ZX279133_IDM_RX_PAYLOAD_OFFSET +
-						 ZX279133_IDM_RX_FRAME_OFFSET,
+						 ZX279133_IDM_RX_PAYLOAD_OFFSET,
 						 len, false);
 				xdp_ran = true;
 				act = bpf_prog_run_xdp(xdp_prog, &xdp);
