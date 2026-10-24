@@ -460,7 +460,8 @@ static void zx279133_idm_rx_sync_for_device(struct zx279133_eth *eth,
 	dma_addr_t dma = page_pool_get_dma_addr(page);
 
 	dma_sync_single_range_for_device(eth->dev, dma,
-					 ZX279133_IDM_RX_PAYLOAD_OFFSET, len,
+					 ZX279133_IDM_RX_PAYLOAD_OFFSET +
+					 ZX279133_IDM_RX_FRAME_OFFSET, len,
 					 DMA_BIDIRECTIONAL);
 }
 
@@ -669,10 +670,12 @@ static void zx279133_idm_find_broadcast(struct zx279133_eth *eth)
 /*
  * Give a received frame back to the CPU.
  *
- * The frame is at page + ZX279133_IDM_RX_PAYLOAD_OFFSET, which is the
- * address the buffer pointer ring was given
+ * The frame is at page + ZX279133_IDM_RX_PAYLOAD_OFFSET +
+ * ZX279133_IDM_RX_FRAME_OFFSET: the buffer the driver handed the
+ * hardware starts at page + ZX279133_IDM_RX_PAYLOAD_OFFSET
  * (__zx279133_idm_rx_post_page() hands out page_pool_get_dma_addr(page) +
- * PAYLOAD_OFFSET), and the hardware wrote it there.
+ * PAYLOAD_OFFSET), and the frame follows the switch engine's own area
+ * inside it.
  *
  * The low-level call is used rather than the page pool's helper, for two
  * reasons.
@@ -906,9 +909,10 @@ xsk_recycle:
 			refill++;
 		}
 		/*
-		 * The frame is where the descriptor says it is: the hardware
-		 * wrote it at page + ZX279133_IDM_RX_PAYLOAD_OFFSET, which is
-		 * the address the buffer pointer ring was given.
+		 * The frame is where the hardware puts it: the buffer the
+		 * driver handed over starts at page +
+		 * ZX279133_IDM_RX_PAYLOAD_OFFSET, and the frame is
+		 * ZX279133_IDM_RX_FRAME_OFFSET further into it.
 		 *
 		 * So the range the CPU has to be given back is that one -
 		 * see zx279133_idm_give_frame_back() for why it is not done
