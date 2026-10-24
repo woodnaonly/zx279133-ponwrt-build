@@ -62,7 +62,8 @@ static unsigned int zx279133_idm_rx_page_slot(u32 key)
 
 static void zx279133_idm_rx_prefetch_payload(struct page *page)
 {
-	u8 *data = page_address(page) + ZX279133_IDM_RX_PAYLOAD_OFFSET;
+	u8 *data = page_address(page) + ZX279133_IDM_RX_PAYLOAD_OFFSET +
+		ZX279133_IDM_RX_FRAME_OFFSET;
 
 	prefetch(data);
 	prefetch(data + L1_CACHE_BYTES);
@@ -638,6 +639,11 @@ static int zx279133_idm_rx_process_queue(struct zx279133_eth *eth,
 
 			xsk_buff_set_size(xdp, len);
 			xsk_buff_dma_sync_for_cpu(xdp);
+			/* The hardware writes the frame 0x40 bytes into the
+			 * buffer it was given, so that is where the frame is -
+			 * and the XDP program has to see the frame too.
+			 */
+			xdp->data += ZX279133_IDM_RX_FRAME_OFFSET;
 			data = xdp->data;
 			if (!lan_source)
 				xdp_prog = rcu_dereference_bh(eth->xdp_prog);
@@ -753,9 +759,11 @@ xsk_recycle:
 		 * place where the frame has to be made visible to the CPU.
 		 */
 		page_pool_dma_sync_for_cpu(zx279133_rx_page_pool(page), page,
-					   ZX279133_IDM_RX_PAYLOAD_OFFSET, len);
+					   ZX279133_IDM_RX_PAYLOAD_OFFSET +
+					   ZX279133_IDM_RX_FRAME_OFFSET, len);
 		zx279133_idm_rx_prefetch_payload(page);
-		data = page_address(page) + ZX279133_IDM_RX_PAYLOAD_OFFSET;
+		data = page_address(page) + ZX279133_IDM_RX_PAYLOAD_OFFSET +
+			ZX279133_IDM_RX_FRAME_OFFSET;
 
 		/*
 		 * The frame's bytes, on request.
@@ -809,7 +817,8 @@ xsk_recycle:
 				xdp_init_buff(&xdp, ZX279133_RX_PAGE_SIZE,
 					      &eth->xdp_rxq[(queue & 7) >> 2]);
 				xdp_prepare_buff(&xdp, page_address(page),
-						 ZX279133_IDM_RX_PAYLOAD_OFFSET,
+						 ZX279133_IDM_RX_PAYLOAD_OFFSET +
+						 ZX279133_IDM_RX_FRAME_OFFSET,
 						 len, false);
 				xdp_ran = true;
 				act = bpf_prog_run_xdp(xdp_prog, &xdp);

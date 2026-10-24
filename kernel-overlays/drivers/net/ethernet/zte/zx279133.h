@@ -694,6 +694,25 @@
 #define ZX279133_IDM_RX_BUFFER_SIZE	(ZX279133_IDM_RX_BUFFER_COUNT * \
 					 ZX279133_IDM_RX_BUFFER_STRIDE)
 #define ZX279133_IDM_RX_PAYLOAD_OFFSET	XDP_PACKET_HEADROOM
+/*
+ * Where inside the buffer the frame itself starts.
+ *
+ * The hardware does not write the frame at the address the buffer pointer
+ * ring carries: it writes it 0x40 bytes further in, and the descriptor's
+ * address field names the buffer, not the frame.  The board's own loader
+ * says so - its IDM receive debug prints the descriptor's address
+ * (0xb00e8000) and then the buffer it dumped (0xb00e8040, the same
+ * address plus this) with the frame's own length in it.
+ *
+ * Reading at the buffer's start instead reads 64 bytes that were never
+ * written - whatever the page held before - and the first 42 bytes of the
+ * frame behind them.  The stack then reads a protocol field out of that
+ * garbage, and the bridge learns a source address out of it: on this board
+ * the addresses it learned were ASCII text, because the pages the pool
+ * hands out are ordinary pages and the initramfs was unpacked into
+ * ordinary pages.
+ */
+#define ZX279133_IDM_RX_FRAME_OFFSET	0x40
 #define ZX279133_MAX_MTU		ZX279133_LAN_USER_MAX_MTU
 #define ZX279133_IDM_RX_FRAME_LIMIT	(ZX279133_MAX_MTU + ETH_HLEN + \
 					 VLAN_HLEN)
