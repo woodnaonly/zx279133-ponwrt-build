@@ -554,6 +554,60 @@ static void zx279133_idm_dump_nonzero(const char *tag, const u8 *p,
 	}
 }
 
+/*
+ * Find the frames the switch's engine wrote, in the BMU's own buffer pool.
+ *
+ * The test PC sends broadcasts, so a frame starts with six 0xff bytes.  The
+ * pool is searched for that, and the first few hits are printed with their
+ * offset - which is the offset inside the buffer as well, and that is the
+ * number the receive path has to know.
+ */
+static void zx279133_idm_find_broadcast(struct zx279133_eth *eth)
+{
+	static const char hex[] = "0123456789abcdef";
+	const u8 *pool = (const u8 *)eth->bmu_mem + ZX279133_BMU_BPPE_SIZE;
+	unsigned int size = ZX279133_BMU_NORMAL_COUNT * ZX279133_BMU_NORMAL_SIZE;
+	unsigned int off, hits = 0, i;
+
+	/* The hardware's own map from a buffer index to a buffer. */
+	pr_info("bmu bppe:");
+	for (i = 0; i < 8; i++)
+		pr_info(" %08x", readl(eth->bmu_mem + 4 * i));
+	pr_info("\n");
+
+	for (off = 0; off + 96 <= size && hits < 4; off += 16) {
+		char out[2 * 16 + 1];
+
+		if (pool[off] != 0xff || pool[off + 1] != 0xff ||
+		    pool[off + 2] != 0xff || pool[off + 3] != 0xff ||
+		    pool[off + 4] != 0xff || pool[off + 5] != 0xff)
+			continue;
+		hits++;
+		pr_info("bmu frame at +%05x (buffer %u, +%03x):",
+			off, off / ZX279133_BMU_NORMAL_SIZE,
+			off % ZX279133_BMU_NORMAL_SIZE);
+		for (i = 0; i < 16; i++) {
+			out[i * 2] = hex[pool[off + i] >> 4];
+			out[i * 2 + 1] = hex[pool[off + i] & 0xf];
+		}
+		out[2 * 16] = 0;
+		pr_info(" %s", out);
+		for (i = 16; i < 96; i += 16) {
+			unsigned int j;
+
+			for (j = 0; j < 16; j++) {
+				out[j * 2] = hex[pool[off + i + j] >> 4];
+				out[j * 2 + 1] = hex[pool[off + i + j] & 0xf];
+			}
+			out[2 * 16] = 0;
+			pr_info(" %s", out);
+		}
+		pr_info("\n");
+	}
+	if (!hits)
+		pr_info("bmu: no broadcast frame in the pool\n");
+}
+
 static int zx279133_idm_rx_process_queue(struct zx279133_eth *eth,
 					 struct napi_struct *napi,
 					 unsigned int queue, u16 count,
@@ -576,6 +630,7 @@ static int zx279133_idm_rx_process_queue(struct zx279133_eth *eth,
 		void *data;
 		dma_addr_t dma;
 		u32 word1;
+		unsigned int i;
 		u16 desc_index = eth->rx_cons[queue];
 		u16 refill_before = refill;
 		u16 len;
@@ -801,20 +856,19 @@ xsk_recycle:
 		 *	"rxb"	arm it; the next frame received is printed
 		 */
 		if (unlikely(READ_ONCE(eth->rx_dump))) {
-			pr_info("rx frame: dma %08x len %u word1 %08x meta0 %08x\n",
-				lower_32_bits(dma), len, word1,
-				le32_to_cpu(READ_ONCE(desc->metadata[0])));
-			pr_info("rx frame: meta1 %08x meta2 %08x meta3 %08x\n",
-				le32_to_cpu(READ_ONCE(desc->metadata[1])),
-				le32_to_cpu(READ_ONCE(desc->metadata[2])),
-				le32_to_cpu(READ_ONCE(desc->metadata[3])));
+			pr_info("rx frame: desc");
+			for (i = 0; i < 8; i++)
+				pr_info(" %08x",
+					le32_to_cpu(READ_ONCE(((u32 *)desc)[i])));
+			pr_info("\n");
+			pr_info("rx frame: len %u\n", len);
 			/*
 			 * Where the frame is.  The bytes the driver reads
 			 * are not the frame - they are whatever the page
 			 * held before - so the whole page is scanned, and
-			 * so is the start of the BMU's own buffer pool,
-			 * which is where the switch's engine writes the
-			 * frames it has parsed.
+			 * so is the BMU's own buffer pool, which is where
+			 * the switch's engine writes the frames it has
+			 * parsed.
 			 *
 			 * Both are read back through the CPU, and neither
 			 * mapping is coherent, so both have to be given
@@ -826,14 +880,16 @@ xsk_recycle:
 			dma_sync_single_range_for_cpu(eth->dev,
 						     eth->bmu_base +
 						     ZX279133_BMU_BPPE_SIZE,
-						     4 * ZX279133_BMU_NORMAL_SIZE,
+						     ZX279133_BMU_NORMAL_COUNT *
+						     ZX279133_BMU_NORMAL_SIZE,
 						     DMA_BIDIRECTIONAL);
 			zx279133_idm_dump_nonzero("page", page_address(page),
 						  ZX279133_RX_PAGE_SIZE);
-			zx279133_idm_dump_nonzero("bmu",
-				(const u8 *)eth->bmu_mem +
-				ZX279133_BMU_BPPE_SIZE,
-				4 * ZX279133_BMU_NORMAL_SIZE);
+			/* The frames the switch's engine wrote: the test PC
+			 * sends broadcasts, so a frame starts with six
+			 * 0xff bytes.
+			 */
+			zx279133_idm_find_broadcast(eth);
 			WRITE_ONCE(eth->rx_dump, 0);
 		}
 
