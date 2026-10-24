@@ -62,8 +62,7 @@ static unsigned int zx279133_idm_rx_page_slot(u32 key)
 
 static void zx279133_idm_rx_prefetch_payload(struct page *page)
 {
-	u8 *data = page_address(page) + ZX279133_IDM_RX_PAYLOAD_OFFSET +
-		ZX279133_IDM_RX_FRAME_OFFSET;
+	u8 *data = page_address(page) + ZX279133_IDM_RX_PAYLOAD_OFFSET;
 
 	prefetch(data);
 	prefetch(data + L1_CACHE_BYTES);
