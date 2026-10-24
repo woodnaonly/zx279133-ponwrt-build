@@ -969,9 +969,52 @@ jobs:
           # that ends the step. This one installs the tool instead, which is deliberate.
           MKIMAGE=$(ls openwrt/staging_dir/host/bin/mkimage 2>/dev/null || command -v mkimage || true)
           [ -n "$MKIMAGE" ] || { sudo apt-get -qq update && sudo apt-get -qq install u-boot-tools; MKIMAGE=mkimage; }
-          IMG="$KT/arch/arm64/boot/Image.gz"
-          [ -f "$IMG" ] || { gzip -9nc "$KT/arch/arm64/boot/Image" > "$KT/arch/arm64/boot/Image.gz"; }
-          test -f "$IMG"
+          # THE KERNEL HAS TO FIT IN THE KERNEL PARTITION.
+          #
+          # The board's loader reads exactly the "kernel" partition - the
+          # env says "mtdparts=...8192k@0x200000(kernel)..." and the bootcmd
+          # is "mtd read kernel 0x88000000" - so the uImage has to be no
+          # larger than 8 MiB.  The kernel build's own Image.gz was 8,395,859
+          # bytes, 7,315 bytes too big, and `mtd write` truncates it without
+          # saying a word: only `mtd verify` notices, and it failed on the
+          # board on 2026-10-25 with "kernel" and "flash-uImage" hashing
+          # differently.
+          #
+          # The loader has no other decompression: lzma, lz4, zstd and
+          # bzip2 all answer "Unimplemented compression type N" (measured
+          # on the board, by booting a probe image for each type).  So the
+          # payload has to stay a gzip stream - and gzip -9 cannot be
+          # improved on by another gzip implementation.
+          #
+          # zopfli can: it is a gzip stream (the same format, the same
+          # decoder on the board) that is a few percent smaller than gzip
+          # -9, because it searches harder for the same format.  The
+          # kernel itself is bit-identical - it is the same Image, only
+          # packed differently - so what is flashed is what was tested.
+          RAW="$KT/arch/arm64/boot/Image"
+          test -f "$RAW" || { echo "::error::no $RAW"; exit 1; }
+          ZOPFLI=$(command -v zopfli || true)
+          [ -n "$ZOPFLI" ] || { sudo apt-get -qq update && sudo apt-get -qq install -y zopfli; ZOPFLI=$(command -v zopfli); }
+          test -n "$ZOPFLI" || { echo "::error::zopfli is not available - the kernel would not fit in the partition"; exit 1; }
+          IMG="$KT/arch/arm64/boot/Image.zopfli.gz"
+          # --i5: five iterations find almost all of the gain, and the whole
+          # kernel takes a minute instead of a quarter of an hour.
+          # --splitting: the deflate blocks are split at the gzip member
+          # boundaries, which was worth another 1.5% on this kernel
+          # (8,199,103 bytes without it, 8,069,537 with it, measured on the
+          # 2026-10-25 kernel with zopfli 0.4.3).
+          "$ZOPFLI" -q --i5 --splitting --gzip -o "$IMG" "$RAW"
+          test -f "$IMG" || { echo "::error::zopfli produced nothing"; exit 1; }
+          echo "kernel: $(stat -c %s "$RAW") bytes raw"
+          echo "kernel: $(stat -c %s "$KT/arch/arm64/boot/Image.gz" 2>/dev/null || echo '?') bytes with gzip -9"
+          echo "kernel: $(stat -c %s "$IMG") bytes with zopfli"
+          # The payload has to be a gzip stream that gives the same kernel
+          # back. zopfli writes one, but the loader only knows gzip, so the
+          # check is not optional: a stream the board's gunzip cannot take
+          # would fail as "Unimplemented compression type N" at boot, with
+          # nothing in the build log to say why.
+          gzip -dc "$IMG" | cmp - "$RAW" || { echo "::error::the zopfli stream does not decompress to the kernel"; exit 1; }
+          echo "kernel: the zopfli stream decompresses to the kernel"
           # the dtb is where the kernel build left it. OpenWrt also stages a copy named
           # image-<dts>.dtb under build_dir, and OpenWrt patches dtbs on the way to an
           # image, so more than one file can match. The old line took whichever `find`
@@ -1012,6 +1055,25 @@ jobs:
           cp "$SU" flash-sysupgrade.bin
           cp templates/flash-sk-d840n.sh flash-sk-d840n.sh
           ls -l flash-uImage flash-dtb.bin flash-rootfs.jffs2 flash-sysupgrade.bin
+          # THE GATE: the kernel partition is 8 MiB, and `mtd write` truncates
+          # what does not fit without saying a word - only `mtd verify` on the
+          # board notices, and it says so after the flash has already
+          # happened. A release that ships an oversized uImage is worse than
+          # no release at all: the board reports a successful flash and then
+          # comes up with "wrong image header" and nothing else to go on.
+          #
+          # This is not hypothetical. The 2026-10-25 build produced an
+          # 8,395,923-byte uImage for an 8,388,608-byte partition - 7,315
+          # bytes over - and the board's `mtd verify` is the only thing that
+          # caught it (the kernel hash and the image hash differed).
+          KPART=8388608
+          KSIZE=$(stat -c %s flash-uImage)
+          echo "kernel uImage: $KSIZE bytes, the kernel partition holds $KPART"
+          if [ "$KSIZE" -gt "$KPART" ]; then
+            echo "::error::flash-uImage is $KSIZE bytes and the kernel partition holds only $KPART - mtd write would truncate it silently"
+            exit 1
+          fi
+          echo "kernel uImage: it fits, with $((KPART - KSIZE)) bytes to spare"
           # Manifest travels INSIDE the tarball, not just as a release attachment: the
           # flasher runs on the board, and it can only check integrity against a manifest
           # that came across with the images. `mtd verify` cannot do this - it confirms

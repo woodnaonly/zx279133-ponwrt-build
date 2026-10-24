@@ -662,3 +662,87 @@ CI 的 Actions 日志匿名访问 404 又看不到编译器原文，只能去翻
 - `docs/76` —— blob 的 PORT_FLOW tag 说了什么；对 docs/74 的更正
 - `docs/77` —— **帧不是帧**：第三个根因的完整证据链、"帧在 BMU 池里"为什么是
   误判、loader 的 0x40 为什么不是红鲱鱼，以及那一处 cache 失效区间
+- `docs/78` —— **kernel 分区只有 8 MiB**：`mtd write` 静默截断、U-Boot 只认 gzip、
+  zopfli 是唯一出路，以及 CI 的尺寸门禁
+
+### 9.10 G3（NAT / M1）：结果与这一轮修掉的五个 bug
+
+**2026-10-25 01:18–01:22，run165 的 trial 内核，G3 全项 PASS。** 证据在
+`staging/ctl/g3nat6.txt`。
+
+板子的路由器功能**自始至终是对的**——五个 bug 里三个在 PC 侧的 bench 脚本，两个在
+板子的 `S27labclient`。下面是这一轮的实际做法和证据：
+
+| 步骤 | 证据 |
+|---|---|
+| 串口告诉板子 `/etc/labwan=pc` | 板子把 lan2 从 br-lan 里移出来当 WAN |
+| 板子 WAN 拿 DHCP 租约 | **192.168.137.193**（PC 侧 ICS 的租约） |
+| 板子自造 veth + netns 客户端 `labcli0` | 拿到 LAN 租约 **192.168.9.179/24** |
+| 客户端 ping 公网 | `223.5.5.5 -> RC=0 ... 1 packets received` |
+| conntrack | `src=192.168.9.179 dst=223.5.5.5 ... src=223.5.5.5 dst=192.168.137.25` → masquerade 成立 |
+| nft masquerade 计数 | 7 包 |
+| lan2 的 tx 计数 | 50548 字节 |
+| `ip_forward` | 1 |
+
+结束后板子被脚本恢复成 LAN 模式（`killall udhcpc; ip link set lan2 master br-lan;
+ip addr flush dev lan2; ip route del default; rm -f /etc/labwan /tmp/labwan.port`），
+板子回到 192.168.9.1。
+
+**这五个 bug（下划线的是板侧的）：**
+
+1. **`nohup` 不在这个镜像里**（busybox 没有 nohup applet）→ `ash: nohup: not found`，
+   于是 `S26nat` **从来没运行过**。改用 `setsid`。
+2. **ssh 的 stderr 被 `2>$null` 吞掉** → 板子不可达的时候脚本**静默无输出**，
+   看起来像"没反应"。现在保留 rc 并打印出来。
+3. **ICS 一开就抹掉网卡上的 `192.168.9.25`**（ICS 会重配网卡）→ 每次 ssh 前
+   `Ensure-BenchIp` 补回并探测。
+4. **`S27labclient` 把地址表里的空格也删了**（`tr -d '\r\n '`）→ 变成一串非法地址。
+   改成 `tr -d '\r\n'`。
+5. **`S27labclient` 用 `1 received` / `bytes from` 判成功**，但 busybox ping 的末两行
+   是 `1 packets transmitted, 1 packets received`。改用 **ping 的退出码**，并保留完整输出。
+
+**顺序必须是「先串口下令，再开 ICS」。** ICS 开着的时候到 192.168.9.1 的 ssh 连试 8 次
+全败，ICS 一关立刻就通——所以板侧下令走**串口**（不依赖网络），顺序也不能反。
+
+### 9.11 G4（刷 flash）：8 MiB 分区、zopfli，和这一轮踩的坑
+
+G4 的拦路虎**和驱动、NAT、内核都没关系**：CI 产出的 flash kernel 镜像
+（8,395,923 字节）**比 kernel 分区（8 MiB = 8,388,608 字节）大 7,315 字节**。
+
+- **`mtd write` 会静默截断**，写完还报 success。**只有 `mtd verify` 抓得到**——第一次
+  刷机三个分区全部"成功"，板子却起不来，最后是 kernel 分区的哈希和镜像的哈希不一样
+  才暴露出来。**任何刷完都必须 `mtd verify`。**
+- 分区表和 `bootargs` 都在 NAND 的 `boot` 分区里（刷写器不碰 `boot`），所以**分区改不了**，
+  镜像必须缩。`root=/dev/mtdblock5`，主 line dtb 的分区编号（boot=1/kernel=2/dtb=3/
+  parameter=4/root=5/scratch=6）和 env 的 `mtdparts` 完全一致，**dtb 的 root 240M + scratch 1M
+  正好等于 env 的 root 246784k**。
+- **U-Boot 只支持 gzip。** 用探针 uImage 逐类型 tftpboot + bootm 实测：bzip2 / lzma /
+  lzo / lz4 / zstd 全是 `Unimplemented compression type N`。U-Boot 是 stripped，没有符号可查。
+- **zlib/gzip 任何参数都压不动**（level9 memLevel9 = 8,397,374，Z_FILTERED = 9,271,933）。
+- **zopfli 是唯一出路**：产出的是**标准 gzip 流**（板子的 gunzip 直接认），而且
+  **内核本体位不变**（刷进去的就是试车用的那个内核，验收证据不打折）。
+  8,395,923 → **8,069,601 字节，余 319,007**。不加 `--splitting` 是 8,199,167（还差 189 KB）。
+- CI 侧已加：`zopfli -q --i5 --splitting --gzip` + `gzip -dc | cmp -` 自检 +
+  **8 MiB 尺寸门禁**（超了直接 `::error::` 失败，绝不再发布会被静默截断的镜像）。
+  板侧的 `templates/flash-sk-d840n.sh` 本来就有尺寸检查，但那是在板上、发布之后。
+
+**这一轮踩的坑（PowerShell / 串口 / 插座）：**
+
+- **`mtd` 的参数顺序是 `<imagefile> <device>`**，不是反过来。`mtd write kernel /tmp/img`
+  只会打印 usage，什么都不写，**而且在只检查整条链退出码的脚本里还会当成成功**。
+- **PC 的 WLAN 网卡上有一条 `192.168.9.1` 的静态 ARP**（早期实验留下的），
+  它让**所有没有绑定源地址**的去板子的包都从无线出去——板子明明在回 ping，
+  `ssh` 却报 `connect to host 192.168.9.1 port 22: Connection timed out`。
+  现在所有工具都绑源地址：ssh `-b`、ping `-S`、curl `--interface`。
+- **`/dev/kmsg` 是流设备**，`grep ... /dev/kmsg | tail` 会**永久阻塞**。用 `dmesg`。
+- **PowerShell 里 `& ssh` 会解析到同名函数** → 必须写 `ssh.exe`；函数里不能用 `$args`。
+- **智能插座每 15.5 分钟断电 30–36 秒**。跨越窗口的操作会被打断：
+  `mtd write` 被打断不会砖（mtd2 可重写），但**引导 trial 内核 + 刷 flash 必须挤在
+  同一个窗口里**，否则白干一轮。
+- **绝不要给 trial 内核发 `reboot`**（会把板子卡死，不回 loader）。冷启动用
+  `tools/hardreset.ps1`，或干脆不干预等插座断电。
+- **relay 的 DTR/RTS 复位会把 CH340 接收路径卡死**：复位后板子完全不出声但有电
+  （网口 1 Gbps Up）→ `tools/relayctl.ps1 stop` + `start 21600` 重开串口即恢复。
+  **板子没声音时先重启 relay，再怀疑板子。**
+- **relay 见到 U-Boot banner 发空格会打断 countdown**，板子就永远停在 `=>`、从不自己
+  启动 flash 里的镜像 → `staging/ctl/ser-nostop` 开关文件（保持存在）。
