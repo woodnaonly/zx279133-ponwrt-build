@@ -233,6 +233,41 @@ jobs:
           if [ "$CRCOUNT" != 0 ]; then
             echo "::error::02_network carries $CRCOUNT CR byte(s) - it is a shell script and CRLF breaks its continuation"; exit 1
           fi
+          # The NAT of the FLASHED image.
+          #
+          # This build has no feed packages, so firewall4 is not in the tree
+          # at all: the nftables userspace comes from the overlay in
+          # overlays/package/network/utils/nftables and the firewall itself
+          # does not exist.  The flashed image then comes up, serves LuCI,
+          # hands out DHCP leases and cannot route - there is nothing to
+          # masquerade with.  Measured on the board on 2026-10-25: one nft
+          # table ("inet dnsmasq"), no fw4 table, and no /etc/init.d/firewall
+          # at all.
+          #
+          # So the one rule the router needs is put in by
+          # base-files/etc/init.d/sk-nat, which
+          # base-files/etc/uci-defaults/99-sk-nat links into /etc/rc.d on the
+          # first boot.  All three files have to reach the tree, all three
+          # have to parse, and none may carry a CR: they are shell scripts
+          # and the device runs them.
+          NAT=openwrt/target/linux/zte/zx279133/base-files/etc/init.d/sk-nat
+          NATD=openwrt/target/linux/zte/zx279133/base-files/etc/uci-defaults/99-sk-nat
+          for f in "$NAT" "$NATD"; do
+            test -f "$f" || { echo "::error::$f did not reach the tree"; exit 1; }
+            sh -n "$f" || { echo "::error::$f does not parse"; exit 1; }
+            CR=$(tr -cd '\r' < "$f" | wc -c)
+            [ "$CR" = 0 ] || { echo "::error::$f carries $CR CR byte(s) - it is a shell script"; exit 1; }
+          done
+          # The rule has to be the one the plan asks for: a masquerade on the
+          # wan port, with the counter BEFORE the masquerade - masquerade is a
+          # terminal statement and nft rejects anything that follows it, so a
+          # rule written the other way round never loads.
+          grep -q 'counter masquerade' "$NAT" || {
+            echo "::error::sk-nat does not install a counted masquerade rule"; exit 1; }
+          # And the uci-defaults has to link the script in, or it never runs:
+          # an init script that is not in /etc/rc.d is not started.
+          grep -q '/etc/rc.d/S96sk-nat' "$NATD" || {
+            echo "::error::99-sk-nat does not link sk-nat into /etc/rc.d"; exit 1; }
           # CONFIG_DEVMEM, and why the earlier attempts at it went nowhere.  The long
           # story is in the YAML comment above this step; what is left here is the
           # edit itself and the assertions around it.
@@ -1045,6 +1080,21 @@ jobs:
             -n "OpenWrt mainline $KVER sk-d840n" -d "$IMG" flash-uImage
           cp "$DTB" flash-dtb.bin
           cp "$RS" flash-rootfs.jffs2
+          # The NAT rule has to be IN the image, not only in the tree.  A
+          # rootfs without it is a board that boots, serves LuCI and cannot
+          # route, and the only way to know which one was built is to look
+          # inside the image.  jffs2 keeps its names as plain strings, so
+          # the file name and the line that starts it are both in there.
+          #
+          # Two separate things are looked for: the script itself (by its
+          # name, which is a jffs2 directory entry) and the uci-defaults
+          # that links it in (by its content).  A rootfs with the script but
+          # without the link is an image whose script never runs.
+          strings "$RS" | grep -qx 'sk-nat' || {
+            echo "::error::the built rootfs does not contain sk-nat - the flashed image would not masquerade"; exit 1; }
+          strings "$RS" | grep -q 'sk-nat.log' || {
+            echo "::error::the built rootfs does not contain the uci-defaults that starts sk-nat"; exit 1; }
+          echo "rootfs: it carries the NAT rule"
           # The same three parts as one sysupgrade tar, for upgrading from inside a
           # running system (LuCI or `sysupgrade -n`). base-files platform.sh writes
           # them by label, so no partition offset is hard-coded on the device.

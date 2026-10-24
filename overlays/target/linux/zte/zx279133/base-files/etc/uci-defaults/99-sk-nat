@@ -1,0 +1,22 @@
+#!/bin/sh
+# Put the NAT of this image in place.
+#
+# The image has no firewall4 (there are no feed packages in this build), so
+# /etc/init.d/sk-nat is what installs the masquerade rule.  An init script
+# is only run when it is linked into /etc/rc.d, and this file is what makes
+# that link on the first boot; the link itself then stays in the jffs2 root
+# and the script runs on every boot after this one.
+#
+# The link is created here rather than shipped as a link: a git checkout on
+# Windows cannot represent a symbolic link (core.symlinks is false there,
+# and the checkout produces a regular file with the target path in it), so
+# a link in the repository would reach the build as a file and the script
+# would never run - silently, because the image would still boot.
+#
+# The script is also started right away, so the first boot has the rule too
+# and not only the second one.
+mkdir -p /etc/rc.d
+ln -sf ../init.d/sk-nat /etc/rc.d/S96sk-nat
+setsid sh /etc/init.d/sk-nat >/tmp/sk-nat.log 2>&1 &
+
+exit 0

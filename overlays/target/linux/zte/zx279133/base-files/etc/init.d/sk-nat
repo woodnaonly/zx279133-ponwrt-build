@@ -1,0 +1,72 @@
+#!/bin/sh
+# Put the masquerade rule on the WAN of this image.
+#
+# WHY THIS FILE EXISTS
+#
+# This image has no firewall.  The build has no feed packages - the nftables
+# userspace comes from overlays/package/network/utils/nftables, which is the
+# feed's recipe without the kmod dependency - so firewall4 itself is not in
+# the tree at all.  The board then comes up, serves LuCI, hands out DHCP
+# leases and cannot route: there is nothing to masquerade with.  Measured on
+# the board on 2026-10-25, the flashed image had exactly one nft table
+# ("inet dnsmasq") and no fw4 table, and /etc/init.d/ had no firewall at all.
+#
+# A board that boots out of flash and cannot reach the internet is not the
+# lab router the plan asks for, so the one rule the router needs is put in
+# here.  The syntax is the same one the trial image's S26nat uses, and the
+# table is called "ip nat" so the acceptance scripts can read the counters
+# with the same command they already use.
+#
+# The counter goes BEFORE the masquerade, not after: masquerade is a
+# terminal statement and nft rejects anything that follows it ("Statement
+# after terminal statement has no effect"), so the rule as it was first
+# written never loaded and the WAN side was never masqueraded.
+#
+# WHICH PORT IS THE WAN
+#
+# The port is whatever /etc/config/network names as the wan interface, and
+# it is re-read every round: the bench moves the WAN port around by hand
+# ("uci set network.wan.device=lan2"), and a rule left on the old port
+# masquerades nothing while looking exactly like a rule that works.
+#
+# Nothing here writes to the flash, and nothing here is fatal: an image
+# without nft, or a board whose WAN never gets a lease, still boots and
+# still serves ssh and LuCI.
+log() { echo "sk-nat: $*" >>/dev/kmsg 2>/dev/null; }
+
+install_rules() { # device
+	_dev=$1
+	[ -n "$_dev" ] || return 1
+	command -v nft >/dev/null 2>&1 || return 1
+	nft list table ip nat >/dev/null 2>&1 && nft delete table ip nat >/dev/null 2>&1
+	nft -f - >>/dev/kmsg 2>&1 <<EOF
+table ip nat {
+	chain postrouting {
+		type nat hook postrouting priority 100; policy accept;
+		oifname "$_dev" counter masquerade
+	}
+}
+EOF
+}
+
+cur=""
+while true; do
+	# The WAN interface, by whatever name this image's config uses.
+	wan=$(uci -q get network.wan.device 2>/dev/null)
+	[ -n "$wan" ] || wan=$(uci -q get network.wan.ifname 2>/dev/null)
+
+	# Forwarding is what netifd turns on when it decides the interfaces
+	# are meant to be routed; it is set here as well so the rule and the
+	# forwarding do not depend on each other's timing.
+	echo 1 >/proc/sys/net/ipv4/ip_forward 2>/dev/null
+
+	if [ -n "$wan" ] && [ "$wan" != "$cur" ]; then
+		if install_rules "$wan"; then
+			cur="$wan"
+			log "masquerade installed on $wan"
+		else
+			log "could not install the masquerade rule on $wan"
+		fi
+	fi
+	sleep 15
+done

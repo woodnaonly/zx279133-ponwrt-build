@@ -746,3 +746,59 @@ G4 的拦路虎**和驱动、NAT、内核都没关系**：CI 产出的 flash ker
   **板子没声音时先重启 relay，再怀疑板子。**
 - **relay 见到 U-Boot banner 发空格会打断 countdown**，板子就永远停在 `=>`、从不自己
   启动 flash 里的镜像 → `staging/ctl/ser-nostop` 开关文件（保持存在）。
+
+### 9.12 G4 的结果（2026-10-25 01:35–03:05）
+
+**G4 通过：板子自己从 flash 起来两次，`verify_router.sh` 5/5。**
+
+刷的是 run165 的三件套（root/dtb/kernel），kernel 是本机 zopfli 重压过的
+`staging/trial/flash-uImage.gzipfit`（8,069,601 字节，余 319,007）。写入顺序
+root → dtb → kernel，`mtd verify` Success，另外**独立读回分区**再算一遍 md5
+（`329f1bbc1b9b5af2d6d5ba634c2d3bdf`）也对上——「写进去了」和「它能启动」是两件事。
+
+两次冷启动都由智能插座完成（02:19:04 断 → 02:19:40 上电；02:35:10 断 →
+02:35:10 上电），**串口全程没有对板子发任何东西**（`staging/ctl/ser-nostop`
+存在，relay 不打断 countdown）。第二次冷启动后 **14 秒**板子就能 ssh 答话。
+
+| 项 | 冷启动 1 | 冷启动 2 |
+|---|---|---|
+| ping | 4/4 | 4/4 |
+| `uname -r` | 6.18.38+ | 6.18.38+ |
+| `/proc/cmdline` | `root=/dev/mtdblock5` | 同左 |
+| `/proc/mtd` | mtd2=kernel(8 MiB)、mtd5=root | 同左 |
+| 根文件系统 | `/dev/root on / type jffs2 (rw,noatime)`，可写 | 同左 |
+| 分区读回 md5 | kernel/dtb 都对上 | 同左 |
+| LuCI | HTTP 200 | HTTP 200 |
+| 串口 flood | 0 行 | 0 行 |
+
+`tools/verify_router.sh`（原版）：**5 pass / 0 fail — ROUTER IS USABLE**。
+证据：`staging/ctl/accept-g4-coldboot1.txt`、`accept-g4-coldboot2.txt`、
+`accept-g4-verify_router.txt`。
+
+**回退路径可用**：`staging/rollback/flash-uImage`（厂商 4.19，4,814,777）+
+`staging/rollback/flash-dtb.bin`（48,463）+ `staging/rootfs.jffs2`
+（11,812,720，md5 `0fd03a1115374f5335d7fc207b14a849`，与刷写器里记的一致）——
+三件都在 PC 上，回退就是把 mtd2/mtd3/mtd5 写回去。
+
+**但刷机后的镜像还不是路由器**：它**没有 firewall4**（这个构建没有 feed 包），
+所以没有 masquerade 规则 → 能开机、能起 LuCI、能发 DHCP 租约，**但转发不出去**。
+已经补上：`overlays/.../base-files/etc/init.d/sk-nat`（装 nft 规则）+ 
+`etc/uci-defaults/99-sk-nat`（把它链进 `/etc/rc.d`），CI 里有断言。见 **docs/79**。
+
+**这一轮新踩的坑：**
+
+- **PC 的 WLAN 网卡上有一条 `192.168.9.1` 的静态 ARP**（早期实验留下的）。
+  它让**没有绑定源地址**的去板子的包都从无线出去——板子明明在回 ping，
+  `ssh` 却报 `Connection timed out`，`curl` 也超时。**所有工具都要绑源地址**
+  （ssh `-b`、ping `-S`、curl `--noproxy`），而且**脚本里的 ssh 也要绑**
+  （漏了一处就整轮白跑）。
+- **本机有 `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY`**，而且 `NO_PROXY` 里的
+  `192.168.*` 对 curl 不生效 → curl 把去板子的请求发给了代理 → 超时。
+  **`curl` 必须加 `--noproxy '*'`**；git bash 里的 `curl` 是 mingw 版
+  （`/mingw64/bin/curl`），Windows 自带的是 `curl.exe`，两者行为不同。
+- **git bash 里的 `sh` 不可靠**：`sh tools/verify_router.sh` 一条都不输出、
+  退出码 0；换成 `bash` 或 `dash` 就正常。**用 `bash`。**
+- **`/etc/config/network` 的改动会被 `uci commit` 落进 flash**。手工改（没 commit）
+  也一样会被 netifd 的 reload 应用掉 —— 改完板子的 br-lan 立刻掉成
+  NO-CARRIER，板子从网上消失，**只有串口救得回来**（`staging/ctl/q.py`）。
+  改板子的网络配置前先想好怎么用串口改回来。
