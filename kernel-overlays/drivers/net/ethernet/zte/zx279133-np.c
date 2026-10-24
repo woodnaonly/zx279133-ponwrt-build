@@ -1741,6 +1741,23 @@ static ssize_t zx279133_9132_write(struct file *file, const char __user *ubuf,
 	}
 
 	/*
+	 * The next frame's bytes.
+	 *
+	 * The counters say how many frames arrived; they cannot say what
+	 * the frames were, and on this board the two were very different
+	 * things - the board's bridge learned source MAC addresses that
+	 * were ASCII text.  This arms the printout of the next frame the
+	 * driver receives: its descriptor, and the first 64 bytes of it.
+	 *
+	 *	"rxb"	arm it; the next frame received is printed
+	 */
+	if (!strcmp(tok, "rxb")) {
+		WRITE_ONCE(eth->rx_dump, 1);
+		pr_info("the next frame received will be printed\n");
+		return count;
+	}
+
+	/*
 	 * The BMU's BPPE table.
 	 *
 	 * The table is the map from a buffer index to a buffer, and it is the

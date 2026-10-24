@@ -757,6 +757,37 @@ xsk_recycle:
 		zx279133_idm_rx_prefetch_payload(page);
 		data = page_address(page) + ZX279133_IDM_RX_PAYLOAD_OFFSET;
 
+		/*
+		 * The frame's bytes, on request.
+		 *
+		 * The counters say how many frames arrived; they cannot say
+		 * what the frames were, and on this board the two were very
+		 * different things - the bridge learned source MAC addresses
+		 * that were ASCII text.  So there has to be a way to look at
+		 * the bytes the hardware wrote, and this is it: the console
+		 * asks for the next frame, and the next frame is printed.
+		 *
+		 *	"rxb"	arm it; the next frame received is printed
+		 */
+		if (unlikely(READ_ONCE(eth->rx_dump))) {
+			static const char hex[] = "0123456789abcdef";
+			char out[2 * 64 + 1];
+			unsigned int i, n = len < 64 ? len : 64;
+
+			for (i = 0; i < n; i++) {
+				out[i * 2] = hex[data[i] >> 4];
+				out[i * 2 + 1] = hex[data[i] & 0xf];
+			}
+			out[n * 2] = 0;
+			pr_info("rx frame: dma %08x len %u word1 %08x meta0 %08x meta1 %08x meta2 %08x\n",
+				lower_32_bits(dma), len, word1,
+				le32_to_cpu(READ_ONCE(desc->metadata[0])),
+				le32_to_cpu(READ_ONCE(desc->metadata[1])),
+				le32_to_cpu(READ_ONCE(desc->metadata[2])));
+			pr_info("rx frame bytes: %s\n", out);
+			WRITE_ONCE(eth->rx_dump, 0);
+		}
+
 		if (!lan_source) {
 			struct bpf_prog *xdp_prog =
 				rcu_dereference_bh(eth->xdp_prog);

@@ -1099,6 +1099,8 @@ struct zx279133_eth {
 	u16 rx_bp_prod;
 	u8 rx_poll_cursor[2];
 	u16 rx_refill_pending;
+	/* Set by the debugfs "rxb" command: print the next frame's bytes. */
+	unsigned int rx_dump;
 	/* Serializes the shared DMA map, supply ring and refill credits. */
 	spinlock_t rx_buffer_lock;
 	atomic_t rx_poll_active;
