@@ -1802,11 +1802,29 @@ static void zx279133_lan_strip_transport_vlan(struct sk_buff *skb)
 	    vid > ZX279133_LAN_TRANSPORT_VID_MAX)
 		return;
 
-	memmove(data + ETH_HLEN, data + ETH_HLEN + VLAN_HLEN,
-		skb->len - ETH_HLEN - VLAN_HLEN);
+	/*
+	 * The tag is four bytes at offset 2 * ETH_ALEN: the TPID, the TCI
+	 * and then the frame's own ethertype.  Taking the tag off means
+	 * moving what follows it four bytes towards the front of the frame:
+	 * what is at offset 2 * ETH_ALEN + VLAN_HLEN moves to
+	 * 2 * ETH_ALEN, and the ethertype that was behind the tag ends up
+	 * in the ethertype field.
+	 *
+	 * The offsets here used to be ETH_HLEN, which is two bytes too
+	 * far: the copy started at the ethertype instead of at the
+	 * payload behind it, so the TPID stayed in the ethertype field
+	 * and the ethertype was thrown away.  The 9132's CPU port then
+	 * saw a TPID where there was no tag and took four bytes off that
+	 * frame as well, and what reached the wire was an ARP reply with
+	 * its ethertype and its hardware type cut out - 56 bytes instead
+	 * of 60, with 0x0800 where the ethertype should be.
+	 */
+	memmove(data + 2 * ETH_ALEN, data + 2 * ETH_ALEN + VLAN_HLEN,
+		skb->len - 2 * ETH_ALEN - VLAN_HLEN);
 	skb->len -= VLAN_HLEN;
 	skb->tail -= VLAN_HLEN;
-	skb->protocol = htons(((u16)data[12] << 8) | data[13]);
+	skb->protocol = htons(((u16)data[2 * ETH_ALEN] << 8) |
+			      data[2 * ETH_ALEN + 1]);
 	/*
 	 * The transport header moved four bytes towards the front of the
 	 * frame, so the offset the software checksum path works from moves

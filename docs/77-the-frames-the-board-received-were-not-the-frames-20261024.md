@@ -105,6 +105,51 @@ four, so runs 156 and 157 never compiled.  The CI's Actions log is not
 readable without a token, so the error text could not be read; it was
 found by reading the header of the exact kernel the build uses.
 
+## The frame the board sends was cut in two places
+
+The receive path was only half of it. With the frame read from the right
+place, the board learned the test PC's address and answered - and the
+answers never arrived, because **the frame the board put on the wire was
+an ARP reply with its ethertype and its hardware type cut out**.
+
+Captured on the PC's own adapter (Windows' pktmon), the board's frame was
+56 bytes long and said:
+
+```
+D0-45-8D-84-09-00 > 84-47-09-5B-BD-2C, ethertype IPv4 (0x0800),
+length 56: IP0 (invalid)
+
+  +000  84 47 09 5b bd 2c | d0 45 8d 84 09 00 | 08 00 | 06 04
+  +010  00 02 | d0 45 8d 84 09 00 | c0 a8 09 01 | 84 47 09 5b
+  +020  bd 2c | c0 a8 09 19 | 00 00 00 00 00 00 | 00 00 00 00
+```
+
+Read as an ARP reply that is the reply's tail: hlen 06, plen 04, oper
+0002, sender `d0:45:8d:84:09:00`, sender protocol 192.168.9.1, target
+hardware `84:47:09:5b:bd:2c`, target protocol 192.168.9.19 - the board
+answering the test PC, correctly, with four bytes missing from the front
+of the ARP payload and `0x0800` (the ARP payload's *protocol type*) where
+the ethertype should be.  The PC's IP stack threw it away; the NIC
+counted it, which is how it was found.
+
+Two things cut it:
+
+* **The driver's transport-VLAN strip was two bytes off.**  The tag is
+  four bytes at offset `2 * ETH_ALEN` - the TPID, the TCI and then the
+  frame's own ethertype - and taking it off means moving what follows it
+  four bytes towards the front of the frame.  The strip used
+  `ETH_HLEN`, which is two bytes too far: the copy started at the
+  ethertype instead of at the payload behind it, so the TPID stayed in
+  the ethertype field and the ethertype was thrown away.
+* **The 9132's CPU port then took four bytes off that frame as well**,
+  because it found a TPID where there was no tag.
+
+The two together are why the frame was 56 bytes instead of 60, and why
+`0x0800` sat where the ethertype should be.
+
+The receive path's own `zx279133_idm_rx_restore_lan_l2()` uses
+`2 * ETH_ALEN` and was never wrong; only the transmit side was.
+
 ## What was ruled out on the way
 
 * **The frame is in the BMU's own buffer pool.**  That was the reading
