@@ -643,6 +643,44 @@ static void zx279133_idm_find_broadcast(struct zx279133_eth *eth)
 		pr_info("bmu: no broadcast frame in the pool\n");
 }
 
+/*
+ * Give a received frame back to the CPU.
+ *
+ * The frame is at page + ZX279133_IDM_RX_PAYLOAD_OFFSET, which is the
+ * address the buffer pointer ring was given
+ * (__zx279133_idm_rx_post_page() hands out page_pool_get_dma_addr(page) +
+ * PAYLOAD_OFFSET), and the hardware wrote it there.
+ *
+ * The low-level call is used rather than the page pool's helper, for two
+ * reasons.
+ *
+ * The helper adds the pool's own offset to the offset it is handed: the
+ * pool was created with .offset = ZX279133_IDM_RX_PAYLOAD_OFFSET, and it
+ * invalidates [dma + offset + pool->p.offset, +len).  The offset to pass
+ * is therefore *zero*.  Passing PAYLOAD_OFFSET invalidates the 256 bytes
+ * *after* the frame, where there is nothing, and the frame stays in the
+ * CPU's cache with whatever was there before - the initramfs' text, the
+ * bridge's port bitmap, zeros.  That is what the board was reading all
+ * along.
+ *
+ * And the helper asks the device whether it has to be given back at all
+ * (dma_dev_need_sync()), which the platform decides from the device tree.
+ * This chip is not coherent with the CPU's cache whatever the tree says,
+ * so the call that does not consult that flag is the one to make.
+ */
+static void zx279133_idm_give_frame_back(struct zx279133_eth *eth,
+					 struct page *page, u16 len)
+{
+#if defined(CONFIG_HAS_DMA) && defined(CONFIG_DMA_NEED_SYNC)
+	__dma_sync_single_for_cpu(eth->dev,
+				   page_pool_get_dma_addr(page) +
+				   ZX279133_IDM_RX_PAYLOAD_OFFSET,
+				   len, DMA_FROM_DEVICE);
+#else
+	page_pool_dma_sync_for_cpu(zx279133_rx_page_pool(page), page, 0, len);
+#endif
+}
+
 static int zx279133_idm_rx_process_queue(struct zx279133_eth *eth,
 					 struct napi_struct *napi,
 					 unsigned int queue, u16 count,
@@ -845,22 +883,11 @@ xsk_recycle:
 		/*
 		 * The frame is where the descriptor says it is: the hardware
 		 * wrote it at page + ZX279133_IDM_RX_PAYLOAD_OFFSET, which is
-		 * the address the buffer pointer ring was given
-		 * (__zx279133_idm_rx_post_page() hands out
-		 * page_pool_get_dma_addr(page) + PAYLOAD_OFFSET).
+		 * the address the buffer pointer ring was given.
 		 *
-		 * So the range the CPU has to be given back is that one.
-		 *
-		 * page_pool_dma_sync_for_cpu() adds the pool's own offset to
-		 * the offset it is handed - the pool was created with
-		 * .offset = ZX279133_IDM_RX_PAYLOAD_OFFSET, and its helper
-		 * invalidates [dma + offset + pool->p.offset, +len).  The
-		 * offset to pass is therefore *zero*: passing
-		 * PAYLOAD_OFFSET invalidates the 256 bytes after the frame,
-		 * where there is nothing, and the frame stays in the CPU's
-		 * cache with whatever was there before - the initramfs' text,
-		 * the bridge's port bitmap, zeros.  That is what the board
-		 * was reading all along.
+		 * So the range the CPU has to be given back is that one -
+		 * see zx279133_idm_give_frame_back() for why it is not done
+		 * through the page pool's helper.
 		 *
 		 * The pool is created with PP_FLAG_DMA_MAP and without
 		 * PP_FLAG_DMA_SYNC_CPU, and its device-side sync only runs
@@ -868,8 +895,7 @@ xsk_recycle:
 		 * frame is after the stack has read it.  So this is the one
 		 * place where the frame has to be made visible to the CPU.
 		 */
-		page_pool_dma_sync_for_cpu(zx279133_rx_page_pool(page), page,
-					   0, len);
+		zx279133_idm_give_frame_back(eth, page, len);
 		zx279133_idm_rx_prefetch_payload(page);
 		data = page_address(page) + ZX279133_IDM_RX_PAYLOAD_OFFSET;
 

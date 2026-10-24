@@ -87,6 +87,15 @@ That is the whole fault: the frame was never given back to the CPU, so the
 stack read the page's leftovers, and the counters were perfect throughout
 because they count frames and the frames had arrived.
 
+The fix does not go through the page pool's helper at all. The helper
+also asks the device whether it has to be given back at all
+(`dma_dev_need_sync()`), which the platform decides from the device tree
+- and this chip is not coherent with the CPU's cache whatever the tree
+says. The low-level call does not consult that flag, so the frame is
+given back either way. `dma_dev_need_sync()` and the device's
+`dma_skip_sync` are printed by the diagnostic, so the next round can say
+which of the two was in the way.
+
 ## The other fault that was in the same place
 
 The frame is not at the start of the page it arrives in - the buffer
