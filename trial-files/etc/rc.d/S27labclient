@@ -200,7 +200,18 @@ fi
 # wins - and the address that answered is written down, so the record says
 # which one it was.  /etc/labtarget can set the list; the default is the
 # addresses that answer in this region first.
-TARGETS=$(cat /etc/labtarget 2>/dev/null | tr -d '\r\n ')
+#
+# The spaces in the list are the separators, so they must survive the read:
+# "tr -d '\r\n '" took the spaces away as well, and the list turned into one
+# long word - "223.5.5.5119.29.29.29180.76.76.768.8.8.81.1.1.1" - which is
+# not an address at all.  The client then pinged nothing, the status file said
+# "no answer from any of: ..." and the whole router looked broken, while the
+# router was fine: measured 2026-10-25 00:41, the same client pinged
+# 223.5.5.5 twice with no loss through the very same NAT.
+#
+# Only the line ends are stripped.  A list may be written on one line with
+# spaces or on one line per address; both are read the same way.
+TARGETS=$(cat /etc/labtarget 2>/dev/null | tr -d '\r\n')
 [ -n "$TARGETS" ] || TARGETS="223.5.5.5 119.29.29.29 180.76.76.76 8.8.8.8 1.1.1.1"
 
 (
@@ -215,19 +226,34 @@ TARGETS=$(cat /etc/labtarget 2>/dev/null | tr -d '\r\n ')
 		ping_out=""
 		ping_ip=""
 		for t in $TARGETS; do
+			# The answer is decided by ping's own exit code, not by
+			# reading its output: this image's ping is busybox's, and
+			# busybox's last two lines are
+			#
+			#   1 packets transmitted, 1 packets received, 0% packet loss
+			#   round-trip min/avg/max = ...
+			#
+			# which contains neither the "bytes from" line (that one is
+			# third from the end) nor the "1 received" of iputils.  The
+			# first version of this script looked for both, so a client
+			# that reached the internet perfectly well was reported as
+			# having reached nothing - measured 2026-10-25 00:41 with
+			# the very same NAT that carried the reply.
+			#
+			# The whole output is kept, not just the last two lines:
+			# the "64 bytes from ..." line is the one that names the
+			# answer, and it is what a reader of the status file wants
+			# to see.
 			if [ "$INNS" = 1 ]; then
-				r=$(ip netns exec "$LABNS" ping -c 1 -W 3 "$t" 2>&1 |
-					tail -n 2 | tr '\n' ' ')
+				ip netns exec "$LABNS" ping -c 1 -W 3 "$t" >/tmp/labping.txt 2>&1
 			else
-				r=$(ping -c 1 -W 3 "$t" 2>&1 | tail -n 2 | tr '\n' ' ')
+				ping -c 1 -W 3 "$t" >/tmp/labping.txt 2>&1
 			fi
-			case "$r" in
-			*"1 received"*|*"bytes from"*)
-				ping_out="$r"
+			if [ $? -eq 0 ]; then
+				ping_out=$(tr '\n' ' ' </tmp/labping.txt)
 				ping_ip="$t"
 				break
-				;;
-			esac
+			fi
 		done
 		[ -n "$ping_ip" ] || ping_out="no answer from any of: $TARGETS"
 		{

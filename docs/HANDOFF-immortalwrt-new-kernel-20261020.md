@@ -474,43 +474,110 @@ PPU 1..4 的 SVID 写进去读回来是 `00ec0000 / 00f00000 / 00f40000 / 00f800
 这一节是 2026-10-24 那一轮的结果，接在第 8 节的"60 秒版"后面。前面几轮
 的判断都建立在"计数器好看 = 数据面是好的"这个假设上，**这个假设是错的**。
 
-### 9.1 三个独立的故障，缺一不可
+### 9.1 四个独立的故障，缺一不可
 
 | # | 故障 | 症状 | 修在哪 |
 |---|---|---|---|
 | 1 | PPU 跑的是 **SR1010 的微码**（树里那份），不是本板厂商 blob | 帧停在 PPU 里：ISU 收 3111、进 PPU 427、ODMA 0 | `51ac6c6`：CI overlay 换成本板 `mcode_133.bin`（CRC `0xc839b946`）+ 窄 `.gitattributes -text -diff` + 驱动开机校验 CRC |
 | 2 | RX 帧**没经 DSA tagger 派发**，直接丢给 conduit `lan-cpu0` | 帧到了 CPU 口就没人管；栈按 ETH_P_XDSA 丢掉 | `51ac6c6`：IDM 接收路径调 `cpu_dp->rcv()`，协议在 tagger 之后、在**端口 netdev** 上取 |
-| 3 | **CPU 读的是自己缓存里的旧内容** —— 帧在页里，但那一行缓存从来没被作废 | 帧到了、长度对、元数据对、计数器全对，但栈拿到的是页的**旧内容** | `0968d2d`：把 `page_pool_dma_sync_for_cpu()` 的偏移参数改回 0 |
+| 3 | **RX：帧不在缓冲区的头** —— 描述符指的是"缓冲区"，帧在它后面 0x80 | 帧到了、长度对、元数据对、计数器全对，但栈拿到的是页的**旧内容** | `1ddcc4b`/`ecfe452`：新增 `ZX279133_IDM_RX_FRAME_OFFSET`，data / prefetch / XDP / cache 失效 / 设备侧失效 五处一起挪 |
+| 4 | **TX：剥 transport VLAN 的偏移错了 2 字节** | 板子**确实回了包**（桥学到 PC 的真实 MAC、ARP 表里有 PC），但线上那 56 字节的 ARP reply **被剪掉了以太类型和 htype**，PC 的 IP 栈丢掉 | `8c5cc82`：`memmove` 用 `2 * ETH_ALEN` 而不是 `ETH_HLEN` |
 
-第 3 个故障的关键证据（全部来自本板自己的字节）：
+第 3 个故障的证据链（全部来自本板自己的字节）：
 
 - run153 的描述符转储：`dma 84265100 len 92 word1 0782005c meta1 c0a801ff`。
   **描述符是对的**：地址就是驱动交给硬件的那块页 +0x100，长度 92，
-  `meta1` 里 `c0 a8` 就是 192.168。**硬件确实把帧写进了驱动给的那块页。**
-- 但那 92 字节在那个地址上是**全零**。而栈看到的东西是页的**旧内容**：
-  一次是 initramfs 的 ASCII 文本（"small" / ".rx_ta" / "let di"），一次是
-  交换机的端口位图。全零 + 旧文本 = **CPU 自己的缓存**。
-- 机制在 `page_pool_dma_sync_for_cpu()` 里。它**自己会加 pool 的 `.offset`**：
+  `meta1` 里 `c0 a8` 就是 192.168。
+- run160 的诊断把整页打了出来，**帧就在里面**：
 
-      __page_pool_dma_sync_for_cpu(pool, dma_addr, offset, size)
-          -> dma_sync_single_range_for_cpu(dev, dma_addr,
-                                          offset + pool->p.offset, size, dir)
+      page +0180: ffffffffffffff8447095bbd2c08060001
+      page +0190: 0800060400018447095bbd2cc0a80919
+      page +01a0: 000000000000c0a80901000000000000
 
-  这个 pool 建的时候 `.offset = ZX279133_IDM_RX_PAYLOAD_OFFSET`（256），所以它
-  实际失效的区间是 `[dma + offset + 256, +len)`。**要失效帧所在的那一段，参数必须
-  是 0。** `2d11bbd` 把它从 0 改成了 `PAYLOAD_OFFSET`，于是失效区间落到**帧后面
-  256 字节**——那里什么都没有。帧从来没有被还给 CPU。
+  完整读出来就是测试 PC 发来的 ARP request：目的 ff:ff:ff:ff:ff:ff、
+  源 84:47:09:5b:bd:2c、0806、htype 1、ptype 0800、hlen 6、plen 4、
+  oper 1、sha=PC、spa=c0a80919、tha=0、tpa=c0a80901。
+- 另一帧（IP/UDP，里面是 HTTP GET，179 字节）**同样在 +0x180**：
+  `01:00:5e:7f:ff:fa`（组播） / `84:47:09:5b:bd:2c` / `0800` / `4500` /
+  TTL 64 / proto 17 / `c0a80119` → `efffffa`。
 
-**=> 驱动数到的帧是真的，硬件写进页里的帧也是真的；错的是 CPU 手里那一行缓存。**
+**=> 硬件把帧写在了描述符所指地址的后面 0x80 处；驱动一直读缓冲区的头，读到的是
+那一页上一次的残留（一次是 initramfs 的 ASCII 文本，一次是 0xff，一次是零）。
+计数器全程正常，因为帧确实到了。**
 
-### 9.2 顺带修掉的另一个编译错误
+### 9.2 同一处的另一个真 bug：cache 失效区间
+`page_pool_dma_sync_for_cpu(pool, page, offset, len)` **会自己加 pool 的
+`.offset`**（这个 pool 建的时候 `.offset = PAYLOAD_OFFSET`），所以它实际失效的是
+`[dma + offset + pool->p.offset, +len)`。要失效帧所在的那一段，参数必须是 **0**；
+`2d11bbd` 把它改成了 `PAYLOAD_OFFSET`，区间就落到帧后面 256 字节。
 
+**但它不是病因**：run160 的诊断把帧打了两遍（数据面看到的那一遍，和整页强制失效
+之后的那一遍），**两遍完全一样**，页转储也和它们一致 —— 缓存并没有陈旧，错的只是
+**读的位置**。陈旧缓存和读错位置在栈那一侧长得一模一样，这就是前半个回合一直在
+追 cache 的原因。
+
+这个区间仍然必须修：帧挪到 +0x80 之后，要失效的是
+`[dma + 0x100 + 0x80, +len)`。现在用的是底层调用
+（`__dma_sync_single_for_cpu()`），**不再问设备"要不要失效"**（那个标志由设备树
+决定，这块芯片无论如何都不与 CPU 缓存一致）。
+
+### 9.3 第四个故障：板子发出去的帧被剪掉了 8 个字节
+
+RX 修好之后，板子**确实在回包**了：桥学到的是 PC 的**真实 MAC**（`84:47:09:5b:bd:2c`，
+端口 2），板子的 ARP 表里也有 `192.168.9.25 → 84:47:09:5b:bd:2c`，`lan-cpu0 tx` 和
+`lan2 tx` 都在涨 —— 但 PC 一个回复也收不到。
+
+用 Windows 的 `pktmon` 在 PC 自己的网卡上抓到了线上那一帧：
+
+```
+D0-45-8D-84-09-00 > 84-47-09-5B-BD-2C, ethertype IPv4 (0x0800), length 56: IP0 (invalid)
+
+  +000  84 47 09 5b bd 2c | d0 45 8d 84 09 00 | 08 00 | 06 04
+  +010  00 02 | d0 45 8d 84 09 00 | c0 a8 09 01 | 84 47 09 5b
+  +020  bd 2c | c0 a8 09 19 | 00 00 00 00 00 00 | 00 00 00 00
+```
+
+按 ARP reply 读，这是**回包的尾巴**：hlen 06、plen 04、oper 0002、
+sha=板子、spa=192.168.9.1、tha=PC、tpa=192.168.9.25 —— 板子在正确地回答 PC，
+但 ARP 载荷的**前 4 个字节（htype 0001、ptype 0800）不见了**，以太类型的位置上是
+**0800**（那正是 ptype）。PC 的 IP 栈把它丢了，网卡却把它算成收到的单播包 ——
+所以它是"收到但不认"。
+
+**两处各剪掉 4 字节：**
+
+1. **驱动的 `zx279133_lan_strip_transport_vlan()` 偏移错了 2 字节。** 标签在
+   `2 * ETH_ALEN` 处，是 4 字节：TPID、TCI、然后是帧自己的以太类型。摘掉标签要
+   把它后面那段**前移 4 字节**，也就是从 `2 * ETH_ALEN + VLAN_HLEN` 拷到
+   `2 * ETH_ALEN`。代码用的是 `ETH_HLEN`（14）—— **偏了两字节**：拷贝从以太类型
+   开始而不是从它后面的载荷开始，于是 TPID 留在以太类型的位置上、以太类型被丢掉。
+2. **9132 的 CPU 口随后又剪了 4 字节**：它在偏移 12 看到一个 TPID，就把它当成
+   标签又摘了一次。
+
+RX 侧的 `zx279133_idm_rx_restore_lan_l2()` 用的是 `2 * ETH_ALEN`，**一直是对的**；
+错的只有发送侧。
+
+### 9.4 G2 的结果（run165）
+
+8c5cc82 之后，run165 第一次把 G2 走通：
+
+    23:15:34   sent=4 received=4 lost=0 answers from the board=4   (洪水前)
+    23:15:39   flooding 300 pps for 10 s, 3000 frames
+    23:15:56   sent=4 received=4 lost=0 answers from the board=4   (洪水后)
+
+    br-lan      rx 3002 pkts   tx 2
+    lan-cpu0    rx 3002 pkts   tx 2
+    lan2        rx 0           tx 2
+
+桥学到的是 PC 的**真实 MAC**（不再是 ASCII 文本），板子的 ARP 表里有 PC，
+两个方向的帧都对得上。
+
+### 9.5 顺带修掉的编译错误
 `dma_sync_single_range_for_cpu()` 在 6.18 是**五个**参数
-`(dev, addr, offset, size, dir)`，而诊断代码给了四个 → run156/run157 根本没编译过，
+`(dev, addr, offset, size, dir)`，诊断代码给了四个 → run156/run157 根本没编译过。
 CI 的 Actions 日志匿名访问 404 又看不到编译器原文，只能去翻那个内核 SHA 的
 `include/linux/dma-mapping.h` 才确认。
 
-### 9.3 这一轮逐项排除掉的东西
+### 9.6 这一轮逐项排除掉的东西
 
 - **帧确实来自 PC 那个物理口**：`echo "trapall 2 0" >/d` 之后驱动一帧都收不到。
 - **协议陷阱表没问题**：`trapall 2 2`（全 trap）送到的帧数和默认一样多。
@@ -521,16 +588,18 @@ CI 的 Actions 日志匿名访问 404 又看不到编译器原文，只能去翻
 - **BMU 的 BPPE 表由硬件维护**：控制台用四种格式写进去，读回来都一样。
 - **MAC 宽度的 ERAM 表（0x1e/0x21/0x2b）和 128 位表全空**。
 - **SA-lookup 的位（bit 28 / bit 31）改与不改结果一样**。
-- **板子 loader 里的 0x40 是误导**：loader 的网络栈是 **PON** 的，PON 帧确实在
-  缓冲 +0x40；9132 自己的四个内口不是这么送的（描述符说的地址就是对的）。
-- **厂商模块自己也不信 CPU 缓存**：`np_133.ko` 带 `zxOsCacheInv` /
-  `zxOsCacheFlush` 两个封装，只在 `se_ddr_data_read()` / `se_ddr_data_write()`
-  里调用——那是交换引擎自己的 DDR 窗口，不是主机的接收缓冲，所以不能直接当结论，
-  但至少说明厂商对这个芯片的缓存一致性是当真的。
+- **"帧在 BMU 自己的缓冲池里"是误判**：帧就在描述符指的那块页里，只是往后 0x80。
+  池扫描只找到 0xff 填充。
+- **板子 loader 里的 0x40 不是红鲱鱼**：同一种现象、不同的数（loader 的网络栈是
+  **PON** 的，PON 帧在缓冲 +0x40）。错的是由此得出的"帧在别处"的结论，不是观察。
+- **厂商模块也不信 CPU 缓存**：`np_133.ko` 自带 `zxOsCacheInv` / `zxOsCacheFlush`，
+  只在 `se_ddr_data_read()` / `se_ddr_data_write()`（读写交换引擎自己的 DDR 窗口）
+  里调用。那是硬件窗口而不是主机接收缓冲，不能直接当结论，但说明厂商对这个芯片的
+  缓存一致性是当真的。
 
-### 9.4 实验台的坑（这一轮踩的）
+### 9.7 实验台的坑（这一轮踩的）
 
-- **插座断电会毁掉一轮验收**：智能插座每 ~15–19 分钟断电 30 s。验收中途被
+- **插座断电会毁掉一轮验收**：智能插座每 ~15–19 分钟断电 30 秒。验收中途被
   断，量到的是"板子没了"。验收前先问板子 `uname -r`，并支持多次重试。
 - **串口 relay 的 DTR/RTS 复位会把 CH340 的接收路径卡死**：复位后板子完全
   不出声，但板子**有电**（网口 1 Gbps Up）。`tools/relayctl.ps1 stop` +
@@ -547,10 +616,10 @@ CI 的 Actions 日志匿名访问 404 又看不到编译器原文，只能去翻
   要问的东西，约 1 分钟。
 - **Windows 的 ping 会把本机 ICMP 不可达算作 "Received"**：板子完全不应答时
   PC 上打出来是 "Received = 2"。判定必须数**指名板子地址的回复**
-  （`Reply from 192.168.1:`），不能数包。
+  （`Reply from 192.168.9.1:`），不能数包。
 - **PC 的静态 ARP 必须指向 trial 内核当次的 MAC**：trial 内核没有工厂 MAC
   （`eth_hw_addr_random()`），**每次启动都不一样**；而 PC 上那个
-  `3e-8e:98:91:64:2a` 是**厂商 4.19 系统的**地址。地址对不上时单播被桥泛洪，
+  `3e-8e:98:91-64-2a` 是**厂商 4.19 系统的**地址。地址对不上时单播被桥泛洪，
   板子一帧都收不到。`accept4.py` 现在先从串口读板子当次的地址再装条目。
 - **改完运行时状态要复原**：`trapall` 的实验把 trap 关掉后，后面几次实验
   实际是在"一帧都不来"的状态下做的，结论全部作废。
@@ -559,29 +628,37 @@ CI 的 Actions 日志匿名访问 404 又看不到编译器原文，只能去翻
 - **prepush 的宏门禁能挡住编译不过的改动**：撤回一个常量时漏了一处引用，是
   它抓出来的（`prepush: 14 files, 1 problems`）。**别跳过 prepush。**
 
-### 9.5 本轮新增的工具
+### 9.8 本轮新增的工具
 
 - `staging/ctl/accept4.py` —— 短的 G2 验收（ping / 各口计数 / 桥转发表 / 板子 ARP 表），
   **会先按板子当次的 MAC 装 PC 的静态 ARP**。
-- `staging/ctl/q.py` —— 串口上问板子一句话，打印回答。
+- `staging/ctl/setmac.py` —— 只做那一步（板子重启后 MAC 变了时用）。
 - `staging/ctl/rxuprobe.py` —— 让板子打印它收到的下一帧（`rxb` 命令）。
+- `staging/ctl/pageimg.py` —— 从**原始串口日志**把整页重建出来（控制台的渲染会
+  吞/串字符，页转储必须从原始字节看），并找出帧头的位置。
+- `staging/ctl/q.py` —— 串口上问板子一句话，打印回答。
 - `staging/ctl/bytecount.py` —— 芯片自己的字节计数器：PC 发 N 帧，看芯片数到多少。
 - `staging/ctl/stacksize.py` —— 栈看到的每帧多少字节。
 - `staging/ctl/bppemode.py` / `trapexp.py` / `mfbit.py` / `eramdump.py` ——
   运行时改 9132 的表并看结果（不必等一次 CI）。
 - `staging/ctl/g2run158.sh` / `g2run4b.sh` / `g2run4c.sh` / `g2second4.sh` ——
   无人值守 G2 轮次，带断电重试。
-- `staging/ctl/rxbone.sh` / `rxblayout.sh` / `rxbwait.sh` —— 帧字节的定位实验。
 - `staging/ctl/fetchit.sh` —— 只等某一个 release 出现就取那一份（`fetchrun.sh`
   会等两个 release 都到齐，flash 打包失败会把 initramfs 也拖住）。
 - `staging/ctl/waithenrun.sh` —— 等板子回到链路上，立刻开始这一轮。
 - `staging/ctl/cbrace.py` / `ko_calls.py` —— 括号配平自检；查厂商 .ko 里某个
   符号的调用点（厂商模块自带 `zxOsCacheInv` / `zxOsCacheFlush` 就是这么找到的）。
+- `staging/ctl/pingboth.py` —— ping 的同时读**板子两侧**的收发计数：
+  板子发出几帧、PC 收到几帧，两边对不上就是帧在路上丢了。
+- `staging/ctl/sniffpcap.py` / `sniffround.sh` —— **用 Windows 的 `pktmon` 在 PC
+  自己的网卡上抓线上帧的原始字节**。`pktmon etl2txt` 只给解码不给字节，要
+  `pktmon etl2pcap` 导成 pcapng 再自己解（pcapng 的 block 链，EPB 的偏移 28）。
+  `--pkt-size 0` 只抓头，要 `--pkt-size 256`。**板子发出的帧只有这一种办法看得到**。
 - `tools/hardreset.ps1` —— 真正按住复位线 4–5 秒。
 
-### 9.6 文档
+### 9.9 文档
 
 - `docs/75` —— 本板微码 + DSA 派发（`51ac6c6`）
 - `docs/76` —— blob 的 PORT_FLOW tag 说了什么；对 docs/74 的更正
-- `docs/77` —— **帧不是帧**：第三个根因的完整证据链、为什么"帧在 BMU 池里"是
-  误判，以及"同一块页被读了两次"的新诊断
+- `docs/77` —— **帧不是帧**：第三个根因的完整证据链、"帧在 BMU 池里"为什么是
+  误判、loader 的 0x40 为什么不是红鲱鱼，以及那一处 cache 失效区间
