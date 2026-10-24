@@ -565,44 +565,52 @@ static void zx279133_idm_dump_nonzero(const char *tag, const u8 *p,
 static void zx279133_idm_find_broadcast(struct zx279133_eth *eth)
 {
 	static const char hex[] = "0123456789abcdef";
-	const u8 *pool = (const u8 *)eth->bmu_mem + ZX279133_BMU_BPPE_SIZE;
+	void __iomem *pool = eth->bmu_mem + ZX279133_BMU_BPPE_SIZE;
 	unsigned int size = ZX279133_BMU_NORMAL_COUNT * ZX279133_BMU_NORMAL_SIZE;
 	unsigned int off, hits = 0, i;
 
-	/* The hardware's own map from a buffer index to a buffer. */
+	/*
+	 * The hardware's own map from a buffer index to a buffer.
+	 *
+	 * The console's receive FIFO is sixteen words deep, so a line
+	 * longer than that loses bytes; every line printed here is kept
+	 * short.
+	 */
 	pr_info("bmu bppe:");
-	for (i = 0; i < 8; i++)
+	for (i = 0; i < 4; i++)
+		pr_info(" %08x", readl(eth->bmu_mem + 4 * i));
+	pr_info("\n");
+	pr_info("bmu bppe:");
+	for (i = 4; i < 8; i++)
 		pr_info(" %08x", readl(eth->bmu_mem + 4 * i));
 	pr_info("\n");
 
-	for (off = 0; off + 96 <= size && hits < 4; off += 16) {
+	for (off = 0; off + 96 <= size && hits < 4; off += 2) {
 		char out[2 * 16 + 1];
 
-		if (pool[off] != 0xff || pool[off + 1] != 0xff ||
-		    pool[off + 2] != 0xff || pool[off + 3] != 0xff ||
-		    pool[off + 4] != 0xff || pool[off + 5] != 0xff)
+		if (readb(pool + off) != 0xff)
+			continue;
+		for (i = 1; i < 6; i++)
+			if (readb(pool + off + i) != 0xff)
+				break;
+		if (i != 6)
 			continue;
 		hits++;
-		pr_info("bmu frame at +%05x (buffer %u, +%03x):",
+		pr_info("bmu frame at +%05x buffer %u off %03x\n",
 			off, off / ZX279133_BMU_NORMAL_SIZE,
 			off % ZX279133_BMU_NORMAL_SIZE);
-		for (i = 0; i < 16; i++) {
-			out[i * 2] = hex[pool[off + i] >> 4];
-			out[i * 2 + 1] = hex[pool[off + i] & 0xf];
-		}
-		out[2 * 16] = 0;
-		pr_info(" %s", out);
-		for (i = 16; i < 96; i += 16) {
+		for (i = 0; i < 96; i += 16) {
 			unsigned int j;
 
 			for (j = 0; j < 16; j++) {
-				out[j * 2] = hex[pool[off + i + j] >> 4];
-				out[j * 2 + 1] = hex[pool[off + i + j] & 0xf];
+				u8 v = readb(pool + off + i + j);
+
+				out[j * 2] = hex[v >> 4];
+				out[j * 2 + 1] = hex[v & 0xf];
 			}
 			out[2 * 16] = 0;
-			pr_info(" %s", out);
+			pr_info(" +%03x: %s\n", i, out);
 		}
-		pr_info("\n");
 	}
 	if (!hits)
 		pr_info("bmu: no broadcast frame in the pool\n");
@@ -814,23 +822,18 @@ xsk_recycle:
 		 * (__zx279133_idm_rx_post_page() hands out
 		 * page_pool_get_dma_addr(page) + PAYLOAD_OFFSET).
 		 *
-		 * So the range the CPU has to be given back is that one, and
-		 * not the first len bytes of the page.  The two are the same
-		 * range only for a frame of at least PAYLOAD_OFFSET bytes, and
-		 * every frame on this wire is shorter than that: an ARP
-		 * request is 60 bytes and a ping is 98.  Syncing [0, len)
-		 * therefore invalidated nothing the stack is about to read,
-		 * and the stack read the page's old contents instead of the
-		 * frame the hardware had just written - whatever those pages
-		 * held before, which on this board is the initramfs' text.
+		 * So the range the CPU has to be given back is that one.
 		 *
-		 * That is not a guess about the symptom: it is what the
-		 * measurement showed.  The board's bridge learned source
-		 * MAC addresses that were ASCII ("small", ".rx_ta", "let
-		 * di"), the board's own ARP table never got the test PC's
-		 * address out of the frames it received, and the counters
-		 * were perfect the whole time - the frames arrived, they
-		 * were counted, and they were not the frames.
+		 * page_pool_dma_sync_for_cpu() adds the pool's own offset to
+		 * the offset it is handed - the pool was created with
+		 * .offset = ZX279133_IDM_RX_PAYLOAD_OFFSET, and its helper
+		 * invalidates [dma + offset + pool->p.offset, +len).  The
+		 * offset to pass is therefore *zero*: passing
+		 * PAYLOAD_OFFSET invalidates the 256 bytes after the frame,
+		 * where there is nothing, and the frame stays in the CPU's
+		 * cache with whatever was there before - the initramfs' text,
+		 * the bridge's port bitmap, zeros.  That is what the board
+		 * was reading all along.
 		 *
 		 * The pool is created with PP_FLAG_DMA_MAP and without
 		 * PP_FLAG_DMA_SYNC_CPU, and its device-side sync only runs
@@ -839,7 +842,7 @@ xsk_recycle:
 		 * place where the frame has to be made visible to the CPU.
 		 */
 		page_pool_dma_sync_for_cpu(zx279133_rx_page_pool(page), page,
-					   ZX279133_IDM_RX_PAYLOAD_OFFSET, len);
+					   0, len);
 		zx279133_idm_rx_prefetch_payload(page);
 		data = page_address(page) + ZX279133_IDM_RX_PAYLOAD_OFFSET;
 
@@ -856,12 +859,35 @@ xsk_recycle:
 		 *	"rxb"	arm it; the next frame received is printed
 		 */
 		if (unlikely(READ_ONCE(eth->rx_dump))) {
-			pr_info("rx frame: desc");
-			for (i = 0; i < 8; i++)
+			pr_info("rx frame: desc 0");
+			for (i = 0; i < 4; i++)
+				pr_info(" %08x",
+					le32_to_cpu(READ_ONCE(((u32 *)desc)[i])));
+			pr_info("\n");
+			pr_info("rx frame: desc 1");
+			for (i = 4; i < 8; i++)
 				pr_info(" %08x",
 					le32_to_cpu(READ_ONCE(((u32 *)desc)[i])));
 			pr_info("\n");
 			pr_info("rx frame: len %u\n", len);
+			/*
+			 * Where the frame is, so that the "rxu" command can
+			 * read the same bytes without the CPU's cache in
+			 * the way.
+			 */
+			WRITE_ONCE(eth->rx_dump_dma, dma);
+			WRITE_ONCE(eth->rx_dump_len, len);
+			/*
+			 * Whether the CPU's cache has been given back at
+			 * all.  If the device is marked coherent, or the
+			 * kernel was built without CONFIG_DMA_NEED_SYNC,
+			 * the invalidation below is a no-op and the CPU
+			 * reads whatever it had cached - and the frame is
+			 * lost in a way no counter shows.
+			 */
+			pr_info("rx frame: need_sync %u skip_sync %u\n",
+				dma_dev_need_sync(eth->dev) ? 1U : 0U,
+				eth->dev->dma_skip_sync ? 1U : 0U);
 			/*
 			 * Where the frame is.  The bytes the driver reads
 			 * are not the frame - they are whatever the page
@@ -870,19 +896,14 @@ xsk_recycle:
 			 * the switch's engine writes the frames it has
 			 * parsed.
 			 *
-			 * Both are read back through the CPU, and neither
-			 * mapping is coherent, so both have to be given
-			 * back to the CPU first - otherwise the scan
-			 * prints the old contents and says nothing.
+			 * The page is read back through the CPU, so it has
+			 * to be given back to the CPU first - otherwise the
+			 * scan prints the old contents and says nothing.
+			 * The BMU's pool is mapped as device memory, so it
+			 * is read as it is; there is nothing to sync.
 			 */
 			page_pool_dma_sync_for_cpu(zx279133_rx_page_pool(page),
 						   page, 0, PAGE_SIZE);
-			dma_sync_single_range_for_cpu(eth->dev,
-						     eth->bmu_base +
-						     ZX279133_BMU_BPPE_SIZE,
-						     ZX279133_BMU_NORMAL_COUNT *
-						     ZX279133_BMU_NORMAL_SIZE,
-						     DMA_BIDIRECTIONAL);
 			zx279133_idm_dump_nonzero("page", page_address(page),
 						  ZX279133_RX_PAGE_SIZE);
 			/* The frames the switch's engine wrote: the test PC

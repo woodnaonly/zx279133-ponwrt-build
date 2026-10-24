@@ -1101,6 +1101,13 @@ struct zx279133_eth {
 	u16 rx_refill_pending;
 	/* Set by the debugfs "rxb" command: print the next frame's bytes. */
 	unsigned int rx_dump;
+	/*
+	 * Where the frame the "rxb" command printed is, so that the "rxu"
+	 * command can read the same bytes without the CPU's cache in the
+	 * way.
+	 */
+	dma_addr_t rx_dump_dma;
+	u32 rx_dump_len;
 	/* Serializes the shared DMA map, supply ring and refill credits. */
 	spinlock_t rx_buffer_lock;
 	atomic_t rx_poll_active;

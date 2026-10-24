@@ -1758,6 +1758,58 @@ static ssize_t zx279133_9132_write(struct file *file, const char __user *ubuf,
 	}
 
 	/*
+	 * The frame the "rxb" command printed, read without the CPU's
+	 * cache in the way.
+	 *
+	 * The page the hardware writes the frame into is cacheable memory,
+	 * so the CPU can be looking at a copy of it that the hardware has
+	 * never seen - and then the frame is simply not there, whatever
+	 * the counters say.  Mapping the same physical address as device
+	 * memory gives a view with no cache line in it at all, and that
+	 * view says what is really in memory.  The mapping is made and
+	 * dropped around the read, so this is a diagnostic and not a data
+	 * path; it is done here, in process context, because making a
+	 * mapping is not something that may be done from the receive
+	 * path.
+	 *
+	 *	"rxu"	read the frame the last "rxb" printed
+	 */
+	if (!strcmp(tok, "rxu")) {
+		dma_addr_t dma = READ_ONCE(eth->rx_dump_dma);
+		u32 len = READ_ONCE(eth->rx_dump_len);
+		dma_addr_t base = dma & ~(dma_addr_t)(PAGE_SIZE - 1);
+		unsigned int skip = (unsigned int)(dma - base);
+		void __iomem *raw;
+		unsigned int i;
+
+		if (!len) {
+			pr_info("no frame has been printed yet\n");
+			return count;
+		}
+		raw = ioremap(base, PAGE_SIZE);
+		if (!raw) {
+			pr_info("the frame's page cannot be mapped\n");
+			return count;
+		}
+		pr_info("rx frame at %08x, %u bytes\n", (u32)dma, len);
+		for (i = 0; i < len; i += 16) {
+			char out[2 * 16 + 1];
+			unsigned int j;
+
+			for (j = 0; j < 16; j++) {
+				u8 v = readb(raw + skip + i + j);
+
+				out[j * 2] = "0123456789abcdef"[v >> 4];
+				out[j * 2 + 1] = "0123456789abcdef"[v & 0xf];
+			}
+			out[2 * 16] = 0;
+			pr_info(" +%04x: %s\n", i, out);
+		}
+		iounmap(raw);
+		return count;
+	}
+
+	/*
 	 * The BMU's BPPE table.
 	 *
 	 * The table is the map from a buffer index to a buffer, and it is the

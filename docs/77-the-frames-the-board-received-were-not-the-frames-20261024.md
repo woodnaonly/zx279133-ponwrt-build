@@ -26,89 +26,119 @@ which is `lan2`, and that is the jack the test PC is in. The port mapping
 and the DSA dispatch of `51ac6c6` are therefore both right. What the
 stack was handed was not the frame.
 
+## What the descriptor says
+
+The run 153 build printed the descriptor of a received frame, and it is a
+good one:
+
+    descriptor: dma 84265100 len 92 word1 0782005c meta0 00000000
+                meta1 c0a801ff meta2 00000000 meta3 00000000
+
+* `dma 84265100` is a page plus 0x100 - the page-pool page the driver
+  handed the hardware, plus `ZX279133_IDM_RX_PAYLOAD_OFFSET`, which is
+  exactly what `__zx279133_idm_rx_post_page()` puts into the buffer
+  pointer ring, and exactly what the driver's own `valid_dma` check
+  insists on. It passes, for every frame.
+* `len 92` is a frame length.
+* `word1 0782005c` carries that length in its low fourteen bits.
+* `meta1 c0a801ff` is the frame's own address - `c0 a8` is 192.168.
+
+So the hardware took the buffer the driver gave it, parsed the frame in
+it, and wrote the descriptor. The frame is in the buffer. And the 92 bytes
+at that address are **all zero**:
+
+    bytes (92): 00000000...0000
+
+Zero is not a frame, and it is not what a frame would look like after the
+stack had touched it either.
+
 ## The cause
 
-**The hardware does not write the frame at the address the buffer pointer
-ring carries. It writes it 0x40 bytes further in.**
+**The CPU was reading its own cache.**
 
-The board's own loader says so, and it says it with the frame in front of
-you. The loader has the same chip and the same 9132, and its IDM receive
-debug (`idm_rx_debug 1`, then a `ping` to start its network stack) prints
-the descriptor and the buffer it filled in:
+The page the hardware writes into is ordinary cacheable memory. The
+hardware writes it behind the CPU's back, so the CPU's copy of it is stale
+until the cache line is given back - and the copy the CPU had was the
+page's *previous* contents: the initramfs' ASCII text in one run, the
+switch's port bitmaps in another. Those are exactly the "source MAC
+addresses" the bridge learned, and exactly what a page that has been used
+for something else holds.
 
-    rx desc address 0x00000000b0028000:
-      0xb00e8000        <- the descriptor's address field: the buffer
-      0x0782003c        <- length 0x3c = 60, source port 2, output 15
-      ...
-    address 0xb00e8000, addr_type 0, ptk_len 60, ... source_port 2, ... output 15
-    buff address : 0x00000000b00e8040, len : 60
+The invalidation was in the wrong place, by exactly the size of the
+offset:
 
-     00 29 47 00 00 32 84 47
-     09 5b bd 2c 08 06 00 01
-     08 00 06 04 00 02 84 47
-     09 5b bd 2c c0 a8 09 19
-     00 29 47 00 00 32 c0 a8
-     01 01 00 00 00 00 00 00
+    page_pool_dma_sync_for_cpu(pool, page, offset, len)
 
-That is a complete, correct Ethernet frame: the board's own address as the
-destination, the test PC's address as the source, `0x0806` as the type, and
-an ARP reply from 192.168.9.25. The **buffer** is at `0xb00e8040` and the
-**descriptor** names `0xb00e8000` - the same address 0x40 bytes earlier.
+`page_pool_dma_sync_for_cpu()` **adds the pool's own offset to the one it
+is handed**. The pool was created with
 
-The driver read at the descriptor's address. So the stack was handed 64
-bytes that were never written - whatever the page held before - followed
-by the first 42 bytes of the frame. The protocol field it read out of that
-was garbage, so the frame was dropped; and the source address the bridge
-learned out of it was the garbage's bytes 6..11. On this board the garbage
-is ASCII text, because the pages the pool hands out are ordinary pages and
-the initramfs was unpacked into ordinary pages.
+    .offset = ZX279133_IDM_RX_PAYLOAD_OFFSET
 
-Everything fits, including the numbers that did not fit anything else:
+so the helper invalidates
 
-* the descriptor's length is right (106 for a 106-byte frame, 60 for the
-  60-byte ARP reply) - only the *address* was wrong, so every counter was
-  perfect;
-* the chip's own SMAC byte counter counted 100 bytes for the 78-byte
-  frames the PC sent, which is the frame plus the six bytes it does not
-  count and the padding - the chip was never adding anything;
-* the frames came from the client's own port (`echo "trapall 2 0" >/d`
-  stops them: the driver's counter does not move at all), and the
-  destination address in the dumped frame is the board's own - the 9132
-  had already rewritten it.
+    [ dma + offset + pool->p.offset , +len )
 
-## The fix
+and the frame is at `dma + PAYLOAD_OFFSET`. The offset to pass is
+therefore **zero**. The fault (`2d11bbd`) changed it from zero to
+`PAYLOAD_OFFSET`, which moved the invalidated range from the frame to the
+**256 bytes after the frame**, where there is nothing at all.
 
-`ZX279133_IDM_RX_FRAME_OFFSET` (0x40), added to the three places that
-read the frame:
-
-* the CPU-side invalidate, which has to cover the range the device
-  actually wrote - `[256 + 0x40, 256 + 0x40 + len)`;
-* the prefetch, for the same reason;
-* the address the skb and the XDP program are built on.
-
-The XSK path moves its buffer's data pointer by the same 0x40, so the XDP
-program there sees the frame as well.
+That is the whole fault: the frame was never given back to the CPU, so the
+stack read the page's leftovers, and the counters were perfect throughout
+because they count frames and the frames had arrived.
 
 ## The other fault that was in the same place
 
-The frame is not at the start of the page it arrives in, either. The
-buffer pointer ring is given `page_pool_get_dma_addr(page) +
-ZX279133_IDM_RX_PAYLOAD_OFFSET`, so the hardware writes the frame at that
-offset - 256 bytes into the page - and the descriptor's address field
-says so, which is what the driver's own check (`valid_dma`) insists on.
-The CPU-side cache maintenance did not agree with that:
+The frame is not at the start of the page it arrives in - the buffer
+pointer ring is given `page_pool_get_dma_addr(page) +
+ZX279133_IDM_RX_PAYLOAD_OFFSET`, so the hardware writes the frame 256
+bytes into the page, and the descriptor's address field says so. The old
+reading of the fault was "the range that has to be invalidated is
+`[256, 256 + len)` and the range that was invalidated was `[0, len)`". The
+helper adds the pool's offset by itself, so `[0, len)` was in fact
+`[256, 256 + len)` and was **right**; the change made it wrong. The
+driver's comment on that call said the opposite, and the change was made
+on the strength of it.
 
-    page_pool_dma_sync_for_cpu(zx279133_rx_page_pool(page), page, 0, len);
+## The build that never ran
 
-Offset zero, length `len`. The range that has to be invalidated is
-`[256, 256 + len)` - and the range that was invalidated was `[0, len)`.
-Every frame on this wire is shorter than 256 bytes (an ARP request is 60, a
-ping is 98), so **not one byte of any frame was given back to the CPU**.
+The two runs after that (`155`, `156`, `157`) never reached the board,
+because the diagnostic that was added with them did not compile:
 
-That is a real fault and it is fixed (`2d11bbd`). It was not the cause of
-the garbage: run 151, with that fix, produced the same ASCII source MAC
-addresses in the same bridge. The frames were never stale cache; they were
-the wrong bytes.
+    dma_sync_single_range_for_cpu(eth->dev, addr, size, DMA_BIDIRECTIONAL);
+
+In 6.18 that helper takes **five** arguments -
+`dma_sync_single_range_for_cpu(dev, addr, offset, size, dir)` - and it
+invalidates `[addr + offset, +size)`. Four arguments is a hard error, and
+the CI's Actions log is not readable without a token, so the error text
+could not be read; it was found by reading the header of the exact kernel
+the build uses. The call has been given the fifth argument and the
+diagnostic now also prints, from the same header, what
+`page_pool_dma_sync_for_cpu()` does with the offset.
+
+## What the next build measures
+
+The BMU's own buffer pool has never actually been scanned: the build that
+would have scanned it did not compile. The scan is still in the tree, and
+it now reads the pool through `readb()` rather than through a pointer
+cast out of `__iomem`.
+
+The new part is the `rxu` command. It reads the bytes of the frame that
+`rxb` printed through a **device-memory mapping** of the same physical
+address - a mapping with no cache line in it at all - so for the first
+time the two possibilities can be told apart:
+
+| `rxb` says | `rxu` says | what it means |
+|---|---|---|
+| the frame | the frame | the data path works; the fault was elsewhere |
+| zeros | the frame | the CPU's cache was stale; the invalidation has to be forced |
+| zeros | zeros | the frame really is not in that buffer, and the pool scan says where it is |
+
+`rxb` also prints whether the kernel will do the invalidation at all
+(`dma_dev_need_sync()`, and the device's `dma_skip_sync`), because if the
+device is taken to be coherent, or the kernel was built without
+`CONFIG_DMA_NEED_SYNC`, the call is a no-op and the frame is lost in a way
+no counter shows.
 
 ## What was ruled out on the way
 
@@ -120,13 +150,21 @@ the wrong bytes.
   console dump of the SPA window shows `a0 = 0x0000a6a5`,
   `a1 = 0x0000088f`, `a2 = 0`, `a9 = 0`, `a10 = 0x0fa0000e`,
   `a13 = 0x00008008`, `a19 = 0x96040001` on the four UNI ports - the
-  values docs/15 lists for the vendor's own working system.
+  values docs/15 lists for the vendor's own working system. The IDM's own
+  configuration is the vendor's too: the control word 0x01ff1007, the
+  descriptor mode 0, the depths, and the buffer pool pointers.
 * **The MAC-width ERAM tables are empty.** Tables 0x1e, 0x21 and 0x2b read
   back as zero, and so do the 128-bit tables 0x00, 0x06, 0x22 and 0x2a.
 * **The trap table is not the problem.** `trapall 2 2` (trap every
   protocol) delivers exactly as many frames as the default.
 * **The SA-lookup bits are not the problem.** Clearing bit 28, bit 31 or
   both in the MF copy of the port's attribute word changes nothing.
+* **The frames come from the client's own port.** `echo "trapall 2 0" >/d`
+  stops them: the driver's counter does not move at all.
+* **The 0x40 in the board's own loader is a red herring.** The loader's
+  network stack is the **PON** one, and the PON's frame is at the buffer
+  plus 0x40. The 9132's own ports deliver the frame differently, and the
+  descriptor says exactly where: at the address the driver handed over.
 
 ## What this says about the earlier rounds
 
