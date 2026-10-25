@@ -1800,6 +1800,41 @@ U-Boot bootargs。真正的判别只有两条，而且都已在门禁里：
   因为 `coldboot.sh:94` 把它覆盖成 `staging/trial/flash-uImage`。**那个默认值是旧物**，
   下一次谁直接手跑 `g4verify.sh` 就会拿一轮前的镜像去比哈希，判出一个假 FAIL。
 
+### 9.24 续：冷启动 1 过闸（2026-10-26 01:48:40–01:49:37）
+
+断电 01:48:05 → 通电 01:48:40，`coldboot.sh` 全部按新写的样子工作：
+
+| 时刻 | 事件 | 实测 |
+|---|---|---|
+| 01:48:40 | 内核 banner | `coldboot: the kernel banner appeared at 01:48:40` |
+| 01:48:58 | ssh 应答，**身份判定（修⑫）** | `kernel 6.18.38+, uptime 19s` —— 19 < 600，是本次上电的启动 |
+| 01:49:23 | `g4verify.sh` 十六项 | `g4: summary 16 pass / 0 fail` |
+| 01:49:37 | `verify_router.sh` 五项 + 状态码传递（修⑩⑪） | `verify: summary 5 pass / 0 fail`、`coldboot: verify_router says 0` |
+
+两条新检查就是 run182 执行位问题的现场答案：
+
+- `g4: sknat PASS - -rwxr-xr-x 1 root root 3822 Oct 24 06:18 /etc/init.d/sk-nat`
+  —— 板子上是 `-rwx`，不是仓库里曾经的 `-rw-`；
+- `g4: masq PASS - the image installed its own masquerade rule (1 line)`
+  —— 跑着的 `ip nat` 表里确实有 masquerade 规则。
+
+配套的两条否证（省得把设计当 bug 修）：
+
+1. **「WAN 搬到 lan2 后规则会留在 lan3」——不成立。** `sk-nat` 不是开机跑一次的
+   脚本，是 `while true` + `sleep 15` 的循环（`sk-nat:69-95`），每轮重读
+   `uci get network.wan.device`，只在设备变了时才 `nft delete table ip nat` 重装
+   （`[ "$wan" != "$cur" ]`）。所以轮次第 1 步搬完口，规则最迟 15 秒后自己跟到
+   `lan2`；轮次第 3 步本来就要轮询到 120 秒，读证据时规则早就在新口上了。
+2. **「`natcounters.sh:24` 读 `lan2` 是上一轮的残留」——不成立。** `portmove.sh:148`
+   就是 `set_wan lan2`，`restore.sh` 再 `set_wan lan3` 放回去（`portmove.sh:166`），
+   计数读的口和轮次自己定的拓扑一致。
+
+一处子代理的引用错误，记下来免得照它改：它说 `natround.sh:173` 给
+`natcounters.sh` 又套了一层 `| tail -20`；实际第 171 行
+`sh natcounters.sh "$WAN" 2>&1` 没有管道，那个 `| tail -20` 属于第 173 行的
+`clientrun.sh`。按它改会改错文件。
+
+
 ## 10. 现在的状态（2026-10-26 00:07）
 
 ### 10.1 正在跑的东西
