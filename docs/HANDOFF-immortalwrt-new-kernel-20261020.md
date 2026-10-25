@@ -1739,7 +1739,7 @@ NAT 腿里还有几处**只打印不判**的（今晚由 ④ 的 `natverdict` �
 `tools/labupstream.ps1:90/92` 把异常写成 `already shared`，且不断言 `137.1` 真到位；
 `clientrun.sh:46-57` 轮询没有 else、`:57 || true`，没租约也返回 0，`:51` 只看 `lease + 192.168.9.`，
 不看 ping、不验 netns（`S27labclient:18-21` 允许回落根空间）；`portmove.sh:112` 的 `tail -1` 会被
-netifd 的横幅占；`flashpush.sh:85` 的 `sha256sum -c` 失败会降级成只打印。
+netifd 的横幅占；`flashpush.sh:85` 的 `sha256sum -c sha256sums-release || sha256sum …`：这文件是有 `set -eu`（:22）的，所以不是「只打印」——真正的洞是 `||` 把**真的 FAILED**（某个镜像哈希不对）和「清单读不到」混成同一种失败，然后后备的裸 `sha256sum` 必然成功、`set -e` 就没得可杀。清单点名的 5 个文件确实全在板上（:49 推 4 个 + 清单，`flash-sk-d840n.sh` 在 :76 从 templates 单独推），所以改成严格判定不会误杀：把输出收进变量，出现 `FAILED|WARNING|can't open` 就在 `--write` 之前退出。
 `natverdict` 接受 `-> RC=0` 这种形状，而它可能来自 `S27labclient` 写进 status、被
 `natevidence.sh:34` cat 出来的文字——那不构成「netns 里那次 ping 真通过」，所以判绿要看
 `0% packet loss` 那一行，不是 RC=0。
