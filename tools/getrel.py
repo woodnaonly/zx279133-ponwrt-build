@@ -82,6 +82,63 @@ def tag_exists(tag):
     return ("refs/tags/%s\n" % tag) in out or ("refs/tags/%s" % tag) in out
 
 
+def check_manifest(out, templates):
+    """Check a fetched release against its own manifest.
+
+    `out` is the directory the release was fetched into and `templates` is
+    the repository's own directory of the files that are built rather than
+    published.  The number of problems is returned; zero means the release
+    is what it says it is.
+    """
+    bad = 0
+    man = os.path.join(out, "sha256sums-release")
+    if not os.path.exists(man):
+        print("no manifest - nothing to check against")
+        return 1
+    for line in open(man):
+        parts = line.split()
+        if len(parts) != 2:
+            continue
+        want, name = parts
+        path = os.path.join(out, name)
+        if not os.path.exists(path):
+            # The release does not carry this file, but the manifest names
+            # it.  That is the flasher: it is in the tree, and the release's
+            # assets are the images.  It comes from this repository, which
+            # is where the release was built from - and the manifest's
+            # checksum is what proves that: if the repository's copy is not
+            # the release's copy, the check below says so.
+            #
+            # This used to be done only when the asset download answered
+            # 404, which is the branch that runs when the release list is
+            # not available.  When the list IS available the flasher is
+            # simply not in it, and the fetch ended with "the release did
+            # not check out" - over a file the release was never going to
+            # carry.  Run 181 was fetched that way, on 2026-10-25.
+            src = os.path.join(templates, name)
+            if os.path.exists(src):
+                shutil.copyfile(src, path)
+                print("   %-22s (not published as an asset; taken from %s)"
+                      % (name, src))
+            else:
+                print("   %-22s missing" % name)
+                bad += 1
+                continue
+        got = sha256(path)
+        ok = got == want
+        bad += 0 if ok else 1
+        print("   %-22s %s" % (name, "OK" if ok else "MISMATCH %s != %s" % (got, want)))
+        if not ok:
+            # The bytes here are not the bytes the release published.  The
+            # file is taken away, so that the next run fetches it again
+            # instead of failing on the same wrong file for ever.
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+    return bad
+
+
 def main():
     if len(sys.argv) < 1:
         list_releases()
@@ -201,33 +258,9 @@ def main():
                     raise
                 time.sleep(5)
 
-    man = os.path.join(out, "sha256sums-release")
-    if not os.path.exists(man):
-        print("no manifest - nothing to check against")
-        return 1
-    bad = 0
-    for line in open(man):
-        parts = line.split()
-        if len(parts) != 2:
-            continue
-        want, name = parts
-        path = os.path.join(out, name)
-        if not os.path.exists(path):
-            print("   %-22s missing" % name)
-            bad += 1
-            continue
-        got = sha256(path)
-        ok = got == want
-        bad += 0 if ok else 1
-        print("   %-22s %s" % (name, "OK" if ok else "MISMATCH %s != %s" % (got, want)))
-        if not ok:
-            # The bytes here are not the bytes the release published.  The
-            # file is taken away, so that the next run fetches it again
-            # instead of failing on the same wrong file for ever.
-            try:
-                os.remove(path)
-            except OSError:
-                pass
+    templates = os.path.join(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))), "templates")
+    bad = check_manifest(out, templates)
 
     kimg = os.path.join(out, "flash-uImage")
     if os.path.exists(kimg):

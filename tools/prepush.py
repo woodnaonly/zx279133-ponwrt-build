@@ -18,6 +18,10 @@ not have to:
      bug in the gate rather than in the driver - so the gate's own test
      runs here too, and, when the tree snapshot is on this PC, the gate
      itself is run against the overlay the way the CI runs it.
+  6. the release publishing less than its own manifest names.  The manifest
+     is made over the staging directory and names the flasher as well as
+     the images; the release's file list is a second, hand-written list, and
+     run 181's release published four of the five files its manifest names.
 
 Exit status 0 means clean.
 """
@@ -39,6 +43,11 @@ TREE_SNAPSHOT = os.path.join(WORKSPACE, "upstream")
 TREE_FLAT = os.path.join(WORKSPACE, "tree")
 FLAT_PREFIXES = (("include_", "include"), ("arch_", "arch"),
                   ("drivers_", "drivers"), ("net_", "net"))
+# The places in an image where a file is run rather than read: an init
+# script, an rc.d link, a preinit hook, a helper in libexec, a command in
+# sbin, a uci-defaults, the upgrade's platform script.
+MUST_RUN = ("/etc/init.d/", "/etc/rc.d/", "/etc/uci-defaults/",
+            "/lib/preinit/", "/usr/libexec/", "/usr/sbin/", "/lib/upgrade/")
 
 
 def strip_c(src):
@@ -97,6 +106,31 @@ def gate_selftest():
     return 0
 
 
+def repo_tests():
+    """The tools that read the images have to be right before the build runs.
+
+    Two of them are asked a question about the image itself, and a wrong
+    answer is a build that is refused for no reason (docs/87, docs/88) or a
+    release that is fetched wrongly (run 181).  Both are here, and both run
+    offline.
+    """
+    bad = 0
+    for name in ("test-jffs2names.py", "test-getrel.py"):
+        t = os.path.join(REPO, "tools", name)
+        if not os.path.exists(t):
+            continue
+        r = subprocess.run([sys.executable, t], capture_output=True, text=True)
+        if r.returncode != 0:
+            print("prepush: %s failed" % name)
+            print(r.stdout)
+            print(r.stderr)
+            bad += 1
+        else:
+            last = [ln for ln in r.stdout.strip().splitlines() if ln.strip()]
+            print("prepush: %s: %s" % (name, last[-1] if last else "ok"))
+    return bad
+
+
 def flat_target(name):
     """Where a flattened tree file belongs, or None if it is not one."""
     for prefix, top in FLAT_PREFIXES:
@@ -106,6 +140,122 @@ def flat_target(name):
                 return None
             return os.path.join(top, rest.replace("_", os.sep))
     return None
+
+
+def release_manifest_check():
+    """The release has to publish everything its own manifest names.
+
+    The manifest is made over the staging directory, so it names the
+    flasher as well as the images - and the flasher is what the board
+    runs, and what the board checks the images against.  The release's own
+    file list is a second list, written by hand further down the same
+    file, and the two can drift apart: run 181's release published four of
+    the five files its manifest names, so a fetch that believes the
+    manifest came back "the release did not check out" over a file the
+    release was never going to carry.
+    """
+    wf = os.path.join(REPO, ".github", "workflows", "build-sk-d840n.yml")
+    if not os.path.exists(wf):
+        return 0
+    with open(wf, encoding="utf-8", errors="replace") as fh:
+        lines = fh.read().splitlines()
+
+    # The shell's line continuations are joined first, so a command written
+    # on two lines is read as the one command it is.
+    logical = []
+    buf = ""
+    for ln in lines:
+        s = ln.rstrip()
+        if s.endswith("\\"):
+            buf += s[:-1] + " "
+            continue
+        logical.append(buf + s)
+        buf = ""
+    if buf:
+        logical.append(buf)
+
+    # What the manifest names: the file names in the sha256sum that writes it.
+    named = set()
+    for s in logical:
+        if "sha256sums-release" not in s:
+            continue
+        m = re.search(r"sha256sum\s+([^>]*?)\s*>", s)
+        if m:
+            for tok in m.group(1).split():
+                named.add(tok)
+
+    # What the release publishes: the files: block of the publish step.
+    published = set()
+    in_block = False
+    for ln in lines:
+        if ln.strip() == "files: |":
+            in_block = True
+            continue
+        if in_block:
+            if not ln.strip():
+                continue
+            if not ln.startswith(" " * 10):
+                in_block = False
+                continue
+            published.add(ln.strip())
+
+    if not named:
+        print("prepush: the workflow's manifest command was not found - the "
+              "release check did not run")
+        return 1
+    missing = sorted(named - published)
+    for name in missing:
+        print("prepush: the release's own manifest names %s, and the release "
+              "does not publish it - a fetch that believes the manifest fails "
+              "on a file the release was never going to carry" % name)
+    print("prepush: the release publishes %d files, and its manifest names "
+          "%d of them" % (len(published), len(named)))
+    return len(missing)
+
+
+def overlay_modes_check():
+    """Everything the image runs has to be executable.
+
+    A file that is 100644 in git reaches the image as 0644, and a script
+    that is not executable is not run - silently, because the image still
+    boots and everything else still works.
+
+    The NAT rule's init script was 0644 in this repository for every
+    commit that had it.  The CI's own image therefore installed the rule
+    on the first boot (the uci-defaults is sourced, so its mode does not
+    matter) and on no boot after that: a board flashed with that image
+    had a masquerade rule after its first boot and none after its second.
+    Measured on 2026-10-25 at 23:49, on the CI's own release.
+
+    The zrec scripts were 0644 in the same way, and they are the
+    recovery service of the RAM image.
+    """
+    try:
+        r = subprocess.run(["git", "-C", REPO, "ls-files", "-s", "overlays"],
+                           capture_output=True, text=True)
+    except Exception:
+        return 0
+    if r.returncode != 0:
+        print("prepush: the overlay's file modes were not read - git said "
+              "nothing about them")
+        return 0
+    bad = 0
+    for line in r.stdout.splitlines():
+        parts = line.split(None, 3)
+        if len(parts) < 4:
+            continue
+        mode, _sha, _stage, path = parts
+        if mode == "100755":
+            continue
+        if not any(m in "/" + path for m in MUST_RUN):
+            continue
+        print("prepush: %s is %s in git and the image runs it - a script "
+              "that is not executable is not run, and the image still boots"
+              % (path, mode))
+        bad += 1
+    print("prepush: the overlay's executable bits are checked (%d problems)"
+          % bad)
+    return bad
 
 
 def gate_against_snapshot():
@@ -176,7 +326,10 @@ def main():
     # gate that says "no" to a good build costs an hour, and a gate that
     # says "yes" to a bad one costs the same.
     bad += gate_selftest()
+    bad += repo_tests()
     bad += gate_against_snapshot()
+    bad += release_manifest_check()
+    bad += overlay_modes_check()
 
     defined = set()
     for f in files:

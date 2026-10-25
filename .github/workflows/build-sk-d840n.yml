@@ -1828,6 +1828,7 @@ jobs:
             flash-dtb.bin
             flash-rootfs.jffs2
             flash-sysupgrade.bin
+            flash-sk-d840n.sh
             sk-d840n-initramfs.itb
             sha256sums
             sha256sums-release
