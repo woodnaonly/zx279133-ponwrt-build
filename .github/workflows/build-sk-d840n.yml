@@ -696,6 +696,31 @@ jobs:
         id: compile
         if: steps.pick.outputs.run == 'true'
         working-directory: openwrt
+        # A build that hangs must not cost the whole job.
+        #
+        # Run 168 sat in this step for 5h53m in BOTH matrix jobs and was
+        # killed by the job's own 6h limit with nothing to show for it: the
+        # step was reported as "cancelled", which says nothing about whether
+        # the compile was slow, stuck on a fetch, or out of memory.  A step
+        # timeout names the step that stopped, and leaves the other matrix
+        # job's result alone.
+        #
+        # The ceiling is 200 minutes because the build has been measured at
+        # 33 to 69 minutes on this runner (runs 166 and 167) - so 200 is
+        # three times the worst good run, and anything slower is a problem
+        # rather than a build.
+        timeout-minutes: 200
+        # A fetch that stalls must fail, not wait.
+        #
+        # git has no default timeout: a half-open connection to a package
+        # mirror leaves `make` blocked forever, which is the shape of a
+        # six-hour build with no output.  These make the transfer give up
+        # after a minute of under 1 KB/s, so the build fails and can be
+        # retried instead of hanging.
+        env:
+          GIT_HTTP_LOW_SPEED_LIMIT: 1000
+          GIT_HTTP_LOW_SPEED_TIME: 60
+          GIT_TERMINAL_PROMPT: 0
         # The serial retry is what names the failing file, so it is the pass worth keeping.
         # It is tee'd and its diagnostics are re-emitted as ::error:: lines because a workflow log
         # is 403 without a token on this machine - and a build that costs 80 minutes and returns
@@ -712,8 +737,25 @@ jobs:
           # broke is the thing this step exists to prevent, so every status has to be captured in
           # a form `-e` is obliged to leave alone.
           rc=0
+          # The disk has to hold the tree.  A build that runs out of space
+          # does not fail cleanly - it stalls in the middle of a write - so
+          # the number is stated before the build starts rather than
+          # inferred from a hang.
+          echo "::notice::the build starts with $(df -BG . | tail -1 | awk '{print $4}') free"
           make -j"$(nproc)" || rc=$?
           if [ "$rc" = 0 ]; then exit 0; fi
+          # A failed build is often one stalled fetch, and make is
+          # incremental, so the same tree is worth one more parallel pass
+          # before the slow diagnostic one.  Runs 166 and 167 compiled in
+          # 33 to 69 minutes with no retry at all, so this only costs
+          # anything when something has already gone wrong.
+          echo "::warning::the parallel build failed with rc=$rc - retrying once on the same tree"
+          rc=0
+          make -j"$(nproc)" || rc=$?
+          if [ "$rc" = 0 ]; then
+            echo "::notice::the retry finished the build"
+            exit 0
+          fi
           make -j1 V=s 2>&1 | tee ../compile-v1.log || rc=$?
           if [ "$rc" != 0 ]; then
             # The compiler's own message comes FIRST in the log and the make
@@ -1028,17 +1070,36 @@ jobs:
           # packed differently - so what is flashed is what was tested.
           RAW="$KT/arch/arm64/boot/Image"
           test -f "$RAW" || { echo "::error::no $RAW"; exit 1; }
-          ZOPFLI=$(command -v zopfli || true)
-          [ -n "$ZOPFLI" ] || { sudo apt-get -qq update && sudo apt-get -qq install -y zopfli; ZOPFLI=$(command -v zopfli); }
-          test -n "$ZOPFLI" || { echo "::error::zopfli is not available - the kernel would not fit in the partition"; exit 1; }
           IMG="$KT/arch/arm64/boot/Image.zopfli.gz"
-          # --i5: five iterations find almost all of the gain, and the whole
-          # kernel takes a minute instead of a quarter of an hour.
-          # --splitting: the deflate blocks are split at the gzip member
-          # boundaries, which was worth another 1.5% on this kernel
-          # (8,199,103 bytes without it, 8,069,537 with it, measured on the
-          # 2026-10-25 kernel with zopfli 0.4.3).
-          "$ZOPFLI" -q --i5 --splitting --gzip -o "$IMG" "$RAW"
+          # zopfli comes from PyPI, not from the distribution's package.
+          #
+          # The `zopfli` command in Ubuntu's archive is version 1.0.3 and its
+          # interface is not what this build assumed: it has no `-q`, no `-o`
+          # and no `--splitting`.  The build called it with all three, the
+          # command wrote nothing at all, and run 167 failed with "zopfli
+          # produced nothing" after an hour of compiling - with the log saying
+          # nothing about why.
+          #
+          # The Python binding has the knobs this needs by name
+          # (numiterations, blocksplitting), installs from a manylinux wheel
+          # without a compiler, and is exactly what the accepted image on the
+          # board was made with - so the CI and the bench produce the same
+          # bytes from the same kernel.
+          #
+          # --user, because the runner's python is not the runner's to
+          # change, and a wheel, because zopfli's C extension would otherwise
+          # need a compiler and a header package for no reason.
+          python3 -m pip install --quiet --disable-pip-version-check --user \
+            "zopfli==0.4.3" || {
+            echo "::error::the zopfli module could not be installed - the kernel would not fit in the partition"
+            exit 1; }
+          python3 -c "import zopfli.gzip" || {
+            echo "::error::the zopfli module is not importable"
+            exit 1; }
+          # tools/mkgzip.py does the compression, checks that the stream
+          # decompresses back to the same kernel, and refuses to write a
+          # payload that does not fit in the partition.
+          python3 tools/mkgzip.py "$RAW" "$IMG" 10
           test -f "$IMG" || { echo "::error::zopfli produced nothing"; exit 1; }
           echo "kernel: $(stat -c %s "$RAW") bytes raw"
           echo "kernel: $(stat -c %s "$KT/arch/arm64/boot/Image.gz" 2>/dev/null || echo '?') bytes with gzip -9"

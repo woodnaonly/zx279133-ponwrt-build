@@ -802,3 +802,64 @@ root → dtb → kernel，`mtd verify` Success，另外**独立读回分区**再
   也一样会被 netifd 的 reload 应用掉 —— 改完板子的 br-lan 立刻掉成
   NO-CARRIER，板子从网上消失，**只有串口救得回来**（`staging/ctl/q.py`）。
   改板子的网络配置前先想好怎么用串口改回来。
+
+### 9.13 run167 / run168 的两个病因，和 CI 的防挂死改造（2026-10-25）
+
+**run167 和 run168 不是同一个失败。** run167 停在 `Package flash images`
+（`::error::zopfli produced nothing`），run168 停在 **`Compile` 步骤**，
+19:04 开始、00:57 被 job 自己的 6h 上限砍掉，**5h53m**。两个 job 一样。
+所以 run168 根本没走到压缩那一步。
+
+对比同一仓库前两次 run 的 `Compile` 耗时：**166 是 62:20 / 69:05，167 是
+51:14 / 32:55**（分钟）。33–69 分钟是正常，5h53m 不是「慢」，是**卡住**。
+
+**病因一：zopfli 的命令行有三个不存在的选项。** build 里写的是
+
+```sh
+"$ZOPFLI" -q --i5 --splitting --gzip -o "$IMG" "$RAW"
+```
+
+Ubuntu 仓库里的 zopfli 是 1.0.3，它的命令行只有
+`-h -c -v --i# --gzip --zlib --deflate --splitlast`——**没有 `-q`、没有 `-o`、
+没有 `--splitting`**。命令自己拒绝了自己的参数，什么都没产出，下一行只能
+报「文件不在」。**报错指向 zopfli，过错在调用方式。**
+
+**改法：改用 zopfli 的 Python 绑定**（`ci-build-repo/tools/mkgzip.py`）：
+
+```sh
+python3 tools/mkgzip.py "$RAW" "$IMG" 10
+```
+
+- 绑定是**按名字**给参数的（`numiterations` / `blocksplitting`），
+  `blocksplitting=True` 正好是值 1.5% 的那个选项（8,199,103 → 8,069,537）。
+- **CI 免编译**：PyPI 上 zopfli 0.4.3 有 `cp310-abi3-manylinux2014_x86_64`
+  wheel，ubuntu-22.04 的 python3.10 直接装。
+- **和已验收的镜像逐字节一致**（本机实测）：同一内核跑 `tools/mkgzip.py`
+  得 8,069,537 字节 payload，与**板子上那个已通过验收的镜像的 payload
+  完全相同**（`staging/ctl/checkmkgzip.py` 的 MATCH 输出）。**CI 和本机
+  现在产出的是同一个镜像**，板子上挣来的验收对 CI 出的片仍然成立。
+- 内核本体一个字节没动，变的只是外面的容器。
+
+**病因二：编译卡死。** OpenWrt 的 build 要联网取东西，**git 没有默认超时**
+——连接建好之后不送数据，fetch 就无限期挂着。这正是「六小时没输出的 build」
+的形状。
+
+三处改造（都不改变构建出来的东西）：
+
+- `Compile` 步骤加 `env: GIT_HTTP_LOW_SPEED_LIMIT=1000` +
+  `GIT_HTTP_LOW_SPEED_TIME=60` + `GIT_TERMINAL_PROMPT=0`：
+  **传输低于 1 KB/s 持续 1 分钟就放弃**，卡住的 fetch 变成会失败的 fetch。
+- `Compile` 步骤加 `timeout-minutes: 200`（job 的 6h 留作外层兜底）。
+  200 是最差正常 run（69 分钟）的三倍，**只在已经出问题时才触发**，而且
+  触发时点名是哪个步骤停了，不会再把整个 job 报成 "cancelled"（那个词
+  什么也没说：慢、抓包、还是内存不够）。
+- `Compile` 在慢速诊断 pass 之前**先重试一次并行 build**。`make` 是增量的，
+  第二次接着第一次断的地方走；失败常常只是一次卡住的 fetch。
+
+**这一轮最该记住的：** 一个**步骤**能报出自己的超时、一个 fetch 被允许失败，
+才能把「构建停了六小时什么都不说」变成「构建停了，停在这里」。
+详见 **docs/80**。
+
+**新文件**：`ci-build-repo/tools/mkgzip.py`（CI 与本机共用的压缩脚本）。
+**新坑**：CI 里 `python3 -m pip install` 要加 `--user`（runner 的 python 不归
+runner 改），加 `--disable-pip-version-check` 免得 pip 自己先升级自己。
