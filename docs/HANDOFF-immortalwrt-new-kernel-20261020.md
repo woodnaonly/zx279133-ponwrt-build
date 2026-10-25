@@ -1542,7 +1542,7 @@ table ip nat { chain postrouting { oifname "lan3" counter packets 0 bytes 0 masq
 
 ---
 
-## 9.23 无人值守轮次开跑前的体检：十七处修、两处否证（2026-10-26 00:41–01:26）
+### 9.23 无人值守轮次开跑前的体检：十七处修、两处否证（2026-10-26 00:41–01:26）
 
 run182 还在编译，出片后 `g4prime-auto.sh` 会**自己**跑完整一轮（门禁→窗口内刷机→两次冷启动→NAT）。
 趁这段时间做了三份只读审计（轮次脚本 / 文档与证据 / 执行位影响），**每条结论都自己重读源码复核过**，
@@ -1754,7 +1754,7 @@ netifd 的横幅占；`flashpush.sh:85` 的 `sha256sum -c sha256sums-release || 
 
 ---
 
-## 9.24 run182 的自动整轮：flash 段已经过了（2026-10-26 01:14–01:35）
+### 9.24 run182 的自动整轮：flash 段已经过了（2026-10-26 01:14–01:35）
 
 ①–⑰ 那批修正是为这一轮写的；这一节是它自己跑出来的结果。**flash 段成功，
 写进去的字节被逐字节读回**；冷启动两次与 NAT 轮在后面（本节留了位置）。
@@ -1834,6 +1834,71 @@ U-Boot bootargs。真正的判别只有两条，而且都已在门禁里：
 `sh natcounters.sh "$WAN" 2>&1` 没有管道，那个 `| tail -20` 属于第 173 行的
 `clientrun.sh`。按它改会改错文件。
 
+
+### 9.25 收证据这一环自己会撒谎：fill86 的三处修 + 两个等待者的否证落空（2026-10-26 01:56–02:02）
+
+轮次还在跑，这一段修的是**轮次之后**要用的东西。核心问题不是 `fill86.py` 会不会崩，
+而是它会不会把上一轮的数当成这一轮的数写进一份永久文档。
+
+**① 真的漏（子代理逐字抓到的串）**：`EVIDENCE` 里 `flashbyhand.txt` 是**不带 run 号**的
+文件，昨天 22:53 落盘、属于 run 181，里面就有 `kernel: OK b2964491dce550c9ccfe17e20aaf76be`
+与 `root: OK a491ee2bb765ecaa7da1ba443d74f0e5` —— 而 `<<FLASH>>`/`<<WRONGWAY>>` 两节的
+取数函数都无条件读它。修法：新增 `release_dir_mtime(run)` + `stale(name, when)`，
+**不带 run 号的文件用时间钉**（早于本轮 release 目录 mtime 01:17:05 的一律不引用），
+`flash_write_evidence(run)` 命中时返回「本轮没有手工写盘，磁盘上那个文件早于本轮
+release，不引用」而不是返回它的内容。
+
+**② 我自己那条守卫原来是空转的**：上一夜加的「按 `.fill86.state.json` 比对 mtime」
+在**第一次**填充时状态文件不存在，整段 `if state and ...` 直接跳过（`load_state()` 返回
+None）—— 所以它对今晚这个泄漏一点作用都没有。这就是「我自己造的正例算不算对照」的
+反面教材：一条规则在真实首跑路径上根本不执行。现在改成不依赖状态文件。
+
+**③ 「文件在、而且新」不等于「那次启动被验过」**：`g4cold2.txt` 现在只有 69 字节、
+内容只有 `coldboot: … waiting for a boot`，而 `section_cold()` 会把这种半截文件照样填进
+文档。新增门禁：冷启动文件必须同时含 `g4: summary` 与 `coldboot: done`，否则具名拒绝。
+
+**④ 两处硬写的假事实**（不是正则问题，是 prose 自己编的）：
+`section_release` 原文写「it is the first *flash* release this project ever published」——
+`staging/trial` 里就摆着 `skd840n_flash_166_*`、`skd840n_flash_181_*`，而且 §9.21 记着 181
+已经刷进 flash 并两次冷启动全过；`section_bytes` 里那张表把 2026-10-25 01:35 **手工构建**
+的镜像（`329f1bbc…`/`55ee805a…`）列在讲 CI release 的小节里，和 182 的真实哈希
+（`170592a7…`/`2af47bc5…`）并排。两句都改成就事论事：182 不是「第一个 flash release」，
+它是第一个**镜像自带的 `/etc/init.d/sk-nat` 以可执行位到达板上、自己装上
+masquerade 规则**的 release，而证据是下面两次冷启动的实测行，不是断言。
+
+对照（全部用磁盘上真实的东西，没有一条是我造的）：
+
+| 对照 | 输入 | 结果 |
+|---|---|---|
+| 拒绝 | `fill86.py 182 --reset`（NAT 还没跑） | `rc=1`，四条具名理由；docs/86 md5 仍 `e2de4030…`＝模板 |
+| stale 真值 | `flashbyhand.txt`(昨 22:53)、`g4nat-round.txt`(昨 23:33) | `stale=True` |
+| stale 假值 | `g4cold1.txt`(今 01:49，本轮真实新文件) | `stale=False` |
+| 漏点关闭 | `section_flash(182)` 输出 | 走「本轮自己写的」分支，且 `a491ee2b`/`b2964491` **都不在** |
+
+**⑤ 两个等待者的「超时也说成成功」**：`g4watch.sh`/`g4natwatch.sh` 的 240 次轮询只用
+`break` 区分成功，`done` 之后无条件 `echo "watch: the power cycle happened"`；而
+`grep … || true` 会把「日志读不到」也当成 0 次，于是**十二分钟没有任何证据**会被宣布成
+一次完整的断电，`g4natwatch` 还紧接着去跑 NAT 轮次（`pwsh … labnat-flash.ps1`），并且
+它等 ssh 那个循环也没有判定、脚本也没有退出码。修法：`CYC` 标志 + 不成立就 `exit 1`
+（并把那一段切片打到 stderr），`g4natwatch` 的 ssh 等待加 `VER` 判定、轮次的 `rc` 传出。
+`LOG=${LOG:-…}`、`sleep ${WAIT:-3}` 是为了能用真实抓取件跑对照。
+
+| 对照 | 输入 | 结果 |
+|---|---|---|
+| 正例 | `g4prime-accept.txt` 里真实的 `01:17:05 Up -> Disconnected` + `01:17:40 Disconnected -> Up` | 宣布，`rc=0` |
+| 否例 | `.netround.slice`（真实控制台抓取，0 条断电、0 条上电） | 不宣布，`rc=1`，`cut=0 up=0` |
+| 否例 | 空日志（文件在，什么都没有） | 不宣布，`rc=1` |
+
+诚实标注：**没有**磁盘上真实存在的「只断电、没上电」半证据件（`plugphase.log` 286 条
+cut 都对 287 条 up，总是成对），所以那一条**未测**，不算已验证。
+
+**⑥ 仍然没修，只把形状写清楚**：`tools/postflash.sh` 的分区回读比报告说的更糟——
+(a) 第 232 行 `|| true`；(b) `2>&1 | tee` 让状态本来就是 tee 的；(c) **根本没有比较**：
+设备哈希和期望哈希只是打印给人看，heredoc 是文件最后一个可执行块，所以脚本退出码
+恒为 0、那段「Expected, md5 of …」永远像回读成功一样打印；另外 `ci-build-repo/` 里没有
+`staging/`，从其仓库根跑时这段是够不着的。不改的理由是要测它只能 stub `ssh`，那是我自
+造的正例；而今晚的 flash 路径已经有独立且更强的闸门（`g4flash.sh` 三分区 md5 回读，
+实测与 PC 侧三个镜像逐字节相同）。
 
 ## 10. 现在的状态（2026-10-26 00:07）
 
