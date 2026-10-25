@@ -1,4 +1,4 @@
-=== 10:23:53 beat 18 log=3331 frozen=0 wrote=yes ===
+=== 10:29:57 beat 21 log=3331 frozen=3 wrote=yes ===
 --- the last 30 lines of the build's own log ---
  make[3] -C tools/dosfstools compile
  make[3] -C tools/flex compile
@@ -32,23 +32,23 @@
  make[3] -C toolchain/gcc/final compile
 --- the processes that have been running the longest ---
 ELAPSED STAT COMMAND
-   2857 Ss   /sbin/init
-   2857 S    [kthreadd]
-   2857 S    [pool_workqueue_release]
-   2857 I<   [kworker/R-rcu_g]
-   2857 I<   [kworker/R-rcu_p]
-   2857 I<   [kworker/R-slub_]
-   2857 I<   [kworker/R-netns]
-   2857 I<   [kworker/0:0H-events_highpri]
-   2857 I<   [kworker/R-mm_pe]
-   2857 I    [rcu_tasks_rude_kthread]
-   2857 I    [rcu_tasks_trace_kthread]
-   2857 S    [ksoftirqd/0]
-   2857 I    [rcu_sched]
+   3222 Ss   /sbin/init
+   3222 S    [kthreadd]
+   3222 S    [pool_workqueue_release]
+   3222 I<   [kworker/R-rcu_g]
+   3222 I<   [kworker/R-rcu_p]
+   3222 I<   [kworker/R-slub_]
+   3222 I<   [kworker/R-netns]
+   3222 I<   [kworker/0:0H-events_highpri]
+   3222 I<   [kworker/R-mm_pe]
+   3222 I    [rcu_tasks_rude_kthread]
+   3222 I    [rcu_tasks_trace_kthread]
+   3222 S    [ksoftirqd/0]
+   3222 I    [rcu_sched]
 --- the directories the build touched lately ---
 toolchain-aarch64_cortex-a53_gcc-14.3.0_musl
 host
 target-aarch64_cortex-a53_musl
 --- memory and load ---
-Mem:           15988        1152        1031          51       13804       14437
- 18:23:53 up 47 min,  0 users,  load average: 4.10, 4.58, 5.26
+Mem:           15988        1622        1393          51       12973       13967
+ 18:29:57 up 53 min,  0 users,  load average: 6.12, 5.54, 5.48
