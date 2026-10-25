@@ -1542,11 +1542,11 @@ table ip nat { chain postrouting { oifname "lan3" counter packets 0 bytes 0 masq
 
 ---
 
-## 9.23 无人值守轮次开跑前的体检：十三处修、两处否证（2026-10-26 00:41–01:11）
+## 9.23 无人值守轮次开跑前的体检：十五处修、两处否证（2026-10-26 00:41–01:14）
 
 run182 还在编译，出片后 `g4prime-auto.sh` 会**自己**跑完整一轮（门禁→窗口内刷机→两次冷启动→NAT）。
 趁这段时间做了三份只读审计（轮次脚本 / 文档与证据 / 执行位影响），**每条结论都自己重读源码复核过**，
-然后修了十三处（①–⑬，其中⑩–⑬是验收那条腿的第二次审计）。下面每一条都是「不修就一定白跑一轮、
+然后修了十五处（①–⑨ 刷机与判据；⑩–⑬ 冷启动验收；⑭–⑮ NAT 腿的收尾）。下面每一条都是「不修就一定白跑一轮、
 或者会把好的判成坏的」的东西，不是改进。
 
 **① 自动轮会在第一步就退出，因为它根本没有取包这一步。**
@@ -1658,6 +1658,35 @@ ssh 那边 `:52` 只要 `uname -r` 有值就算板子回来了 ——
 `g4flash.sh` 的 trap（⑧）负责还回来；这是从"会为此买单的那一侧"再看一遍。
 控制组：把守卫原样抽出来跑——无文件 rc=1、只有 `.off` rc=1+提示、文件在 rc=0。
 
+**⑭–⑮ NAT 腿的收尾（第三次只读审计，01:12–01:14）——这两条是今晚最贵的**
+
+**⑭ 收尾的那条 ssh 在 ICS 开着的时候必然连不上，而它的失败被 `| tail` 掩掉。**
+`tools/restore.sh` 调 `portmove.sh back`，只传了 `SKD_HOST=$WAN`，没传 `SKD_BIND`
+⇒ 沿用默认 `-b 192.168.9.25`；而**第 7 步是在 ICS 还开着的时候跑的**，
+共享一开就把有线网卡重配成只有 `192.168.137.1`（`clientrun.sh:35` 正是用 137.1 做 BindAddress）
+⇒ ssh 在 bind 阶段就 255 退出 ⇒ 又被 `2>&1 | tail -20` 变成 0。
+后果不是"少一条日志"：**口从没放回**，`wan` 与它的 `uci commit` 留在 flash 里，
+`natround.sh:175` 照样打印 "the round is done"；下一次插座断电之后 `192.168.9.1` 不在 PC 这一段，
+**此后所有 ssh 工具与冷启动验收一起废**，而且看起来像镜像坏了。
+**已修**：bind 按"这块网卡现在到底有没有 137.1"来选（实测当前 ICS 关 ⇒ 0 命中 ⇒ 仍走 9.25；
+合成文本 ⇒ 命中），并**去掉那条 `| tail`**——`portmove.sh back` 自己会从**串口**回读桥的端口列表、
+不对就 exit 1，那个判定正是"口放回没放回"的全部意义，它必须传到脚本的退出码上。
+
+**⑮ `natround.sh` 只在走到末尾时才复原。**
+它 `set -e`，而复原排在最后一步；`grep` 六个脚本**没有一条 trap** ⇒
+任何一步失败（最可能的是 `:146 sh natcounters.sh "$WAN"`——唯一不带 `| tail` 的那条，
+板子中途失联就整轮退出）就把 ICS、被摘出去的口、`lan wan` 的 dropbear **全留下**。
+**已修**：`trap natround_cleanup EXIT` + 两面旗（`RESTORED`、`ICS_ON`）保证不重复复原；
+顺带给整个脚本加上 `set -o pipefail` —— `portmove.sh` 自己那句
+"the round stops here rather than going on with a bridge that is not the one that was asked for"
+**从来就停不住**，因为它的状态被管道里的 `tail` 换了。
+控制组（把 `restore.sh`/`pwsh` 换成桩跑抽取出来的真函数）：
+`RESTORED=0 ICS_ON=1` ⇒ 复原与关共享都执行；两者都已完成 ⇒ 什么都不做；
+内层退出码 7 与 3 ⇒ **原样传出**。
+**测试自己也会错，记下来省得再错**：第一版把 `sh` 也做成了桩，于是连测试自己的
+`sh -c 'exit 7'` 都被拦下来，读成 rc=0，差点得出"trap 吞状态码"的错误结论。
+控制组必须先证明它测的是被测试的那个东西——造失败码要用 `bash -c`，别用被桩接管的名字。
+
 **否证一：`trial-files/` 那 5 个 `100644` 不是 bug。**（子代理报的是"同类缺口"，我不接受，去查了构建路径）
 `workflow:305` 的 `cp -a` 后面紧跟 `:306 chmod 755 openwrt/files/etc/rc.d/* openwrt/files/usr/libexec/*`
 （`git log -S` 显示它自 `6d076d4`（2026-10-10）就在），所以 S15trial/S26nat/S27labclient/trial-blink
@@ -1680,6 +1709,14 @@ RAM 镜像的开机行为**逐字节等价**，今晚那一轮不受影响。
 **已知、未修、别当成已修**（今晚的轮次会带着它们跑，`natverdict` 兜住了最关键的一条）：
 `natround.sh` 无 pipefail + `| tail` 吞步骤失败；`g4watch.sh:21-34`、`g4natwatch.sh:21-28`
 循环超时后照样打「the power cycle happened」；`g4verify.sh:114` 有个 `|| true`；它的 #13/#14 读的是「上一段 `Linux version` 之后」的日志，板子中途死了那两项照过（⑫ 补的是 ssh 侧的身份，补不住这两项）；验收全程不读 `plugphase.log` 来避让断电，跨 15:30 是常态、只重试。
+NAT 腿里还有几处**只打印不判**的（今晚由 ④ 的 `natverdict` 在末尾兜住，单条没修）：
+`tools/labupstream.ps1:90/92` 把异常写成 `already shared`，且不断言 `137.1` 真到位；
+`clientrun.sh:46-57` 轮询没有 else、`:57 || true`，没租约也返回 0，`:51` 只看 `lease + 192.168.9.`，
+不看 ping、不验 netns（`S27labclient:18-21` 允许回落根空间）；`portmove.sh:112` 的 `tail -1` 会被
+netifd 的横幅占；`flashpush.sh:85` 的 `sha256sum -c` 失败会降级成只打印。
+`natverdict` 接受 `-> RC=0` 这种形状，而它可能来自 `S27labclient` 写进 status、被
+`natevidence.sh:34` cat 出来的文字——那不构成「netns 里那次 ping 真通过」，所以判绿要看
+`0% packet loss` 那一行，不是 RC=0。
 `g4flash.sh:63` 取 RAM 镜像用 `|| true` **是有意的**（`:88-96`：release 自带 itb 就用它，
 没有就留在盘上那一个，好让「RAM 镜像起不来的 release」也还有一条活路），不算缺陷。
 ⑦⑧ 两条已经在本节里修掉并给了控制组，不要重复劳动。

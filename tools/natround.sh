@@ -34,6 +34,35 @@
 #   7. everything is put back: the client, the port, dropbear, and this
 #      PC's sharing.
 set -e
+set -o pipefail
+# The round leaves the bench in a state that only this script knows how to
+# undo: the sharing on, one port out of the bridge and committed into flash,
+# dropbear listening on the wan.  It used to put those back only on the way
+# through the end of the script, and the script has `set -e`, so any step that
+# failed left all of it behind - and a board committed in wan mode answers
+# nothing on 192.168.9.1 after the next power cut, which is the address every
+# other tool on this bench uses.  So: put the bench back whatever happens, and
+# let the original status travel afterwards.  RESTORED is what keeps the happy
+# path from running the restore twice.
+ICS_ON=0
+RESTORED=0
+natround_cleanup() {
+	rc=$?
+	if [ "$RESTORED" = 0 ]; then
+		echo "natround: the round stopped before the restore - putting the bench back" >&2
+		sh restore.sh "${WAN:-}" >&2 2>&1 ||
+			echo "natround: the restore itself failed; the board may still be in wan mode - use the console (portmove.sh back)" >&2
+	fi
+	if [ "$ICS_ON" = 1 ]; then
+		if command -v pwsh >/dev/null 2>&1; then
+			pwsh -NoProfile -File "$UPSTREAM" -Mode off >&2 2>&1 || true
+		else
+			powershell -NoProfile -ExecutionPolicy Bypass -File "$UPSTREAM" -Mode off >&2 2>&1 || true
+		fi
+	fi
+	exit $rc
+}
+trap natround_cleanup EXIT
 cd "$(dirname "$0")"
 
 HERE=$(pwd)
@@ -97,6 +126,7 @@ if command -v pwsh >/dev/null 2>&1; then
 else
 	powershell -NoProfile -ExecutionPolicy Bypass -File "$UPSTREAM" -Mode on 2>&1 | tail -6
 fi
+ICS_ON=1
 
 say "3. the board takes a lease on the shared subnet"
 # Moving the port is not the same as the wan interface being brought up:
@@ -148,12 +178,19 @@ echo
 sh natevidence.sh "$WAN" 2>&1
 
 say "7. putting everything back"
-sh restore.sh "$WAN" 2>&1 | tail -30
+# The sharing is still on here on purpose: the board's wan address is the one
+# the restore talks to, and that address only exists while the sharing holds
+# 192.168.137.1.  No `| tail` either - the restore's own verdict (did the
+# port really go back, proven by reading the bridge over the console) has to
+# reach this script's exit status.
+sh restore.sh "$WAN"
+RESTORED=1
 if command -v pwsh >/dev/null 2>&1; then
 	pwsh -NoProfile -File "$UPSTREAM" -Mode off 2>&1 | tail -4
 else
 	powershell -NoProfile -ExecutionPolicy Bypass -File "$UPSTREAM" -Mode off 2>&1 | tail -4
 fi
+ICS_ON=0
 
 # Turning the sharing off does not always give the wired adapter its
 # 192.168.9.25 back.  On 2026-10-25 it was left holding the sharing address

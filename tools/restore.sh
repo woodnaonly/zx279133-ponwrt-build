@@ -49,9 +49,24 @@ echo "=== putting lan2 back into the bridge ==="
 # console path), and the restore is the same change in the other
 # direction.
 if [ -n "$WAN" ]; then
-	SKD_HOST="$WAN" sh portmove.sh back 2>&1 | tail -20
+	# The source address has to be one this PC actually holds *at this
+	# moment*.  The round restores while the sharing is still on, and turning
+	# the sharing on reconfigures the wired adapter - it then holds
+	# 192.168.137.1 and nothing else, so `ssh -b 192.168.9.25` fails with a
+	# bind error before it reaches the board.  That used to be invisible: the
+	# call was piped through `tail`, whose status is the one the script saw,
+	# so the port was never put back, the board kept the committed wan, and
+	# the log still said the round was done.  Measured 2026-10-26 01:12.
+	if ipconfig | tr -d '\r' | grep -aq '192\.168\.137\.1'; then
+		export SKD_BIND=192.168.137.1
+		echo "the sharing is still on: this PC reaches the board's wan from 192.168.137.1"
+	fi
+	# No `| tail` here: `portmove.sh back` reads the bridge's port list back
+	# over the console and exits 1 when it is not the list it was asked for,
+	# and that judgement is the whole point of putting the port back.
+	SKD_HOST="$WAN" sh portmove.sh back
 else
-	sh portmove.sh back 2>&1 | tail -20
+	sh portmove.sh back
 fi
 
 echo
