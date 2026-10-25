@@ -126,7 +126,19 @@ if command -v pwsh >/dev/null 2>&1; then
 else
 	powershell -NoProfile -ExecutionPolicy Bypass -File "$UPSTREAM" -Mode on 2>&1 | tail -6
 fi
-ICS_ON=1
+# The sharing's own output cannot be trusted as a verdict: labupstream.ps1
+# prints "already shared" from a catch block, and the `| tail` above takes
+# the pipe's status rather than the script's.  So the state is read instead
+# of assumed - the sharing either owns 192.168.137.1 on this PC or the round
+# has no upstream, and finding that out here costs nothing, while finding it
+# out in step 3 costs the moved port and two minutes of console polling.
+if ipconfig | tr -d '\r' | grep -aq '192\.168\.137\.1'; then
+	echo "natround: the sharing is really on - this PC holds 192.168.137.1"
+	ICS_ON=1
+else
+	echo "natround: the sharing is NOT on (this PC has no 192.168.137.1) - stopping before the board is left with no upstream"
+	exit 1
+fi
 
 say "3. the board takes a lease on the shared subnet"
 # Moving the port is not the same as the wan interface being brought up:
