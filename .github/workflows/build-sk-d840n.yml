@@ -806,27 +806,48 @@ jobs:
           # three ways a build can stop and only one of them is silence.
           #
           #   1. The build's own log: make prints the target it is working on, so a
-          #      log that has not grown is a build that is not working.  This is
-          #      the quiet stall.
-          #   2. The files: a build that is working writes files.  A build that
-          #      has not written anything under build_dir, bin, staging_dir, dl
-          #      or tmp is not working, whatever it is printing - and a build
-          #      stuck in a retry loop prints a line every few seconds and
-          #      writes nothing at all, so this is the stall that talks.
+          #      log that has not grown for 20 minutes is a build that is not
+          #      working.  This is the quiet stall.
+          #   2. The files: a build that is working changes files.  A build that
+          #      has changed nothing under build_dir, bin, staging_dir, dl
+          #      or tmp for 30 minutes is not working, whatever it is printing.
+          #   3. The processes: a build that is working has started something in
+          #      the last 15 minutes; a build that has started nothing for 15
+          #      minutes is waiting, not working.
           #
-          # The first two have to AGREE before the build is stopped, because
-          # each of them on its own has a case where the build is well: a
-          # build compiling one big file is quiet, and a build that is
-          # downloading talks and writes nothing under build_dir.  One
-          # further rule is not the conjunction of the other two: nothing
-          # written for forty minutes whatever it prints, which is the
-          # stall that talks.
+          # All three have to agree before the build is stopped, because each
+          # of them on its own has a case where the build is well: a build
+          # compiling one big file is quiet, and a build that is downloading
+          # talks and writes nothing under build_dir.  One further rule is not
+          # the conjunction of the three: nothing written for ninety minutes
+          # whatever it prints, which is the stall that talks.
+          #
+          # The question about the files is "has this file CHANGED", not "was
+          # this file written", and the difference is not academic.  The
+          # install phase of a build copies the root filesystem into place
+          # with cp -a, which keeps the modification time of every file it
+          # copies - so a build that was halfway through installing a root
+          # filesystem looked to the first version of this rule like a build
+          # that had written nothing for forty minutes, and was stopped for
+          # it on run 177, an hour into the build.  The change time of a
+          # copied file is the moment of the copy, because a kernel does not
+          # let a program set it, so the watchdog compares the change time
+          # and not the modification time.
+          #
+          # When it stops the build, the watchdog signals the build's PROCESS
+          # GROUP, because that is the build and everything the build
+          # started.  Signalling only make leaves its children holding the
+          # build's output pipe open, and the step then waits for a pipe
+          # that will never close: the build is dead and the job is not, and
+          # the runner is wasted until the step's own ceiling.
           #
           # The watchdog is a file of its own (tools/compile-watchdog.sh) and
           # the rehearsal (tools/watchdog-dryrun.sh) runs THAT file: a rule
           # that is rehearsed in one place and shipped in another is a rule
           # that will be different from the one that was rehearsed, and the
           # difference is only ever found out in a build that takes an hour.
+          # The rehearsal has a case for the build that writes copies with an
+          # old modification time, because that is the case that was wrong.
           #
           # When it decides the build is stuck, the watchdog stops the build
           # itself, so the step fails, the job ends, and the annotations -
