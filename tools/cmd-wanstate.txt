@@ -1,0 +1,8 @@
+echo "--- the address on the wan port"
+ip -4 addr show lan2 | grep inet
+echo "--- the default route"
+ip route show default
+echo "--- the masquerade rule"
+nft list table ip nat 2>&1 | head -8
+echo "--- uptime"
+cat /proc/uptime

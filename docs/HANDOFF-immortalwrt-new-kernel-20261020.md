@@ -863,3 +863,96 @@ python3 tools/mkgzip.py "$RAW" "$IMG" 10
 **新文件**：`ci-build-repo/tools/mkgzip.py`（CI 与本机共用的压缩脚本）。
 **新坑**：CI 里 `python3 -m pip install` 要加 `--user`（runner 的 python 不归
 runner 改），加 `--disable-pip-version-check` 免得 pip 自己先升级自己。
+
+### 9.14 刷机镜像的 NAT 复验通过（2026-10-25 10:20–10:50）
+
+**刷机镜像现在是路由器了：`sk-nat` 在真板上装上了规则，客户端从板子拿到租约，
+ping 通外网，conntrack 里能看到源地址被改写。**
+
+这一轮先证了一件事：**镜像里的 first-boot 机制在真板上成立**。当前板上刷的是
+run165 的旧 rootfs（NAT 修复在 2e9b4e6，CI 一直没出片），所以我把仓库里的
+`overlays/.../etc/init.d/sk-nat` 和 `etc/uci-defaults/99-sk-nat` 拷到板上，
+**按 boot 的方式**（`cd /etc/uci-defaults` → `. ./file` → `uci commit` →
+删掉已应用的）跑了一遍：
+
+- `/etc/init.d/boot` **自带 `uci_apply_defaults()` 实现并在第 53 行调用** ——
+  机制在，不是我以为的「靠某个包提供」；
+- `99-sk-nat` 被执行，`/etc/rc.d/S96sk-nat -> ../init.d/sk-nat` 建好；
+- 脚本里的 `setsid` 把 sk-nat 拉起来，15 秒后规则装上：
+
+```
+table ip nat { chain postrouting {
+    type nat hook postrouting priority srcnat; policy accept;
+    oifname "lan3" counter packets 0 bytes 0 masquerade } }
+dmesg: sk-nat: masquerade installed on lan3
+```
+
+**这一轮最重要的发现：HANDOFF 里「串口 `uci` parse error」是错的诊断。**
+不是 uci 的限制，是 **shell glob**：`@device[0]` 是 glob 模式，串口的 shell
+把它按当前目录展开，uci 收到的东西不是敲进去的东西，于是报了一个指向语法
+的 parse error。**加上引号就好了**：
+
+```sh
+uci -q get "network.@device[0].ports"   ->   lan1 lan2 lan4 lan-cpu0
+```
+
+这解锁了整轮：**换 WAN 口可以在串口做**，而串口不依赖网络。
+
+**为什么必须走串口：插座每 ~15.5 分钟断电 15 秒。** 换口之后板子的
+192.168.9.1 就离开了本 PC 的网段（lan2 出了桥），后面还要等租约——这段
+时间板子随时可能重启。实测：10:25 在 ssh 上换的口，板子在读到租约前重启，
+回来还是 `wan=lan3`，**改动随电走了**。改走串口 + `uci commit`（commit 写
+jffs2，能扛住断电）之后：板子被插座切断后 57 秒回来，报告的仍是
+`wan=lan2` / `ports=lan1 lan4 lan-cpu0` —— **改动扛过了断电**。
+
+**第二个发现：`dropbear` 只监听 lan。** 换口后板子在共享网段上是
+192.168.137.215，但 `dropbear.main.Interface='lan'`，ssh 只听 192.168.9.1:22，
+所以 ssh 不通。改成 `lan wan` + 重启 dropbear 即可（验完要改回 `lan`）。
+
+**最终证据**（从板子的 WAN 地址读，客户端是板子自己造的 veth+netns）：
+
+| 项 | 结果 |
+|---|---|
+| masquerade 规则 | `oifname "lan2" counter packets 47 bytes 2572 masquerade` |
+| 客户端租约 | `192.168.9.226/24`（来自板子自己的 DHCP） |
+| 客户端默认路由 | `default via 192.168.9.1 dev labcli0` |
+| 外网 ping | `223.5.5.5` **2/2 通，0% 丢包** |
+| conntrack 改写 | `src=192.168.9.226 dst=223.5.5.5` → 回程 `dst=192.168.137.215` |
+| WAN tx | 73814 字节 |
+
+conntrack 那一行就是 NAT 本身：源地址从客户端的 `192.168.9.226` 变成板子 WAN
+的 `192.168.137.215`。证据：`staging/ctl/g4nat-evidence.txt`。
+
+**新增仓库工具**（`ci-build-repo/tools/`，都自洽可用）：
+
+| 文件 | 作用 |
+|---|---|
+| `bssh2.sh` | 一次 ssh，命令从文件读（避免三层引号转义地狱） |
+| `cmd-portstate.txt` | 读端口/wan/forward 的命令文件 |
+| `portmove.sh` | 串口换 WAN 口（move/back），带 commit |
+| `clientrun.sh` | 装客户端、等它拿到租约 |
+| `natcounters.sh` | 规则 + 计数 + conntrack + 客户端视角 |
+| `natevidence.sh` | 从板子 WAN 地址读全部证据 |
+| `restore.sh` | 拆客户端、端口还原、dropbear 还原 |
+| `q.py` | 串口问板子（路径改成相对脚本位置，`SKD_CTL` 可覆盖） |
+
+**这一轮踩的坑：**
+
+- **`uci delete network.@device[0].ports` 在串口「parse error」是 glob 不是
+  uci**（上面已详述）。**凡是带 `[]` 的 uci 参数都要加引号。**
+- **`dropbear.main.Interface='lan'` 意味着换口后 ssh 就断了**；要改成
+  `lan wan` 才读得到证据，**验完改回 `lan`**。
+- **Git bash 会把发给板子的 `/etc/...` 改成 `C:/Program Files/Git/etc/...`**，
+  板子回 `-ash: C:/Program: not found`。调用 `python q.py` 时要
+  `export MSYS_NO_PATHCONV=1`。
+- **插座断电会把板子留在 U-Boot 提示符**（这次是 `network restart` 撞上
+  断电，自启没跑成）。串口 `=>` 下 `bootm` 会说 "Wrong Image Format"——
+  因为 `mtd read` 还没执行。完整执行
+  `mtd read kernel 0x88000000; mtd read dtb 0x88800000; bootm 0x88000000 - 0x88800000`
+  就能正常从 flash 起来（这次 20 秒内就 ping 通了）。
+- **`labnat-flash.ps1` 要用 `pwsh` 跑，不能用 `powershell`**：前者是 PS7，
+  后者是 PS5.1，而脚本里的三元运算符 `$x ? 0 : 1` 只有 PS7 认。
+  （已把 `labnat-flash.ps1` 的三元改成 if/else，两边都能跑。）
+- **`scp` 没有 `-b`**，要绑源地址得用 `-o BindAddress=192.168.137.1`。
+
+详见 **docs/81**。

@@ -1,0 +1,10 @@
+echo "--- ports"
+uci -q get "network.@device[0].ports"
+echo "--- wan"
+uci -q get network.wan.device
+echo "--- wan6"
+uci -q get network.wan6.device
+echo "--- uptime"
+cat /proc/uptime
+echo "--- ip forward"
+cat /proc/sys/net/ipv4/ip_forward
