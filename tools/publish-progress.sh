@@ -30,10 +30,22 @@ SRC=${4:-}
 [ -d "$WS/.git" ] || exit 0
 [ -f "$SRC" ] || exit 0
 
+# The source is resolved BEFORE the cd below, because the cd makes every
+# relative path mean something else.  The first version of this script copied
+# the source after it had changed directory, so a relative source was looked
+# for one directory above the workspace - and the rehearsal, which passed an
+# absolute path, never noticed.
+case "$SRC" in
+  /*) SRC=$SRC ;;
+  *)  SRC=$(cd "$(dirname "$SRC")" 2>/dev/null && pwd)/$(basename "$SRC") || exit 0 ;;
+esac
+[ -f "$SRC" ] || exit 0
+
 cd "$WS" || exit 0
 
 case "$FILE" in
-  *..*|/*) exit 0 ;;   # a path that could leave the workspace
+  /*) exit 0 ;;
+  ../*|*/../*|*/..) exit 0 ;;   # a path that could leave the workspace
 esac
 
 mkdir -p "$(dirname "$FILE")" 2>/dev/null || exit 0

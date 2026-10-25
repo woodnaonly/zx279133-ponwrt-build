@@ -125,6 +125,14 @@ published, read back off the remote, overwritten by the next one, and a
 missing source file and a workspace that is not a repository are both
 refused without failing anything.
 
+**The rehearsal also drives the whole path the workflow uses** — the
+watchdog, in a tree, publishing into a workspace that is a repository — and
+that is where the first version of the script was caught: it copied its
+source *after* it had changed directory, so a relative source was looked for
+one directory above the workspace, and nothing was ever published.  The
+rehearsal that passed an absolute path had not noticed, because the bug was
+in the path and the test was not.
+
 **The watchdog is a file of its own too** — `tools/compile-watchdog.sh` — and
 the workflow and the rehearsal both run *that* file.  They used to be two
 copies, and they had already drifted: the rule that was shipped and the rule
