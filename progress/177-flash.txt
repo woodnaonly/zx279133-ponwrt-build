@@ -1,0 +1,23 @@
+=== 09:47:15 beat 1 log=0 frozen=0 wrote=unknown ===
+--- the last 30 lines of the build's own log ---
+--- the processes that have been running the longest ---
+ELAPSED STAT COMMAND
+    583 Ss   /sbin/init
+    583 S    [kthreadd]
+    583 S    [pool_workqueue_release]
+    583 I<   [kworker/R-rcu_g]
+    583 I<   [kworker/R-rcu_p]
+    583 I<   [kworker/R-slub_]
+    583 I<   [kworker/R-netns]
+    583 I<   [kworker/0:0H-events_highpri]
+    583 I    [kworker/0:1-events]
+    583 I    [kworker/u8:0-flush-259:0]
+    583 I<   [kworker/R-mm_pe]
+    583 I    [rcu_tasks_rude_kthread]
+    583 I    [rcu_tasks_trace_kthread]
+--- the directories the build touched lately ---
+host
+target-aarch64_cortex-a53_musl
+--- memory and load ---
+Mem:           15988         745        2515          48       12728       14847
+ 17:47:15 up 9 min,  0 users,  load average: 2.53, 1.16, 0.54
