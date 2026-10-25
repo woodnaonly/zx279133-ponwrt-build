@@ -60,7 +60,18 @@ export MSYS_NO_PATHCONV=1
 
 MODE=${1:-move}
 
-# One console command, on its own.
+# The board over ssh, with the source address pinned: this PC has a static
+# neighbour entry for 192.168.9.1 on the WLAN adapter, so an unpinned packet
+# to the board leaves through the radio and never comes back.
+BIND=${SKD_BIND:-192.168.9.25}
+HOST=${SKD_HOST:-192.168.9.1}
+KEY="$HOME/.ssh/id_onu"
+SSH="ssh -q -b $BIND -o BatchMode=yes -o PreferredAuthentications=publickey \
+	-o IdentitiesOnly=yes -o ConnectTimeout=8 -o ServerAliveInterval=5 \
+	-o ServerAliveCountMax=3 -o UserKnownHostsFile=/dev/null \
+	-o StrictHostKeyChecking=no -i $KEY root@$HOST"
+
+# One command, on its own, over the console.
 console() {
 	python q.py "$1" 2>&1 | tail -4
 }
@@ -77,13 +88,29 @@ read_ports() {
 # is the only way uci will write a list: `uci set` would store the whole
 # thing as one string with spaces in it, and the bridge would then be told
 # about a port called "lan1 lan4 lan-cpu0".
+#
+# The commands go over SSH, and they used to go over the console.  Over the
+# console they did not take effect on 2026-10-25 at 23:16: the delete
+# reported nothing, changed nothing, and the three adds appended to the list
+# that was already there - so the bridge kept lan2, the board's lan address
+# stayed on the wan port, and the round went on with a bridge that was not
+# the one it had asked for.  The delete works over ssh on the same board, in
+# the same second, with the same arguments.
+#
+# What still has to be the console is the network restart: that is the step
+# that takes the board's LAN address off this PC's segment, and the session
+# it arrives on dies with it.
 set_ports() {
 	want="$*"
-	console 'uci -q delete "network.@device[0].ports"'
-	for p in $want; do
-		console "uci add_list \"network.@device[0].ports\"=$p"
-	done
-	got=$(read_ports)
+	got=$(
+		{
+			echo 'uci -q delete "network.@device[0].ports"'
+			for p in $want; do
+				echo "uci add_list \"network.@device[0].ports\"=$p"
+			done
+			echo 'uci -q get "network.@device[0].ports"'
+		} | $SSH sh -s 2>&1 | tail -1 | tr -d '\r'
+	)
 	if [ "$got" != "$want" ]; then
 		echo "the port list is '$got', and it should be '$want'" >&2
 		echo "the round stops here rather than going on with a bridge" >&2
@@ -93,24 +120,42 @@ set_ports() {
 	echo "the port list is '$got'"
 }
 
+# The wan port, over ssh, and the proof that it took.
+set_wan() {
+	want=$1
+	got=$(
+		{
+			echo "uci set network.wan.device=$want"
+			echo "uci set network.wan6.device=$want"
+			echo 'uci -q get network.wan.device'
+		} | $SSH sh -s 2>&1 | tail -1 | tr -d '\r'
+	)
+	if [ "$got" != "$want" ]; then
+		echo "the wan port is '$got', and it should be '$want'" >&2
+		exit 1
+	fi
+	echo "the wan port is '$got'"
+}
+
 echo "=== before ==="
 sh bssh2.sh cmd-portstate.txt 2>&1 || true
 
 case "$MODE" in
 move)
 	echo
-	echo "=== the move, over the console ==="
+	echo "=== the move, over ssh ==="
 	set_ports "lan1 lan4 lan-cpu0"
-	console 'uci set network.wan.device=lan2'
-	console 'uci set network.wan6.device=lan2'
-	console 'uci commit network'
+	set_wan lan2
+	{
+		echo 'uci commit network'
+	} | $SSH sh -s 2>&1 | tail -2
 	# The network is restarted, because a changed config is not a changed
 	# network: netifd reads the file when it is told to, and until then the
 	# old bridge is still the bridge and the wan interface is still down.
 	# The restart is detached, because the board's LAN address leaves this
 	# PC's segment while it runs - the session it arrived on dies with it.
 	echo
-	echo "=== restarting the network ==="
+	echo "=== restarting the network, over the console ==="
 	console 'setsid /etc/init.d/network restart >/tmp/netr.log 2>&1 &'
 	sleep 10
 	;;
@@ -118,11 +163,12 @@ back)
 	echo
 	echo "=== putting lan2 back into the bridge ==="
 	set_ports "lan1 lan2 lan4 lan-cpu0"
-	console 'uci set network.wan.device=lan3'
-	console 'uci set network.wan6.device=lan3'
-	console 'uci commit network'
+	set_wan lan3
+	{
+		echo 'uci commit network'
+	} | $SSH sh -s 2>&1 | tail -2
 	echo
-	echo "=== restarting the network ==="
+	echo "=== restarting the network, over the console ==="
 	console 'setsid /etc/init.d/network restart >/tmp/netr.log 2>&1 &'
 	sleep 10
 	;;
