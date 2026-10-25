@@ -1,4 +1,4 @@
-=== 10:51:47 beat 33 log=7516 frozen=2 wrote=no ===
+=== 10:57:49 beat 36 log=7516 frozen=5 wrote=no ===
 --- the last 30 lines of the build's own log ---
  make[3] -C package/network/services/dnsmasq compile
  make[3] -C package/network/utils/iptables compile
@@ -32,24 +32,24 @@
 make: *** [/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/include/toplevel.mk:233: world] Terminated
 --- the processes that have been running the longest ---
 ELAPSED STAT COMMAND
-   4454 Ss   /sbin/init
-   4454 S    [kthreadd]
-   4454 S    [pool_workqueue_release]
-   4454 I<   [kworker/R-rcu_g]
-   4454 I<   [kworker/R-rcu_p]
-   4454 I<   [kworker/R-slub_]
-   4454 I<   [kworker/R-netns]
-   4454 I<   [kworker/0:0H-events_highpri]
-   4454 I    [kworker/0:1-events]
-   4454 I<   [kworker/R-mm_pe]
-   4454 I    [rcu_tasks_rude_kthread]
-   4454 I    [rcu_tasks_trace_kthread]
-   4454 S    [ksoftirqd/0]
+   4817 Ss   /sbin/init
+   4817 S    [kthreadd]
+   4817 S    [pool_workqueue_release]
+   4817 I<   [kworker/R-rcu_g]
+   4817 I<   [kworker/R-rcu_p]
+   4817 I<   [kworker/R-slub_]
+   4817 I<   [kworker/R-netns]
+   4817 I<   [kworker/0:0H-events_highpri]
+   4817 I    [kworker/0:1-events]
+   4817 I<   [kworker/R-mm_pe]
+   4817 I    [rcu_tasks_rude_kthread]
+   4817 I    [rcu_tasks_trace_kthread]
+   4817 S    [ksoftirqd/0]
 --- the directories the build touched lately ---
 target-aarch64_cortex-a53_musl
 hostpkg
 toolchain-aarch64_cortex-a53_gcc-14.3.0_musl
 host
 --- memory and load ---
-Mem:           15988         804         383          52       14800       14785
- 18:51:47 up  1:14,  0 users,  load average: 0.00, 0.00, 0.63
+Mem:           15988         800         386          52       14801       14789
+ 18:57:49 up  1:20,  0 users,  load average: 0.08, 0.02, 0.42
