@@ -1,11 +1,5 @@
-=== 09:49:17 beat 2 log=2541 frozen=0 wrote=unknown ===
+=== 09:51:19 beat 3 log=2744 frozen=0 wrote=yes ===
 --- the last 30 lines of the build's own log ---
- make[3] -C tools/autoconf-archive compile
- make[3] -C tools/xz compile
- make[3] -C tools/ninja compile
- make[3] -C tools/gnulib compile
- make[3] -C tools/expat compile
- make[3] -C tools/zlib compile
  make[3] -C tools/cpio compile
  make[3] -C tools/lzma compile
  make[3] -C tools/make-ext4fs compile
@@ -30,24 +24,30 @@
  make[3] -C tools/patchelf compile
  make[3] -C tools/gmp compile
  make[3] -C tools/cmake compile
+ make[3] -C tools/bison compile
+ make[3] -C tools/bc compile
+ make[3] -C tools/util-linux compile
+ make[3] -C tools/elfutils compile
+ make[3] -C tools/findutils compile
+ make[3] -C tools/mkimage compile
 --- the processes that have been running the longest ---
 ELAPSED STAT COMMAND
-    704 Ss   /sbin/init
-    704 S    [kthreadd]
-    704 S    [pool_workqueue_release]
-    704 I<   [kworker/R-rcu_g]
-    704 I<   [kworker/R-rcu_p]
-    704 I<   [kworker/R-slub_]
-    704 I<   [kworker/R-netns]
-    704 I<   [kworker/0:0H-events_highpri]
-    704 I    [kworker/0:1-events]
-    704 I<   [kworker/R-mm_pe]
-    704 I    [rcu_tasks_rude_kthread]
-    704 I    [rcu_tasks_trace_kthread]
-    704 S    [ksoftirqd/0]
+    827 Ss   /sbin/init
+    827 S    [kthreadd]
+    827 S    [pool_workqueue_release]
+    827 I<   [kworker/R-rcu_g]
+    827 I<   [kworker/R-rcu_p]
+    827 I<   [kworker/R-slub_]
+    827 I<   [kworker/R-netns]
+    827 I<   [kworker/0:0H-events_highpri]
+    827 I    [kworker/0:1-events]
+    827 I<   [kworker/R-mm_pe]
+    827 I    [rcu_tasks_rude_kthread]
+    827 I    [rcu_tasks_trace_kthread]
+    827 S    [ksoftirqd/0]
 --- the directories the build touched lately ---
 host
 target-aarch64_cortex-a53_musl
 --- memory and load ---
-Mem:           15988         938        1281          49       13769       14654
- 17:49:17 up 11 min,  0 users,  load average: 4.40, 2.13, 0.96
+Mem:           15988        2480         255          49       13252       13111
+ 17:51:19 up 13 min,  0 users,  load average: 10.78, 5.37, 2.30
