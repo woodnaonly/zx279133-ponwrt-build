@@ -1409,3 +1409,210 @@ $ python -c "d=open('flash-rootfs.jffs2','rb').read(); print(d.count(b'sk-nat'),
 同一个问题问在两个地方，现在答案也一样。
 
 详见 **docs/88**。
+### 9.21：G4' 第一轮 —— CI 自己的 release 刷进 flash，两次冷启动全过（2026-10-25 23:00）
+
+**run181 是这个项目第一个 flash release**，CI 的结果是 `completed successfully`；
+门禁改问文件名之后，它一次就过了。
+
+**写入成功，22:53:32。** 三个分区读回来和写进去的字节一致：
+
+```
+kernel: OK b2964491dce550c9ccfe17e20aaf76be
+dtb: OK 8c460c9794558ac7e18bcb18d903a228
+root: OK a491ee2bb765ecaa7da1ba443d74f0e5
+```
+
+**冷启动 1（22:59:41）**：插座自己断电、自己回电，板子**自己**从 flash 起来，
+`g4verify` **14/14**，`verify_router.sh` **5/5**。
+**冷启动 2（23:15:11）**：同样 **14/14 + 5/5**。
+
+**板子上的 NAT 规则是镜像自己装的**，这正是 G4' 要证明的那一件事：镜像里**没有**
+`S96sk-nat` 链接，只有 `99-sk-nat`（说明**构建没有跑** uci-defaults，它留在镜像
+里等第一次开机），第一次开机时它建了链接**并且直接装了规则**（这是 222e1dc 加的
+保险）：
+
+```
+[   10.834216] sk-nat: the masquerade is on lan3
+```
+
+板上 `/etc/uci-defaults/` 跑完就被 boot 脚本删掉了。
+
+**台架上栽了四个跟头**，都写进 docs/86 第 5 节：
+
+1. **复位把 U-Boot 的横幅弄丢了。** 进 loader 才能起 RAM 镜像，RAM 镜像才能写
+   flash。复位原来由 `tools/hardreset.ps1` 做——它要独占 COM3（一个串口只能被一个
+   进程持有），而 loader 的横幅是在复位线放开后**大约一秒**才打印的，正好落在独占
+   窗口里。于是横幅没被看见，轮次报 `the loader never showed up`，板子继续跑它本来
+   就有的 flash。
+   改成让 relay 自己复位（它不放开端口，看得见横幅），并且**空格连发到 loader 停在
+   `=>` 为止**——横幅打在倒计时开始之前很久，单个空格会被白费，倒计时跑完板子就自
+   己 boot 了 flash。
+   顺带测出两件事：**relay 的 DTR/RTS 翻转对这个板子根本不产生复位**（板子一直在
+   ping，中间一个字都没打印）；真正好用的是 loader 自己的 `reset` 命令。
+2. **断在半路的管道，看起来跟成功的管道一模一样。** 镜像用
+   `cat file | ssh "cat > file"` 送上板，板上的 `flash-sysupgrade.bin` 短了
+   **133120 字节**（13050077 / 13138197），脚本却打印 `done`。幸好 flasher 自己的
+   manifest 检查拦住了（`sha256sum -c` 不通过就拒绝写 flash）——那正是这道检查存在
+   的意义。
+3. **那个短文件还是上一轮遗留的旧文件。** g4flash 第 2 步只把 uImage、dtb、
+   rootfs 和 manifest 从 release 复制过来，**没有复制 sysupgrade 镜像**，于是送上去
+   的是 run165 那轮的旧文件。两个错误互相遮住了：一个又是旧、又是短的过时文件，看
+   起来就像一次传输中断。
+4. **`cmd | tee file` 的退出码是 tee 的**，永远是 0——所以门禁拒了 release 之后，轮
+   次照样往下跑去了刷机。现在改成写文件再 `cat`，退出码是它自己的。
+
+### 9.22：镜像里的 init 脚本从来没被执行过（执行位），run182 正在重建（2026-10-26 00:05）
+
+**NAT 轮失败了，失败在最要命的地方**：板子有租约、客户端有地址，而 masquerade 表
+根本不存在：
+
+```
+=== the masquerade rule and its counter ===
+Error: No such file or directory
+list table ip nat
+```
+
+**根因是 git 里的一个模式位。** 镜像用两个地方装这条规则：
+
+- **`/etc/uci-defaults/99-sk-nat`**：直接装规则，第一次开机跑。OpenWrt 的 boot 脚
+  本是 **source** uci-defaults 的，所以这个文件的模式**没关系**——规则因此在第一次开
+  机后还在（`sk-nat: the masquerade is on lan3`）。
+- **`/etc/init.d/sk-nat`**：通过 `/etc/rc.d/S96sk-nat` 在**之后每一次**开机装规
+  则。**而它从来没有被执行过，因为它不可执行**：
+
+```
+root@ImmortalWrt:~# ls -l /etc/init.d/sk-nat
+-rw-r--r--    1 root     root          3822 Oct 24 06:18 /etc/init.d/sk-nat
+```
+
+而仓库里它就是 `100644`：
+
+```
+$ git ls-files -s overlays/target/linux/zte/zx279133/base-files/etc/init.d/sk-nat
+100644 d73fb7261a1b4cc3fc5b8d8bb888626869037856 0	overlays/.../etc/init.d/sk-nat
+```
+
+`100644` 就是「不可执行」。构建把这个模式原样带进镜像，**不可执行的脚本不会被运行
+——而且是静默的，因为镜像照常启动，别的功能照常工作**。这个仓库里唯一本来就对
+的是 `etc/board.d/02_network`（100755），所以板子的 LAN 是通的、NAT 是不通的。
+
+**板上证明「模式位就是全部原因」**（同一块板、同一个镜像，只改了一个位）：
+
+```
+[  503.168825] sk-nat: masquerade installed on lan3
+table ip nat { chain postrouting { oifname "lan3" counter packets 0 bytes 0 masquerade } }
+```
+
+**同类文件一共 8 个**，全部改成 `100755`：sk-nat、99-sk-nat、platform.sh，以及 zrec
+那 5 个（`S21zrec`、`85_zrec`、`zrec-bringup`、`zrec-ops`、`zrec-run`——那是 RAM 镜
+像的恢复服务）。
+
+**CI 侧这次一起改的**：
+
+- **release 现在发布 `flash-sk-d840n.sh` 了。** manifest 是对着 staging 目录生成
+  的，所以它列了 flasher；release 的文件清单是另一份手写的清单，两份清单会漂移——
+  run181 的 release 只发布了 manifest 里的 5 个文件中的 4 个，于是「相信 manifest
+  的 fetch」在一个 release 根本不会带的文件上失败。
+- **`prepush.py` 加了两条门禁**：① release 发布的文件清单必须覆盖它自己 manifest 列
+  出的每一个文件；② **镜像要跑的文件（`/etc/init.d/`、`/etc/rc.d/`、
+  `/etc/uci-defaults/`、`/lib/preinit/`、`/usr/libexec/`、`/usr/sbin/`、
+  `/lib/upgrade/`）必须是 100755**。
+- **`tools/getrel.py` 的兜底**：manifest 提到、release 没发布的文件改从仓库的
+  `templates/` 取；清单校验抽成 `check_manifest()` 函数，`tools/test-getrel.py` 是
+  它的回归测试，`prepush.py` 现在会把仓库自己的两个测试一起跑。
+
+**已推送 `cca0ba6`（23:56:52），run182 正在构建。**
+
+**这一轮暴露的东西值得记住**：这是本项目第四次栽在「板子说的」和「构建做的」之间
+的差别上，而这一次差的是**一个模式位**。执行位、符号链接、换行、编码——都是构建系
+统里「拷贝过去就以为是对的」的东西。
+
+---
+
+## 10. 现在的状态（2026-10-26 00:07）
+
+### 10.1 正在跑的东西
+
+| 什么 | 在哪 | pid / 怎么查 |
+|---|---|---|
+| **run182 的自动整轮** | `sh staging/ctl/g4prime-auto.sh 182 90` | pid 45168，输出 `staging/ctl/g4prime-auto.txt` |
+| 串口 relay | `tools/relayctl.ps1 status` | pid 37636（22:49 重启过，代码是新的） |
+| 插座监视 | `tools/plugwatch.ps1` | pid 32244，写 `staging/ctl/plugphase.log` + `linkup` |
+| TFTP | `python tools/tftpsrv.py staging/trial 69` | pid 35284 |
+
+`g4prime-auto.sh` 会等 run182 的 flash release 出现（用 `git ls-remote --tags`，不耗
+API 配额），一出现就自动跑整轮：**门禁 → 下一个上电窗口刷机 → 两次冷启动 → NAT
+轮**。
+
+### 10.2 插座的节拍
+
+断电每 **15 分 30 秒**一次，断 35 秒。断电时刻：23:30:06、23:45:35、**00:01:05**、
+00:16:35、00:32:05、00:47:35、01:03:05、01:18:35、01:33:05……
+（`staging/ctl/plugphase.log` 是权威，上电时刻 = 断电时刻 + 35 秒）
+
+**刷机必须整个落在两个断电之间**（从 RAM 镜像写三个分区，约 5 分钟）。run181 那一
+轮就吃了这个亏：22:28:41 上电时写的，正好切在 22:43:35。
+
+### 10.3 板子现在的样子
+
+- 跑的是 **run181 的镜像**（CI 自己出的片），`uname -r` = 6.18.38+
+- `/etc/init.d/sk-nat` 的模式是 `-rwxr-xr-x`——**这是我手工 chmod 的**，为了证明模式
+  位就是原因；下一次刷机会被新镜像覆盖成正确的 0755
+- 桥的端口 `lan1 lan2 lan4 lan-cpu0`、wan = `lan3`、masquerade 规则在 `lan3`（23:59
+  复原过，见 10.5）
+- `/etc/uci-defaults/` 是空的（跑过就被删）
+- SSH：`root@192.168.9.1`，密钥 `~/.ssh/id_onu`，**必须绑源地址** `-b 192.168.9.25`
+
+### 10.4 PC 现在的样子
+
+- 有线网卡 `以太网`：192.168.9.25/24 + 192.168.1.25/24，**ICS 是关的**
+- Wi-Fi 是公网侧（ICS 打开时它是 public，有线是 private）
+
+### 10.5 刚才动过板子的地方（已经复原）
+
+00:03 为了定位「控制台的 uci delete 为什么无效」，在板上把桥的端口列表**删空**做对
+照实验——结果那次 delete **成功了**（列表变空），而补回的脚本 `ucideltest.sh` 里
+`bssh2.sh` 少写了 `tools/` 目录，**没执行**，板子就那样留了几分钟。
+00:05 用 `staging/ctl/uciback.sh` 补回了四个端口（`lan1 lan2 lan4 lan-cpu0`），
+wan 仍是 lan3，规则仍在 lan3，SSH 已验证可达。
+
+**结论**：控制台的 `uci delete` 本身是好的，23:16 那次失败另有原因（还没定论）。
+端口搬运现在走 ssh（`tools/portmove.sh`），只有网络重启走控制台。
+
+### 10.6 下一步（按顺序）
+
+1. **等 run182 出片**：`python staging/ctl/beat.py 182 flash` 看编译进度；
+   `python devtools/runstatus.py --recent 3` 看 run 状态；出片后 `g4prime-auto.sh`
+   会自己接上。
+2. **盯整轮**：`Get-Content staging/ctl/g4prime-flash.txt -Wait`、`g4cold1.txt`、
+   `g4cold2.txt`、`g4nat-round.txt`、`g4prime.rc`。
+3. **收证据**：`python staging/ctl/fill86.py`（填 docs/86 的 5 个占位）、
+   `python staging/ctl/addh921.py`（HANDOFF §9.21/§9.22 已在仓库里，这一步是核对）。
+4. **最后 push**：`python tools/prepush.py` 必须过（末行 `prepush: 14 files, 0
+   problems`），然后 `git push`。**注意 `docs/**` 也在 CI 的触发路径里**，所以推文档
+   也会起一次构建——可以接受，但别在等 release 的时候推。
+5. **G5（PON 状态机）保持冻结**：按计划第 7 节「PON 状态机工作量过大 → 冻结 M2，保
+   留 M1 实验室路由器」。未通过前不要把产物叫「可用光猫」。
+
+### 10.7 这一夜里踩过的坑（省得再踩一遍）
+
+- **`cmd | tee file` 的退出码是 tee 的**，永远是 0。轮次脚本里凡是这么写的，失败都
+  会被吞掉。改成写文件再 `cat`。
+- **`cat file | ssh "cat > file"` 会断在半路**，而且脚本会说 done。现在
+  `tools/flashpush.sh` 会比大小、比不上就重传。
+- **Windows PowerShell 5.1 按 ANSI 读 .ps1**，脚本里的中文会让它报解析错误——用
+  `pwsh`（7），并且给 pwsh 传**Windows 路径**（`cygpath -w`）。
+- **python 写重定向的控制台是 GBK**，板子上一个字符就能让整轮死在 UnicodeEncodeErr
+  上（`staging/ctl/natrun.py` 已改成 `sys.stdout.reconfigure(encoding="utf-8")`）。
+- **git bash 的 MSYS 会把 `/etc/...` 改写成 Windows 路径** → 给板子的命令要带
+  `MSYS_NO_PATHCONV=1`。
+- **`$HOME` 在 PowerShell 里传给 bash 会被吃掉反斜杠**（`C:Userswoodn/.ssh/...`）→
+  含 `$`/引号/`|` 的命令一律写成脚本文件再执行。
+- **插座监视器的 `linkup` 只在 Disconnected→Up 时写**，所以「上电」不会误判成断电。
+- **relay 会自己死掉**：`tools/relayctl.ps1 status` + 看 `serial.log` 是否还在长；
+  复活用 `tools/relayctl.ps1 start 21600`。**冷启动验收期间不能让它死**。
+- **`staging/ctl/ser-nostop` 在 = 插座不给 U-Boot 倒计时送空格 = 板子自己从 flash 起
+  来**。冷启动验收期间必须保持在场；刷机时它被移走（`ser-nostop.off`），刷完必须
+  移回来。
+- **trial/mainline 内核的 `reboot` 会把板子卡死**；要复位用 loader 的 `reset` 命令
+  或 `tools/hardreset.ps1`（后者会丢横幅，只在没有别的办法时用）。
