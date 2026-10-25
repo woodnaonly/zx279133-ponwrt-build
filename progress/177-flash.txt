@@ -1,7 +1,5 @@
-=== 10:03:24 beat 9 log=3331 frozen=0 wrote=yes ===
+=== 10:09:27 beat 12 log=3388 frozen=0 wrote=yes ===
 --- the last 30 lines of the build's own log ---
- make[3] -C tools/libtool compile
- make[3] -C tools/flex compile
  make[3] -C tools/fakeroot compile
  make[3] -C tools/gengetopt compile
  make[3] -C tools/mklibs compile
@@ -30,25 +28,27 @@
  make[3] -C toolchain/kernel-headers compile
  make[3] -C toolchain/musl compile
  make[3] -C toolchain/gcc/final compile
+ make[2] target/compile
+ make[3] -C target/linux compile
 --- the processes that have been running the longest ---
 ELAPSED STAT COMMAND
-   1552 Ss   /sbin/init
-   1552 S    [kthreadd]
-   1552 S    [pool_workqueue_release]
-   1552 I<   [kworker/R-rcu_g]
-   1552 I<   [kworker/R-rcu_p]
-   1552 I<   [kworker/R-slub_]
-   1552 I<   [kworker/R-netns]
-   1552 I<   [kworker/0:0H-events_highpri]
-   1552 I    [kworker/0:1-events]
-   1552 I<   [kworker/R-mm_pe]
-   1552 I    [rcu_tasks_rude_kthread]
-   1552 I    [rcu_tasks_trace_kthread]
-   1552 S    [ksoftirqd/0]
+   1914 Ss   /sbin/init
+   1914 S    [kthreadd]
+   1914 S    [pool_workqueue_release]
+   1914 I<   [kworker/R-rcu_g]
+   1914 I<   [kworker/R-rcu_p]
+   1914 I<   [kworker/R-slub_]
+   1914 I<   [kworker/R-netns]
+   1914 I<   [kworker/0:0H-events_highpri]
+   1914 I    [kworker/0:1-mm_percpu_wq]
+   1914 I<   [kworker/R-mm_pe]
+   1914 I    [rcu_tasks_rude_kthread]
+   1914 I    [rcu_tasks_trace_kthread]
+   1914 S    [ksoftirqd/0]
 --- the directories the build touched lately ---
+target-aarch64_cortex-a53_musl
 toolchain-aarch64_cortex-a53_gcc-14.3.0_musl
 host
-target-aarch64_cortex-a53_musl
 --- memory and load ---
-Mem:           15988        1041        1168          50       13777       14525
- 18:03:24 up 25 min,  0 users,  load average: 4.55, 5.62, 4.49
+Mem:           15988        1307         838          50       13843       14284
+ 18:09:27 up 31 min,  0 users,  load average: 4.76, 4.99, 4.57
