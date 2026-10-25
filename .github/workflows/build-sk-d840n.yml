@@ -705,11 +705,20 @@ jobs:
         # timeout names the step that stopped, and leaves the other matrix
         # job's result alone.
         #
-        # The ceiling is 200 minutes because the build has been measured at
-        # 33 to 69 minutes on this runner (runs 166 and 167) - so 200 is
-        # three times the worst good run, and anything slower is a problem
-        # rather than a build.
-        timeout-minutes: 200
+        # Run 169 sat in it for more than three hours and was killed by the
+        # 200 minute ceiling - and the ceiling took the retry with it,
+        # because the retry is inside this step.  So the ceilings are inside
+        # the step now: the first pass, then the retry, then the diagnostic
+        # pass, and the step's own limit is the sum of them with a margin.
+        #
+        # The numbers come from what this build has been measured at on this
+        # runner: 33 to 69 minutes (runs 160 to 167).  The first pass is
+        # allowed 250 minutes - nearly four times the worst good run, which
+        # is what it takes to survive a runner that is three times slower
+        # than the ones the good runs had - and the retry gets 70 minutes,
+        # which is what the part of the tree that is left needs when a pass
+        # is killed near its end.
+        timeout-minutes: 340
         # A fetch that stalls must fail, not wait.
         #
         # git has no default timeout: a half-open connection to a package
@@ -742,8 +751,27 @@ jobs:
           # the number is stated before the build starts rather than
           # inferred from a hang.
           echo "::notice::the build starts with $(df -BG . | tail -1 | awk '{print $4}') free"
-          make -j"$(nproc)" || rc=$?
+          # The first pass is bounded, and everything it prints goes to a
+          # file.
+          #
+          # The file is the point.  A build that stops for two hours says
+          # nothing on the step log that says WHY it stopped, and the
+          # failure artifact only carries openwrt/logs and compile-v1.log -
+          # so the parallel build's own output is written beside them and a
+          # later run can read it.  Runs 168 and 169 both ended with a
+          # Compile that had said nothing for hours, and there was nothing
+          # to read afterwards.
+          #
+          # `timeout` puts the child in its own process group, so the whole
+          # build is signalled and not just make: a compiler left running
+          # after make is gone would keep the runner busy for the rest of
+          # the job.  The status it leaves is 124, which is neither 0 nor
+          # the compiler's own code, so it is worth saying out loud.
+          timeout --kill-after=60s 250m make -j"$(nproc)" 2>&1 | tee ../compile-parallel.log || rc=$?
           if [ "$rc" = 0 ]; then exit 0; fi
+          if [ "$rc" = 124 ]; then
+            echo "::warning::the first pass was killed after 250 minutes - it was not slow, it was stuck"
+          fi
           # A failed build is often one stalled fetch, and make is
           # incremental, so the same tree is worth one more parallel pass
           # before the slow diagnostic one.  Runs 166 and 167 compiled in
@@ -751,7 +779,7 @@ jobs:
           # anything when something has already gone wrong.
           echo "::warning::the parallel build failed with rc=$rc - retrying once on the same tree"
           rc=0
-          make -j"$(nproc)" || rc=$?
+          timeout --kill-after=60s 70m make -j"$(nproc)" 2>&1 | tee -a ../compile-parallel.log || rc=$?
           if [ "$rc" = 0 ]; then
             echo "::notice::the retry finished the build"
             exit 0
@@ -1473,6 +1501,7 @@ jobs:
           path: |
             openwrt/logs
             openwrt/.config
+            compile-parallel.log
             compile-v1.log
           if-no-files-found: ignore
 
