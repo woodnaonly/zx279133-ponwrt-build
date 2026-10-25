@@ -1,10 +1,6 @@
-=== 12:17:19 beat 33 log=7271 frozen=0 wrote=yes ===
---- signals: quiet=0s writes=1800s newproc=900s hard=5400s cmp=-cnewer proc=0s ---
+=== 12:23:23 beat 36 log=7431 frozen=4 wrote=yes ===
+--- signals: quiet=240s writes=1800s newproc=900s hard=5400s cmp=-cnewer proc=265s ---
 --- the last 30 lines of the build's own log ---
- make[3] -C package/system/uci compile
- make[3] -C package/utils/util-linux compile
- make[3] -C package/utils/busybox compile
- make[3] -C package/network/utils/iwinfo compile
  make[3] -C feeds/packages/net/cgi-io compile
  make[3] -C package/network/services/dnsmasq compile
  make[3] -C package/network/utils/iptables compile
@@ -31,36 +27,38 @@
  make[3] -C feeds/luci/themes/luci-theme-bootstrap compile
  make[3] -C package/base-files compile
  make[3] -C feeds/luci/modules/luci-mod-admin-full compile
+ make[3] -C feeds/packages/libs/libfido2 compile
+ make[3] -C package/system/apk compile
+ make[3] -C feeds/packages/net/openssh compile
+ make[2] package/install
 --- the build's own processes ---
-   5210 Ss   /usr/bin/python3 /usr/bin/networkd-dispatcher --run-startup-triggers
-   5210 Ss   /usr/bin/python3 -u /usr/sbin/waagent -daemon
-   5197 Sl   /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
-   3898 S    timeout --kill-after=60s 280m bash -c echo $$ > ../compile-make.pid; exec make -j"$(nproc)"
-   3898 S    tee ../compile-parallel.log
-   3898 S    make -j4
-   3888 S    /bin/sh -c _limit=`ulimit -n`; [ "$_limit" = "unlimited" -o "$_limit" -ge 1024 ] || ulimit -n 1024; umask 022; cmd() { >/dev/null 2>&1 make -s "$@" < /dev/null || { echo "make $*: build failed. Please re-run make with -j1 V=s or V=sc for a higher verbosity level to see what's going on"; false; } } 8>&1 9>&2; cmd -r world 
-   3888 S    make -s -r world
-    480 S    make --no-print-directory package/compile
-    408 S    bash -c /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/time.pl "time: package/libs/openssl/compile" make  -r -C package/libs/openssl BUILD_SUBDIR="package/libs/openssl" BUILD_VARIANT="" ALL_VARIANTS="" compile  || ?(?{ printf "%s\n" "    ERROR: package/libs/openssl failed to build." >&8 || printf "%s\n" "    ERROR: package/libs/openssl failed to build."; } 2>/dev/null;   exit 1;) 
-    408 S    perl /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/time.pl time: package/libs/openssl/compile make -r -C package/libs/openssl BUILD_SUBDIR=package/libs/openssl BUILD_VARIANT= ALL_VARIANTS= compile
-    408 S    make -r -C package/libs/openssl BUILD_SUBDIR=package/libs/openssl BUILD_VARIANT= ALL_VARIANTS= compile
-    400 S    make --jobserver-auth=3,4 -C /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/build_dir/target-aarch64_cortex-a53_musl/openssl-3.5.7 CC=aarch64-openwrt-linux-musl-gcc SOURCE_DATE_EPOCH=1792793907 all
-    396 S    /bin/sh -c "make" depend && "make" _build_sw
+   5574 Ss   /usr/bin/python3 /usr/bin/networkd-dispatcher --run-startup-triggers
+   5574 Ss   /usr/bin/python3 -u /usr/sbin/waagent -daemon
+   5561 Sl   /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
+   4262 S    timeout --kill-after=60s 280m bash -c echo $$ > ../compile-make.pid; exec make -j"$(nproc)"
+   4262 S    tee ../compile-parallel.log
+   4262 S    make -j4
+   4252 S    /bin/sh -c _limit=`ulimit -n`; [ "$_limit" = "unlimited" -o "$_limit" -ge 1024 ] || ulimit -n 1024; umask 022; cmd() { >/dev/null 2>&1 make -s "$@" < /dev/null || { echo "make $*: build failed. Please re-run make with -j1 V=s or V=sc for a higher verbosity level to see what's going on"; false; } } 8>&1 9>&2; cmd -r world 
+   4252 S    make -s -r world
+    269 S    make --no-print-directory -j1 package/install
+    266 S    bash -c ( cd /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/build_dir/target-aarch64_cortex-a53_musl/root-zte; if [ -n "y" ]; then IPKG_POSTINST_PATH=./lib/apk/db/*.post-install; /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/host/bin/gzip -d ./lib/apk/db/scripts.tar; /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/host/bin/tar -C ./lib/apk/db/ -xf ./lib/apk/db/scripts.tar --wildcards "*.post-install"; else IPKG_POSTINST_PATH=./usr/lib/opkg/info/*.postinst; fi; for script in $IPKG_POSTINST_PATH; do IPKG_INSTROOT=/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/build_dir/target-aarch64_cortex-a53_musl/root-zte $(command -v bash) $script; ret=$?; if [ $ret -ne 0 ]; then echo "postinst script $script has failed with exit code $ret" >&2; exit 1; fi; [ -n "y" ] && /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/host/bin/tar --delete -f ./lib/apk/db/scripts.tar $(basename $script); done; [ -n "y" ] && /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/host/bin/gzip -f -9n -S ".gz" ./lib/apk/db/scripts.tar; if [ -z "y" ]; then awk -i inplace '/^Status:/ { if ($3 == "user") { $3 = "ok" } else { sub(/,\<user\>|\<user\>,/, "", $3) } }1' /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/build_dir/target-aarch64_cortex-a53_musl/root-zte/usr/lib/opkg/status ; sed -i "s/Installed-Time: .*/Installed-Time: 1792793907/" /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/build_dir/target-aarch64_cortex-a53_musl/root-zte/usr/lib/opkg/status ; fi; for script in ./etc/init.d/*; do grep '#!/bin/sh /etc/rc.common' $script >/dev/null || continue; if ! echo "  " | grep -q " $(basename $script) "; then IPKG_INSTROOT=/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/build_dir/target-aarch64_cortex-a53_musl/root-zte $(command -v bash) ./etc/rc.common $script enable; echo "Enabling" $(basename $script); else IPKG_INSTROOT=/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/build_dir/target-aarch64_cortex-a53_musl/root-zte $(command -v bash) ./etc/rc.common $script disable; echo "Disabling" $(basename $script); fi; done || true )
+    266 S    bash -c ( cd /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/build_dir/target-aarch64_cortex-a53_musl/root-zte; if [ -n "y" ]; then IPKG_POSTINST_PATH=./lib/apk/db/*.post-install; /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/host/bin/gzip -d ./lib/apk/db/scripts.tar; /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/host/bin/tar -C ./lib/apk/db/ -xf ./lib/apk/db/scripts.tar --wildcards "*.post-install"; else IPKG_POSTINST_PATH=./usr/lib/opkg/info/*.postinst; fi; for script in $IPKG_POSTINST_PATH; do IPKG_INSTROOT=/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/build_dir/target-aarch64_cortex-a53_musl/root-zte $(command -v bash) $script; ret=$?; if [ $ret -ne 0 ]; then echo "postinst script $script has failed with exit code $ret" >&2; exit 1; fi; [ -n "y" ] && /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/host/bin/tar --delete -f ./lib/apk/db/scripts.tar $(basename $script); done; [ -n "y" ] && /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/host/bin/gzip -f -9n -S ".gz" ./lib/apk/db/scripts.tar; if [ -z "y" ]; then awk -i inplace '/^Status:/ { if ($3 == "user") { $3 = "ok" } else { sub(/,\<user\>|\<user\>,/, "", $3) } }1' /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/build_dir/target-aarch64_cortex-a53_musl/root-zte/usr/lib/opkg/status ; sed -i "s/Installed-Time: .*/Installed-Time: 1792793907/" /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/build_dir/target-aarch64_cortex-a53_musl/root-zte/usr/lib/opkg/status ; fi; for script in ./etc/init.d/*; do grep '#!/bin/sh /etc/rc.common' $script >/dev/null || continue; if ! echo "  " | grep -q " $(basename $script) "; then IPKG_INSTROOT=/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/build_dir/target-aarch64_cortex-a53_musl/root-zte $(command -v bash) ./etc/rc.common $script enable; echo "Enabling" $(basename $script); else IPKG_INSTROOT=/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/build_dir/target-aarch64_cortex-a53_musl/root-zte $(command -v bash) ./etc/rc.common $script disable; echo "Disabling" $(basename $script); fi; done || true )
 --- the oldest processes that are not kernel threads ---
-   5220 Ss   /sbin/init
-   5219 S<s  /lib/systemd/systemd-journald
-   5218 SLsl /sbin/multipathd -d -s
-   5218 Ss   /lib/systemd/systemd-udevd
-   5217 Ss   /usr/lib/linux-tools/6.8.0-1064-azure/hv_kvp_daemon -n
-   5217 Ss   /usr/sbin/haveged --Foreground --verbose=1
-   5216 Ss   /lib/systemd/systemd-networkd
-   5210 Ss   @dbus-daemon --system --address=systemd: --nofork --nopidfile --systemd-activation --syslog-only
+   5584 Ss   /sbin/init
+   5583 S<s  /lib/systemd/systemd-journald
+   5582 SLsl /sbin/multipathd -d -s
+   5582 Ss   /lib/systemd/systemd-udevd
+   5581 Ss   /usr/lib/linux-tools/6.8.0-1064-azure/hv_kvp_daemon -n
+   5581 Ss   /usr/sbin/haveged --Foreground --verbose=1
+   5580 Ss   /lib/systemd/systemd-networkd
+   5574 Ss   @dbus-daemon --system --address=systemd: --nofork --nopidfile --systemd-activation --syslog-only
 --- the directories the build touched lately ---
 target-aarch64_cortex-a53_musl
 hostpkg
 toolchain-aarch64_cortex-a53_gcc-14.3.0_musl
 host
 --- how big the root filesystem is getting ---
+  build_dir/target-aarch64_cortex-a53_musl/root-zte: 636 files, 12M
 --- memory and load ---
-Mem:           15988         911         446          52       14630       14678
- 20:17:19 up  1:27,  0 users,  load average: 6.79, 6.88, 6.16
+Mem:           15988         852         336          52       14800       14737
+ 20:23:23 up  1:33,  0 users,  load average: 0.03, 2.31, 4.35
