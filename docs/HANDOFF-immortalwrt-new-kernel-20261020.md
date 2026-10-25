@@ -2056,5 +2056,6 @@ wan 仍是 lan3，规则仍在 lan3，SSH 已验证可达。
   `coldboot.sh` 都已随 `g4prime.rc = 0` 退出，没有孤儿流处理器。
 - **下次开工的三件小事**（都不紧急）：① `tools/postflash.sh` 的分区回读**没有比较**，
   三重吞码，见 §9.25⑥；② `portmove.sh:112` 的 `tail -1`
+- **审计后澄清的两条（别再当 bug 修）**：`g4verify.sh:118` 取的是 `serial.log` 最后 300 KB，看着像「混用多次启动」，但紧接着的 `awk '/Linux version/{n=NR}…END{for(i=n;i<=NR;i++)…}'` 把窗口**起点重定到窗口里最后一条 banner**，而一次启动只产 ~57 KB（01:48 那次：103382771→103439624），所以 `flood lines this boot` 的「this boot」是**准确的**；第 14 项（banner 在日志里）则是**装饰**——它靠的正是那条用来重定起点的 banner，永远真。真正的「本次启动」身份证据是 `coldboot.sh` 的字节偏移（它先记录 `the console log is N bytes now`，再等 N 之后出现 banner）加 `uname -r` 加 `uptime < 600`，不是这一项。
   可能吃到 netifd 横幅、`g4verify.sh:114` 的 `|| true`、验收不看 `plugphase.log` 避开断电；
   ③ 关键路径第 2 项（PON 状态机）才决定它能不能当光猫用。
