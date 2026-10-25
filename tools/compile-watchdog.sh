@@ -76,11 +76,20 @@ publish() {
 		echo "=== $(date -u +%H:%M:%S) beat $n log=$sz frozen=$frozen wrote=$wrote ==="
 		echo "--- the last 30 lines of the build's own log ---"
 		tail -n 30 "$LOG" 2>/dev/null || true
-		echo "--- the processes that have been running the longest ---"
+		echo "--- the build's own processes ---"
 		ps -eo etimes,stat,args --sort=-etimes 2>/dev/null |
-			grep -Ev 'ps -eo|compile-watchdog' | head -14 || true
+			grep -Ei 'make|cc1|gcc|clang|(^|/)ld |(^|/)ar |python|perl|cmake|ninja|tee|curl|wget|git|rsync|tar ' |
+			grep -Ev 'ps -eo|compile-watchdog|grep -E' | head -14 || true
+		echo "--- the oldest processes that are not kernel threads ---"
+		ps -eo etimes,stat,args --sort=-etimes 2>/dev/null |
+			awk 'NR > 1 && $3 !~ /^\[/' | head -8 || true
 		echo "--- the directories the build touched lately ---"
 		ls -t build_dir 2>/dev/null | head -8 || true
+		echo "--- how big the root filesystem is getting ---"
+		for r in build_dir/target-*/root-*; do
+			[ -d "$r" ] || continue
+			echo "  $r: $(find "$r" -type f 2>/dev/null | wc -l) files, $(du -sh "$r" 2>/dev/null | cut -f1)"
+		done
 		echo "--- memory and load ---"
 		free -m | sed -n '2p' || true
 		uptime || true
@@ -105,7 +114,7 @@ while :; do
 		uptime || true
 		free -m | sed -n '2p' || true
 		ps -eo etimes,stat,args --sort=-etimes |
-			grep -Ev 'ps -eo|compile-watchdog' | head -12 || true
+			awk 'NR > 1 && $3 !~ /^\[/' | head -12 || true
 		echo "--- the package directories the build touched lately ---"
 		ls -t build_dir 2>/dev/null | head -6 || true
 	} >> "$WDLOG" 2>&1 || true

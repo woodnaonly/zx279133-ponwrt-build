@@ -78,7 +78,7 @@ jobs:
       matrix:
         mode: [initramfs, flash]
     runs-on: ubuntu-22.04
-    timeout-minutes: 360
+    timeout-minutes: 400
     steps:
       - uses: actions/checkout@v4
 
@@ -732,7 +732,7 @@ jobs:
         # the watchdog stops a build that has stopped making progress long
         # before that.  The retry gets 40 minutes, which is what the part of
         # the tree that is left needs when a pass is killed near its end.
-        timeout-minutes: 340
+        timeout-minutes: 360
         # A fetch that stalls must fail, not wait.
         #
         # git has no default timeout: a half-open connection to a package
@@ -872,10 +872,10 @@ jobs:
           # kills the build it was meant to measure.  The watchdog is the
           # judge: it watches the build work, and it stops a build that has
           # stopped, whatever the clock says.
-          timeout --kill-after=60s 240m bash -c 'echo $$ > ../compile-make.pid; exec make -j"$(nproc)"' 2>&1 | tee ../compile-parallel.log || rc=$?
+          timeout --kill-after=60s 280m bash -c 'echo $$ > ../compile-make.pid; exec make -j"$(nproc)"' 2>&1 | tee ../compile-parallel.log || rc=$?
           if [ "$rc" = 0 ]; then exit 0; fi
           if [ "$rc" = 124 ]; then
-            echo "::warning::the first pass was killed after 240 minutes - it was not slow, it was stuck"
+            echo "::warning::the first pass was killed after 280 minutes - it was not slow, it was stuck"
           fi
           # The evidence, while it is still here.  A step that is killed never
           # reaches the lines that would have said where it was, and a job's

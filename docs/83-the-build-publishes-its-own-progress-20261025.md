@@ -182,6 +182,23 @@ checks four cases:
 | goes quiet and stops writing | stopped |
 | prints and writes nothing | stopped |
 
+**And then the live progress showed that the rule mattered in the wild.**
+Run 177 was watched through a whole build, and the `package/install` phase
+is *silent for twelve minutes and more* while it fills the root filesystem:
+
+```
+beat 18  log=7392  frozen=0   wrote=yes
+beat 21  log=7392  frozen=3   wrote=yes
+beat 24  log=7392  frozen=6   wrote=yes
+```
+
+The log does not grow at all for twelve minutes, and the build is working
+the whole time — `build_dir/target-aarch64_cortex-a53_musl` is being written
+into.  Under the old rule — silence alone, twenty-four minutes — that
+healthy build would have been killed a few minutes later, at exactly the
+point where the last three runs stopped.  The rule that survives is the
+conjunction: quiet **and** nothing written.
+
 **The ceiling is back up, and it is a backstop rather than a judge.**  The
 first pass was capped at 90 minutes, which was a guess: the good runs take
 33 to 69 minutes, and every run that hangs was killed by that cap while it
