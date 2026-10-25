@@ -1,55 +1,55 @@
-=== 10:15:29 beat 15 log=3662 frozen=0 wrote=yes ===
+=== 10:21:32 beat 18 log=7392 frozen=0 wrote=yes ===
 --- the last 30 lines of the build's own log ---
- make[3] -C tools/util-linux compile
- make[3] -C tools/elfutils compile
- make[3] -C tools/findutils compile
- make[3] -C tools/mkimage compile
- make[3] -C tools/mtd-utils compile
- make[3] -C tools/mpfr compile
- make[3] -C tools/e2fsprogs compile
- make[3] -C tools/erofs-utils compile
- make[3] -C tools/padjffs2 compile
- make[3] -C tools/quilt compile
- make[3] -C tools/mpc compile
- make[3] -C tools/firmware-utils compile
- make[2] toolchain/compile
- make[3] -C toolchain/binutils compile
- make[3] -C toolchain/gdb compile
- make[3] -C toolchain/fortify-headers compile
- make[3] -C toolchain/gcc/initial compile
- make[3] -C toolchain/kernel-headers compile
- make[3] -C toolchain/musl compile
- make[3] -C toolchain/gcc/final compile
- make[2] target/compile
- make[3] -C target/linux compile
- make[2] buildinfo
- make[2] package/compile
- make[3] diffconfig buildversion feedsversion
- make[3] -C package/utils/lua host-compile
- make[3] -C package/libs/ncurses host-compile
- make[3] -C package/system/fwtool host-compile
- make[3] -C package/libs/libjson-c host-compile
- make[4] scripts/config/conf
+ make[3] -C feeds/packages/net/cgi-io compile
+ make[3] -C package/network/services/dnsmasq compile
+ make[3] -C package/network/utils/iptables compile
+ make[3] -C package/network/utils/nftables compile
+ make[3] -C package/utils/ucode compile
+ make[3] -C package/libs/libbpf compile
+ make[3] -C package/libs/uclient compile
+ make[3] -C package/network/services/uhttpd compile
+ make[3] -C package/libs/udebug compile
+ make[3] -C feeds/luci/contrib/package/lucihttp compile
+ make[3] -C package/system/rpcd compile
+ make[3] -C feeds/luci/contrib/package/ucode-mod-html compile
+ make[3] -C package/network/utils/iproute2 compile
+ make[3] -C package/network/config/netifd compile
+ make[3] -C package/system/ubox compile
+ make[3] -C feeds/luci/libs/rpcd-mod-luci compile
+ make[3] -C package/system/urandom-seed compile
+ make[3] -C package/system/fstools compile
+ make[3] -C feeds/luci/modules/luci-base compile
+ make[3] -C package/system/procd compile
+ make[3] -C feeds/luci/modules/luci-mod-network compile
+ make[3] -C feeds/luci/modules/luci-mod-status compile
+ make[3] -C feeds/luci/modules/luci-mod-system compile
+ make[3] -C feeds/luci/themes/luci-theme-bootstrap compile
+ make[3] -C package/base-files compile
+ make[3] -C feeds/luci/modules/luci-mod-admin-full compile
+ make[3] -C feeds/packages/libs/libfido2 compile
+ make[3] -C package/system/apk compile
+ make[3] -C feeds/packages/net/openssh compile
+ make[2] package/install
 --- the processes that have been running the longest ---
 ELAPSED STAT COMMAND
-   2277 Ss   /sbin/init
-   2277 S    [kthreadd]
-   2277 S    [pool_workqueue_release]
-   2277 I<   [kworker/R-rcu_g]
-   2277 I<   [kworker/R-rcu_p]
-   2277 I<   [kworker/R-slub_]
-   2277 I<   [kworker/R-netns]
-   2277 I<   [kworker/0:0H-events_highpri]
-   2277 I    [kworker/0:1-events]
-   2277 I<   [kworker/R-mm_pe]
-   2277 I    [rcu_tasks_rude_kthread]
-   2277 I    [rcu_tasks_trace_kthread]
-   2277 S    [ksoftirqd/0]
+   2639 Ss   /sbin/init
+   2639 S    [kthreadd]
+   2639 S    [pool_workqueue_release]
+   2639 I<   [kworker/R-rcu_g]
+   2639 I<   [kworker/R-rcu_p]
+   2639 I<   [kworker/R-slub_]
+   2639 I<   [kworker/R-netns]
+   2639 I<   [kworker/0:0H-events_highpri]
+   2639 I    [kworker/0:1-events]
+   2639 I<   [kworker/R-mm_pe]
+   2639 I    [rcu_tasks_rude_kthread]
+   2639 I    [rcu_tasks_trace_kthread]
+   2639 S    [ksoftirqd/0]
 --- the directories the build touched lately ---
-hostpkg
 target-aarch64_cortex-a53_musl
+hostpkg
 toolchain-aarch64_cortex-a53_gcc-14.3.0_musl
 host
 --- memory and load ---
-Mem:           15988         967         439          51       14581       14622
- 18:15:29 up 37 min,  0 users,  load average: 5.19, 5.14, 4.77
+Mem:           15988         790         401          51       14796       14799
+ 18:21:32 up 43 min,  0 users,  load average: 0.96, 4.26, 4.72
