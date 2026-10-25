@@ -1342,3 +1342,70 @@ jffs2 压缩文件内容但**不压缩文件名**，所以 `tools/jffs2names.py`
 构建**根本跑不完**。
 
 详见 **docs/85**。
+### 9.19：run180 的构建跑完了，是门禁把 release 拦下了（2026-10-25 21:25）
+
+**先说好消息：构建不再挂。** run180 的 Compile 从 12:34:40Z 到 13:12:30Z，
+**37.8 分钟，completed**——这是 run167 之后第一个跑完的构建，docs/85 那个修
+法（把 uci-defaults 里的后台进程去掉）是对的。initramfs job 也成功并发布了
+release。
+
+**坏消息：flash job 被自己的门禁拒了。**
+
+```
+::error::the built rootfs does not contain sk-nat - the flashed image would not masquerade
+```
+
+门禁是这样问的：
+
+```sh
+strings "$RS" | grep -qx 'sk-nat' || { … exit 1; }
+strings "$RS" | grep -q 'sk-nat.log' || { … exit 1; }
+```
+
+**两条都是错问法**，第一条跟 jffs2 的压缩没关系：
+
+**`strings` 不会把文件名单独放一行。** `strings` 打印的是文件里可打印字符的
+连续段，而 jffs2 的目录项（承载文件名的那个节点）在名字两边都是二进制字节，
+所以名字总是搭在更长的段里。拿 run166 那个真实 rootfs（767 个文件）实测：
+
+```
+network      exact-line=4    substring=25
+dnsmasq      exact-line=0    substring=22
+init.d       exact-line=0    substring=33
+rc.d         exact-line=1    substring=1
+```
+
+`init.d` 就在那个镜像里（它是根目录下的一个目录），而
+`strings | grep -cx 'init.d'` 是 **0**——`strings` 印出来的是
+`']init.d'`、`'../init.d/gpio_switch'` 这种。**所以这条门禁问的其实是「镜像
+的可打印段里有没有一行正好是 `sk-nat`」，跟构建出来的是什么镜像无关——它会
+拒掉所有镜像，好的坏的都拒。**
+
+**第二条问的是一个注释里的词。** `sk-nat.log` 是旧 uci-defaults 把 init 脚本
+输出重定向到的文件名，那行已经没了（docs/85：就是它占着 make 的 jobserver 把
+构建卡住），剩下的只是注释里的一句话——而 jffs2 压缩的正是**文件内容**，文件
+里的词是找不到的：
+
+```
+$ python -c "d=open('flash-rootfs.jffs2','rb').read(); print(d.count(b'sk-nat'), d.count(b'sk-nat.log'))"
+0 0
+```
+
+**修法**：jffs2 压缩文件内容但**不压缩文件名**（目录项原样存），所以
+`tools/jffs2names.py` 能把镜像里的文件名全部读出来，门禁改成问**名字**：
+`sk-nat`（init 脚本本身）、`S96sk-nat`（rc.d 链接，构建跑了 uci-defaults
+时在镜像里）、`99-sk-nat`（uci-defaults，构建没跑时在镜像里）——后两个至少要
+有一个在，否则脚本永远不会被启动。门禁还会把它看到的名字打出来，下次失败就
+能看出镜像里到底有什么。
+
+**同时给 uci-defaults 加了一道保险**：它现在除了建链接，还直接把规则装上。
+镜像里是哪一个，文件自己没法知道——构建跑了 uci-defaults，链接就在镜像里、
+第一次开机就跑；构建没跑，链接要等第一次开机才建，而 `/etc/rc.d` 的链接是在
+**运行**的时候读的，那时候 uci-defaults 还没跑，所以规则会晚一次开机。现在
+第一次开机两种情况都有 NAT。构建环境里这一整块是跳过的（`IPKG_INSTROOT` /
+`PKG_ROOT` / `CI` 任一有值），也不拉起任何进程。
+
+**台架上那道门禁犯的是同一个错**，已按同一条思路修掉（docs/87）；两道门禁是
+同一个问题问在两个地方，现在答案也一样。
+
+详见 **docs/88**。
