@@ -2052,6 +2052,24 @@ wan 仍是 lan3，规则仍在 lan3，SSH 已验证可达。
 - **trial/mainline 内核的 `reboot` 会把板子卡死**；要复位用 loader 的 `reset` 命令
   或 `tools/hardreset.ps1`（后者会丢横幅，只在没有别的办法时用）。
 
+### 9.27 第三次冷启动：NAT 轮次写进闪存的配置抗住了断电（2026-10-26 02:19:05–02:20:36）
+
+轮次本身的结束条件是「复位成功」，但复位是靠 `uci commit` 落在闪存里的，所以「读回来对」
+还不等于「下次上电还对」。接了一次正常的定时断电来验它：
+
+| 时刻 | 事件 | 实测 |
+|---|---|---|
+| 02:19:05 / 02:19:41 | 断电 / 送电 | `plugphase.log` |
+| 02:19:56 | ssh 应答 | `kernel 6.18.38+, uptime 17s` |
+| 02:20:36 | 验证完成 | `g4: summary 16 pass / 0 fail`、`verify: summary 5 pass / 0 fail`、`THE BOARD BOOTS OUT OF FLASH AND IS A ROUTER` |
+
+配置字段（同一次启动内，`uptime 90` 时读）：`network.wan.device=lan3`、`br-lan` 端口
+`lan1 lan2 lan4 lan-cpu0`、运行中的规则 `oifname "lan3" counter … masquerade`，而这次启动的 dmesg
+里 **只有一行** `[   16.883592] sk-nat: masquerade installed on lan3`——`lan2` 在新启动中完全不存在。
+
+所以第 10 项里唯一还没被断电级证据覆盖的一条也补上了：**这块板子现在的状态是可以随时拔电的**，
+不需要保全关机。轮次的全部验收（刷写→两次冷启动→NAT 转发→复位→再次冷启动）现在全部闭环。
+
 ### 10.8 轮次之后的交接状态（2026-10-26 02:07）—— §10.1、§10.6 里前瞻的部分到此作废
 
 - **§10.6 的 1–4 步全部做完**：run182 出片→整轮无人值守跑完→`fill86.py 182` 已填
