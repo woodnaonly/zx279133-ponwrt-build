@@ -1924,7 +1924,17 @@ NAT 的证据不是「装了规则」，是**流量过了规则**：
 - conntrack 里是完整的一对：`src=192.168.9.240 dst=223.5.5.5 … src=223.5.5.5 dst=192.168.137.170`；
 - `natverdict: PASS (g4nat-round.txt, 9257 bytes)`：规则计数 > 0、0% 丢包、22 处客户端流。
   判绿走的是证据文本，不是轮次自己的退出码（§9.23④）。
-- 复位段可核：dropbear 回 `lan`、`network restart`、`ensurebenchip: OK`（PC 回到
+- **复位还是没复位，dmesg 自己把三步写出来了**（02:13 实测，这是全部证据里最硬的一条，因为它不是脚本声称的）：
+
+```
+[   14.622025] sk-nat: masquerade installed on lan3      # 冷启动 2 开机，默认拓扑
+[   59.690634] sk-nat: masquerade installed on lan2      # NAT 轮次第 1 步把 WAN 搬到 lan2
+[  104.771614] sk-nat: masquerade installed on lan3      # 第 7 步复位，规则跟回来
+```
+
+现在板上是 `oifname "lan3" counter packets 0 bytes 0 masquerade`——**这个 0 是正确的**：重装前 `install_rules` 先 `nft delete table ip nat`，计数器随旧表一起没了；轮次读到的计数在 `lan2` 那张表上。别把它读成「规则不工作」。配置侧同时读到 `network.wan.device=lan3`、`br-lan` 端口 `lan1 lan2 lan4 lan-cpu0`（`lan2` 已还桥）、`br-lan` 上 `192.168.9.1`、绑定源地址 ping 全应答。
+
+- 复位段其余可核：dropbear 回 `lan`、`network restart`、`ensurebenchip: OK`（PC 回到
   `192.168.9.25/24` + `192.168.1.25/24`），ICS 关掉之后板子的 LAN 侧仍可达。
 
 `fill86.py 182 --reset` 现在 `rc=0`、`placeholders left: (none)`，这是 ①–④ 那条**真实正向**
