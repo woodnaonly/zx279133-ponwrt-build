@@ -41,10 +41,24 @@ HERE=$(pwd)
 # up and the bench's own tools (the upstream script) are two levels up.
 REPO=$(dirname "$HERE")
 ROOT=$(dirname "$REPO")
+# This repository carries its own copy of the upstream script, because the
+# round is worth running from a checkout and not only from the bench it was
+# written on.  The bench's copy wins when it is there - it is the one that
+# has been measured against this machine's adapters - and the repository's
+# copy is the fallback.
+UPSTREAM="$HERE/labupstream.ps1"
+if [ -f "$ROOT/tools/labupstream.ps1" ]; then
+	UPSTREAM="$ROOT/tools/labupstream.ps1"
+fi
+UPSTREAM_POSIX=$UPSTREAM
 # A Windows path, because that is what pwsh wants.  A POSIX path handed to
 # pwsh is a path it cannot open - which shows up as pwsh printing its own
 # help instead of running the script.
-UPSTREAM=$(cygpath -w "$ROOT/tools/labupstream.ps1" 2>/dev/null || echo "$ROOT/tools/labupstream.ps1")
+if command -v cygpath >/dev/null 2>&1; then
+	UPSTREAM=$(cygpath -w "$UPSTREAM" 2>/dev/null || echo "$UPSTREAM")
+else
+	UPSTREAM=$(echo "$UPSTREAM" | sed -e 's|^/c/|C:/|' -e 's|^/|C:/|')
+fi
 
 # Git bash rewrites an argument that looks like an absolute path into a
 # Windows one before Python sees it, which turns "/etc/init.d/..." into
@@ -71,8 +85,8 @@ echo "the round is being written to $LOG"
 say "0. the bench"
 echo "repository: $REPO"
 echo "upstream script: $UPSTREAM"
-test -f "$ROOT/tools/labupstream.ps1" || {
-	echo "no upstream script at $ROOT/tools/labupstream.ps1"; exit 1; }
+test -f "$UPSTREAM_POSIX" || {
+	echo "no upstream script at $UPSTREAM_POSIX"; exit 1; }
 
 say "1. the WAN port moves to lan2, over the console"
 sh portmove.sh move 2>&1 | tail -30
