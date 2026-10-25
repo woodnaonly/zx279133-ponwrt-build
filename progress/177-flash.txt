@@ -1,6 +1,5 @@
-=== 10:39:38 beat 27 log=7392 frozen=9 wrote=yes ===
+=== 10:45:45 beat 30 log=7392 frozen=0 wrote=no ===
 --- the last 30 lines of the build's own log ---
- make[3] -C feeds/packages/net/cgi-io compile
  make[3] -C package/network/services/dnsmasq compile
  make[3] -C package/network/utils/iptables compile
  make[3] -C package/network/utils/nftables compile
@@ -30,26 +29,27 @@
  make[3] -C package/system/apk compile
  make[3] -C feeds/packages/net/openssh compile
  make[2] package/install
+make: *** [/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/include/toplevel.mk:233: world] Terminated
 --- the processes that have been running the longest ---
 ELAPSED STAT COMMAND
-   3725 Ss   /sbin/init
-   3725 S    [kthreadd]
-   3725 S    [pool_workqueue_release]
-   3725 I<   [kworker/R-rcu_g]
-   3725 I<   [kworker/R-rcu_p]
-   3725 I<   [kworker/R-slub_]
-   3725 I<   [kworker/R-netns]
-   3725 I<   [kworker/0:0H-events_highpri]
-   3725 I    [kworker/0:1-events]
-   3725 I<   [kworker/R-mm_pe]
-   3725 I    [rcu_tasks_rude_kthread]
-   3725 I    [rcu_tasks_trace_kthread]
-   3725 S    [ksoftirqd/0]
+   4092 Ss   /sbin/init
+   4092 S    [kthreadd]
+   4092 S    [pool_workqueue_release]
+   4092 I<   [kworker/R-rcu_g]
+   4092 I<   [kworker/R-rcu_p]
+   4092 I<   [kworker/R-slub_]
+   4092 I<   [kworker/R-netns]
+   4092 I<   [kworker/0:0H-events_highpri]
+   4092 I    [kworker/0:1-events]
+   4092 I<   [kworker/R-mm_pe]
+   4092 I    [rcu_tasks_rude_kthread]
+   4092 I    [rcu_tasks_trace_kthread]
+   4092 S    [ksoftirqd/0]
 --- the directories the build touched lately ---
 target-aarch64_cortex-a53_musl
 hostpkg
 toolchain-aarch64_cortex-a53_gcc-14.3.0_musl
 host
 --- memory and load ---
-Mem:           15988         807         384          51       14796       14782
- 18:39:38 up  1:02,  0 users,  load average: 0.00, 0.10, 1.44
+Mem:           15988         802         385          52       14800       14787
+ 18:45:45 up  1:08,  0 users,  load average: 0.00, 0.02, 0.95
