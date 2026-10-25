@@ -664,6 +664,19 @@ CI 的 Actions 日志匿名访问 404 又看不到编译器原文，只能去翻
   误判、loader 的 0x40 为什么不是红鲱鱼，以及那一处 cache 失效区间
 - `docs/78` —— **kernel 分区只有 8 MiB**：`mtd write` 静默截断、U-Boot 只认 gzip、
   zopfli 是唯一出路，以及 CI 的尺寸门禁
+- **索引补齐（2026-10-26 核对：`docs/74`…`docs/89` 磁盘上全在，无悬空引用）**：
+  `docs/74-the-board-s-port-flow-table`（端口流表，被 76 更正）、
+  `docs/79-the-flashed-image-had-no-firewall`（刷进去的镜像没有防火墙，所以不转发）、
+  `docs/80-the-ci-failed-on-the-compiler-s-command-line`（zopfli 的三个不存在的选项）、
+  `docs/81-the-console-can-change-the-network-and-it-was-a-glob`（「串口 uci parse error」实为 shell glob）、
+  `docs/82-the-build-hung-twice-and-the-ceiling-was-in-the-wrong-place`（上限该在步骤里面，不是步骤上）、
+  `docs/83-the-build-publishes-its-own-progress`（`ci-progress/<run>-<mode>` 分支，git 不耗 API 配额）、
+  `docs/84-the-watchdog-must-see-a-copy-that-kept-its-modification-time`（`cp -a` 保 mtime ⇒ 该问 ctime）、
+  `docs/85-a-background-process-in-the-build-is-what-stopped-the-build`（uci-defaults 拉起的永不退出的进程占着 make 的 jobserver socket）、
+  `docs/86-the-ci-release-flashed-and-booted-twice`（run181：CI 自己的 release 刷进 flash、两次冷启动 14/14+5/5；**当前留的是模板，等 run182 的证据**）、
+  `docs/87-the-gate-was-asking-the-wrong-question-about-the-nat-rule`（问名字，不问字节）、
+  `docs/88-the-gate-refused-a-good-image`（`strings | grep -x` 会拒掉所有镜像）、
+  `docs/89-the-init-script-that-was-never-executable`（**一个模式位**：镜像里的 init 脚本从来没被执行）。
 
 ### 9.10 G3（NAT / M1）：结果与这一轮修掉的五个 bug
 
@@ -1525,7 +1538,7 @@ table ip nat { chain postrouting { oifname "lan3" counter packets 0 bytes 0 masq
 
 **这一轮暴露的东西值得记住**：这是本项目第四次栽在「板子说的」和「构建做的」之间
 的差别上，而这一次差的是**一个模式位**。执行位、符号链接、换行、编码——都是构建系
-统里「拷贝过去就以为是对的」的东西。
+统里「拷贝过去就以为是对的」的东西。完整取证与八个文件的清单见 **docs/89**。
 
 ---
 
@@ -1639,7 +1652,7 @@ RAM 镜像的开机行为**逐字节等价**，今晚那一轮不受影响。
 |---|---|---|
 | **run182 的自动整轮** | `sh staging/ctl/g4prime-auto.sh 182 90` | pid 45168，输出 `staging/ctl/g4prime-auto.txt`；**到点约 01:44**（270×(20 s + 一次 ls-remote)，不是正好 90 分钟） |
 | **接棒的等待者**（00:45 新加，见 §9.23） | `sh staging/ctl/g4prime-baton.sh 182 240` | 输出 `staging/ctl/g4prime-baton.txt`；只在 auto 的错误文件里出现「did not arrive」且 tag 已存在时才接管，auto 已经开跑就自己站下 |
-| 串口 relay | `tools/relayctl.ps1 status` | pid 9424（22:49 重启过，寿命 21600 s ⇒ **04:49 到点**） |
+| 串口 relay | `tools/relayctl.ps1 status` | **01:02 起改由 `sh tools/relayloop.sh 6` 保活**：裸 relay 那个实例 04:49 会到点自杀，而保活环没有钟（实例退出 4 秒后自己重开），单实例由「COM3 真能开」+「数 sh.exe 根进程」两道拒绝保证。换过来以后**实测**抓下 01:01:35 断电 → 01:02:10 上电的整次启动（`sk-nat: masquerade installed on lan3` 在 14.48 s） |
 | 插座监视 | `tools/plugwatch.ps1` | **旧实例 32244 已在 00:48 被我杀掉**（它本来会在 01:15:27 自己退，见 §9.23②）；新实例 00:48:50 起、`-Seconds 28800` ⇒ 到 ~08:49，写 `staging/ctl/plugphase.log` + `linkup` |
 | TFTP | `python tools/tftpsrv.py staging/trial 69` | pid 35284，`netstat -ano -p udp` 里 UDP 0.0.0.0:69 在 |
 
