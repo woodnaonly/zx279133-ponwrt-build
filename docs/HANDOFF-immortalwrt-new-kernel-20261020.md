@@ -1754,6 +1754,44 @@ netifd 的横幅占；`flashpush.sh:85` 的 `sha256sum -c` 失败会降级成只
 
 ---
 
+## 9.24 run182 的自动整轮：flash 段已经过了（2026-10-26 01:14–01:35）
+
+①–⑰ 那批修正是为这一轮写的；这一节是它自己跑出来的结果。**flash 段成功，
+写进去的字节被逐字节读回**；冷启动两次与 NAT 轮在后面（本节留了位置）。
+
+| 时刻 | 事件 | 证据 |
+|---|---|---|
+| 01:14:35 | tag `skd840n_flash_182_40209332232` 出现，baton 看见第一轮已点火就自己站下 | `g4prime-baton.txt` |
+| 01:15:10 | 自动轮点火，**第 0 步取包第一次在真实轮次里跑**（13 MB） | `g4prime-auto.txt`、`g4prime-getrel.txt` |
+| 01:16–01:17 | 门禁 11 项全 OK：`the release is fit to be flashed` | `g4prime-release.txt` |
+| 01:17:40 → 01:24:31 | 第一次尝试死于 `the loader never showed up`（⑰ 那条时序坑），**一个字节都没写**；⑧ 的 EXIT trap 在真实失败路径上把标志放回 | `g4prime-flash.txt` 两行：`the flag file is still away - put it back with:` 然后 `the flag file is back on the way out` |
+| 01:26:08 | 重挂，标志在**等沿之前**就移走 | `g4prime-flash.txt` |
+| 01:32:35 / 01:33:10 | 插座断电 / 上电 | `plugphase.log` |
+| **01:33:19** | **`the loader is up`** —— relay 在沿上把板子停在 `=>`，⑰ 的修法被真实验证 | `g4prime-flash.txt` |
+| 01:34:02 | RAM 镜像里读到身份：`uname -r 6.18.38+`、`root=/dev/mtdblock5` | `g4flash-env.txt` |
+| 01:34:44 | `g4flash said 0`，第 7 步把标志放回 | 同上 |
+
+**flasher 自己的校验**（`g4flash-write.txt`）：`sha256sums-release` 五项全 OK
+（uImage / dtb / rootfs / sysupgrade / flash-sk-d840n.sh），三个分区都跑了 `mtd verify`。
+
+**⑦ 那道新读回的结果**（`g4flash-readback.txt`，从 RAM 环境里把分区dd回来算 md5）：
+
+```
+kernel: OK 170592a71ed0d83b9aea4b77fd2aa628
+dtb:    OK 8c460c9794558ac7e18bcb18d903a228
+root:   OK 2af47bc59aeb090982e69f1e658487d4
+```
+
+这三个 md5 与 PC 上 `staging/trial/flash-{uImage,dtb.bin,rootfs.jffs2}` 的 md5 **逐字节相同**
+——「flash 里就是写进去的东西」这一条不再是推断。
+
+两点顺带记下：
+- **dtb 的 md5 与 run181 完全相同**（同一件 dtb），变的是 kernel 与 root——run182 要修的就是
+  rootfs 里那几个执行位，所以 dtb 相同反而是好消息：**分区表没变，`root=/dev/mtdblock5` 仍然对**。
+- `g4verify.sh:23` 的 `KIMG` 默认还指着 run165 留下的 `flash-uImage.gzipfit`；本轮没踩，
+  因为 `coldboot.sh:94` 把它覆盖成 `staging/trial/flash-uImage`。**那个默认值是旧物**，
+  下一次谁直接手跑 `g4verify.sh` 就会拿一轮前的镜像去比哈希，判出一个假 FAIL。
+
 ## 10. 现在的状态（2026-10-26 00:07）
 
 ### 10.1 正在跑的东西
