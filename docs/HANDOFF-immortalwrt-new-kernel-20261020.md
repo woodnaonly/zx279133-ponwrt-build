@@ -1542,7 +1542,7 @@ table ip nat { chain postrouting { oifname "lan3" counter packets 0 bytes 0 masq
 
 ---
 
-## 9.23 无人值守轮次开跑前的体检：十六处修、两处否证（2026-10-26 00:41–01:19）
+## 9.23 无人值守轮次开跑前的体检：十七处修、两处否证（2026-10-26 00:41–01:26）
 
 run182 还在编译，出片后 `g4prime-auto.sh` 会**自己**跑完整一轮（门禁→窗口内刷机→两次冷启动→NAT）。
 趁这段时间做了三份只读审计（轮次脚本 / 文档与证据 / 执行位影响），**每条结论都自己重读源码复核过**，
@@ -1697,6 +1697,21 @@ ssh 那边 `:52` 只要 `uname -r` 有值就算板子回来了 ——
 `nft list table ip nat` 必须有 masquerade 行。
 控制组用本项目自己抓过的两行真字符串：`-rw-r--r-- …  sk-nat`（§9.22 那块坏镜像）走 FAIL 分支，
 `-rwxr-xr-x …  sk-nat`（今天手工 chmod 后读回的）走 PASS 分支，文件不在也走 FAIL。
+
+**⑰ 轮次要在上电沿之前把 `ser-nostop` 移走，不是沿之后。**
+run182 的第一次自动尝试（01:15:10 点火）就是这么死的：`flashonpower.sh` 在沿上开工以后，
+`g4flash.sh` 的第 1–2 步还要取包+复制四件镜像——实测 **01:17:40 上电 → 01:20:56 才走到第 3 步**
+（移走标志）；而在这三分钟里标志一直在场 ⇒ relay 不动倒计时 ⇒ 板子在 01:17:41 就启进了 Linux。
+于是第 4 步找不到加载器，relay 的 DTR/RTS 复位又对这个板子无效（第二次实测），
+`reset` 打在 Linux 控制台上也不是复位 ⇒ 01:24:31 `the loader never showed up`，
+**flash 一个字节都没写**（安全失败）。**已修**：`flashonpower.sh` 在等沿之前就把标志移走，
+自己再加一道 EXIT trap（沿没等到也要放回）。这样沿一上来 relay 就把板子停在 `=>`，
+那三分钟板子在 prompt 上等我们。窗口内取包不是问题：`getrel.py:190` 对已在盘上的文件
+打印 `(already here: N bytes)` 直接跳过。
+**顺带两条实测的正面证据**：① ⑧ 那道 trap 在**真实失败路径**上响了——日志先打
+`g4flash: the flag file is still away - put it back with:`（旧写法：给人一条建议），
+紧接着打 `g4flash: the flag file is back on the way out`，`ser-nostop` 回到原位、`.off` 消失；
+② ⑨ 之后 `g4prime.rc` 仍是 22:50 的旧文件（轮次失败时不写它），**读退出码要看 mtime**。
 
 **否证一：`trial-files/` 那 5 个 `100644` 不是 bug。**（子代理报的是"同类缺口"，我不接受，去查了构建路径）
 `workflow:305` 的 `cp -a` 后面紧跟 `:306 chmod 755 openwrt/files/etc/rc.d/* openwrt/files/usr/libexec/*`
