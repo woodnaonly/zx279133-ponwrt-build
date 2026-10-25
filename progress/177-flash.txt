@@ -1,23 +1,53 @@
-=== 09:47:15 beat 1 log=0 frozen=0 wrote=unknown ===
+=== 09:49:17 beat 2 log=2541 frozen=0 wrote=unknown ===
 --- the last 30 lines of the build's own log ---
+ make[3] -C tools/autoconf-archive compile
+ make[3] -C tools/xz compile
+ make[3] -C tools/ninja compile
+ make[3] -C tools/gnulib compile
+ make[3] -C tools/expat compile
+ make[3] -C tools/zlib compile
+ make[3] -C tools/cpio compile
+ make[3] -C tools/lzma compile
+ make[3] -C tools/make-ext4fs compile
+ make[3] -C tools/mtools compile
+ make[3] -C tools/patch-image compile
+ make[3] -C tools/squashfs4 compile
+ make[3] -C tools/sstrip compile
+ make[3] -C tools/zip compile
+ make[3] -C tools/meson compile
+ make[3] -C tools/autoconf compile
+ make[3] -C tools/pkgconf compile
+ make[3] -C tools/lz4 compile
+ make[3] -C tools/libressl compile
+ make[3] -C tools/automake compile
+ make[3] -C tools/missing-macros compile
+ make[3] -C tools/dosfstools compile
+ make[3] -C tools/libtool compile
+ make[3] -C tools/flex compile
+ make[3] -C tools/fakeroot compile
+ make[3] -C tools/gengetopt compile
+ make[3] -C tools/mklibs compile
+ make[3] -C tools/patchelf compile
+ make[3] -C tools/gmp compile
+ make[3] -C tools/cmake compile
 --- the processes that have been running the longest ---
 ELAPSED STAT COMMAND
-    583 Ss   /sbin/init
-    583 S    [kthreadd]
-    583 S    [pool_workqueue_release]
-    583 I<   [kworker/R-rcu_g]
-    583 I<   [kworker/R-rcu_p]
-    583 I<   [kworker/R-slub_]
-    583 I<   [kworker/R-netns]
-    583 I<   [kworker/0:0H-events_highpri]
-    583 I    [kworker/0:1-events]
-    583 I    [kworker/u8:0-flush-259:0]
-    583 I<   [kworker/R-mm_pe]
-    583 I    [rcu_tasks_rude_kthread]
-    583 I    [rcu_tasks_trace_kthread]
+    704 Ss   /sbin/init
+    704 S    [kthreadd]
+    704 S    [pool_workqueue_release]
+    704 I<   [kworker/R-rcu_g]
+    704 I<   [kworker/R-rcu_p]
+    704 I<   [kworker/R-slub_]
+    704 I<   [kworker/R-netns]
+    704 I<   [kworker/0:0H-events_highpri]
+    704 I    [kworker/0:1-events]
+    704 I<   [kworker/R-mm_pe]
+    704 I    [rcu_tasks_rude_kthread]
+    704 I    [rcu_tasks_trace_kthread]
+    704 S    [ksoftirqd/0]
 --- the directories the build touched lately ---
 host
 target-aarch64_cortex-a53_musl
 --- memory and load ---
-Mem:           15988         745        2515          48       12728       14847
- 17:47:15 up 9 min,  0 users,  load average: 2.53, 1.16, 0.54
+Mem:           15988         938        1281          49       13769       14654
+ 17:49:17 up 11 min,  0 users,  load average: 4.40, 2.13, 0.96
