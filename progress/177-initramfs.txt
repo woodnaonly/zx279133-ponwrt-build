@@ -1,23 +1,52 @@
-=== 09:49:22 beat 1 log=0 frozen=0 wrote=unknown ===
+=== 09:51:24 beat 2 log=1788 frozen=0 wrote=unknown ===
 --- the last 30 lines of the build's own log ---
+WARNING: Makefile 'package/network/services/dnsmasq/Makefile' has a dependency on 'nftables-json', which does not exist
+WARNING: Makefile 'package/network/config/firewall4/Makefile' has a dependency on 'nftables-json', which does not exist
+WARNING: Makefile 'package/feeds/packages/gst1-plugins-base/Makefile' has a dependency on 'libmesa', which does not exist
+WARNING: Makefile 'package/feeds/packages/gst1-plugins-base/Makefile' has a dependency on 'libwayland', which does not exist
+WARNING: Makefile 'package/feeds/packages/gst1-plugins-base/Makefile' has a dependency on 'libgraphene', which does not exist
+WARNING: Makefile 'package/feeds/packages/pbr/Makefile' has a dependency on 'nftables-json', which does not exist
+WARNING: Makefile 'package/feeds/packages/prometheus-node-exporter-lua/Makefile' has a dependency on 'nftables-json', which does not exist
+WARNING: Makefile 'package/feeds/packages/uspot/Makefile' has a dependency on 'nftables-json', which does not exist
+make[2]: Entering directory '/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/config'
+make[2]: 'conf' is up to date.
+make[2]: Leaving directory '/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/config'
+ make[1] world
+ make[2] tools/compile
+ make[2] package/cleanup
+ make[3] -C tools/libdeflate compile
+ make[3] -C tools/flock compile
+ make[3] -C tools/zstd compile
+ make[3] -C tools/sed compile
+ make[3] -C tools/patch compile
+ make[3] -C tools/tar compile
+ make[3] -C tools/m4 compile
+ make[3] -C tools/autoconf-archive compile
+ make[3] -C tools/ninja compile
+ make[3] -C tools/xz compile
+ make[3] -C tools/gnulib compile
+ make[3] -C tools/expat compile
+ make[3] -C tools/zlib compile
+ make[3] -C tools/cpio compile
+ make[3] -C tools/lzma compile
 --- the processes that have been running the longest ---
 ELAPSED STAT COMMAND
-    787 Ss   /sbin/init
-    787 S    [kthreadd]
-    787 S    [pool_workqueue_release]
-    787 I<   [kworker/R-rcu_g]
-    787 I<   [kworker/R-rcu_p]
-    787 I<   [kworker/R-slub_]
-    787 I<   [kworker/R-netns]
-    787 I<   [kworker/0:0H-events_highpri]
-    787 I    [kworker/u8:0-events_power_efficient]
-    787 I<   [kworker/R-mm_pe]
-    787 I    [rcu_tasks_rude_kthread]
-    787 I    [rcu_tasks_trace_kthread]
-    787 S    [ksoftirqd/0]
+    909 Ss   /sbin/init
+    909 S    [kthreadd]
+    909 S    [pool_workqueue_release]
+    909 I<   [kworker/R-rcu_g]
+    909 I<   [kworker/R-rcu_p]
+    909 I<   [kworker/R-slub_]
+    909 I<   [kworker/R-netns]
+    909 I<   [kworker/0:0H-events_highpri]
+    909 I    [kworker/u8:0-events_power_efficient]
+    909 I<   [kworker/R-mm_pe]
+    909 I    [rcu_tasks_rude_kthread]
+    909 I    [rcu_tasks_trace_kthread]
+    909 S    [ksoftirqd/0]
 --- the directories the build touched lately ---
 host
 target-aarch64_cortex-a53_musl
 --- memory and load ---
-Mem:           15988         728        3559          49       11700       14864
- 17:49:23 up 13 min,  0 users,  load average: 3.94, 1.70, 0.76
+Mem:           15988        1655        2159          49       12174       13936
+ 17:51:24 up 15 min,  0 users,  load average: 4.63, 2.33, 1.09
