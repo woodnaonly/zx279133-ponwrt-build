@@ -1,25 +1,63 @@
-=== 10:51:23 beat 1 log=0 frozen=0 wrote=unknown ===
+=== 10:53:24 beat 2 log=2479 frozen=0 wrote=unknown ===
 --- the last 30 lines of the build's own log ---
+ make[3] -C tools/tar compile
+ make[3] -C tools/m4 compile
+ make[3] -C tools/autoconf-archive compile
+ make[3] -C tools/ninja compile
+ make[3] -C tools/xz compile
+ make[3] -C tools/gnulib compile
+ make[3] -C tools/expat compile
+ make[3] -C tools/zlib compile
+ make[3] -C tools/cpio compile
+ make[3] -C tools/lzma compile
+ make[3] -C tools/make-ext4fs compile
+ make[3] -C tools/mtools compile
+ make[3] -C tools/patch-image compile
+ make[3] -C tools/squashfs4 compile
+ make[3] -C tools/sstrip compile
+ make[3] -C tools/zip compile
+ make[3] -C tools/meson compile
+ make[3] -C tools/pkgconf compile
+ make[3] -C tools/lz4 compile
+ make[3] -C tools/autoconf compile
+ make[3] -C tools/libressl compile
+ make[3] -C tools/automake compile
+ make[3] -C tools/missing-macros compile
+ make[3] -C tools/libtool compile
+ make[3] -C tools/dosfstools compile
+ make[3] -C tools/flex compile
+ make[3] -C tools/fakeroot compile
+ make[3] -C tools/gengetopt compile
+ make[3] -C tools/mklibs compile
+ make[3] -C tools/patchelf compile
 --- the build's own processes ---
-    864 Ss   /usr/bin/python3 /usr/bin/networkd-dispatcher --run-startup-triggers
-    864 Ss   /usr/bin/python3 -u /usr/sbin/waagent -daemon
-    863 Sl   /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
-      1 S    timeout --kill-after=60s 280m bash -c echo $$ > ../compile-make.pid; exec make -j"$(nproc)"
-      1 S    tee ../compile-parallel.log
-      1 S    make -j4
+    985 Ss   /usr/bin/python3 /usr/bin/networkd-dispatcher --run-startup-triggers
+    985 Ss   /usr/bin/python3 -u /usr/sbin/waagent -daemon
+    984 Sl   /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
+    122 S    timeout --kill-after=60s 280m bash -c echo $$ > ../compile-make.pid; exec make -j"$(nproc)"
+    122 S    tee ../compile-parallel.log
+    122 S    make -j4
+    116 S    /bin/sh -c _limit=`ulimit -n`; [ "$_limit" = "unlimited" -o "$_limit" -ge 1024 ] || ulimit -n 1024; umask 022; cmd() { >/dev/null 2>&1 make -s "$@" < /dev/null || { echo "make $*: build failed. Please re-run make with -j1 V=s or V=sc for a higher verbosity level to see what's going on"; false; } } 8>&1 9>&2; cmd -r world 
+    116 S    make -s -r world
+    115 S    make --no-print-directory tools/compile
+      8 S    bash -c /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/time.pl "time: tools/flex/compile" make  -r -C tools/flex BUILD_SUBDIR="tools/flex" BUILD_VARIANT="" ALL_VARIANTS="" compile  || ?(?{ printf "%s\n" "    ERROR: tools/flex failed to build." >&8 || printf "%s\n" "    ERROR: tools/flex failed to build."; } 2>/dev/null;   exit 1;) 
+      8 S    perl /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/time.pl time: tools/flex/compile make -r -C tools/flex BUILD_SUBDIR=tools/flex BUILD_VARIANT= ALL_VARIANTS= compile
+      8 S    bash -c /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/time.pl "time: tools/fakeroot/compile" make  -r -C tools/fakeroot BUILD_SUBDIR="tools/fakeroot" BUILD_VARIANT="" ALL_VARIANTS="" compile  || ?(?{ printf "%s\n" "    ERROR: tools/fakeroot failed to build." >&8 || printf "%s\n" "    ERROR: tools/fakeroot failed to build."; } 2>/dev/null;   exit 1;) 
+      8 S    perl /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/time.pl time: tools/fakeroot/compile make -r -C tools/fakeroot BUILD_SUBDIR=tools/fakeroot BUILD_VARIANT= ALL_VARIANTS= compile
+      8 S    bash -c /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/time.pl "time: tools/gengetopt/compile" make  -r -C tools/gengetopt BUILD_SUBDIR="tools/gengetopt" BUILD_VARIANT="" ALL_VARIANTS="" compile  || ?(?{ printf "%s\n" "    ERROR: tools/gengetopt failed to build." >&8 || printf "%s\n" "    ERROR: tools/gengetopt failed to build."; } 2>/dev/null;   exit 1;) 
 --- the oldest processes that are not kernel threads ---
-    871 Ss   /sbin/init
-    870 S<s  /lib/systemd/systemd-journald
-    869 SLsl /sbin/multipathd -d -s
-    869 Ss   /lib/systemd/systemd-udevd
-    869 Ss   /usr/lib/linux-tools/6.8.0-1064-azure/hv_kvp_daemon -n
-    869 Ss   /usr/sbin/haveged --Foreground --verbose=1
-    868 Ss   /lib/systemd/systemd-networkd
-    868 Ss   /lib/systemd/systemd-resolved
+    992 Ss   /sbin/init
+    991 S<s  /lib/systemd/systemd-journald
+    990 SLsl /sbin/multipathd -d -s
+    990 Ss   /lib/systemd/systemd-udevd
+    990 Ss   /usr/lib/linux-tools/6.8.0-1064-azure/hv_kvp_daemon -n
+    990 Ss   /usr/sbin/haveged --Foreground --verbose=1
+    989 Ss   /lib/systemd/systemd-networkd
+    989 Ss   /lib/systemd/systemd-resolved
 --- the directories the build touched lately ---
 host
 target-aarch64_cortex-a53_musl
 --- how big the root filesystem is getting ---
 --- memory and load ---
-Mem:           15988         699        2556          49       12732       14893
- 18:51:23 up 14 min,  0 users,  load average: 1.77, 1.02, 0.47
+Mem:           15988         986        1476          49       13525       14605
+ 18:53:24 up 16 min,  0 users,  load average: 3.81, 1.95, 0.87
