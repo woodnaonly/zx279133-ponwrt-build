@@ -229,14 +229,19 @@ def overlay_modes_check():
 
     The zrec scripts were 0644 in the same way, and they are the
     recovery service of the RAM image.
+
+    The RAM image's own scaffolding is copied the same way - the workflow
+    does `cp -a trial-files/. openwrt/files/` - so trial-files is judged
+    here too, not only overlays.
     """
     try:
-        r = subprocess.run(["git", "-C", REPO, "ls-files", "-s", "overlays"],
+        r = subprocess.run(["git", "-C", REPO, "ls-files", "-s",
+                            "overlays", "trial-files"],
                            capture_output=True, text=True)
     except Exception:
         return 0
     if r.returncode != 0:
-        print("prepush: the overlay's file modes were not read - git said "
+        print("prepush: the image's file modes were not read - git said "
               "nothing about them")
         return 0
     bad = 0
@@ -253,7 +258,7 @@ def overlay_modes_check():
               "that is not executable is not run, and the image still boots"
               % (path, mode))
         bad += 1
-    print("prepush: the overlay's executable bits are checked (%d problems)"
+    print("prepush: the image's executable bits are checked (%d problems)"
           % bad)
     return bad
 

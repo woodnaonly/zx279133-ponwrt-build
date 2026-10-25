@@ -140,7 +140,7 @@ def check_manifest(out, templates):
 
 
 def main():
-    if len(sys.argv) < 1:
+    if len(sys.argv) < 2:
         list_releases()
         return
     tag = sys.argv[1]
