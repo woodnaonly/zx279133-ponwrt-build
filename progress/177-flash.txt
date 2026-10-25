@@ -1,4 +1,4 @@
-=== 10:21:32 beat 18 log=7392 frozen=0 wrote=yes ===
+=== 10:27:34 beat 21 log=7392 frozen=3 wrote=yes ===
 --- the last 30 lines of the build's own log ---
  make[3] -C feeds/packages/net/cgi-io compile
  make[3] -C package/network/services/dnsmasq compile
@@ -32,24 +32,24 @@
  make[2] package/install
 --- the processes that have been running the longest ---
 ELAPSED STAT COMMAND
-   2639 Ss   /sbin/init
-   2639 S    [kthreadd]
-   2639 S    [pool_workqueue_release]
-   2639 I<   [kworker/R-rcu_g]
-   2639 I<   [kworker/R-rcu_p]
-   2639 I<   [kworker/R-slub_]
-   2639 I<   [kworker/R-netns]
-   2639 I<   [kworker/0:0H-events_highpri]
-   2639 I    [kworker/0:1-events]
-   2639 I<   [kworker/R-mm_pe]
-   2639 I    [rcu_tasks_rude_kthread]
-   2639 I    [rcu_tasks_trace_kthread]
-   2639 S    [ksoftirqd/0]
+   3001 Ss   /sbin/init
+   3001 S    [kthreadd]
+   3001 S    [pool_workqueue_release]
+   3001 I<   [kworker/R-rcu_g]
+   3001 I<   [kworker/R-rcu_p]
+   3001 I<   [kworker/R-slub_]
+   3001 I<   [kworker/R-netns]
+   3001 I<   [kworker/0:0H-events_highpri]
+   3001 I    [kworker/0:1-mm_percpu_wq]
+   3001 I<   [kworker/R-mm_pe]
+   3001 I    [rcu_tasks_rude_kthread]
+   3001 I    [rcu_tasks_trace_kthread]
+   3001 S    [ksoftirqd/0]
 --- the directories the build touched lately ---
 target-aarch64_cortex-a53_musl
 hostpkg
 toolchain-aarch64_cortex-a53_gcc-14.3.0_musl
 host
 --- memory and load ---
-Mem:           15988         790         401          51       14796       14799
- 18:21:32 up 43 min,  0 users,  load average: 0.96, 4.26, 4.72
+Mem:           15988         798         393          51       14796       14791
+ 18:27:34 up 50 min,  0 users,  load average: 0.08, 1.26, 3.18
