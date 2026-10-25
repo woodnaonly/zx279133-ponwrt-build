@@ -247,20 +247,45 @@ it is printed, and the watchdog's notices are worth something only after the
 job they belong to has finished - which is exactly when they are least
 wanted.
 
-**So the build stops itself.**  The build's own log is the proof of life:
-`make` prints the target it is working on, so a log that has not grown in
-twenty-four minutes is a build that is not working.  The watchdog watches
-that, and when the log goes quiet it stops the build - the `make` process,
-by the pid the build wrote for itself on the way in.  The step then fails,
-the job ends, and the annotations are published with the evidence in them:
-the tail of the parallel log, and the watchdog's own record of what the
-process table looked like at the moment the build was stopped.
+**So the build stops itself.**  There are two ways a build can stop, and
+only one of them is quiet.
+
+The quiet one is the build's own log: `make` prints the target it is working
+on, so a log that has not grown is a build that is not working.
+
+The talking one is the build's files.  A build that is working writes
+files, so a build that has written nothing under `build_dir` is not working
+either - whatever it is printing.  This is the stall that keeps talking: a
+build stuck in a retry loop prints a line every few seconds and writes
+nothing at all, and a watchdog that only watched the log would watch it
+talk for ever.
+
+The watchdog watches both, and it stops the build when the two agree - the
+log quiet for twelve minutes AND nothing written under `build_dir`, `bin`,
+`staging_dir`, `dl` or `tmp` for twenty minutes.  They have to agree,
+because each of them on its own has a case where the build is perfectly
+well: a build compiling one big file is quiet, and a build that is
+downloading talks and writes nothing.  A third rule catches the stall that
+talks - nothing written for forty minutes, whatever the build is printing.
+
+When it decides, it stops the build - the `make` process, by the pid the
+build wrote for itself on the way in.  The step then fails, the job ends,
+and the annotations are published with the evidence in them: the tail of
+the parallel log, and the watchdog's own record of what the process table
+looked like at the moment the build was stopped.
+
+(Those thresholds were tightened after this document was written, and the
+watchdog became a file of its own so that the rule that is shipped and the
+rule that is rehearsed cannot drift apart - see **docs/83**.  A build that
+is stopped is not tried again, because it would stop in the same place and
+the retry would cost the fifty minutes before the annotations are
+published.)
 
 The rehearsal for this is `tools/watchdog-dryrun.sh`, which runs the
-watchdog against a fake build twice - one that keeps printing, and one that
-goes quiet.  The first is left alone and the second is stopped, which is the
-whole contract: **a build that is merely slow keeps printing and is never
-touched.**
+watchdog against three fake builds - one that prints and writes, one that
+goes quiet, and one that prints without writing.  The first is left alone
+and the other two are stopped, which is the whole contract: **a build that
+is merely slow keeps writing files and is never touched.**
 
 **The second: a download that has connected and then gone quiet is given up
 on.**  `scripts/download.pl` gives curl and wget a connect timeout - five

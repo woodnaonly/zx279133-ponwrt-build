@@ -658,6 +658,13 @@ jobs:
       - name: Install feeds
         if: steps.pick.outputs.run == 'true'
         working-directory: openwrt
+        # A clone that stalls must fail, not wait: git has no default
+        # timeout, and a feed that half-arrives leaves the build that
+        # follows it waiting on a tree that never finishes arriving.
+        env:
+          GIT_HTTP_LOW_SPEED_LIMIT: 1000
+          GIT_HTTP_LOW_SPEED_TIME: 60
+          GIT_TERMINAL_PROMPT: 0
         run: |
           ./scripts/feeds update -a
           ./scripts/feeds install -a
@@ -688,6 +695,13 @@ jobs:
       - name: Download packages
         if: steps.pick.outputs.run == 'true'
         working-directory: openwrt
+        # The same transfer limits the Compile step has: scripts/download.pl
+        # gives curl and wget a connect timeout but no limit on the
+        # transfer itself, so a mirror that accepts the connection and then
+        # stops sending leaves this step waiting forever.
+        env:
+          CURL_OPTIONS: --speed-limit 100 --speed-time 120
+          WGET_OPTIONS: --read-timeout=120 --timeout=120
         run: |
           make download -j8
           find dl -size -1024c -exec rm -f {} \;
@@ -764,6 +778,15 @@ jobs:
           # the number is stated before the build starts rather than
           # inferred from a hang.
           echo "::notice::the build starts with $(df -BG . | tail -1 | awk '{print $4}') free"
+          # Where the progress is published while the build runs.
+          #
+          # The branch is named after the run, so two runs never fight over
+          # the same ref.  The file lives under progress/, which the
+          # workflow's own push filter does not match - so publishing
+          # progress cannot start another build, which is the one way a
+          # diagnostic could make the thing it diagnoses worse.
+          PROGRESS_BRANCH="ci-progress/${{ github.run_number }}-${{ matrix.mode }}"
+          PROGRESS_FILE="progress/${{ github.run_number }}-${{ matrix.mode }}.txt"
           # What the build is doing, and when it stops doing it.
           #
           # Runs 168 and 169 both sat in this step until a ceiling took them and
@@ -779,57 +802,45 @@ jobs:
           # stalled download look completely different in those numbers, and
           # the stalled one carries the URL in its command line.
           #
-          # It also WATCHES for the stall.  The build's own log is the proof:
-          # make prints the target it is working on, so a log that has not
-          # grown in twenty-four minutes is a build that is not working.  When
-          # that happens the watchdog stops the build itself, so the step
-          # fails, the job ends, and the annotations - which GitHub only
-          # publishes when a job ENDS - say what happened while the evidence
-          # was still there to collect.  A build that is merely slow keeps
-          # printing and is never stopped.
+          # It also WATCHES for the stall, in three ways, because there are
+          # three ways a build can stop and only one of them is silence.
+          #
+          #   1. The build's own log: make prints the target it is working on, so a
+          #      log that has not grown is a build that is not working.  This is
+          #      the quiet stall.
+          #   2. The files: a build that is working writes files.  A build that
+          #      has not written anything under build_dir, bin, staging_dir, dl
+          #      or tmp is not working, whatever it is printing - and a build
+          #      stuck in a retry loop prints a line every few seconds and
+          #      writes nothing at all, so this is the stall that talks.
+          #
+          # The first two have to AGREE before the build is stopped, because
+          # each of them on its own has a case where the build is well: a
+          # build compiling one big file is quiet, and a build that is
+          # downloading talks and writes nothing under build_dir.  One
+          # further rule is not the conjunction of the other two: nothing
+          # written for forty minutes whatever it prints, which is the
+          # stall that talks.
+          #
+          # The watchdog is a file of its own (tools/compile-watchdog.sh) and
+          # the rehearsal (tools/watchdog-dryrun.sh) runs THAT file: a rule
+          # that is rehearsed in one place and shipped in another is a rule
+          # that will be different from the one that was rehearsed, and the
+          # difference is only ever found out in a build that takes an hour.
+          #
+          # When it decides the build is stuck, the watchdog stops the build
+          # itself, so the step fails, the job ends, and the annotations -
+          # which GitHub only publishes when a job ENDS - say what happened
+          # while the evidence was still there to collect.  A build that is
+          # merely slow keeps writing files and is never stopped.
           WD=
           trap 'if [ -n "$WD" ]; then kill "$WD" 2>/dev/null || true; fi' EXIT
           (
-            n=0
-            last=-1
-            frozen=0
-            while :; do
-              n=$((n + 1))
-              if [ -f ../compile-parallel.log ]; then
-                sz=$(wc -c < ../compile-parallel.log | tr -d ' ')
-              else
-                sz=0
-              fi
-              {
-                echo "=== $(date -u +%H:%M:%S) beat $n log=$sz frozen=$frozen ==="
-                uptime || true
-                free -m | sed -n '2p' || true
-                ps -eo etimes,stat,args --sort=-etimes | grep -Ev 'ps -eo|compile-watchdog' | head -12 || true
-                echo "--- the package directories the build touched lately ---"
-                ls -t build_dir 2>/dev/null | head -6 || true
-              } >> ../compile-watchdog.log 2>&1 || true
-              if [ "$sz" = "$last" ]; then
-                frozen=$((frozen + 1)) || true
-              else
-                frozen=0
-              fi
-              last=$sz
-              if [ "$n" -ge 4 ] && [ "$frozen" -ge 12 ]; then
-                echo "::error::the build has printed nothing for 24 minutes - it is stuck, and it is being stopped"
-                if [ -s ../compile-make.pid ]; then
-                  kill -TERM "$(cat ../compile-make.pid)" 2>/dev/null || true
-                fi
-                sleep 5
-                frozen=0
-              fi
-              if [ $((n % 3)) -eq 0 ] || [ "$n" -le 2 ]; then
-                longest=$(ps -eo etimes,args --sort=-etimes 2>/dev/null | grep -Ev 'ps -eo|compile-watchdog' | head -3 | cut -c1-220 | tr '\n' '|' || true)
-                dirs=$(ls -t build_dir 2>/dev/null | head -4 | tr '\n' ' ' || true)
-                mem=$(free -m | awk '/^Mem:/ {print $7"MB available"}' || true)
-                echo "::notice::beat $n $(date -u +%H:%M:%S) log=$sz frozen=$frozen mem=$mem dirs=[$dirs] longest=[$longest]"
-              fi
-              sleep 120
-            done
+            PROGRESS_WORKSPACE="$GITHUB_WORKSPACE" \
+            PROGRESS_BRANCH="$PROGRESS_BRANCH" \
+            PROGRESS_FILE="$PROGRESS_FILE" \
+            bash ../tools/compile-watchdog.sh . ../compile-parallel.log \
+                 ../compile-make.pid ../compile-watchdog.log
           ) &
           WD=$!
           # The first pass is bounded, and everything it prints goes to a
@@ -854,15 +865,17 @@ jobs:
           # stop when the build stops making progress.  `exec` keeps the pid,
           # which is the whole trick: the process the watchdog kills IS make.
           #
-          # The ceiling is 90 minutes, not 250.  The good runs of this build
-          # took 33 to 69 minutes, and the watchdog catches a build that has
-          # stopped twenty-four minutes before the ceiling is anywhere near
-          # it - so the long ceiling was buying nothing but the time it took
-          # to find out.
-          timeout --kill-after=60s 90m bash -c 'echo $$ > ../compile-make.pid; exec make -j"$(nproc)"' 2>&1 | tee ../compile-parallel.log || rc=$?
+          # The ceiling is 240 minutes, and it is the BACKSTOP, not the
+          # judge.  The good runs of this build took 33 to 69 minutes, but
+          # the runs that hang were killed at 90 minutes while they were
+          # still working - a ceiling that guesses wrong about a slow build
+          # kills the build it was meant to measure.  The watchdog is the
+          # judge: it watches the build work, and it stops a build that has
+          # stopped, whatever the clock says.
+          timeout --kill-after=60s 240m bash -c 'echo $$ > ../compile-make.pid; exec make -j"$(nproc)"' 2>&1 | tee ../compile-parallel.log || rc=$?
           if [ "$rc" = 0 ]; then exit 0; fi
           if [ "$rc" = 124 ]; then
-            echo "::warning::the first pass was killed after 90 minutes - it was not slow, it was stuck"
+            echo "::warning::the first pass was killed after 240 minutes - it was not slow, it was stuck"
           fi
           # The evidence, while it is still here.  A step that is killed never
           # reaches the lines that would have said where it was, and a job's
@@ -876,11 +889,21 @@ jobs:
           } | while IFS= read -r line; do
             echo "::error::evidence: $(printf '%s' "$line" | sed -e 's/%/%25/g' -e 's/#/%23/g' | tr -d '\r')"
           done
-          # A failed build is often one stalled fetch, and make is
-          # incremental, so the same tree is worth one more parallel pass
-          # before the slow diagnostic one.  Runs 166 and 167 compiled in
-          # 33 to 69 minutes with no retry at all, so this only costs
-          # anything when something has already gone wrong.
+          # A build that was STOPPED - by the watchdog, or by the
+          # ceiling - will stop again on the same tree, and the fifty
+          # minutes the retry and the serial pass would take are fifty
+          # minutes before the annotations are published.  The annotations
+          # are the only channel out of a failed build that this machine
+          # can read, so waiting is exactly the wrong thing to do here.
+          #
+          # A build that FAILED is a different thing: make is incremental,
+          # and the same tree is often one target away from the answer.
+          case "$rc" in
+            124|143)
+              echo "::error::the build was stopped rather than failed (rc=$rc) - a second pass on the same tree would stop in the same place, so the step ends here"
+              exit "$rc"
+              ;;
+          esac
           echo "::warning::the parallel build failed with rc=$rc - retrying once on the same tree"
           rc=0
           timeout --kill-after=60s 40m bash -c 'echo $$ > ../compile-make.pid; exec make -j"$(nproc)"' 2>&1 | tee -a ../compile-parallel.log || rc=$?

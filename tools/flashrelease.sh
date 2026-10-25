@@ -46,6 +46,25 @@ if [ -n "$ITBTAG" ]; then
 fi
 
 echo
+echo "=== the release, before it goes near the board ==="
+# The gate is tools/preflash.py, and it is the same one the bench uses: the
+# manifest the release ships has to describe the files beside it, the uImage
+# has to fit the 8 MiB kernel partition, its payload has to be a gzip stream
+# the loader can read, the kernel inside has to be the 6.18.38 this project
+# is about, and the rootfs has to carry the NAT rule and the uci-defaults
+# that starts it.  A release that fails any of those is a release that
+# costs a flash and a power cycle to find out.
+if [ -x "$REPO/tools/preflash.py" ] || [ -f "$REPO/tools/preflash.py" ]; then
+	python "$REPO/tools/preflash.py" "$TAG" || {
+		echo "flashrelease: the release did not pass the gate - nothing was written" >&2
+		exit 1
+	}
+else
+	echo "flashrelease: tools/preflash.py is missing - the gate cannot be run" >&2
+	exit 1
+fi
+
+echo
 echo "=== putting the images where the flasher looks for them ==="
 mkdir -p "$TRIAL"
 for f in flash-uImage flash-dtb.bin flash-rootfs.jffs2; do
