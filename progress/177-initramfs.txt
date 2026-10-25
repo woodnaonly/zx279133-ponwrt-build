@@ -1,9 +1,5 @@
-=== 09:59:33 beat 6 log=2847 frozen=0 wrote=yes ===
+=== 10:05:38 beat 9 log=2982 frozen=1 wrote=yes ===
 --- the last 30 lines of the build's own log ---
- make[3] -C tools/mtools compile
- make[3] -C tools/patch-image compile
- make[3] -C tools/squashfs4 compile
- make[3] -C tools/sstrip compile
  make[3] -C tools/zip compile
  make[3] -C tools/autoconf compile
  make[3] -C tools/meson compile
@@ -30,24 +26,28 @@
  make[3] -C tools/mtd-utils compile
  make[3] -C tools/mpfr compile
  make[3] -C tools/e2fsprogs compile
+ make[3] -C tools/erofs-utils compile
+ make[3] -C tools/padjffs2 compile
+ make[3] -C tools/quilt compile
+ make[3] -C tools/mpc compile
 --- the processes that have been running the longest ---
 ELAPSED STAT COMMAND
-   1398 Ss   /sbin/init
-   1398 S    [kthreadd]
-   1398 S    [pool_workqueue_release]
-   1398 I<   [kworker/R-rcu_g]
-   1398 I<   [kworker/R-rcu_p]
-   1398 I<   [kworker/R-slub_]
-   1398 I<   [kworker/R-netns]
-   1398 I<   [kworker/0:0H-events_highpri]
-   1398 I    [kworker/u8:0-events_power_efficient]
-   1398 I<   [kworker/R-mm_pe]
-   1398 I    [rcu_tasks_rude_kthread]
-   1398 I    [rcu_tasks_trace_kthread]
-   1398 S    [ksoftirqd/0]
+   1762 Ss   /sbin/init
+   1762 S    [kthreadd]
+   1762 S    [pool_workqueue_release]
+   1762 I<   [kworker/R-rcu_g]
+   1762 I<   [kworker/R-rcu_p]
+   1762 I<   [kworker/R-slub_]
+   1762 I<   [kworker/R-netns]
+   1762 I<   [kworker/0:0H-events_highpri]
+   1762 I    [kworker/u8:0-events_power_efficient]
+   1762 I<   [kworker/R-mm_pe]
+   1762 I    [rcu_tasks_rude_kthread]
+   1762 I    [rcu_tasks_trace_kthread]
+   1762 S    [ksoftirqd/0]
 --- the directories the build touched lately ---
 host
 target-aarch64_cortex-a53_musl
 --- memory and load ---
-Mem:           15988         949        1137          50       13902       14641
- 17:59:33 up 23 min,  0 users,  load average: 8.78, 7.85, 4.33
+Mem:           15988        2776         440          50       12771       12814
+ 18:05:38 up 29 min,  0 users,  load average: 8.05, 8.88, 6.07
