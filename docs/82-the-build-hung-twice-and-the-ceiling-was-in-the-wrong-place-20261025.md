@@ -170,3 +170,111 @@ stops answerable:
 
 If the next run hangs again, the log will say where, and the answer will be
 in that file rather than in a guess.
+
+## 7. The sources were not the difference
+
+Before the watchdog, the question was still open: what changed between run
+167, which compiled in 51 minutes, and run 168, which sat in `Compile` until
+the job's own six-hour limit took it?  Everything that feeds the build was
+checked against the two dates.
+
+* **The base tree.** `git clone --depth 1 -b sr1010-zx279133` takes the
+  branch tip, so a moving branch would make every run a different tree.  The
+  tip of `cnjn/ImmortalWrt` is `5996412`, committed on 2026-10-23 at 22:18
+  UTC - before run 165, the first of the three good runs, and still the tip
+  now.  Every run from 165 on compiled the same base tree.
+* **The kernel.**  Pinned: `KERNEL_SHA` is
+  `96e5a2413524742e177e383fe523ef21de5ed238`, checked out by hand after the
+  clone, with its submodules updated from that commit.
+* **The feeds.**  Four of the five are pinned to a commit as well -
+  `packages` `e93a938`, `luci` `ed7692cb`, `routing` `76c93390`,
+  `telephony` `2618106d`.  The fifth, `zte_mesh`, floats, and its newest
+  commit is from 2026-10-19 - six days before the first good run.
+
+So the inputs were the same for the runs that compiled and the runs that did
+not.  What is left between them is the repository itself: run 168 is the
+first run of commit `2e9b4e6`, which added the two `base-files` scripts and
+the assertions around them.  Nothing in that commit plausibly hangs a
+compile - it is two shell scripts in the rootfs and a few `grep`s in a step
+that took 0.0 minutes - and the same cannot be said for a runner.
+
+What it can be is a stalled fetch.  A build that waits on a package mirror
+looks exactly like a build that is slow, from the outside, and the two are
+told apart by what the build is *doing* - which nothing was reporting.
+
+## 8. The build now says where it is
+
+So the build is now watched while it runs.
+
+A watchdog starts with the compile.  Every two minutes it writes a snapshot
+of the process table, the load and the memory to `compile-watchdog.log`, and
+every sixth it says one line out loud as a notice: the processes that have
+been running the longest, the package directories the build has touched
+lately, and how much memory is left.
+
+```
+::notice::beat 6 07:41:12 mem=912MB available dirs=[target-... linux-6.18.38] longest=[2203 curl -o ... https://... | 1190 cc1 -O2 ...]
+```
+
+That one line separates the two cases that look identical from outside.
+Compilers that are working are young and there are many of them; a fetch
+that is stuck is one process that has been running for an hour, and it
+carries the URL it is waiting for.
+
+The notices are annotations, and a check run's annotations are readable
+without a token - the same channel the error annotations already use.  So a
+build that is stuck now explains itself within minutes rather than at the
+end of a ceiling.  The watchdog log is uploaded with the failure artifacts
+as well, and the step that reports what the build was doing when it stopped
+prints it: the log tail says what was being built, the watchdog says whether
+it was being built or waited for.
+
+The change is diagnostic only.  The ceilings, the retry and the serial pass
+are untouched, so a build that was going to succeed still succeeds and a
+build that was going to fail still fails - it just says so while it is doing
+it.
+
+## 9. The build stops itself, and the download gives up
+
+Two things were measured on 2026-10-25 that turned "the build is stuck" from
+a guess into a thing the build can be asked.
+
+**The first: annotations are published when a job ends, not while it runs.**
+Run 170 had been sitting in `Compile` for two hours with its "the build
+starts with 97G free" notice already printed, and the API returned *zero*
+annotations for it.  A notice is therefore not a live channel, however often
+it is printed, and the watchdog's notices are worth something only after the
+job they belong to has finished - which is exactly when they are least
+wanted.
+
+**So the build stops itself.**  The build's own log is the proof of life:
+`make` prints the target it is working on, so a log that has not grown in
+twenty-four minutes is a build that is not working.  The watchdog watches
+that, and when the log goes quiet it stops the build - the `make` process,
+by the pid the build wrote for itself on the way in.  The step then fails,
+the job ends, and the annotations are published with the evidence in them:
+the tail of the parallel log, and the watchdog's own record of what the
+process table looked like at the moment the build was stopped.
+
+The rehearsal for this is `tools/watchdog-dryrun.sh`, which runs the
+watchdog against a fake build twice - one that keeps printing, and one that
+goes quiet.  The first is left alone and the second is stopped, which is the
+whole contract: **a build that is merely slow keeps printing and is never
+touched.**
+
+**The second: a download that has connected and then gone quiet is given up
+on.**  `scripts/download.pl` gives curl and wget a connect timeout - five
+seconds - and no limit on the transfer itself.  So a mirror that accepts the
+connection and stops sending leaves the build waiting forever, and a build
+waiting forever is indistinguishable from a slow one from the outside.  The
+two variables `download.pl` already reads, `CURL_OPTIONS` and
+`WGET_OPTIONS`, are now set in the Compile step: a transfer that stays under
+100 bytes a second for two minutes is given up on, and the build says which
+URL it was waiting for.
+
+**And the ceilings came down.**  The first pass is 90 minutes instead of
+250, the retry 40 instead of 70, and the serial pass 10 instead of
+unbounded.  The good runs of this build took 33 to 69 minutes, and the
+watchdog catches a build that has stopped making progress long before
+90 minutes - so the long ceiling was buying nothing except the time it took
+to find out.
