@@ -13,10 +13,28 @@
 # a link in the repository would reach the build as a file and the script
 # would never run - silently, because the image would still boot.
 #
-# The script is also started right away, so the first boot has the rule too
-# and not only the second one.
+# WHY THERE IS NO BACKGROUND START HERE
+#
+# This script used to end with
+#
+#	setsid sh /etc/init.d/sk-nat >/tmp/sk-nat.log 2>&1 &
+#
+# so that the first boot had the rule too and not only the second one.  A
+# build runs this script inside the package manager's chroot, and the init
+# script is a loop that never ends - so the build left a process running
+# that inherited GNU make's jobserver socket.  Make waits for that socket
+# to close before it finishes, and it never did: the build's own work was
+# done, the machine was idle, and the step sat there until the ceiling took
+# it.  That is what stopped runs 168 to 179 from finishing, and it is why
+# the last build that completed was run 167, the one before this file was
+# added.
+#
+# Nothing is lost by not starting it here.  The link below is what makes
+# the init script run, and the init script installs the rule on the first
+# boot just as it does on every boot after that - the board's own flashed
+# image has carried the link since it was built, and the rule has been on
+# the WAN since the first boot.
 mkdir -p /etc/rc.d
 ln -sf ../init.d/sk-nat /etc/rc.d/S96sk-nat
-setsid sh /etc/init.d/sk-nat >/tmp/sk-nat.log 2>&1 &
 
 exit 0

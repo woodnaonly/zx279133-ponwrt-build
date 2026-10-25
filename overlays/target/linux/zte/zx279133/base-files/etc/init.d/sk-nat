@@ -34,6 +34,27 @@
 # still serves ssh and LuCI.
 log() { echo "sk-nat: $*" >>/dev/kmsg 2>/dev/null; }
 
+# A BUILD RUNS THIS SCRIPT TOO, and there it must not loop.
+#
+# The uci-defaults that used to start this script in the background made a
+# build leave a process running for ever, and that process held GNU make's
+# jobserver socket open - so make never finished, and runs 168 to 179 sat
+# in the Compile step with their work already done.  The uci-defaults no
+# longer starts anything (see the file next to this one), but the guard
+# stays: anything that does start this script inside a build's chroot gets
+# one pass and an exit, never a loop.
+#
+# A build is recognised by the package manager's instant root, by the
+# package root, or by the CI variable - in a build's chroot there is no
+# uci and no nft for this architecture, so there is nothing to install
+# anyway.
+in_build() {
+	[ -n "${IPKG_INSTROOT:-}" ] && return 0
+	[ -n "${PKG_ROOT:-}" ] && return 0
+	[ -n "${CI:-}" ] && return 0
+	return 1
+}
+
 install_rules() { # device
 	_dev=$1
 	[ -n "$_dev" ] || return 1
@@ -58,7 +79,7 @@ while true; do
 	# Forwarding is what netifd turns on when it decides the interfaces
 	# are meant to be routed; it is set here as well so the rule and the
 	# forwarding do not depend on each other's timing.
-	echo 1 >/proc/sys/net/ipv4/ip_forward 2>/dev/null
+	in_build || echo 1 >/proc/sys/net/ipv4/ip_forward 2>/dev/null
 
 	if [ -n "$wan" ] && [ "$wan" != "$cur" ]; then
 		if install_rules "$wan"; then
@@ -68,5 +89,9 @@ while true; do
 			log "could not install the masquerade rule on $wan"
 		fi
 	fi
+
+	# A build gets one pass and no more: see the comment above in_build.
+	in_build && break
+
 	sleep 15
 done
