@@ -54,4 +54,17 @@ while [ "$i" -lt 40 ]; do
 	esac
 	sleep 3
 done
-$SSH "root@$WAN" 'cat /tmp/labclient.status 2>/dev/null' 2>&1 || true
+STATUS=$($SSH "root@$WAN" 'cat /tmp/labclient.status 2>/dev/null' 2>&1 | tr -d '')
+echo "$STATUS"
+
+# The loop above breaks on a lease; reaching here without one is the failure,
+# and it used to be a success: this script ended in `|| true` and exited 0, so
+# the round continued to the counters, printed an empty conntrack, and the only
+# thing that caught it was natverdict.py.  natround.sh runs with `set -e` and
+# `set -o pipefail`, so a non-zero here now stops the round and its trap puts
+# the bench back - which is worth the minutes the round would otherwise waste.
+case "$STATUS" in
+	*lease:*192.168.9.*)	;;
+	*) echo "clientrun: the client took no lease in $((i * 3)) s - the round cannot show routing without one" >&2
+	   exit 1 ;;
+esac

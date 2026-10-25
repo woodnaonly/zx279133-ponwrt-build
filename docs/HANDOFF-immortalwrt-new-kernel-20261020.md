@@ -2055,6 +2055,6 @@ wan 仍是 lan3，规则仍在 lan3，SSH 已验证可达。
   （`-Seconds 28800`，到 ~08:49）、`tftpsrv`。`g4prime-auto.sh`/`g4prime.sh`/`g4accept.sh`/
   `coldboot.sh` 都已随 `g4prime.rc = 0` 退出，没有孤儿流处理器。
 - **下次开工的三件小事**（都不紧急）：① `tools/postflash.sh` 的分区回读**没有比较**，
-  三重吞码，见 §9.25⑥；② `clientrun.sh` 拿不到租约仍退 0、`portmove.sh:112` 的 `tail -1`
+  三重吞码，见 §9.25⑥；② `portmove.sh:112` 的 `tail -1`
   可能吃到 netifd 横幅、`g4verify.sh:114` 的 `|| true`、验收不看 `plugphase.log` 避开断电；
   ③ 关键路径第 2 项（PON 状态机）才决定它能不能当光猫用。
