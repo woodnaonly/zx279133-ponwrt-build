@@ -86,10 +86,22 @@ def read_names(path):
 
 
 def main():
-    if len(sys.argv) < 2:
-        print("usage: jffs2names.py <image>")
+    args = [a for a in sys.argv[1:]]
+    plain = False
+    if "--list" in args:
+        plain = True
+        args.remove("--list")
+    if not args:
+        print("usage: jffs2names.py [--list] <image>")
+        print()
+        print("  --list  one name per line and nothing else, so that the list")
+        print("          can be grepped - this is what the CI's gate does")
         return 2
-    names = read_names(sys.argv[1])
+    names = read_names(args[0])
+    if plain:
+        for n in sorted(names):
+            print(n)
+        return 0
     print("the image holds %d names" % len(names))
     for n in sorted(names):
         print("  %s" % n)

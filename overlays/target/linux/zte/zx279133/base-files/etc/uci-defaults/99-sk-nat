@@ -37,4 +37,42 @@
 mkdir -p /etc/rc.d
 ln -sf ../init.d/sk-nat /etc/rc.d/S96sk-nat
 
+# THE RULE IS INSTALLED HERE AS WELL, NOT ONLY ON THE SECOND BOOT.
+#
+# The link above is what starts the init script - but the links in
+# /etc/rc.d are read when they are run, and this file runs after that, so
+# on the first boot the link exists and nothing has started yet.  On the
+# second boot the init script runs and installs the rule.
+#
+# Which of the two happens depends on something this file cannot know: a
+# build that runs the uci-defaults creates the link while the image is
+# being made, and then the first boot already has the link; a build that
+# does not leaves the link to the first boot, and then the rule is a boot
+# late.  So the rule is installed here as well, and the first boot has it
+# either way.
+#
+# A build runs this file in the package manager's chroot, and there is
+# nothing to install there - no uci, and no nft for this architecture - so
+# the whole thing is skipped when the build's own variables are there.  The
+# process that this file used to start is the one that stopped the build
+# (docs/85), and nothing here starts anything.
+if [ -z "${IPKG_INSTROOT:-}" ] && [ -z "${PKG_ROOT:-}" ] && [ -z "${CI:-}" ]; then
+	if command -v nft >/dev/null 2>&1 && command -v uci >/dev/null 2>&1; then
+		wan=$(uci -q get network.wan.device 2>/dev/null)
+		[ -n "$wan" ] || wan=$(uci -q get network.wan.ifname 2>/dev/null)
+		if [ -n "$wan" ]; then
+			nft list table ip nat >/dev/null 2>&1 && nft delete table ip nat >/dev/null 2>&1
+			nft -f - >>/dev/kmsg 2>&1 <<EOF
+table ip nat {
+	chain postrouting {
+		type nat hook postrouting priority 100; policy accept;
+		oifname "$wan" counter masquerade
+	}
+}
+EOF
+			echo "sk-nat: the masquerade is on $wan" >>/dev/kmsg 2>/dev/null
+		fi
+	fi
+fi
+
 exit 0

@@ -1378,21 +1378,45 @@ jobs:
             -n "OpenWrt mainline $KVER sk-d840n" -d "$IMG" flash-uImage
           cp "$DTB" flash-dtb.bin
           cp "$RS" flash-rootfs.jffs2
-          # The NAT rule has to be IN the image, not only in the tree.  A
+          # THE NAT RULE HAS TO BE IN THE IMAGE, not only in the tree.  A
           # rootfs without it is a board that boots, serves LuCI and cannot
           # route, and the only way to know which one was built is to look
-          # inside the image.  jffs2 keeps its names as plain strings, so
-          # the file name and the line that starts it are both in there.
+          # inside the image.
           #
-          # Two separate things are looked for: the script itself (by its
-          # name, which is a jffs2 directory entry) and the uci-defaults
-          # that links it in (by its content).  A rootfs with the script but
-          # without the link is an image whose script never runs.
-          strings "$RS" | grep -qx 'sk-nat' || {
+          # HOW THE IMAGE IS ASKED.  jffs2 compresses the CONTENTS of a file
+          # but not its NAME: the directory entry that carries the name is
+          # stored as it is.  So the names are read out of the image and the
+          # question is asked about names - and not about bytes.
+          #
+          # The way this used to be asked was `strings "$RS" | grep -qx
+          # 'sk-nat'`, and that question is wrong twice over.  `strings`
+          # prints the printable runs of the file, and the name sits between
+          # binary bytes, so it never lands on a line of its own: measured on
+          # the rootfs of run 166, `strings | grep -cx 'init.d'` is 0 while
+          # the file is in the image - and the second check looked for
+          # "sk-nat.log", which is the name of the file the old uci-defaults
+          # redirected its output into: a word in a comment, in a file the
+          # build deletes, in a file whose contents jffs2 compresses.
+          #
+          # So run 180 built a good image and this gate refused it.  What the
+          # gate asks now:
+          #
+          #   sk-nat         the init script itself, by its exact name;
+          #   S96sk-nat      the rc.d link that starts it, if the build ran
+          #   99-sk-nat      the uci-defaults that makes the link, if the
+          #                  build did not - one of the two has to be there,
+          #                  or the script never runs.
+          python3 tools/jffs2names.py --list "$RS" > rootfs-names.txt
+          echo "rootfs: $(wc -l < rootfs-names.txt) names in the image"
+          grep -qx 'sk-nat' rootfs-names.txt || {
             echo "::error::the built rootfs does not contain sk-nat - the flashed image would not masquerade"; exit 1; }
-          strings "$RS" | grep -q 'sk-nat.log' || {
-            echo "::error::the built rootfs does not contain the uci-defaults that starts sk-nat"; exit 1; }
+          if ! grep -qx -e 'S96sk-nat' -e '99-sk-nat' rootfs-names.txt; then
+            echo "::error::the built rootfs has the sk-nat script but nothing that starts it - neither the rc.d link nor the uci-defaults is in the image"
+            grep -i 'nat' rootfs-names.txt || echo "(the image holds no name with 'nat' in it)"
+            exit 1
+          fi
           echo "rootfs: it carries the NAT rule"
+          grep -x -e 'sk-nat' -e 'S96sk-nat' -e '99-sk-nat' rootfs-names.txt || true
           # The same three parts as one sysupgrade tar, for upgrading from inside a
           # running system (LuCI or `sysupgrade -n`). base-files platform.sh writes
           # them by label, so no partition offset is hard-coded on the device.
