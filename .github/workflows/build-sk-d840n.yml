@@ -802,8 +802,52 @@ jobs:
               echo "::error::$(printf '%s' "$line" | sed -e 's/%/%25/g' -e 's/#/%23/g' | tr -d '\r')"
             done
             echo "::error::compile rc=$rc; last 6 lines: $(tail -n 6 ../compile-v1.log | tr '\n' ' ' | sed -e 's/%/%25/g' -e 's/#/%23/g')"
+            # And the parallel pass's own last words, which is the part
+            # that says WHERE a build that was killed was when it was
+            # killed.
+            #
+            # This is the only channel out of a failed build that this
+            # machine can read: the job log is 403 without a token and
+            # the failure artifact needs a session to download, so a
+            # build that stops for three hours leaves nothing to read
+            # otherwise.  Runs 168 and 169 both ended that way.
+            if [ -s ../compile-parallel.log ]; then
+              {
+                echo "--- the parallel pass, its last 12 lines ---"
+                tail -n 12 ../compile-parallel.log
+              } | while IFS= read -r line; do
+                echo "::error::parallel: $(printf '%s' "$line" | sed -e 's/%/%25/g' -e 's/#/%23/g' | tr -d '\r')"
+              done
+            fi
           fi
           exit "$rc"
+
+      # What the build was doing when it stopped.
+      #
+      # The Compile step's own error annotations are only reached when the
+      # step ends by itself.  A build that is KILLED - by the step's own
+      # timeout - never gets there, and that is exactly the case this step
+      # is for: runs 168 and 169 both sat in Compile until the ceiling took
+      # them, and there was nothing afterwards to say where they were.
+      #
+      # This is also the only channel out of a failed build that a machine
+      # with no token can read: the job log is 403 without one, and the
+      # failure artifact needs a session to download.  The annotations of a
+      # check run are public, so this is what a machine with no token has.
+      - name: What the build was doing when it stopped
+        if: always() && steps.pick.outputs.run == 'true' && steps.compile.outcome == 'failure'
+        run: |
+          set -e
+          if [ -s compile-parallel.log ]; then
+            {
+              echo "--- the parallel pass, its last 20 lines ---"
+              tail -n 20 compile-parallel.log
+            } | while IFS= read -r line; do
+              echo "::error::parallel: $(printf '%s' "$line" | sed -e 's/%/%25/g' -e 's/#/%23/g' | tr -d '\r')"
+            done
+          else
+            echo "::notice::the parallel pass left no log of its own"
+          fi
 
       - name: Assert the kernel really has the PHY driver
         if: steps.pick.outputs.run == 'true'
