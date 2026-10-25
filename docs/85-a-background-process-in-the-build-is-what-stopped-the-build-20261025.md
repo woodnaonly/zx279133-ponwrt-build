@@ -90,30 +90,49 @@ computed, and no amount of waiting changes anything.
 
 ## 5. The proof that the uci-defaults runs in the build
 
-The flashed image says so, and it says it in two independent ways.
+**The proof is the correlation itself.**  Run 167 is the last build without
+`2e9b4e6` and run 168 is the first one with it, and every build since then
+stops in the same place, while nothing else about the build changed (the
+base tree, the four feeds, the kernel's SHA and the Compile step itself are
+all the same - docs/82 §2).
 
-**The link is in the image, and it is newer than everything else in
-`/etc/rc.d`.**  On the board:
+A file in the overlay can only affect the build if the build runs it.  The
+uci-defaults is a file in the overlay, so if the build did not run it, adding
+it could not have changed anything, and run 168 would have built as run 167
+did.  It did not: it hung.  **So the build does run the uci-defaults**, and
+running it starts the loop that holds make's jobserver open.
 
-```
-lrwxrwxrwx 1 root root 16 Oct 24 06:45 S96sk-nat -> ../init.d/sk-nat
-lrwxrwxrwx 1 root root 16 Oct 24 06:18 S50uhttpd -> ../init.d/uhttpd
-lrwxrwxrwx 1 root root 19 Oct 24 06:18 S19dnsmasq -> ../init.d/dnsmasq
-```
+**Two claims that were made here once were wrong, and are corrected now**
+(2026-10-25, after the timestamps on the board were read properly):
 
-Every other link is dated 06:18 - the minute the image's files were
-copied - and `S96sk-nat` is dated 06:45.  That link is the one thing the
-uci-defaults creates, so the uci-defaults ran 27 minutes into the build,
-**in the build**, and not on the board.
+* *"The link is in the image, and it is newer than everything else in
+  `/etc/rc.d`."*  On the board the link is dated `Oct 24 06:45` while every
+  other link is dated `Oct 24 06:18` - but the `sk-nat` **init script itself**
+  is dated `06:45:34` too, and that file is not in the image at all: it was
+  copied onto the board by hand on 2026-10-25, when the board was still
+  running the run 165 rootfs and the CI had not published anything with the
+  NAT fix in it (see §9.14 of the HANDOFF).  The hand-made copy and the
+  hand-made link carry the same timestamp, and the timestamp says nothing
+  about the build.  Everything the image really carries is dated `06:18:27`,
+  which is the base tree's commit time (`5996412`, 2026-10-23 22:18:27 UTC)
+  - that is how a reproducible build stamps its files.
+* *"`/etc/uci-defaults/` on the board is empty: the build removes the scripts
+  it has run."*  The board's uci-defaults are empty because the **first boot**
+  runs them and deletes them: `/etc/init.d/boot` carries its own
+  `uci_apply_defaults()` and calls it at line 53.  That is the device's
+  mechanism, and it says nothing about the build's.
 
-**The scripts are gone from the image.**  `/etc/uci-defaults/` on the board
-is empty: the build removes the scripts it has run, so an image that has
-been through a build carries no uci-defaults at all.
+**Whether the CI's image carries the link is a question about the image, and
+the image can now be asked.**  jffs2 compresses the contents of a file but
+not its name, so `tools/jffs2names.py` reads the names out of a rootfs and
+`tools/preflash.py` asks about names instead of about bytes - see **docs/87**.
 
-Both facts also mean something useful about the fix: the link is in the
-image, so the init script runs on the first boot exactly as it does now,
-and the rule has been on the WAN since the first boot - the board's own
-flashed image has carried it since it was built.
+The fix itself does not depend on any of this: the uci-defaults no longer
+starts anything, and the init script is guarded against running in a build's
+chroot.  If the image carries the link, the init script runs on the first
+boot exactly as it does now; if it does not, the rule is installed on the
+second boot, and the acceptance does two cold boots before it reads the
+counters.
 
 ## 6. The fix
 
