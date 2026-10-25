@@ -1580,6 +1580,24 @@ run181 **放行**（11 项 OK，含「rootfs 里有 `sk-nat`」「uci-defaults �
 run166 **拒 3 项**（超 8 MiB 达 7315 字节 / 无 `sk-nat` / 既无 rc.d 链接也无 uci-defaults）——
 和 §9.11、§9.19 记录的那三条一字不差。门禁不是那种一次都没响过的检查。
 
+**⑦ 分区的读回比对过去只打印、不进退出码。**
+`g4flash.sh` 的第 6 步是 `$SSH 'sh -s' <<EOF`，退出码是 ssh 的 0——板子答什么都一样。
+⇒ 读回 MISMATCH 也照样往下冷启动。现在写到 `staging/ctl/g4flash-readback.txt`、`cat` 出来、
+`grep -qE 'MISMATCH|no partition'` 就 exit 1。
+控制组：真件 `staging/ctl/flashbyhand.txt`（run181 的三行 `kernel/dtb/root: OK <md5>`）
+**不匹配**（grep rc=1），而 MISMATCH 文本匹配（rc=0）。
+这条是 §9.11「任何刷完都必须 mtd verify」在轮次脚本里的落点——`mtd write` 静默截断还报 success。
+
+**⑧ 轮次中途失败会把 `ser-nostop` 留在 off，把整条验收腿一起废掉。**
+第 3 步把标志文件改名成 `ser-nostop.off`（让 relay 送空格、把板子停在 U-Boot 提示符好起 RAM 镜像），
+第 7 步才放回；而第 3 到第 7 步之间任何一条早退（加载器没起来、推包失败、现在多了的读回失败）
+都把它留在 off。此后每一次冷启动都会停在 `=>` 而不是自己从 flash 起——
+**验收会全灭，而且原因和镜像无关**。原来的写法是在这些地方**给人打一条 `mv` 建议**
+（`:154`、`:177`），可这一轮是 02:00 没人看。
+**已修**：`trap restore_flag EXIT`（函数体是 `if` 判断，`set -u` 下安全）。
+控制组：把 `g4flash.sh` 里那个函数**原样抽出来**跑，标志文件回到原位、`rc` 仍是 1
+（失败照旧往外传，不会被掩盖）。
+
 **否证一：`trial-files/` 那 5 个 `100644` 不是 bug。**（子代理报的是"同类缺口"，我不接受，去查了构建路径）
 `workflow:305` 的 `cp -a` 后面紧跟 `:306 chmod 755 openwrt/files/etc/rc.d/* openwrt/files/usr/libexec/*`
 （`git log -S` 显示它自 `6d076d4`（2026-10-10）就在），所以 S15trial/S26nat/S27labclient/trial-blink
@@ -1601,8 +1619,10 @@ RAM 镜像的开机行为**逐字节等价**，今晚那一轮不受影响。
 
 **已知、未修、别当成已修**（今晚的轮次会带着它们跑，`natverdict` 兜住了最关键的一条）：
 `natround.sh` 无 pipefail + `| tail` 吞步骤失败；`g4watch.sh:21-34`、`g4natwatch.sh:21-28`
-循环超时后照样打「the power cycle happened」；`g4flash.sh:63` 取 itb 用 `|| true`，
-`:187-210` 的分区读回 MISMATCH 不影响 rc；`g4verify.sh:114` 有个 `|| true`。
+循环超时后照样打「the power cycle happened」；`g4verify.sh:114` 有个 `|| true`。
+`g4flash.sh:63` 取 RAM 镜像用 `|| true` **是有意的**（`:88-96`：release 自带 itb 就用它，
+没有就留在盘上那一个，好让「RAM 镜像起不来的 release」也还有一条活路），不算缺陷。
+⑦⑧ 两条已经在本节里修掉并给了控制组，不要重复劳动。
 
 **现在的等待链**：`g4prime-auto.sh`（pid 45168，约 **01:44** 到点，270×(20s+一次 ls-remote)）
 → 若它放弃而 tag 才出现，`staging/ctl/g4prime-baton.sh`（00:45 起，240 分钟，写 `g4prime-baton.txt`）
