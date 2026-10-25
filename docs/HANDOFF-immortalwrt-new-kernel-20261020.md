@@ -431,7 +431,7 @@ PPU 1..4 的 SVID 写进去读回来是 `00ec0000 / 00f00000 / 00f40000 / 00f800
 
 ## 6. 规矩（上一任被纠正过的点，别再犯）
 
-- **编译只在 CI**：本机**绝不**编译。**只有 push 命中以下路径才会触发构建**：`build-sk-d840n.yml`、`kernel-overlays/**`、`overlays/**`、`configs/sk-d840n*`、`scripts/configure-sk-d840n.sh`、`templates/**`。**docs-only push 不会构建**，所以“纯文档提交攒着以免占 release 指针”是错的；真正要攒的是上面这些会触发构建的路径，别把未验证的 overlay 推上去占住 release 指针。
+- **编译只在 CI**：本机**绝不**编译。**只有 push 命中以下路径才会触发构建**：`build-sk-d840n.yml`、`kernel-overlays/**`、`overlays/**`、`configs/sk-d840n*`、`scripts/configure-sk-d840n.sh`、`templates/**`、`trial-files/**`、`tools/**`、`docs/**`（`.github/workflows/build-sk-d840n.yml:27-46`，逐条核对于 2026-10-26 00:52）。**本节此前写的「改 docs 不会触发」是错的**——`docs/**` 在第 46 行里，而且这句话还是 run126 那次「修了门禁却没起构建」之后补进来的。所以**等 release 的时候什么都别推**：一次文档 push 会起一个和你正在等的那次竞争的构建，抢同一批 runner。真正要攒的是「别在别人的 release 落地之前推会触发的路径」。
 - **正本只有一个**：`ci-build-repo/` 是 canonical（10-20 的 workflow，带 `KERNEL_SHA` pin 和 DEVMEM 修补）；`ci-wanport/` 是 10-16 的旧工作副本（workflow 没有 pin/DEVMEM），**不要 push 它**。
 - `KERNEL_SHA` 已 pin（run 72 因为 branch-tip clone 炸出 21 个错）；顶层 `CONFIG_KERNEL_*` 会**覆盖** defconfig（`KERNEL_DEVMEM` 事故，run 63–67 全废），要在 build-root `.config` 里 defconfig **之后**再钉。
 - 每个判定门都要有**正例 + 反例**；“0 命中”先怀疑自己的 pattern，而不是怀疑设备。
@@ -1529,16 +1529,102 @@ table ip nat { chain postrouting { oifname "lan3" counter packets 0 bytes 0 masq
 
 ---
 
+## 9.23 无人值守轮次开跑前的体检：六处修、两处否证（2026-10-26 00:41–00:55）
+
+run182 还在编译，出片后 `g4prime-auto.sh` 会**自己**跑完整一轮（门禁→窗口内刷机→两次冷启动→NAT）。
+趁这段时间做了三份只读审计（轮次脚本 / 文档与证据 / 执行位影响），**每条结论都自己重读源码复核过**，
+然后修了六处。下面每一条都是「不修就一定白跑一轮」的东西，不是改进。
+
+**① 自动轮会在第一步就退出，因为它根本没有取包这一步。**
+`g4prime.sh` 的第 1 步跑 `preflash.py`，而 `preflash.py:100-104` 只看 `staging/trial/<tag>` 在不在，
+**不 fetch**（`grep fetch` 零命中）；`flashonpower.sh:21-24` 同样只检查目录。
+真正取包的是 `g4flash.sh:59`——**在窗口里面**。
+⇒ tag 一出现，轮次打印「there is no such directory」，`g4prime.rc=1`，一个字节都不会写。
+run181 那一轮之所以能跑，是因为取包是手工做的。
+**已修**：`g4prime.sh` 加了第 0 步，用 `ci-build-repo/tools/getrel.py` 在窗口外把 release 取下来，
+失败就退出——顺带把「下载坏了」这种失败也从窗口里挪到了窗口外。
+
+**② 插座监视器比 release 先死。**
+`tools/plugwatch.ps1` 是 `-Seconds` 到点自己退的（`:18` 的 deadline、`:35` 的循环），
+上一个实例 19:15:27 起、跑 21600 秒 ⇒ **01:15:27 停**。它一停，`staging/ctl/linkup` 不再被盖，
+而 `flashonpower.sh:30` 等的就是 `linkup -nt .flashwant` ⇒ 空等 100 分钟（`:37`）后 exit 1。
+**已修**：00:48:50 换成一个 28800 秒的实例（到 ~08:49）。新实例的第一行是 `00:48:58 link  -> Up`，
+**这一行故意不盖 linkup**（`:26-31`：开机时已经在 Up 不是跳变），下一次真实跳变在 ~01:01。
+
+**③ 冷启动失败不进退出码。**
+`g4accept.sh:30-37` 把两次冷启动的 rc 只 `echo` 出来，末尾 `exit $rc` 用的是 NAT 轮的。
+⇒ 板子根本起不来，轮次照样报 0。**已修**：改成 `worst`，任何一次冷启动失败都让轮次非 0。
+
+**④ 「NAT 轮的绿」不是一条判据，所以新增了一条。**
+`natcounters.sh`、`natevidence.sh` 只打印不 assert，`natround.sh` 是 `set -e` 但没有 pipefail
+且六处 `... | tail`（管道退出码是 tail 的 0）。⇒ §9.22 那种「镜像里没有规则」的轮次**返回 0**。
+新增 `staging/ctl/natverdict.py`：从**轮次捕获的字节**里要三样东西——
+masquerade 计数 > 0、客户端的 ping 一个不丢地回来了、conntrack 里有客户端的流。
+`natrun.py` 现在在轮次结束后跑它，不过就返回 1（**只能把绿改成红，不能反过来**）。
+判据的控制组全是盘上真件（`staging/ctl/test-natverdict.py`，5/5）：
+正例 `g3nat6.txt`（01:19 那次真 PASS 的 G3 轮）；
+反例 `g4nat-round.txt`（run181 断在第 2 步）、`g4nat-evidence.txt`（无规则那次）、
+以及串口日志里板子自己打的 `oifname "lan3" counter packets 0 bytes 0 masquerade`
+——「装了但一个包都没数」，正是骗过台架的那张脸。
+
+**⑤ `getrel.py` 的「无参数列出 release」从来没跑通过。**
+`tools/getrel.py:143` 写的是 `if len(sys.argv) < 1` ——argv 永远 ≥1，所以直接
+`IndexError`。改成 `< 2`，实测能列出 release 与每个 release 的资产清单
+（**这也是「取包通道今晚可用」的正例**：API 走代理、匿名可读）。
+
+**⑥ 门禁有两个副本，跑的是影子那份。**
+`g4prime.sh` 调 `staging/ctl/preflash.py`，正本在 `ci-build-repo/tools/preflash.py`。
+逐行 diff：只差两行注释里的路径，行为一致——**今晚没吃亏，但下次改正本就会吃亏**。
+已把 `g4prime.sh` 指向正本，并用两个真实 release 给门禁做了正例和反例：
+run181 **放行**（11 项 OK，含「rootfs 里有 `sk-nat`」「uci-defaults 在镜像里」），
+run166 **拒 3 项**（超 8 MiB 达 7315 字节 / 无 `sk-nat` / 既无 rc.d 链接也无 uci-defaults）——
+和 §9.11、§9.19 记录的那三条一字不差。门禁不是那种一次都没响过的检查。
+
+**否证一：`trial-files/` 那 5 个 `100644` 不是 bug。**（子代理报的是"同类缺口"，我不接受，去查了构建路径）
+`workflow:305` 的 `cp -a` 后面紧跟 `:306 chmod 755 openwrt/files/etc/rc.d/* openwrt/files/usr/libexec/*`
+（`git log -S` 显示它自 `6d076d4`（2026-10-10）就在），所以 S15trial/S26nat/S27labclient/trial-blink
+**从来没在镜像里是 0644**——docs/07:5889 记的出货件就是 `-rwxr-xr-x`。
+`lib/preinit/05_trial_alive` 更根本：preinit 在 OpenWrt 里是被 **source** 的
+（本仓 zrec 的 `85_zrec:2-4` 自陈「SOURCED，只能定义函数」，`Makefile:43` 还用 `INSTALL_DATA`(0644) 装它，
+而它的 `preinit_main` 在板上确实跑过）。⇒ 它不该算 bug，是 `prepush.py:49-50` 的 MUST_RUN 把
+`/lib/preinit/`、`/etc/uci-defaults/` 也列进去了才看着像。
+我还是做了两件无害的事：git 位对齐成 `100755`（exec 与 source 都走得通），
+并把 `overlay_modes_check` 从只扫 `overlays` 扩到 **`overlays` + `trial-files`**
+（正例 `prepush: 14 files, 0 problems`；反例把 S15trial 调回 100644，门禁点名它并给 1 problem）。
+RAM 镜像的开机行为**逐字节等价**，今晚那一轮不受影响。
+
+**否证二：没有加「剩余窗口不足就不开工」。**
+`linkup` 的章正是在 **Up 沿**盖的（`plugwatch.ps1:29-31`），`flashonpower.sh` 每 5 秒看一次，
+所以开工时刻就是窗口起点，15.5 分钟全在前面。run181 那次被砍（22:28:41 起、22:43:35 砍）
+是因为**取包和推 sysupgrade 都在窗口里**做——那正是①已经挪出去的东西。
+加一条窗口算术只会引入新bug，买不到东西。
+
+**已知、未修、别当成已修**（今晚的轮次会带着它们跑，`natverdict` 兜住了最关键的一条）：
+`natround.sh` 无 pipefail + `| tail` 吞步骤失败；`g4watch.sh:21-34`、`g4natwatch.sh:21-28`
+循环超时后照样打「the power cycle happened」；`g4flash.sh:63` 取 itb 用 `|| true`，
+`:187-210` 的分区读回 MISMATCH 不影响 rc；`g4verify.sh:114` 有个 `|| true`。
+
+**现在的等待链**：`g4prime-auto.sh`（pid 45168，约 **01:44** 到点，270×(20s+一次 ls-remote)）
+→ 若它放弃而 tag 才出现，`staging/ctl/g4prime-baton.sh`（00:45 起，240 分钟，写 `g4prime-baton.txt`）
+**只在** auto 的错误文件里出现「did not arrive」且 tag 已存在时接管；auto 已经开跑就自己站下。
+两者不会同时刷机。
+
+---
+
 ## 10. 现在的状态（2026-10-26 00:07）
 
 ### 10.1 正在跑的东西
 
 | 什么 | 在哪 | pid / 怎么查 |
 |---|---|---|
-| **run182 的自动整轮** | `sh staging/ctl/g4prime-auto.sh 182 90` | pid 45168，输出 `staging/ctl/g4prime-auto.txt` |
-| 串口 relay | `tools/relayctl.ps1 status` | pid 37636（22:49 重启过，代码是新的） |
-| 插座监视 | `tools/plugwatch.ps1` | pid 32244，写 `staging/ctl/plugphase.log` + `linkup` |
-| TFTP | `python tools/tftpsrv.py staging/trial 69` | pid 35284 |
+| **run182 的自动整轮** | `sh staging/ctl/g4prime-auto.sh 182 90` | pid 45168，输出 `staging/ctl/g4prime-auto.txt`；**到点约 01:44**（270×(20 s + 一次 ls-remote)，不是正好 90 分钟） |
+| **接棒的等待者**（00:45 新加，见 §9.23） | `sh staging/ctl/g4prime-baton.sh 182 240` | 输出 `staging/ctl/g4prime-baton.txt`；只在 auto 的错误文件里出现「did not arrive」且 tag 已存在时才接管，auto 已经开跑就自己站下 |
+| 串口 relay | `tools/relayctl.ps1 status` | pid 9424（22:49 重启过，寿命 21600 s ⇒ **04:49 到点**） |
+| 插座监视 | `tools/plugwatch.ps1` | **旧实例 32244 已在 00:48 被我杀掉**（它本来会在 01:15:27 自己退，见 §9.23②）；新实例 00:48:50 起、`-Seconds 28800` ⇒ 到 ~08:49，写 `staging/ctl/plugphase.log` + `linkup` |
+| TFTP | `python tools/tftpsrv.py staging/trial 69` | pid 35284，`netstat -ano -p udp` 里 UDP 0.0.0.0:69 在 |
+
+CI 侧：run182（`cca0ba6`）16:39Z 还在 `toolchain/gcc/final` + `target/linux`，看门狗判据是 `wrote=yes`
+（`python staging/ctl/beat.py 182 flash` 读进度分支，不耗 API 配额）。
 
 `g4prime-auto.sh` 会等 run182 的 flash release 出现（用 `git ls-remote --tags`，不耗
 API 配额），一出现就自动跑整轮：**门禁 → 下一个上电窗口刷机 → 两次冷启动 → NAT
@@ -1582,15 +1668,24 @@ wan 仍是 lan3，规则仍在 lan3，SSH 已验证可达。
 ### 10.6 下一步（按顺序）
 
 1. **等 run182 出片**：`python staging/ctl/beat.py 182 flash` 看编译进度；
-   `python devtools/runstatus.py --recent 3` 看 run 状态；出片后 `g4prime-auto.sh`
-   会自己接上。
+   `python devtools/runstatus.py --recent 3` 看 run 状态。出片后 `g4prime-auto.sh` 自己接上，
+   **现在它会先自己取包、再跑门禁**（§9.23①），过了 01:44 由 `g4prime-baton.sh` 接管。
 2. **盯整轮**：`Get-Content staging/ctl/g4prime-flash.txt -Wait`、`g4cold1.txt`、
    `g4cold2.txt`、`g4nat-round.txt`、`g4prime.rc`。
-3. **收证据**：`python staging/ctl/fill86.py`（填 docs/86 的 5 个占位）、
-   `python staging/ctl/addh921.py`（HANDOFF §9.21/§9.22 已在仓库里，这一步是核对）。
+   **判绿用 `python staging/ctl/natverdict.py staging/ctl/g4nat-round.txt`**（§9.23④），
+   不要只看轮次自己的退出码；`g4prime.rc` 现在等于「两次冷启动 + NAT 判据」的最坏值（§9.23③）。
+   判据自己的控制组：`python staging/ctl/test-natverdict.py`（5/5，正例是真跑过的 G3 轮）。
+3. **收证据**：`python staging/ctl/fill86.py 182 --reset` —— run 号**必须显式给**：
+   它按 run 号取样，拿不到就拒绝、绝不回退到别的 run 的证据（实测对 run182 报四条理由、
+   `rc=1`、docs/86 的 md5 不动）。占位是 **7 个**不是 5 个。
+   `python staging/ctl/addh921.py` 只是核对（§9.21/§9.22/§10 已在仓库文件里，跑它是 no-op）。
 4. **最后 push**：`python tools/prepush.py` 必须过（末行 `prepush: 14 files, 0
-   problems`），然后 `git push`。**注意 `docs/**` 也在 CI 的触发路径里**，所以推文档
-   也会起一次构建——可以接受，但别在等 release 的时候推。
+   problems`），然后 `git push`。**`docs/**`、`tools/**`、`trial-files/**` 都在 CI 的触发路径里**
+   （§6 已按 workflow 原文改正），所以**在 run182 的 release 落地之前什么都别推**——
+   一次 push 就是一会和 run182 抢同一批 runner 的一次构建。
+   本地攒着待推：`origin/main..main` 的 2 个提交（`23ec6f6`、`b81cca4`）
+   ＋ §9.23 这批（trial-files 的 git 位对齐、prepush 门禁扩到 trial-files、
+   `getrel.py` 的 argv off-by-one、本节与 §6 的文档）。
 5. **G5（PON 状态机）保持冻结**：按计划第 7 节「PON 状态机工作量过大 → 冻结 M2，保
    留 M1 实验室路由器」。未通过前不要把产物叫「可用光猫」。
 
@@ -1598,6 +1693,9 @@ wan 仍是 lan3，规则仍在 lan3，SSH 已验证可达。
 
 - **`cmd | tee file` 的退出码是 tee 的**，永远是 0。轮次脚本里凡是这么写的，失败都
   会被吞掉。改成写文件再 `cat`。
+- **同一条坑在量出来的时候也会踩**：`python x.py 182 | tail -8; echo "rc=$?"` 打出来的是
+  `tail` 的 0，不是 x.py 的退出码——2026-10-26 00:55 我就这样把一条**正确拒绝**的检查读成了
+  「它不拒绝」。要读退出码就别接管道：先 `> file 2>&1`，`echo $?`，再 `tail file`。
 - **`cat file | ssh "cat > file"` 会断在半路**，而且脚本会说 done。现在
   `tools/flashpush.sh` 会比大小、比不上就重传。
 - **Windows PowerShell 5.1 按 ANSI 读 .ps1**，脚本里的中文会让它报解析错误——用
