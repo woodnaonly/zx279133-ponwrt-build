@@ -1788,6 +1788,14 @@ root:   OK 2af47bc59aeb090982e69f1e658487d4
 两点顺带记下：
 - **dtb 的 md5 与 run181 完全相同**（同一件 dtb），变的是 kernel 与 root——run182 要修的就是
   rootfs 里那几个执行位，所以 dtb 相同反而是好消息：**分区表没变，`root=/dev/mtdblock5` 仍然对**。
+**一条容易骗人的身份证据，实测过（01:45:01，板子还停在 RAM 镜像里等下一次断电）**：
+`/proc/cmdline` 里的 `root=/dev/mtdblock5` **不是**"从 flash 起来了"的证据——RAM 镜像同样带着这条
+U-Boot bootargs。真正的判别只有两条，而且都已在门禁里：
+`grep ' / ' /proc/mounts` 的根必须是 `type jffs2`（`g4verify.sh:74`；此刻 RAM 镜像里读回来是
+`tmpfs / tmpfs rw,relatime 0 0` ⇒ 这就是那条检查的**真实反例**），
+以及 ⑯ 新加的 `/etc/init.d/sk-nat` 在不在（RAM 镜像里没有这个文件，实测 `No such file or directory`）。
+所以"验收时板子在哪个系统里"这个问题，今晚有了两个互相独立的回答。
+
 - `g4verify.sh:23` 的 `KIMG` 默认还指着 run165 留下的 `flash-uImage.gzipfit`；本轮没踩，
   因为 `coldboot.sh:94` 把它覆盖成 `staging/trial/flash-uImage`。**那个默认值是旧物**，
   下一次谁直接手跑 `g4verify.sh` 就会拿一轮前的镜像去比哈希，判出一个假 FAIL。
