@@ -148,7 +148,7 @@ echo
 sh natevidence.sh "$WAN" 2>&1
 
 say "7. putting everything back"
-sh restore.sh 2>&1 | tail -30
+sh restore.sh "$WAN" 2>&1 | tail -30
 if command -v pwsh >/dev/null 2>&1; then
 	pwsh -NoProfile -File "$UPSTREAM" -Mode off 2>&1 | tail -4
 else

@@ -1,7 +1,7 @@
 #!/bin/sh
 # Put the bench back the way it was.
 #
-#   sh tools/restore.sh
+#   sh tools/restore.sh [the board's wan address]
 #
 # Four things were changed for the NAT round and all four have to go back:
 #
@@ -14,10 +14,18 @@
 #   * and this PC's sharing goes off, so the wired adapter has its
 #     192.168.9.25 back.
 #
-# The port move and the dropbear change are done over the console, because
-# the console does not depend on the network: the board's LAN address is
-# gone from this PC's segment while lan2 is the wan, so ssh cannot be used
-# to undo what ssh did.
+# The order is the point, and it is the reverse of the order the round
+# changed things in:
+#
+#   * the port move comes FIRST, and it goes over ssh to the board's WAN
+#     address - the address the round found the board on.  It cannot go to
+#     192.168.9.1: lan2 is the wan at this point, so the board's LAN
+#     address is not on this PC's segment and never was.
+#   * dropbear goes back to the lan only AFTER that, because the ssh the
+#     port move arrived on is the one that has to be listening on the wan
+#     until the move is done.
+#   * the client's namespace goes first of all, over the console, so it
+#     works whether or not the board is reachable at all.
 #
 # Git bash rewrites an argument that looks like an absolute path into a
 # Windows one before Python sees it, which turns "/etc/init.d/..." into
@@ -27,22 +35,31 @@ set -e
 cd "$(dirname "$0")"
 export MSYS_NO_PATHCONV=1
 
+WAN=${1:-}
+
 echo "=== removing the client ==="
 # Over the console, so it works whether or not the board is reachable.
 python q.py 'ip netns del labcli' 'ip link del labhost0' 2>&1 | tail -6
 
 echo
-echo "=== dropbear back to the lan only ==="
-# BEFORE the port moves back.  Once lan2 is in the bridge again the board's
-# address on the shared subnet is gone, and the ssh session this round has
-# been using arrives over that address - so the change is made while the
-# session still has somewhere to arrive.
-python q.py 'uci set dropbear.main.Interface="lan"' 'uci commit dropbear' \
-	'/etc/init.d/dropbear restart' 2>&1 | tail -8
+echo "=== putting lan2 back into the bridge ==="
+# Over ssh, to the address the round found the board on.  The port move
+# itself used ssh too (the change and its commit are made before the
+# network is restarted, so they have no reason to be on the fragile
+# console path), and the restore is the same change in the other
+# direction.
+if [ -n "$WAN" ]; then
+	SKD_HOST="$WAN" sh portmove.sh back 2>&1 | tail -20
+else
+	sh portmove.sh back 2>&1 | tail -20
+fi
 
 echo
-echo "=== putting lan2 back into the bridge ==="
-sh portmove.sh back 2>&1 | tail -20
+echo "=== dropbear back to the lan only ==="
+# AFTER the port moves back: the ssh the port move arrived on is the one
+# that was listening on the wan.
+python q.py 'uci set dropbear.main.Interface="lan"' 'uci commit dropbear' \
+	'/etc/init.d/dropbear restart' 2>&1 | tail -8
 
 echo
 echo "=== restarting the network so the board answers on its lan again ==="
