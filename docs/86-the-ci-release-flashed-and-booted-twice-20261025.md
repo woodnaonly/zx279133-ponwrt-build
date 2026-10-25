@@ -27,7 +27,40 @@ to, and put the board through the two cold boots and the NAT round again.
 
 ## 2. The release
 
-<<RELEASE>>
+The release the CI published for this round is **`skd840n_flash_182_40209332232`**.
+
+That is run 182 of `build-sk-d840n.yml`.  It is not the first flash
+release the CI ever published: `staging/trial` holds
+`skd840n_flash_166_*` and `skd840n_flash_181_*`, and 181 was already
+flashed and booted twice (HANDOFF section 9.21).  What this run is the
+first of is the narrower thing docs/86 records, and the cold boots below
+are the measurement of it: the first image whose own
+`/etc/init.d/sk-nat` reaches the board executable and installs the
+masquerade rule without help.
+
+Before anything was written to the NAND the release went past the gate
+(`tools/preflash.py`), which reads the manifest, the uImage and the
+rootfs of the release - and the rootfs by its file names:
+
+```
+the release: C:\UGit\openwrt\SK-D840N\staging\trial\skd840n_flash_182_40209332232
+  OK   flash-uImage matches the manifest
+  OK   flash-dtb.bin matches the manifest
+  OK   flash-rootfs.jffs2 matches the manifest
+  OK   the uImage fits the 8 MiB kernel partition - 8069601 bytes, 319007 to spare
+  OK   the uImage has the right magic - 0x27051956
+  OK   the payload is gzip, which is all the loader reads - compression type 1
+  OK   the payload decompresses - 20568072 bytes of kernel, md5 e3ef0bbc67198c691f6b42da9488894b
+  OK   the kernel announces 6.18.38 - Linux version 6.18.38+ (runner@runnervmwhx2h) (aarch64-openwrt-linux-musl-gcc (OpenWrt GCC
+  OK   the kernel's version line is complete - U ld (GNU Binutils) 2.44) #0 SMP Fri Oct
+  OK   the rootfs carries the NAT init script - /etc/init.d/sk-nat
+  OK   the rootfs starts the NAT rule at boot - the uci-defaults is in the image
+       the names in the rootfs with 'nat' in them - 99-sk-nat, dropbear.alternatives, ip-full.alternatives, logd.alternatives, sk-nat, ubox.alternatives, uclient-fetch.alternatives
+       the rootfs holds 769 names
+  OK   the dtb has the dtb magic - d00dfeed
+
+preflash: the release is fit to be flashed
+```
 
 ## 3. The bytes are the same kernel, and not the same bytes
 
@@ -40,7 +73,19 @@ two cold boots - was:
 | `flash-dtb.bin` | 13040 | `8c460c9794558ac7e18bcb18d903a228` |
 | `flash-rootfs.jffs2` | 4587524 | `55ee805ae7013fe333419577daf9e130` |
 
-<<CI_BYTES>>
+The three files the CI published, as they arrived here:
+
+| file | bytes | md5 |
+|---|---|---|
+| `flash-uImage` | 8069601 | `170592a71ed0d83b9aea4b77fd2aa628` |
+| `flash-dtb.bin` | 13040 | `8c460c9794558ac7e18bcb18d903a228` |
+| `flash-rootfs.jffs2` | 4718596 | `2af47bc59aeb090982e69f1e658487d4` |
+
+These are the bytes this round wrote, and the FLASH section's read-back
+is the proof that the partitions hold exactly them.  The table that used
+to sit here described a *hand-built* image from 2026-10-25 01:35 - other
+md5s (`329f1bbc...`, `55ee805a...`) inside a section about a CI release,
+which is how a document starts lying, so it is gone.
 
 Two things are worth saying about the comparison, because they are the two
 ways one can get this wrong.
@@ -73,7 +118,31 @@ the fetch.
 
 ## 4. The flash
 
-<<FLASH>>
+The flash was done the way the CI says to do it: the images were
+written from the RAM environment, in one power window, so that the
+plug could not cut the power in the middle of `mtd write`.
+
+```
+flashonpower: the power came back at 01:33:10, starting now
+  the uImage is 8069601 bytes, the rootfs is 4718596 bytes
+  the flag file was already away
+flasher: verify kernel
+flasher:     mtd write rootfs.jffs2 root && mtd verify rootfs.jffs2 root
+kernel: OK 170592a71ed0d83b9aea4b77fd2aa628
+dtb: OK 8c460c9794558ac7e18bcb18d903a228
+root: OK 2af47bc59aeb090982e69f1e658487d4
+g4flash: the flag file is back on the way out
+  the flag file is back: the next power cycle is the board's own
+g4flash: done at 01:34:44
+flashonpower: g4flash said 0 at 01:34:44
+```
+
+This round's own step did the write - `g4flash said 0`, and the
+read-back shows the partitions holding the same bytes:
+
+```
+(no manual write in this round: the flashbyhand.txt on disk predates this run's release and is not quoted)
+```
 
 ## 5. Three things that were wrong on the way
 
@@ -145,19 +214,97 @@ Both are fixed in the bench now: the release's own copy of every file goes
 to the board, and the size of what arrived is compared with the size of
 what was sent, and the copy is repeated until it is whole.
 
-<<WRONGWAY>>
+The evidence, in the order it happened.
+
+**The manifest check on the board, with the stale file:**
+
+```
+fetching flash-sysupgrade.bin   -> C:\UGit\openwrt\SK-D840N\staging\trial\skd840n_flash_182_40209332232\flash-sysupgrade.bin
+   flash-sysupgrade.bin   OK
+   (no flash-sysupgrade.bin in this release)
+  flash-sysupgrade.bin
+```
+
+**And then the write, with the release's own file:**
+
+```
+(no manual write in this round: the flashbyhand.txt on disk predates this run's release and is not quoted)
+```
 
 ## 6. Cold boot 1
 
-<<COLD1>>
+Cold boot 1 - the plug cut the power, and the board came up by
+itself, out of the flash, with nothing sent to the console.
+
+```
+coldboot: the console log is 103382771 bytes now; waiting for a boot
+coldboot: the kernel banner appeared at 01:48:40
+coldboot: waiting for the board to answer over ssh
+coldboot: the board answers at 01:48:58: kernel 6.18.38+, uptime 19s
+coldboot: giving the userspace a moment to settle
+coldboot: verification round 1
+coldboot: the original gate as well
+coldboot: verify_router says 0
+coldboot: done at 01:49:37
+```
 
 ## 7. Cold boot 2
 
-<<COLD2>>
+Cold boot 2 - the plug cut the power, and the board came up by
+itself, out of the flash, with nothing sent to the console.
+
+```
+coldboot: the console log is 103439624 bytes now; waiting for a boot
+coldboot: the kernel banner appeared at 02:04:09
+coldboot: waiting for the board to answer over ssh
+coldboot: the board answers at 02:04:25: kernel 6.18.38+, uptime 16s
+coldboot: giving the userspace a moment to settle
+coldboot: verification round 1
+coldboot: the original gate as well
+coldboot: verify_router says 0
+coldboot: done at 02:05:04
+```
 
 ## 8. The NAT round
 
-<<NAT>>
+The NAT round is the thing the image exists for: the board
+masquerades one client behind it, and the counters and the
+conntrack table are read while that is true.  The rule is the one
+the image carries - `/etc/init.d/sk-nat` - and not one that was
+put there by hand.
+
+```
+############ 0. the bench ############
+############ 1. the WAN port moves to lan2, over the console ############
+root@ImmortalWrt:~# [   59.690634] sk-nat: masquerade installed on lan2
+############ 2. this PC becomes the upstream ############
+############ 3. the board takes a lease on the shared subnet ############
+############ 4. dropbear listens on the wan as well ############
+############ 5. a client behind the router ############
+=== copying the client over ===
+=== waiting for the client to take a lease from the board ===
+client: labcli0 (netns: 1)
+lease: 192.168.9.240/24
+ping 223.5.5.5: PING 223.5.5.5 (223.5.5.5): 56 data bytes 64 bytes from 223.5.5.5: seq=0 ttl=50 time=18.589 ms  --- 223.5.5.5 ping statistics --- 1 packets transmitted, 1 packets received, 0% packet loss round-trip min/avg/max = 18.589/18.589/18.589 ms 
+conntrack:
+############ 6. the evidence ############
+=== the masquerade rule and its counter ===
+		oifname "lan2" counter packets 1 bytes 84 masquerade
+=== the client's flow, with the address rewritten ===
+=== the wan side's own counters ===
+=== and the client, from inside its own namespace ===
+2 packets transmitted, 2 packets received, 0% packet loss
+--- the masquerade rule
+		oifname "lan2" counter packets 2 bytes 168 masquerade
+=== the client's own evidence ===
+client: labcli0 (netns: 1)
+lease: 192.168.9.240/24
+ping 223.5.5.5: PING 223.5.5.5 (223.5.5.5): 56 data bytes 64 bytes from 223.5.5.5: seq=0 ttl=50 time=18.589 ms  --- 223.5.5.5 ping statistics --- 1 packets transmitted, 1 packets received, 0% packet loss round-trip min/avg/max = 18.589/18.589/18.589 ms 
+conntrack:
+--- the wan tx counter
+############ 7. putting everything back ############
+=== removing the client ===
+```
 
 ## 9. What is still open
 

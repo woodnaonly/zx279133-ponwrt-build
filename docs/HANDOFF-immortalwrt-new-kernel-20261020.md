@@ -1900,6 +1900,44 @@ cut 都对 287 条 up，总是成对），所以那一条**未测**，不算已�
 造的正例；而今晚的 flash 路径已经有独立且更强的闸门（`g4flash.sh` 三分区 md5 回读，
 实测与 PC 侧三个镜像逐字节相同）。
 
+### 9.26 run182 整轮结果：两次冷启动 + NAT 真转发，全绿（2026-10-26 01:33–02:07）
+
+无人值守跑完，没有任何一步是人手工补的。
+
+| 时刻 | 段 | 实测 |
+|---|---|---|
+| 01:33:10 / 01:33:19 | 上电 → RAM 镜像 loader | `the loader is up at 01:33:19` |
+| 01:34:44 | flash 段 | `g4flash said 0`；回读 `kernel 170592a7…`、`dtb 8c460c97…`、`root 2af47bc5…` 与 PC 侧三个镜像逐字节相同 |
+| 01:48:05 / 01:48:40 | 冷启动 1 | ssh 01:48:58 `kernel 6.18.38+, uptime 19s`；`16 pass / 0 fail` + `5 pass / 0 fail`；`cold boot 1: 0` |
+| 02:03:35 / 02:04:11 | 冷启动 2 | ssh 02:04:25 `kernel 6.18.38+, uptime 16s`；同样 `16 pass / 0 fail` + `5 pass / 0 fail` |
+| 02:04–02:06 | NAT 轮次 | `the round is done; the board's own address is 192.168.137.170 on the shared subnet` |
+| 02:06:48 | 整轮 | `g4accept: done (0)`、`g4prime.rc` = 0、`g4prime-auto: the round said 0` |
+
+NAT 的证据不是「装了规则」，是**流量过了规则**：
+
+- `root@ImmortalWrt:~# [   59.690634] sk-nat: masquerade installed on lan2` —— 内核时间 59.69 s，
+  也就是 `portmove.sh move` 把 WAN 搬到 `lan2` 之后，`sk-nat` 那个 15 秒循环**自己**把规则
+  重装到新口上（§9.24 那条否证的现场证实，不是我推测的）；
+- `oifname "lan2" counter packets 1 bytes 84 masquerade`；
+- 客户端从板上取到租约 `lease: 192.168.9.240/24`，`ping 223.5.5.5` → `1 packets transmitted,
+  1 packets received, 0% packet loss`，回程 `ttl=50 time=18.589 ms`；
+- conntrack 里是完整的一对：`src=192.168.9.240 dst=223.5.5.5 … src=223.5.5.5 dst=192.168.137.170`；
+- `natverdict: PASS (g4nat-round.txt, 9257 bytes)`：规则计数 > 0、0% 丢包、22 处客户端流。
+  判绿走的是证据文本，不是轮次自己的退出码（§9.23④）。
+- 复位段可核：dropbear 回 `lan`、`network restart`、`ensurebenchip: OK`（PC 回到
+  `192.168.9.25/24` + `192.168.1.25/24`），ICS 关掉之后板子的 LAN 侧仍可达。
+
+`fill86.py 182 --reset` 现在 `rc=0`、`placeholders left: (none)`，这是 ①–④ 那条**真实正向**
+（不是我造的），审计结果：`170592a7…`/`8c460c97…`/`2af47bc5…` 在文档里，run 181 的
+`b2964491…`、`a491ee2b…` **0 命中**。
+
+**这一轮真正证明了什么（也说清没证明什么）**：证明的是关键路径第 1 项——9132 内部交换在
+mainline 下带着真流量跑通（`br-lan` 收 `lan1/lan2/lan4 + lan-cpu0`，控制台里
+`zx279133-switch … lan4: left promiscuous mode` 这类 DSA 端口事件是活的；PC 那根网线在
+搬口前后都能通），ImmortalWrt 用户态 + `6.18.38+` 内核能从闪存自举两次并且做 NAT。
+**没证明**的：G5（PON 状态机 / OMCI / ONU 角色）照旧冻结，这块板子现在是**实验室路由器**，
+不是可用光猫；eth0 / 面板第 4 个 RJ45 在两个 Linux 下都从未发过字节，仍不是门槛。
+
 ## 10. 现在的状态（2026-10-26 00:07）
 
 ### 10.1 正在跑的东西
@@ -2003,3 +2041,20 @@ wan 仍是 lan3，规则仍在 lan3，SSH 已验证可达。
   移回来。
 - **trial/mainline 内核的 `reboot` 会把板子卡死**；要复位用 loader 的 `reset` 命令
   或 `tools/hardreset.ps1`（后者会丢横幅，只在没有别的办法时用）。
+
+### 10.8 轮次之后的交接状态（2026-10-26 02:07）—— §10.1、§10.6 里前瞻的部分到此作废
+
+- **§10.6 的 1–4 步全部做完**：run182 出片→整轮无人值守跑完→`fill86.py 182` 已填
+  docs/86（`rc=0`，占位符清零）→ `prepush` 过 → 已 push。**第 5 步（G5 冻结）继续有效**：
+  未通过 PON 状态机之前，产物一律不叫「可用光猫」。
+- **板上现在是什么**：`6.18.38+` + ImmortalWrt（`DISTRIB_ID='ImmortalWrt'`），根是
+  `/dev/mtdblock5` 上的 jffs2，三分区回读 md5 与 release 里的三个文件相同；`br-lan` 走
+  9132 DSA 端口；`/etc/init.d/sk-nat` 以可执行位到达板上并自己装 masquerade。
+  断电窗口照常：每 ~15 分钟断 ~35 s，`staging/ctl/plugphase.log` 是唯一权威。
+- **还活着的进程**：`tools/relayloop.sh 6`（常驻，取代定长 relay）、`tools/plugwatch.ps1`
+  （`-Seconds 28800`，到 ~08:49）、`tftpsrv`。`g4prime-auto.sh`/`g4prime.sh`/`g4accept.sh`/
+  `coldboot.sh` 都已随 `g4prime.rc = 0` 退出，没有孤儿流处理器。
+- **下次开工的三件小事**（都不紧急）：① `tools/postflash.sh` 的分区回读**没有比较**，
+  三重吞码，见 §9.25⑥；② `clientrun.sh` 拿不到租约仍退 0、`portmove.sh:112` 的 `tail -1`
+  可能吃到 netifd 横幅、`g4verify.sh:114` 的 `|| true`、验收不看 `plugphase.log` 避开断电；
+  ③ 关键路径第 2 项（PON 状态机）才决定它能不能当光猫用。
