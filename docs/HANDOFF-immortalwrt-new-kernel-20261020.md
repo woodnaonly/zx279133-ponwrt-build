@@ -1260,3 +1260,68 @@ mtime 的拷贝 → 不动**；安静且不写 → 停；只打印不写 → 停
 旧的 8 个 run（171–178）全部取消，腾出 runner 给 **run179**（`56b75ee`）。
 
 详见 **docs/84**。
+### 9.18：真正卡住构建的是一个后台进程（2026-10-25 20:30）
+
+**run168–179 全部没有跑完，而且不是构建慢**：活干完了、机器空闲、日志停在
+`make[2] package/install` 之后、rootfs 停在 622 个文件不动。run179 的实时
+通道把这一段完整记下来了：
+
+| beat | 时刻(UTC) | 日志 | 多久没说话 | 有没有写 | rootfs |
+|-----:|-----------|-----:|-----------:|----------:|-------:|
+| 30 | 12:10:19 | 7 392 | 0 | yes | 622 files, 12M |
+| 33 | 12:16:22 | 7 392 | 6 min | yes | 622 files, 12M |
+| 36 | 12:22:24 | 7 392 | 12 min | yes | 622 files, 12M |
+
+同一份快照里的进程表更说明问题：两个包管理器的 post-install 循环还活着在
+等（`make --no-print-directory -j1 package/install` + 两个 `bash -c ( cd
+…/root-zte; …`），而机器的负载是 `0.08`。
+
+**相关性只有一个变量宽**：run167 是最后一个跑完的构建（2026-10-24T19:12Z），
+而 overlay 的提交历史短到能一眼看完：
+
+```
+2e9b4e6 2026-10-25 02:56:52 +0800 flash(nat): the flashed image had no firewall, so it could not route
+51ac6c6 2026-10-24 03:27:41 +0800 fix(9132): this board's own microcode, and the frames that never reached the DSA ports
+```
+
+`2e9b4e6` 推送于 2026-10-24 18:56:52Z，run167 在 19:12Z 结束——**run167 是
+不带它的最后一个构建，run168 是带它的第一个**，此后每一个构建都挂在同一个地
+方。其余输入都没动（base tree、四个 feed、内核 SHA、Compile 段本身，见
+docs/82 §2）。
+
+**2e9b4e6 加的东西就是元凶**：它给镜像加了 NAT 规则，也加了
+`/etc/uci-defaults/99-sk-nat`，那个文件最后一行是
+
+```sh
+setsid sh /etc/init.d/sk-nat >/tmp/sk-nat.log 2>&1 &
+```
+
+而 `/etc/init.d/sk-nat` 是一个**永不结束的循环**（`while true; do …; sleep 15;
+done`）。**构建会在包管理器的 chroot 里执行 uci-defaults**，所以构建里被拉起
+了一个永不退出的进程。
+
+**机制**：GNU make 把自己的 jobserver（一个 socket）交给每个 recipe，**make
+在结束之前要等这个 socket 关闭**；recipe 起的后台进程继承了这个 socket 并一直
+持有它。构建的活干完了，make 却在等一个**自己起的进程**持有的 socket——这就是
+为什么日志停在 install、什么都不写、什么都不算、怎么等都没用。
+
+**证据就在镜像里，而且有两个独立的证据**：
+
+1. 板上 `/etc/rc.d/S96sk-nat` 的时间戳是 **Oct 24 06:45**，而 `/etc/rc.d`
+   里其它链接全是 **06:18**（镜像文件被拷贝的那一刻）。那条链接正是
+   uci-defaults 唯一会创建的东西，所以 uci-defaults 是在**构建里**跑的
+   （构建开始后 27 分钟），不是在板上跑的。
+2. 板上 `/etc/uci-defaults/` 是**空的**：构建会把跑过的 uci-defaults 删掉。
+
+**修法**：`99-sk-nat` 不再拉起任何后台进程，只留那条链接——**链接才是让 init
+脚本跑起来的东西**，而链接本来就进了镜像，所以板上行为一点没变（规则仍然
+由 init 脚本在开机时装上，板上的 flashed image 从出厂起就是这样）。init 脚本
+另加一道护栏：构建环境（`IPKG_INSTROOT`/`PKG_ROOT`/`CI` 任一有值）里只走一轮
+就退出，绝不循环——反正构建的 chroot 里没有 uci、也没有本架构的 nft，本来就
+装不上规则。
+
+**两个故障是独立的，两个都得修**：看门狗的错（用 mtime 判断「有没有写」，看不
+见 `cp -a` 保留 mtime 的拷贝）会让构建**因为错误的理由被杀**；这个后台进程会让
+构建**根本跑不完**。
+
+详见 **docs/85**。
