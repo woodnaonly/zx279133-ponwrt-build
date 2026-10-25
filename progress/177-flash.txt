@@ -1,13 +1,5 @@
-=== 10:09:27 beat 12 log=3388 frozen=0 wrote=yes ===
+=== 10:15:29 beat 15 log=3662 frozen=0 wrote=yes ===
 --- the last 30 lines of the build's own log ---
- make[3] -C tools/fakeroot compile
- make[3] -C tools/gengetopt compile
- make[3] -C tools/mklibs compile
- make[3] -C tools/patchelf compile
- make[3] -C tools/gmp compile
- make[3] -C tools/cmake compile
- make[3] -C tools/bison compile
- make[3] -C tools/bc compile
  make[3] -C tools/util-linux compile
  make[3] -C tools/elfutils compile
  make[3] -C tools/findutils compile
@@ -30,25 +22,34 @@
  make[3] -C toolchain/gcc/final compile
  make[2] target/compile
  make[3] -C target/linux compile
+ make[2] buildinfo
+ make[2] package/compile
+ make[3] diffconfig buildversion feedsversion
+ make[3] -C package/utils/lua host-compile
+ make[3] -C package/libs/ncurses host-compile
+ make[3] -C package/system/fwtool host-compile
+ make[3] -C package/libs/libjson-c host-compile
+ make[4] scripts/config/conf
 --- the processes that have been running the longest ---
 ELAPSED STAT COMMAND
-   1914 Ss   /sbin/init
-   1914 S    [kthreadd]
-   1914 S    [pool_workqueue_release]
-   1914 I<   [kworker/R-rcu_g]
-   1914 I<   [kworker/R-rcu_p]
-   1914 I<   [kworker/R-slub_]
-   1914 I<   [kworker/R-netns]
-   1914 I<   [kworker/0:0H-events_highpri]
-   1914 I    [kworker/0:1-mm_percpu_wq]
-   1914 I<   [kworker/R-mm_pe]
-   1914 I    [rcu_tasks_rude_kthread]
-   1914 I    [rcu_tasks_trace_kthread]
-   1914 S    [ksoftirqd/0]
+   2277 Ss   /sbin/init
+   2277 S    [kthreadd]
+   2277 S    [pool_workqueue_release]
+   2277 I<   [kworker/R-rcu_g]
+   2277 I<   [kworker/R-rcu_p]
+   2277 I<   [kworker/R-slub_]
+   2277 I<   [kworker/R-netns]
+   2277 I<   [kworker/0:0H-events_highpri]
+   2277 I    [kworker/0:1-events]
+   2277 I<   [kworker/R-mm_pe]
+   2277 I    [rcu_tasks_rude_kthread]
+   2277 I    [rcu_tasks_trace_kthread]
+   2277 S    [ksoftirqd/0]
 --- the directories the build touched lately ---
+hostpkg
 target-aarch64_cortex-a53_musl
 toolchain-aarch64_cortex-a53_gcc-14.3.0_musl
 host
 --- memory and load ---
-Mem:           15988        1307         838          50       13843       14284
- 18:09:27 up 31 min,  0 users,  load average: 4.76, 4.99, 4.57
+Mem:           15988         967         439          51       14581       14622
+ 18:15:29 up 37 min,  0 users,  load average: 5.19, 5.14, 4.77
