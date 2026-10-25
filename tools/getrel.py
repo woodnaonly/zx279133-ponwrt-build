@@ -26,7 +26,10 @@ points at that directory.
 import hashlib
 import json
 import os
+import shutil
+import subprocess
 import sys
+import time
 import urllib.request
 
 REPO = "woodnaonly/zx279133-ponwrt-build"
@@ -37,7 +40,7 @@ _default = os.path.join(os.path.dirname(os.path.dirname(_HERE)), "staging", "tri
 BASE = os.environ.get("SKD_TRIAL", _default)
 PARTITION = 8388608
 ASSETS = ["flash-uImage", "flash-dtb.bin", "flash-rootfs.jffs2", "flash-sysupgrade.bin",
-          "sk-d840n-initramfs.itb", "sha256sums-release"]
+          "flash-sk-d840n.sh", "sk-d840n-initramfs.itb", "sha256sums-release"]
 
 
 def opener():
@@ -66,8 +69,21 @@ def sha256(path):
     return h.hexdigest()
 
 
+def tag_exists(tag):
+    """Is there a release for this tag?  Git answers that, and git does not
+    spend the API's quota."""
+    try:
+        out = subprocess.run(
+            ["git", "ls-remote", "--tags", "git@github.com:woodnaonly/zx279133-ponwrt-build.git"],
+            capture_output=True, text=True, timeout=120).stdout
+    except Exception as exc:
+        print("git ls-remote failed: %s" % exc, file=sys.stderr)
+        return False
+    return ("refs/tags/%s\n" % tag) in out or ("refs/tags/%s" % tag) in out
+
+
 def main():
-    if len(sys.argv) < 2:
+    if len(sys.argv) < 1:
         list_releases()
         return
     tag = sys.argv[1]
@@ -75,27 +91,115 @@ def main():
     os.makedirs(out, exist_ok=True)
     o = opener()
 
-    rel = None
-    with o.open(API, timeout=120) as r:
-        for item in json.load(r):
-            if item["tag_name"] == tag:
-                rel = item
-                break
-    if rel is None:
-        print("no release named", tag, file=sys.stderr)
-        list_releases()
-        return 1
+    # The asset URLs are a fixed shape, so the API is not needed to download
+    # anything: what it is needed for is to find out WHICH assets a release
+    # has, and that is answered by trying each one.
+    #
+    # The API's anonymous quota is sixty requests an hour per address, and
+    # on this machine both the direct address and the proxy's are spent
+    # most of the time - so a fetch that needs the API to start is a fetch
+    # that cannot start at all.  The release list is tried first, because it
+    # is cheaper and more precise; when it is not available, the assets are
+    # fetched by URL and the ones that are not in the release say so.
+    have = {}
+    try:
+        # The listing is a nicety, not a necessity, so it is not allowed to
+        # hold the fetch up: the proxy answered a spent quota with a four
+        # minute hang on 2026-10-25, and four minutes is a lot to pay for a
+        # list that the asset URLs do not need.
+        with o.open(API, timeout=20) as r:
+            for item in json.load(r):
+                if item["tag_name"] == tag:
+                    have = {a["name"]: a["browser_download_url"]
+                            for a in item.get("assets", [])}
+                    break
+    except Exception as exc:
+        print("the release list is not available (%s); the assets are fetched "
+              "by URL instead" % exc)
+        print("(the tag itself is confirmed with git, which spends no quota)")
+    if not have:
+        if not tag_exists(tag):
+            print("no release named", tag, file=sys.stderr)
+            return 1
+        for name in ASSETS:
+            have[name] = ("https://github.com/woodnaonly/zx279133-ponwrt-build/"
+                          "releases/download/%s/%s" % (tag, name))
 
-    have = {a["name"]: a["browser_download_url"] for a in rel.get("assets", [])}
     for name in ASSETS:
         if name not in have:
             print("   (no %s in this release)" % name)
             continue
         dst = os.path.join(out, name)
+        if os.path.exists(dst) and os.path.getsize(dst) > 0:
+            # Already fetched.  The proxy is not a reliable route and the
+            # release is tens of megabytes, so a file that is already here
+            # is not fetched again - and if it turns out to be the wrong
+            # bytes, the manifest check below says so and takes it away,
+            # so the next run fetches it properly.
+            print("fetching %-22s -> %s" % (name, dst), flush=True)
+            print("   (already here: %d bytes)" % os.path.getsize(dst))
+            continue
         print("fetching %-22s -> %s" % (name, dst), flush=True)
-        with o.open(have[name], timeout=600) as r, open(dst, "wb") as f:
-            f.write(r.read())
-        print("   %d bytes" % os.path.getsize(dst))
+        # The bytes are written as they arrive, not at the end.
+        #
+        # The download goes through the proxy, and the proxy is slow: 222
+        # kB/s measured on 2026-10-25, so the biggest asset takes a minute
+        # and the whole release takes several.  Writing it all at the end
+        # would leave an empty file for the whole of that time, and an
+        # empty file and a download that is still going look exactly the
+        # same on disk.
+        got = 0
+        # The proxy drops connections.  Measured on 2026-10-25: a fetch of
+        # this release died with "Remote end closed connection without
+        # response" after three assets had arrived, so a single attempt per
+        # asset is not enough - the proxy is the only route to the release
+        # and it is not a reliable one.
+        for attempt in range(1, 4):
+            got = 0
+            try:
+                with o.open(have[name], timeout=600) as r, open(dst, "wb") as f:
+                    while True:
+                        chunk = r.read(1 << 16)
+                        if not chunk:
+                            break
+                        f.write(chunk)
+                        got += len(chunk)
+                print("   %d bytes" % got)
+                break
+            except Exception as exc:
+                # An asset the release does not have answers 404, and that is
+                # not a failure of the fetch - the release simply does not
+                # carry it.  Anything else is worth another try.
+                print("   %d bytes, then %s" % (got, repr(exc)[:120]))
+                if got == 0:
+                    try:
+                        os.remove(dst)
+                    except OSError:
+                        pass
+                if "404" in repr(exc):
+                    # The flasher is not published as a release asset, but
+                    # the release's own manifest lists it - the manifest is
+                    # made over the staging directory, and the flasher is
+                    # in it.  So the release cannot be checked against its
+                    # manifest without it, and the board's own
+                    # "sha256sum -c sha256sums-release" needs it too.
+                    #
+                    # It comes from this repository, which is where the
+                    # release was built from - and the manifest's checksum
+                    # is what proves that: if the repository's copy is not
+                    # the release's copy, the check below says so.
+                    src = os.path.join(os.path.dirname(os.path.dirname(
+                        os.path.abspath(__file__))), "templates", name)
+                    if os.path.exists(src):
+                        shutil.copyfile(src, dst)
+                        print("   (not published as an asset; taken from %s)"
+                              % src)
+                        break
+                    print("   (not in this release)")
+                    break
+                if attempt == 3:
+                    raise
+                time.sleep(5)
 
     man = os.path.join(out, "sha256sums-release")
     if not os.path.exists(man):
@@ -116,6 +220,14 @@ def main():
         ok = got == want
         bad += 0 if ok else 1
         print("   %-22s %s" % (name, "OK" if ok else "MISMATCH %s != %s" % (got, want)))
+        if not ok:
+            # The bytes here are not the bytes the release published.  The
+            # file is taken away, so that the next run fetches it again
+            # instead of failing on the same wrong file for ever.
+            try:
+                os.remove(path)
+            except OSError:
+                pass
 
     kimg = os.path.join(out, "flash-uImage")
     if os.path.exists(kimg):
