@@ -1082,3 +1082,22 @@ with 97G free` 早就打在日志里了，API 返回的注解却是 **0 条**。
 判定卡死了——那个长上限买到的只是「知道它卡住」所花的时间。
 
 详见 **docs/82 §7–§9**。
+
+### 9.15 再补：刷机前门禁（2026-10-25 15:25）
+
+flash 是这个项目里唯一不好撤销的动作，所以进 flash 之前先把 release 看一遍。
+新增 `tools/preflash.py`，逐条检查**只有上板才会暴露**的问题：
+
+- release 自带的 `sha256sums-release` 是否描述了旁边的文件（刷机脚本在板上
+  就是拿它校验的，对不上照样写，写完才发现）；
+- uImage 是否放得进 8 MiB 的 kernel 分区（`mtd write` 静默截断，板子起来
+  只有一句 "wrong image header"）；
+- payload 是不是 gzip（loader 别的都不认）；
+- 里面的内核是不是 6.18.38；
+- **rootfs 里有没有 `sk-nat` 和把它挂进 `/etc/rc.d` 的 uci-defaults**
+  （没有的话，镜像起来是个能 ssh 但不路由的盒子）；
+- dtb 的 magic 对不对。
+
+**用 run166 的 release 做过反测**：三条老问题（超尺寸 7315 字节、无 sk-nat、
+无 uci-defaults）全部被抓住，其余（manifest、magic、gzip、内核版本、dtb）
+全部放行。门禁本身是有效的，不是一次都没响过的检查。
