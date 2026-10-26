@@ -78,21 +78,30 @@ echo "portsall: wan is now $(echo 'uci -q get network.wan.device' | board | tail
 python q.py 'setsid /etc/init.d/network restart >/tmp/netr.log 2>&1 &' >/dev/null 2>&1
 sleep 12
 
-echo "portsall: after the restart, the running bridge is"
-# Tested for content, not for a status: the read-back ends in `tail`, whose
-# exit code is 0 even when the ssh in front of it never connected, so a
-# status test here would pass on a dead board.
-after=$(
-	{
-		echo 'uci -q get "network.@device[0].ports"'
-		echo 'cat /sys/class/net/lan*/carrier | tr "\n" " "'
-		echo 'echo'
-	} | board 2>&1 | tail -3
+echo "portsall: after the restart, the bridge on the running system is"
+# The proof goes over the CONSOLE.  Handing the jacks back to the LAN is precisely
+# the moment this PC's route to the board changes: after a NAT round the wan is
+# eth0 again, so the address the restore arrived on (192.168.137.100) no longer
+# exists on the board at all, and the sharing has not been switched off yet, so
+# 192.168.9.25 does not exist on this PC either.  An ssh read-back there is not a
+# proof of the change, it is a second and unrelated failure - measured 2026-10-26
+# 16:2x, where the port list and `wan.device=eth0` were already correct, this
+# check failed on ssh, and natround's trap then ran the whole restore a second
+# time and reported a board still in wan mode when none was.
+#
+# Tested for content, never for a status: an empty answer and a wrong answer must
+# not both look like success.
+now=$(
+	python q.py 'uci -q get "network.@device[0].ports"' 2>/dev/null |
+		sed -n '/^### /,$p' | tail -n +2 | grep -av '^[[:space:]]*$' |
+		head -1 | tr -d '\r'
 )
-if [ -z "$after" ]; then
-	echo "portsall: ssh did not come back after the restart" >&2
-	echo "portsall: the board is still on the console - tools/q.py" >&2
+if [ "$now" != "$WANT_PORTS" ]; then
+	echo "portsall: the running bridge is '$now', and it should be '$WANT_PORTS'" >&2
+	echo "portsall: the file on flash can be right while netifd never read it -" >&2
+	echo "portsall: that is what this check exists for, so it stops the run" >&2
 	exit 1
 fi
-echo "$after"
+echo "portsall: the running bridge is '$now'"
+python q.py 'cat /sys/class/net/lan*/carrier' 2>&1 | tail -6
 echo "portsall: done"
