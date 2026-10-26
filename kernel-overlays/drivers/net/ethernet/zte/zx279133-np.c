@@ -2798,29 +2798,8 @@ static int zx279133_9132_port_init(struct zx279133_eth *eth)
 	u32 ppu, attr;
 	int ret;
 
-	/*
-	 * The outerphy port is declared here too, and that is the whole of
-	 * this function's change.
-	 *
-	 * PPU 5 is the 2.5G jack's port: sw_port_change_to_chip_port() maps a
-	 * switch port p to p+1 and the live board names switch port 4 the
-	 * external PHY ("outerphy_mode=5,outerphy_name=phy_RTL8226"), and the
-	 * device tree already carries it as the DSA user port labelled lan1
-	 * (reg = <4>).  Its flood words were transcribed long ago - row 4 of
-	 * zx279133_9132_vendor_flood[] is the 0x05400410/0x01400940 pair that
-	 * continues the other four ports' pattern - and nothing ever read
-	 * them, because this loop stopped at PPU 4.
-	 *
-	 * Why the boot-time declaration is a different question from the
-	 * runtime one docs/92 §11 already ran: that round wrote the same word
-	 * set into memory 5 with the np debugfs CLI after np_init_done and the
-	 * SOPC publish had latched the port table, and got no arrival at all
-	 * (§12.3's lan-cpu0 counter).  A port the engine has never seen at
-	 * init is not the same as a port whose memory is rewritten later, and
-	 * order/timing is one of the two suspects §11 left alive.
-	 */
-	for (ppu = ZX279133_9132_UNI_PPU_FIRST;
-	     ppu <= ZX279133_9132_OUTERPHY_PPU; ppu++) {
+	for (ppu = ZX279133_9132_UNI_PPU_FIRST; ppu <= ZX279133_9132_UNI_PPU_LAST;
+	     ppu++) {
 		ret = zx279133_9132_port_words_vendor(eth, ppu);
 		if (ret)
 			return ret;
@@ -2878,8 +2857,8 @@ static int zx279133_9132_port_init(struct zx279133_eth *eth)
 		return ret;
 
 	dev_info(eth->dev,
-		 "9132 ports %u..%u (the four UNI jacks and the outerphy) and the CPU port %u up (the vendor's configuration)\n",
-		 ZX279133_9132_UNI_PPU_FIRST, ZX279133_9132_OUTERPHY_PPU,
+		 "9132 UNI ports %u..%u and the CPU port %u up (the vendor's configuration)\n",
+		 ZX279133_9132_UNI_PPU_FIRST, ZX279133_9132_UNI_PPU_LAST,
 		 ZX279133_9132_CONDUIT_PPU);
 
 	return 0;
