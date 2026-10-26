@@ -2191,6 +2191,23 @@ owner 口径原话：**「默认都是 lan 口 需要 wan口的 用户自己去�
   口的 lease；`natcounters.sh` 的 wan 计数器不再写死 `lan2`，改为问 `network.wan.device`。
   `portmove.sh`/`portsall.sh`/`natround.sh` 里「智能开关每 15 分钟自动断电」的说法都已按 §10.9 改成
   「owner 手工断电」，`uci commit` 仍然强制。
+- **仪器新事实（会影响旧结论的读法）：`lanN` 用户口的 `rx_bytes` 恒为 0，收到的帧记在
+  `lan-cpu0` 上**。16:3x 实测（线在 LAN4、四口全 LAN 默认）：PC 发 4 个 ping 进板子，
+  `lan4 tx_bytes 255996→256810`（+814，是回给 PC 的帧），`lan4 rx_bytes` 两次都 `0`，
+  而 `lan-cpu0 rx_bytes 1543227→1544041`（+764 ≈ 4 个请求的字节）。
+  后果两条：① `natcounters.sh` 那句「wan 口自己的 rx」在任何 `lanN` 上都是 0，
+  **不能**当「帧没进来」的证据（这轮 NAT 里它就先报了 `rx 0`，而 ssh 明显正在通过那个口跑）；
+  ② 这份文件里历史上大量「`tx>0 / rx=0` 说明 lane 不通」的读法，只有在 **`eth0`**
+  （非 DSA 用户口）上仍然成立，套到 `lan1..lan4` 上就是误读。
+- **这轮 NAT 的 client 步骤是仪器问题，不是板子问题**（owner 的第一轮复核）。板上
+  `logread` 有完整的 `DHCPDISCOVER(br-lan) ee:8e:dc:6d:ad:0f → DHCPOFFER 192.168.9.126 →
+  DHCPREQUEST → DHCPACK`，namespace 里 `ip route show` 有 `default via 192.168.9.1` 和
+  `192.168.9.0/24 dev labcli0 ... src 192.168.9.126`，`ping 192.168.9.1` 2/2 0% loss ——
+  但 `tools/clientrun.sh` 只等 40×3=120 s，ACK 落在窗口之后，于是报「client took no lease」，
+  `natverdict.py` 判 FAIL。**板子的 DHCP、桥、NAT 侧证据都在**，缺的是等得起的读窗口：
+  已把窗口加长并打印实际等待秒数（`client took no lease in N s` 之后是 300 s 的上限）。
+  另外「线插在哪个口」这件事本轮第一次由 **PC 网卡的 `Connected / 1 Gbps`** 与板上四个
+  `carrier=0` 的矛盾定位到 LAN1（记在项目记忆 `ref-bench-pc-lane-measurement`）。
 - 顺带修的工具 bug：`tools/watchrun.py` 在 jobs API 抖动时 `api()` 返回 `None`，`or []` 之后
   `jobs.get(...)` 抛 `AttributeError`，watcher 在 run 186 跑到 1492 s 时自己死了，终态没人报
   —— 已改成 `or {}`。

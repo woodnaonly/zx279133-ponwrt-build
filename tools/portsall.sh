@@ -93,29 +93,35 @@ echo "portsall: wan and wan6 are both on '$WAN'"
 # change from one that never landed - and a bridge that exists only until the next
 # power cut is the failure this script's header says it exists to avoid (the plug
 # is the owner's to pull, and they pull it).
-set -- $WANT_PORTS
-want_n=$#
+#
+# Checked per name, not by counting `^list ports` lines: uci writes the option with
+# a leading tab, so an anchored count came back 0 on a file that held all five
+# ports (measured 2026-10-26 16:5x, where this check failed a restore that had
+# actually worked).  `echo file-ok` at the end is the positive control - without it
+# a script that never ran and a file that matched would both print nothing.
 file=$(
 	{
-		echo 'grep -ac "^list ports" /etc/config/network'
-		echo "grep -a -A3 'interface wan' /etc/config/network"
+		echo "for p in $WANT_PORTS; do grep -q \"list ports '\$p'\" /etc/config/network || echo \"missing \$p\"; done"
+		echo "grep -q \"option device '$WAN'\" /etc/config/network || echo missing-wan"
+		echo file-ok
 	} | board 2>&1 | tr -d '\r'
 )
-nports=$(printf '%s\n' "$file" | sed -n '1p')
-if [ "$nports" != "$want_n" ]; then
-	echo "portsall: /etc/config/network holds $nports port lines, not $want_n" >&2
-	printf '%s\n' "$file" | sed 's/^/  /' >&2
-	exit 1
-fi
 case "$file" in
-*"device '$WAN'"*) : ;;
+*file-ok*) : ;;
 *)
-	echo "portsall: the committed file has no wan on $WAN" >&2
+	echo "portsall: the committed file was never read - the check itself did not run" >&2
 	printf '%s\n' "$file" | sed 's/^/  /' >&2
 	exit 1
 	;;
 esac
-echo "portsall: the committed file carries $nports ports and the wan on $WAN"
+case "$file" in
+*missing*)
+	echo "portsall: /etc/config/network is not the default this script just wrote:" >&2
+	printf '%s\n' "$file" | grep -a missing | sed 's/^/  /' >&2
+	exit 1
+	;;
+esac
+echo "portsall: the committed file carries $WANT_PORTS and the wan on $WAN"
 
 # The restart goes over the console and detached, because the board's LAN
 # address leaves this PC's segment while it runs and the session it arrived
