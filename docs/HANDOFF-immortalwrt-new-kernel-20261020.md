@@ -2284,3 +2284,59 @@ br-lan 的是 /25，比脚本给 eth0 的 /24 前缀更长），于是八个值�
 **下一步只有一个**：出包 → RAM 启动（线继续留 LAN1）→ 同一批寄存器两边对比 → 找出 generic realtek
 驱动改掉/从未写的那几个 → 再决定是补原厂序列、还是给 PHY 节点补 `reset-gpios`。运行期写入每次断电即失，
 所以今晚所有配置都只是仪表，不是修复。
+
+### 10.13 LAN1：口落到 `nppt+0x19140000`，而 §13 那句"收不到"用的是发计数（2026-10-26 23:42）
+
+写在前面，免得下一个读的人接着信错的：本篇 §10.12 的落点（"故障点在 PHY 面向 SoC 那一侧"）**还挂着**，
+但它当时用来支撑自己的那条计数**已经作废**，而今晚多了一条正向证据和一条新的、能变成补丁的机制嫌疑。
+
+**量到的（两次 U-Boot 窗口，都是同一次开机里 `host 192.168.9.25 is alive` 打过之后读的）**
+
+1. `tools/ubmacrate.sh`（23:09:08 抢到 prompt）：5 个 ping 之后
+   `0x19142400` 3→13、`0x19142070` 2→11，而 `0x19182400`/`0x19182070` 与 `0x19180000` 整个窗口是 `00000000`；
+   `tools/ublanewords.sh`（23:29:39）把三段（pre / 只有 PC 出声 / 板子 ping 出去）扩到**六个 MAC 窗口**：
+   四个 SMAC 窗口（`0x1904/08/0c/10` +0x2400/+0x2070）**全程为 0**，只有 `0x19140000` 那两块跟着 ping 动。
+   ⇒ **丝印 LAN1 的 MAC 是 `nppt+0x19140000`**（SPA 5），而 mainline 的 `eth0` 只碰 `ZX279133_XMAC1_BASE`
+   （`zx279133-mac.c:31,413,447`，DTS 又给它 `pcs-handle = <&xpcs1>` = PON 侧 PCS）。
+   顺带否掉 docs/18 §4 的「RGMII MAC + RTL8226 是另一个独立口（jack 4）」，
+   以及把 U-Boot 打的 `phy_id:0x5; port:0x4;` 读成 SPA 口号的那条路（SPA 4 = SMAC3 = 丝印 LAN4，那块今晚为 0）。
+2. `nppt+0x90`（XPCS0 状态镜像，`switch.c:129`）在一条**今天真的通着**的线上三段都读 `0x2c03`（缺 bit11/12），
+   而 `zx279133-switch.c:2059` 的"引导程序把链路留着了，继承它"要求 `(status & 0x3800) == 0x3800`
+   （掩码来源 :2104 自己写了：抄本仓库的 RTL8372N 驱动）。⇒ **本板上这个分支永远走不到**，
+   每次开机都走 :2068-2089：重编 XPCS0（SGMII AN）+ `xpcs_bypass(true)` + 带复位的 `xmac_configure()`。
+   这是今晚第一条能把"mainline 一个字节的帧都看不见"讲成因果的机制。**没定的**：2026-10-21 docs/18:92 在
+   同一地址读到过 `0x380b`（bit11,12,13 全置），两次差在哪（对端不同？AN 没完成？线在别的口？）还没判。
+3. 一条 carrying boot 留下的六个字，第一次成套拿到：
+   `tx=0x60010000 rx=0x3e8000c6 frame=0x80000001 mode=0x00000000 duplex=0x00000100 misc=0x00002000`，
+   和 mainline 今晚 `lane pre-serdes` 快照读到的**逐字相同**——Linux 照抄是对的，出事在抄完之后又改了一遍。
+   另两处差异记下：`0x190342a4/0x190342a8`（SOPC mac0/mac1 的 ready）在 U-Boot 里**都读 0**，
+   而 `switch.c:2047` 那句"mac1 读 1"是在 Linux 里读的；Uni SerDes `0x161000d0` U-Boot 读 `0xc880bb83`、
+   mainline 打印 `0xc87fbb83`（**没定的**），`0x161000e4` 两边一致 `0x01000706`（RX LOS=0 ⇒ Linux 里也看得见信号）。
+4. `md 0x1a000000 / +0x104 / +0x400` 全是 `00000000` ⇒ XPCS0 是 C45 间接访问的（mainline 走 `mdiodev_c45()`，
+   `mac.c:79-94`），**没有平映射可抄**；能当证据的只有 `nppt+0x90` 那个镜像字。
+
+**撤销的一条**：docs/92 §13 那句「现在没有任何一条计数证明 PC 的帧进了 9132 的 XMAC0」**不再成立**。
+23:29 那轮里，只有 PC 出声、板子静默的一段这两个字**一个字都不动**（2→2），要板子自己 ping 才 2→11，
+而 `+0x2070` 是本仓库头文件 `zx279133.h:878` 自己命名成 `XMAC_STAT_TX_FRAMES` 的字。
+⇒ 我们一直是拿发计数当收计数用；**收计数的偏移至今没找到**，所以"帧到不到 XMAC0 的接收端"是一个
+**开放问题**，不是已证的结论。`tools/ubmacfind.sh`（23:49 窗口，整块 dump + 广播单向激励）就是为它写的。
+
+**仪表自己的两个错，都已改**：`ubmacrate.sh` 的 verdict 段用 `cut -d' ' -f3-` 比较，`PRE ` 两个空格、
+`POST ` 一个，字段错位导致**六行全打印 MOVED**（包括两行本来就全 0 的）——证据只有表格，verdict 行是假的；
+新工具改成按地址前缀取单字。另外 docs/92 §9 当年丢 RX_CTRL 是因为 `md a 8` 打两行而脚本只留最后一行，
+现在一律 `md <a> 1`。`tools/linuxphy.sh` 的 `printf` 里那个 `$devad\,$reg` 也修掉了（git-bash 下反斜杠会花）。
+
+**排在后面的两步（都已武装，门控串行，不抢同一个串口）**：00:09 窗口 RAM 起 run 189（预检：ITB 的 DTB 里
+`zx279133,outer-phy-bus` 命中 1 次、对照 `uni-phy-bus` 也 1 次，包 12156484 B，head sha = `7d75ef4`）→
+`tools/linuxphy.sh` 读十个 CL45 对 `staging/ctl/ubattr-phy.txt`；以及收计数一找到就用
+`RXOFF=… tools/linrx.sh` 在 mainline 里重跑同样三段。
+
+**补丁范围已经摸清**（等上面两个读数决定先做哪一个）：把 eth0 挪到 XMAC0 = `mac.c` 三处基址 + 复位位
+（`mac.c` 现在脉冲的是 `ZX279133_XMAC_RESET_MASK = BIT(11)`，而 `switch.c:120` 说 XMAC0 是 **BIT(10)**）
++ DTS 的 `pcs-handle` + 让 `zx279133-switch.c` 不再占 XPCS0/XMAC0；改继承判据 = `switch.c:2059` 一处。
+两者都要在 RAM 里量，不动 flash。四个 docs 提交（`19412c7 d6a84a4 be8b6c1 50a0d9c`）压着没推——
+run 189 已于 23:29 发布、CI 空闲，但推 = dispatch，docs-only 会白占构建机 80 分钟，所以和补丁一起推。
+
+**旁证一条（owner 那个默认口径）**：22:48 那次真断电之后板子从 flash 起进的就是新默认，
+串口日志里 `br-lan: port 1..4(lan1..lan4)` + `port 5(lan-cpu0)`、`sk-nat: masquerade installed on eth0`
+——四个丝印 LAN 口全在桥里、`wan` 指向 `eth0`，经一次真实断电仍然成立。
