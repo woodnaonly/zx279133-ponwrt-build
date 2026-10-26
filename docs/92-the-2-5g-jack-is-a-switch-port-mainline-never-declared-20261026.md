@@ -498,3 +498,29 @@ mainline 今晚的 `lane pre-serdes` 快照读到的六个字和这一组**逐�
 **否证掉的一条打算**：`md 0x1a000000`、`+0x104`、`+0x400` 都读 `00000000`。所以「去 XPCS0 的窗口
 抄一份可用参考」做不到——那颗 PCS 是 C45 间接访问的（mainline 走 `mdiodev_c45()`，`mac.c:79-94`），
 不是平映射；能当证据的只有 `nppt+0x90` 这个镜像字。
+
+## 16. `phy sereds mode : 0x6` 是什么，以及为什么它不能和 mainline 的 `mode 0x1` 相减
+
+23:29 那轮每次 ping 都打出 `test:cur 0 phy sereds mode : 0x6, last mode0 : 0x6, last mode1 : 0xc`。
+这行很容易被骗——它会让人以为"所以 SoC 侧该配成 6，而 mainline 配的是 1/0x101"。**不是**：这五个数字
+属于五个互不相干的命名空间，本地文件里都有出处（三条我逐字复核过，标 ✓）：
+
+| 数字 | 它数的是什么 | 出处 |
+|---|---|---|
+| `0x6` | PHY 侧的链路模式**枚举**，= 1G 档 | ✓ `np_133.ko` 的 `outerphy_xmac_partner_check`（`.text+0x19ed8`，`staging/ctl/_np133_funcs.txt:276`）；枚举表在 ✓ `staging/k/drivers_net_phy_zx279051.c:479-481`「modes 2/5/6 都下 `mode_eth_1gbase_x_cfg`，modes 3/4 下 `mode_eth_2p5gbase_x_cfg`」⇒ **6 = 1G**，和本机 PC 网卡报 `1 Gbps` 一致；另见 ✓ `staging/src/cnjn-FIRST_PATH.md:53`「1 Gbit/s host interface … PHY SerDes mode 6」 |
+| `7`（`uni_serdes_init(port,7)`） | SoC 侧 Uni SerDes 的 **profile 序号**（1gbase_x 那一档镜像） | docs/07:13498、13507-13509 |
+| `2` | `OUTERPHY_XMAC_WORK_MODE_1000BASE_X`，XMAC 的工作模式 | `tools/smac6.sh:33-35` 引的原厂 help 串「`xmac_test xmac_work_mode_set [xmac_id] [work_mode]`」+ docs/07:13237 的 `speed set 2 in sgmii (xmac speed 3)` |
+| `0x1` / `0x101` | **我们驱动自己的** `readl(serdes+0x54)` MODE_CTRL（BIT0 = enable），跟上面三行不同类 | `phy-zx279133-uni-serdes.c`（打印 `mode %#x already` 的那句） |
+| `outerphy_desc_mode = <0x00 0x05 0x00>` | dts 里 PHY 的描述序号（`phy_RTL8226`），也不是链路模式 | `decompiled/sk-d840n-community-4.19.dts:1184` |
+
+**由此**：`0x6` vs `0x1/0x101` 的"差"是假的，不能作为缺陷登记；`0x161000d0` 的 `c880bb83` vs `c87fbb83`
+也只是同一字里一段没被任何文件解码过的只读状态带（两边 bit0 都 = 1，docs/07:14873 明说连 BIT(0)="PLL_LOCK"
+都**没验证过**）。这一节的用处是把"mode 数字对不上"这条岔路堵掉。
+
+**还剩下的一条真岔路**，而且 §15 的读数正好指到它：`0x6` = 1G ⇒ 这条 lane 走的是
+**1000BASE-X/SGMII 且带 AN** 的档；而 mainline 从来**没有跑过原厂面向这颗 outerphy 的那套写**
+（`1e.7581` BIT(4) 复位、`1e.7588`→`1e.7589 = 0x70d0/0x71d0` 的 AN/mode 选择、`1f.a436/a438` 的 DSP 补丁；
+`zx279133-np.c:1308-1319` 自己就把这几条列成注释，代码里没有），generic realtek 驱动只在 probe 时**读**这颗 PHY。
+判决还是 §15 末尾那句：run 189 的 `m45` 把 `1e.7588/7589/758b/758d` 读一遍，
+和 `staging/ctl/ubattr-phy.txt` 里那条通流线留下的 `00CE / 035A / 0005 / 801E` 对——
+不一致就 `m45w` 现场重放，一致就缺口在 XMAC0 的收使能（而收计数在哪一个字，23:53 排的那轮正在找）。
