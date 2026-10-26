@@ -443,6 +443,20 @@
 	 */
 	zx279133,uni-phy-bus = <&mdio0>;
 
+	/* The controller the RTL8226 is actually on.
+	 *
+	 * The vendor's board file names it, and it is not the one above:
+	 * `mdio_8226_id = <0x01>` (decompiled/sk-d840n-community-4.19.dts:1810)
+	 * with that controller's `reg = <0x00 0x14f02000 0x00 0x1000>`, so the
+	 * PHY at address 5 is on &mdio1 and controller #0 answers 0xffff for it
+	 * (measured 2026-10-26 21:16: "9132 mdio: addr 05 reg 01 = 0xffff",
+	 * while /sys/bus/mdio_bus/devices/14f02000.mdio:05/phy_id reads
+	 * 0x001cc849). Naming the second bus is what lets the console read and
+	 * write the Clause-45 registers of the PHY's SoC-facing SerDes, which is
+	 * the one part of this lane's bring-up mainline never runs.
+	 */
+	zx279133,outer-phy-bus = <&mdio1>;
+
 	/* LAST of this node's properties, and it has to be: dtc orders a node as
 	 * properties-then-subnodes ("Properties must precede subnodes", run 60 at
 	 * 393.2-18), so a `fixed-link {}` written among the properties kills the

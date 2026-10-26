@@ -2208,6 +2208,79 @@ owner 口径原话：**「默认都是 lan 口 需要 wan口的 用户自己去�
   已把窗口加长并打印实际等待秒数（`client took no lease in N s` 之后是 300 s 的上限）。
   另外「线插在哪个口」这件事本轮第一次由 **PC 网卡的 `Connected / 1 Gbps`** 与板上四个
   `carrier=0` 的矛盾定位到 LAN1（记在项目记忆 `ref-bench-pc-lane-measurement`）。
+- **NAT 在全 LAN 默认下重跑并通过（第三轮，`staging/ctl/natround-lan-default3.txt`，8225 B）**，
+  借的口是 **lan4**（owner 把线留在 LAN4，正好是「PC 充当上游」要求的位置）：
+  `natverdict: PASS` —— `the rule: the masquerade counted 5 packets`、
+  `the client: a ping behind the board came back with 0% loss (2 replies)`、
+  `the flow: conntrack carries the client in 20 place(s)`。
+  本轮 `portmove.sh move lan4` 算出的桥是 `lan1 lan2 lan3 lan-cpu0`（**`lan3` 留在桥里**，
+  旧的写死列表会把它一起踢掉），结束后还原回 `lan1 lan2 lan3 lan4 lan-cpu0` + `wan=eth0`，
+  并且事后从板上确认过：`/etc/config/network` 里 5 条 `list ports`、2 条
+  `option device 'eth0'`（wan 与 wan6）。
+  这三轮里 `natround.sh` 的退出码不可信：第一轮栽在 `portsall.sh` 还原后的 ssh 回读，
+  第三轮栽在 `portsall.sh` 那句 `grep -c "^list ports"`（uci 写的行首是 TAB，于是 5 条数成 0）。
+  **判定看 `natverdict.py` 的三项与板上回读，不看脚本 rc**（两条都已修，见 `4bbfb17`）。
 - 顺带修的工具 bug：`tools/watchrun.py` 在 jobs API 抖动时 `api()` 返回 `None`，`or []` 之后
   `jobs.get(...)` 抛 `AttributeError`，watcher 在 run 186 跑到 1492 s 时自己死了，终态没人报
   —— 已改成 `or {}`。
+
+### 10.11 LAN1（2.5G 丝印口）：今晚把故障点夹到「口没接到 CPU 通道」（2026-10-26 20:55）
+
+供电节奏改了：owner 把智能开关设成 **20 min 通电 / 20 s 断电**（不是原来的一小时一次）。
+每一个 U-Boot 窗口都是靠这个 20 s 落进去的，`tools/armu.sh` 必须在断电**之前**就在跑。
+线现在**一直在 LAN1**，所以 ssh 不可用，控制台（`ci-build-repo/tools/q.py`）是唯一通道。
+
+完整测量在 **docs/92**；对后续最有用的三条结论：
+
+1. **这条通路在原厂 U-Boot 里今天仍然双向通**（4 个窗口：18:01 / 19:03 / 19:24 / 20:04，
+   `host 192.168.9.25 is alive`，PC `ReceivedBytes` 每次 +194）。所以不是线、不是 PHY、不是焊盘。
+2. **descriptor 的出口端口不是病因，两头都否证了。** U-Boot 把 `idm_tx_outport` 设成 4/5/6/3/0
+   五次全通；mainline 在 run 188 的 RAM kit 上用修好的 `ping -c 4 -I eth0` 扫 0..7，
+   每个值都 0 received，且 PC 那一轮 662 个样本 rx_delta 中位数为 0。
+   `zx279133_tx_port` 现在是 0644 模块参数（`ee21de8`，默认 4），**这条改动留在树上作为仪表**，
+   但它不是修复。
+3. **帧进得了芯片、到不了 CPU**：PC 打 12 个 ping 之后 `0x19034100` 从 `0x00650065` 变
+   `0x00860086`（+33），而 `sopc_to_smac5`/`sopc_req_smac5` 零增量，`rx_irq_count`、
+   `rx_napi_polls`、`rx_desc_not_ready` 全 0。另外 U-Boot 留 `0x19180000` 全 0、
+   `0x19140000 = 60010000`，mainline 两处都写 `60010001`——**写它们的是谁仍未定**。
+
+flash 没有动过：今晚全部是 RAM kit（`tftpboot 0x89000000 sk-d840n-initramfs.itb; bootm`），
+没有 `reboot`/sysrq-b，没有写任何分区。
+
+新踩的坑（都已写进脚本注释）：`ping 192.168.9.25` 不加 `-I eth0` 会走 br-lan（RAM 镜像给
+br-lan 的是 /25，比脚本给 eth0 的 /24 前缀更长），于是八个值测的是桥；Windows 的 `ping`
+会把本机生成的差错计入「已接收」，判双向必须同时看 PC 邻居表里有没有板子的 MAC。
+
+### 10.12 更正 §10.11 的第 3 条：口声明不是开关，故障点在 PHY 面向 SoC 的那一侧（2026-10-26 21:53）
+
+§10.11 的第 3 条（「帧进得了芯片、到不了 CPU，所以要把 RTL8226 声明成交换机的口」）在今晚最后 20 分钟
+被运行期实验否证。**不需要重新出包就能做的实验**：控制台已有的 `w`（SPA 间接写）、`fa`/`ew`（MF 镜像）、
+`trapall`（协议 trap）、`regw`（NPPT 寄存器）足以把一个口的完整配方写进芯片。全部结果在 docs/92 §11，这里是判据：
+
+1. **mem 5 拿到「一个真能用的口」的整套字**（`reg0 a6a5`、`reg10 0fa0000e`、`reg13 00008008`、`reg14 0`、
+   `reg17 05400410`、`reg18 01400940`、`reg19 960c0001` 含 extend 位，MF 镜像 `ew 24742` 三字齐写，
+   `trapall 5 2`）→ PC 发 14+20 帧，`lan1 rx`、`eth0 rx`、`br-lan rx` 全 0，`nppt +0x34100` 全 0。
+2. **mem 6 根本不用配**：U-Boot 早就把它当 extend 口写好了（`reg19 = 148e0000`，bit19=1；
+   MF 镜像 `… 0e014400 000001f1 148e0000`），mainline 从不碰它，而 eth0 的 MAC 恰是 `0x19180000`（XMAC1）。
+   `trapall 6 2` 之后同样 0 回复。
+3. **XMAC0 的统计块不数这根线**：以已知的 TX 计数 `+0x142070` 为锚扫 `0x142000..0x1420fc`，
+   空载与 20 帧之后逐字相同，且 `+0x142070` 本身是 0。
+4. **铜口侧是活的、PHY 也是活的**：PC 网卡 `Status=Up SPEED=1 Gbps`；
+   `/sys/bus/mdio_bus/devices/14f02000.mdio:05/phy_id = 0x001cc849`，驱动
+   `RTL8221B-VB-CG 2.5Gbps PHY (C22)`，mdio 统计 `reads 9 / writes 15 / transfers 24`。
+   `m 5 0/1` 读到 `0xffff` 是**走错总线**（`m` 只到控制器 #0，PHY 在 #1 = `0x14f02000`，
+   原厂 `mdio_8226_id = <0x01>`）——这条坑记进 [[ref-sk-d840n-panel-jack-map]] 的同类。
+
+**因此 §10.11 里那句「`0x19034100` 从 `0x00650065` 变成 +33」是今晚唯一没能复现的一行**：在 21:12 之后的
+每一次采样它都是 0。它数的是什么，属于**没定的**。
+
+**已落地的动作**（一次提交，只加入口、不改行为）：`zx279133-np.c` 的调试台多两个命令
+`m45 <phy> <devad> <reg>` / `m45w … <val>`，经新 DTS 属性 `zx279133,outer-phy-bus = <&mdio1>` 走
+`mdiobus_get_phy()` + `phy_read_mmd()/phy_write_mmd()`。这样 Linux 里第一次能读、也能**重放**原厂
+`rlt8226b.ko` 面向 SerDes 的那几条写（`1e.7581` BIT(4) 复位、`1e.7588`/`1e.7589 = 0x70d0/0x71d0` 自协商、
+`1e.758b/1e.758d` 链路状态、`1f.0xa436/0xa438` 的 DSP 补丁）。参考值由 `tools/ubattr.sh` 第二阶段在
+原厂 U-Boot 里用 `mii 45read 5 1e 7581 …` 抓（devad/reg 十六进制，docs/07:13839）。
+
+**下一步只有一个**：出包 → RAM 启动（线继续留 LAN1）→ 同一批寄存器两边对比 → 找出 generic realtek
+驱动改掉/从未写的那几个 → 再决定是补原厂序列、还是给 PHY 节点补 `reset-gpios`。运行期写入每次断电即失，
+所以今晚所有配置都只是仪表，不是修复。

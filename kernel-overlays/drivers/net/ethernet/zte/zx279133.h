@@ -17,6 +17,9 @@
 #include "zx279133-stats.h"
 #include "zx279133-lan.h"
 
+struct gpio_desc;
+struct led_classdev;
+
 #define ZX279133_NUM_CLOCKS	6
 #define ZX279133_NUM_IRQS	5
 
@@ -25,45 +28,59 @@
 /*
  * The port the NPPT-side transmit descriptors name.
  *
- * It was `#define ... 6` and nothing could change it: the debugfs "txp" verb
- * writes eth->lan_tx_port, which only the LAN branch reads (zx279133-netdev.c
- * picks zx279133_tx_port for the NPPT device), so 6 was compiled into every
- * frame on that side for the whole history of this port.
+ * It was `#define ... 6` and nothing could reach it: the debugfs "txp" verb
+ * writes eth->lan_tx_port, which only the LAN branch reads, so 6 was compiled
+ * into every frame on this side for the whole history of this port.
  *
- * Two things say the number is wrong for this board's 2.5G jack, and one says
- * the sweep has to be repeated:
+ * 6 is this file's own legend for XMAC1, and the jack the field has to point at
+ * is the RTL8226 2.5G one, which the vendor calls switch port 4 / chip port 5
+ * (docs/15) and which np_133.ko's np_user_table_init() hands to
+ * port_attr_def_src_is_extend_port_flag_set(5, 1) in its xmac0_to_extend case.
  *
- *  - Measured 2026-10-26 18:01 with the cable in panel LAN1: vendor U-Boot
- *    pings this PC through that jack - "current idm tx outport is 4", "host
- *    192.168.9.25 is alive", its own RX ring 0xb0028000 full of received
- *    frames - while mainline, on the same wire, leaves the PC's adapter at
- *    1 Gbps/Connected (so the PHY's copper side has negotiated) and receiving
- *    nothing, with 192.168.9.1 Unreachable in the PC's own ARP table. The lane
- *    works; what is in this field does not.
- *  - The vendor's own numbering puts the RTL8226 at switch port 4 / chip port 5
- *    (docs/15, and np_133.ko's np_user_table_init() calls
- *    port_attr_def_src_is_extend_port_flag_set(5, 1) for its xmac0_to_extend
- *    case). So the working value is 4 or 5, in whichever of the two spaces the
- *    descriptor counts, and 6 - which is this file's own legend for XMAC1, a
- *    MAC with no peer here - is not either of them.
- *  - The sweep was already run once, on 2026-10-19 (run 69, docs/07 补八十九),
- *    and all eight values answered "0 received". That negative does not bind:
- *    the same round recorded `xmac_tx_frames: 0` and `idm_tx_done: 5` against
- *    71 submitted frames, so the hardware had taken no descriptor at all and no
- *    port value could have produced a frame on the wire. With that upstream
- *    blocker since fixed, today's read of the same counters on this jack is
- *    `xmac_tx_frames 744 / xmac_tx_good_frames 757 / idm_tx_done 8497`: frames
- *    really do leave, and really do not arrive.
+ * Read out of the bootloader that works, 2026-10-26, cable in panel LAN1, in the
+ * same boot as the ping that this PC answered ("host 192.168.9.25 is alive",
+ * `current idm tx outport is 4`):
  *
- * So it is a parameter, 0644, and one kit sweeps every candidate:
+ *	b0008000: b0328000 0f800054 00440000 00000000	TX, 42 bytes = the ARP
+ *	b0028000: b00e8000 0785004a c0a80919 c0a80901	RX, the echo reply back
+ *
+ * 0x00440000 is bit 22 (port valid) with 4 in bits 16..21 - where mainline writes
+ * 0x00460000 - so the default here is 4, the number the working descriptor
+ * carries. It is not yet established that 4 means the same thing in mainline's
+ * hands: the field that goes out as 2 for panel LAN2 (zx279133.h's
+ * ZX279133_LAN_TX_PORT, measured jack by jack in docs/90 §5) has 4 as PPU4 =
+ * panel LAN4, while U-Boot reaches the 2.5G jack with 4 in it, and the vendor's
+ * own chip numbering calls that jack 5. U-Boot drives that lane as an extend port
+ * straight off XMAC0 (`xmac0 is used`, its outerphy init names phy_id 0x5) and may
+ * therefore never consult this field the way the switch does. So 4 is the starting
+ * value and the sweep is the verdict, not this paragraph.
+ *
+ * The RX side of the same pair of words says something on its own: the descriptor
+ * of the echo reply that came back through this jack reads `0785004a` in its
+ * second word, and 0x0785 & 0x3f = 5 - the source port in the chip's numbering,
+ * where this file's own LAN receive path maps 1..4 to the four UNIs
+ * (zx279133-idm.c:346 zx279133_idm_rx_lan_vport).
+ *
+ * One variable therefore cannot be both numbers, but it does not have to be: the
+ * comparison at zx279133-idm.c:372 only decides CHECKSUM_UNNECESSARY (its one
+ * caller sets skb->ip_summed, at 1215), so whichever value is wrong for the
+ * direction costs an offload and loses no frame. Splitting it is a separate
+ * question from making this jack carry traffic, and it is recorded here so the
+ * next reader does not "fix" the RX side by changing this number.
+ *
+ * The parameter exists because finding a number by build-per-candidate is not
+ * feasible here:
  *
  *	echo 5 > /sys/module/zx279133/parameters/zx279133_tx_port
  *
- * The default is the value the traffic-proven bootloader carries. The same
- * variable names the port an *incoming* frame has to match for the NPPT side to
- * count it (zx279133-idm.c:372), which is why it is one variable and not two:
- * a frame that arrives with a different number in its word 1 is silently not
- * accounted, and that is the other half of the same wrong number.
+ * and because the one sweep that was run before, on 2026-10-19 (run 69, docs/07
+ * 补八十九), came back "all eight values, 0 received" under conditions that made
+ * that answer meaningless: that round's own counters read `xmac_tx_frames: 0` and
+ * `idm_tx_done: 5` against 71 frames submitted, so the hardware had taken no
+ * descriptor at all and no value of this field could have put a frame on the
+ * wire. With that blocker since fixed, the same counters on this jack today read
+ * `xmac_tx_frames 744 / xmac_tx_good_frames 757 / idm_tx_done 8497`: frames do
+ * leave, and do not arrive. The sweep is meaningful for the first time now.
  */
 extern u16 zx279133_tx_port;
 /*
@@ -73,8 +90,30 @@ extern u16 zx279133_tx_port;
  * port in the output-port field - 1..4, never 5 - and the 9132's chip
  * ports are its SPA memory ids: PPU 1..4 are the four jacks.  This board's
  * DSA map puts PPU 2 behind DSA port 5 (lan2), which is the jack the test
- * PC is plugged into.  The old value 5 was XMAC0, a 10G SerDes MAC that has
- * no peer on this board and that the vendor never programs.
+ * PC is plugged into.
+ *
+ * What 5 and 6 are is still an open question and this is where it is kept.
+ * 5 is the memory mainline runs its LAN ingress program on
+ * (zx279133-np.c:3814), and it is also the number the vendor's bootloader
+ * names for the 2.5G jack's lane: its outerphy init prints
+ * `port=4 outerphy_mode=5, phy_RTL8226 enable:1` (docs/13:208), its RX
+ * descriptor of a frame from that jack names source 5, and its
+ * `spa_port_attr_op help` table reads XMAC0_MEMID=5 / XMAC1_MEMID=6.
+ * 6 is the memory whose attribute word already carries bit 19
+ * (0x148e0000, the value port_attr_def_src_is_extend_port_flag_set()
+ * writes) and whose MF mirror U-Boot left populated
+ * (`960c0001`-shaped: `... 0e014400 000001f1 148e0000`).
+ *
+ * Neither is the answer to the jack, measured 2026-10-26 21:36..21:53: with
+ * memory 5 rewritten to the *complete word set of a working jack* - entry
+ * program 0xa6a5, regs 10/13/14/17/18 copied from memory 1, attribute 19 with
+ * the extend bit, its MF mirror, and every protocol trapped to the CPU - the
+ * bench PC sent 20 frames and the board received none: lan1, eth0 and br-lan
+ * all stayed at rx_packets 0 and XMAC0's own statistics block
+ * (nppt +0x142000..+0x1420fc) did not move by one word.  So the number in a
+ * descriptor or an attribute is not what gates this jack, and what is missing
+ * is behind the PHY, on the side it makes with the SoC - see docs/92 §11 and
+ * the "m45" console command that reads it.
  */
 #define ZX279133_LAN_TX_PORT		2
 #define ZX279133_LAN_RX_QUEUE_COUNT	8
@@ -1212,6 +1251,14 @@ struct zx279133_eth {
 	struct delayed_work rx_refill_work;
 	/* Copies the WAN unicast list (macvlans) into the SPA ONU MAC slots. */
 	struct work_struct rx_mode_work;
+	/*
+	 * The vendor's pon_plat puts the optical RX signal detect on gpio2
+	 * pin 1.  The work polls it and drives the red LOS lamp: low means
+	 * loss of signal, high means light present (docs/91).
+	 */
+	struct delayed_work pon_led_work;
+	struct gpio_desc *opsd_gpio;
+	struct led_classdev *los_led;
 	struct ptp_clock_info ptp_info;
 	struct ptp_clock *ptp_clock;
 	u32 ptp_agc_saved;

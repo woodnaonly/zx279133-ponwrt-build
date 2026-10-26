@@ -14,6 +14,7 @@
 #include <linux/module.h>
 #include <linux/of.h>
 #include <linux/of_mdio.h>
+#include <linux/phy.h>
 #include <linux/regmap.h>
 #include <linux/seq_file.h>
 #include <linux/kstrtox.h>
@@ -1288,6 +1289,88 @@ static ssize_t zx279133_9132_write(struct file *file, const char __user *ubuf,
 			return ret;
 		pr_info("9132 mdio: addr %02x reg %02x = 0x%04x\n",
 			maddr, mreg, (u16)ret);
+		return count;
+	}
+
+	/*
+	 * A Clause-45 register of the PHY that sits on the *other* MDIO
+	 * controller - the 2.5G jack's RTL8226.
+	 *
+	 * "m" cannot reach it and the reason is not a broken PHY: "m" walks
+	 * zx279133_9132_uni_mdio_bus(), controller #0 at 0x14f01000, and address
+	 * 5 there answers 0xffff (measured 2026-10-26 21:16, both BMSR and BMCR).
+	 * The PHY lives on controller #1: the vendor's board file says
+	 * `mdio_8226_id = <0x01>` (sk-d840n-community-4.19.dts:1810), and mainline
+	 * agrees - /sys/bus/mdio_bus/devices/14f02000.mdio:05 reads phy_id
+	 * 0x001cc849 and is bound to "RTL8221B-VB-CG 2.5Gbps PHY (C22)" while the
+	 * bench PC's NIC on that jack reports "Up, 1 Gbps".
+	 *
+	 * So the PHY is alive and configured by a generic driver, and the one
+	 * thing nobody in this tree ever runs is the vendor's outerphy sequence
+	 * for the PHY's SoC-facing side: Rtl8226_serdes_rst() toggles BIT(4) of
+	 * devad 0x1e reg 0x7581, Rtl8226_serdes_autoNego_set() writes 0x7588 and
+	 * then 0x7589 = 0x70d0/0x71d0, Rtl8226_serdes_link_get() reads 0x758b and
+	 * 0x758d, and Rtl8226b_phy_init() downloads the DSP patch through devad
+	 * 0x1f's 0xa436/0xa438 (rlt8226b.ko, decoded in docs/07:14726 and
+	 * devtools/phydiff.py:30). All of those are Clause-45, and tonight's
+	 * measurement - zero frames in either direction on this lane while the
+	 * copper side is linked, with the 9132's own port 5 given a complete
+	 * working-jack configuration and still seeing nothing - puts the defect
+	 * behind the PHY, on exactly that side.
+	 *
+	 *	"m45 5 0x1e 0x758d"		read one register
+	 *	"m45w 5 0x1e 0x7581 0x10"	write one and read it back
+	 *
+	 * phy_read_mmd()/phy_write_mmd() go through the phy_device phylib already
+	 * made for this chip, so whichever Clause-45 access method the bound
+	 * driver declares is the one used here; that is the point - this console
+	 * has to agree with what the PHY's own driver does, not invent a second
+	 * way to address the same registers.
+	 */
+	if (!strcmp(tok, "m45") || !strcmp(tok, "m45w")) {
+		bool is_write = tok[3] == 'w';
+		struct device_node *bnp;
+		struct phy_device *pd;
+		struct mii_bus *bus;
+		u32 devad, reg;
+		int ret2;
+
+		tok = zx279133_9132_next_token(&p);
+		if (!tok || kstrtou32(tok, 0, &mem))
+			return -EINVAL;
+		tok = zx279133_9132_next_token(&p);
+		if (!tok || kstrtou32(tok, 0, &devad) || devad > 31)
+			return -EINVAL;
+		tok = zx279133_9132_next_token(&p);
+		if (!tok || kstrtou32(tok, 0, &reg) || reg > 0xffff)
+			return -EINVAL;
+
+		bnp = of_parse_phandle(eth->dev->of_node,
+				       "zx279133,outer-phy-bus", 0);
+		if (!bnp)
+			return -ENODEV;
+		bus = of_mdio_find_bus(bnp);
+		of_node_put(bnp);
+		if (!bus)
+			return -ENODEV;
+
+		pd = mdiobus_get_phy(bus, (int)mem);
+		if (!pd)
+			return -ENXIO;
+
+		if (is_write) {
+			tok = zx279133_9132_next_token(&p);
+			if (!tok || kstrtou32(tok, 0, &val))
+				return -EINVAL;
+			ret2 = phy_write_mmd(pd, (int)devad, reg, (u16)val);
+			if (ret2)
+				return ret2;
+		}
+		ret2 = phy_read_mmd(pd, (int)devad, reg);
+		if (ret2 < 0)
+			return ret2;
+		pr_info("outer phy %u devad %#02x reg %#04x = 0x%04x\n",
+			mem, devad, reg, (u16)ret2);
 		return count;
 	}
 
