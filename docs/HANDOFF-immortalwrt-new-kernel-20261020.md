@@ -2402,3 +2402,38 @@ ping 它，读 `eth0 rx/tx_packets` 差与 `Get-NetNeighbor` 状态，三档判�
 (c) 在一条**通着的** lane 上把 8226 声明成交换机的口（§11 的否证只在被 mainline 重编过的 lane 上做
 过，条件不足）。压着的 10 个 docs 提交（`19412c7 d6a84a4 be8b6c1 50a0d9c a8797a1 ed5c13d 528ece6
 a79d9e9 63d1f25 47800d5`）与第一个补丁提交**一起推**——推 = dispatch，docs-only 会白占构建机 80 分钟。
+
+### 10.15 LAN1（2.5G 丝印口）在 02:20 的落点 —— 顶掉 §10.14 末尾那张 (a)(b)(c) 表
+
+§10.14 结尾的 **(b)「eth0 改绑 XMAC0」已作废**：XMAC0 是 SoC↔9132 唯一活着的那条 lane，LAN2/3/4
+今天就从它走（`zx279133-switch.c:1-56` + docs/90 §5 三口 4/4），`eth0` 的 XMAC1 在那次通流开机里整个
+窗口全 0（docs/92 §14），**引导程序根本没用过 XMAC1**。详见 docs/92 §33(一)、§35。
+
+**活着的候选只剩两条，按顺序**：
+
+1. **SPA memory 5 的 extend 位**（docs/92 §35）。`docs/36` 解出来的位表：bit19 =
+   `src_is_extend_port_flag`（setter `np_133.ko 0xbc3cc`，**并要求镜像进 ERAM `0x7d` word0 同一位**）。
+   原厂 `np_user_table_init()` 的 `xmac0_to_extend` 分支调 `port_attr_def_src_is_extend_port_flag_set(5, 1)`；
+   mainline 给 mem 5 的是 `0x00042000`（只有 bit13+18，`np.c:3996`），bit19 反而给了它称作 WAN 的 mem 6
+   （`0x148e0000`，`np.c:4040`）。**这条不用出包**：
+   `sh tools/mem5extend.sh <值>`（`w 5 19` + `fa 5`，两处都回读）→ `sh tools/lan1arrive.sh`
+   → `tools/pcrxwatch.ps1`。与 §11 的分别是真的：§11 把 `word0` 的入口程序 `0x8015` 一起盖成 `0xa6a5`
+   了，这条**只动属性字**。
+2. **给 outerphy 一个真 netdev**（docs/92 §33(三)）：`switch.c:221-258` 的表是 DSA 4..7 = PPU 1..4、
+   CPU 口 = 8，所以 PPU 5 用线性宏 `DSA_PPU(port)` 表达不出来（会撞 CPU 口）。要做的是
+   `ZX279133_SWITCH_DSA_NUM_PORTS` 加宽、DTS 多一个 `port@N`、`DSA_PPU()` 改成表、
+   `net/dsa/tag_zx279133_rtl8372n.c`（`VID = 55 + port`）与 `zx279133-idm.c` 的 `rx_lan_vport()`
+   （`1..4 → 59..62`）一起扩。**这条要出包。**
+
+**仪表与判据**（都是预登记的，docs/92 §35 末）：`tools/ubattr.sh` 现在读 mem 1/5/6 × attr
+`0 1 3 5 10 13 14 17 18 19`，先 `ping 192.168.9.25` 证明那次开机通流。三种读数各自的下一步已写死，
+包括「通流开机里 mem 6 也含 bit19 ⇒ mainline 那份 WAN 配方是抄对的，6 号与这根线无关」这条减法。
+
+**run 190（`27e79e4`）是废包，不要 boot、不要刷**：它就是候选 1 的错误版本（把整份 UNI 配方在开机时
+盖到 mem 5 上，而 `lan_port_bringup` 跑在 `port_init` 之前，`np.c:5303`→`:5313`），已 `git revert` 成
+`e1b3d30`。本地现在 ahead origin 若干条全是 docs + revert，**下一个真补丁（或运行期读数的结论）
+一起推**——推 = dispatch，docs-only 白占构建机。
+
+**不变的红线**：不给 mainline 发 `reboot`；任何写 flash 先要 owner 点头；断电由智能开关自己走
+（20 min 通 / 20 s 断），要冷启动就先 arm 再开口；subagent 不碰串口/继电器/板子，也不读
+`C:\UGit\SSH`，它们报的"现网状态"一律重新读一遍再动。
