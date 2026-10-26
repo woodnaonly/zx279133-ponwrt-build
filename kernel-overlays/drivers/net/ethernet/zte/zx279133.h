@@ -870,7 +870,7 @@ static inline u32 zx279133_idm_tx_done_reg(unsigned int queue)
 #define ZX279133_XMAC_PAUSE_TIME	0xffff
 #define ZX279133_XMAC_RX_FLOW		0x0240
 #define ZX279133_XMAC_RX_FLOW_EN	BIT(0)
-#define ZX279133_XMAC_RESET_MASK	BIT(11)
+#define ZX279133_XMAC1_RESET_MASK	BIT(11)
 #define ZX279133_XMAC1_EEE_CTRL		(ZX279133_XMAC1_BASE + 0x0340)
 #define ZX279133_XMAC1_EEE_TIMER	(ZX279133_XMAC1_BASE + 0x0350)
 #define ZX279133_XMAC_EEE_ENABLE_MASK	0x000b0000
@@ -905,6 +905,29 @@ static inline u32 zx279133_idm_tx_done_reg(unsigned int queue)
 #define ZX279133_XMAC1_SOPC_SEND_ENABLE	0x342c4
 #define ZX279133_XMAC1_SOPC_DUPLEX_MASK	BIT(5)
 #define ZX279133_XMAC1_SGMII_SPEED	3
+/*
+ * The same window seen from the other side: XMAC0.
+ *
+ * docs/92 36 is why these exist. The vendor CLI's own memory table
+ * (spa_port_attr_op help, np.c:2347) reads "1..4 = SMAC0..3 (the four UNI
+ * jacks)  5 = XMAC0  6 = XMAC1", so the four working jacks are the SoC's own
+ * GE MACs and XMAC0 is not what carries them - and in the one boot that
+ * proved this lane carrying traffic, XMAC0's window counted while XMAC1's
+ * read all zero (docs/92 14). The 2.5G jack's RTL8226 is therefore XMAC0's
+ * outerphy: np_133.ko's xmac0_to_extend branch is the call
+ * port_attr_def_src_is_extend_port_flag_set(5, 1).
+ */
+#define ZX279133_XMAC0_SOPC_READY	0x342a4
+#define ZX279133_XMAC0_SOPC_SEND_ENABLE	0x342c0
+#define ZX279133_XMAC0_SOPC_DUPLEX_MASK	BIT(4)
+#define ZX279133_XMAC0_RESET_MASK	BIT(10)
+#define ZX279133_XMAC_EEE_CTRL_OFF	0x0340
+#define ZX279133_XMAC_EEE_TIMER_OFF	0x0350
+
+/* The window eth0's MAC block is in - see zx279133_eth0_xmac in mac.c. */
+u32 zx279133_xmac_base(void);
+u32 zx279133_sopc_ready(void);
+u32 zx279133_sopc_send_enable(void);
 
 /*
  * The four internal-PHY MACs - the vendor's "smac0..3".  Each one has a

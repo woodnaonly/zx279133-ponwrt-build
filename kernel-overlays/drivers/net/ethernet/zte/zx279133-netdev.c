@@ -254,7 +254,7 @@ void zx279133_shutdown(struct zx279133_eth *eth)
 		mutex_lock(&eth->xmac_lock);
 		zx279133_xmac_close(eth, ZX279133_XMAC0_BASE,
 				    ZX279133_XMAC_RX_CTRL);
-		zx279133_xmac_close(eth, ZX279133_XMAC1_BASE,
+		zx279133_xmac_close(eth, zx279133_xmac_base(),
 				    ZX279133_XMAC_RX_CTRL);
 		mutex_unlock(&eth->xmac_lock);
 		zx279133_shared_rx_stop(eth);
@@ -262,7 +262,7 @@ void zx279133_shutdown(struct zx279133_eth *eth)
 		mutex_lock(&eth->xmac_lock);
 		zx279133_xmac_close(eth, ZX279133_XMAC0_BASE,
 				    ZX279133_XMAC_TX_CTRL);
-		zx279133_xmac_close(eth, ZX279133_XMAC1_BASE,
+		zx279133_xmac_close(eth, zx279133_xmac_base(),
 				    ZX279133_XMAC_TX_CTRL);
 		mutex_unlock(&eth->xmac_lock);
 		zx279133_route_set(eth, false);
@@ -1247,15 +1247,15 @@ static void zx279133_get_ethtool_stats(struct net_device *ndev,
 	data[ZX279133_STAT_TX_DROPPED] = sw_stats.tx_dropped;
 	data[ZX279133_STAT_RX_LENGTH] = sw_stats.rx_length_errors;
 	data[ZX279133_STAT_XMAC_TX_FRAMES] =
-		zx279133_hw_stat(eth, ZX279133_XMAC1_BASE +
+		zx279133_hw_stat(eth, zx279133_xmac_base() +
 				 ZX279133_XMAC_STAT_TX_FRAMES);
 	data[ZX279133_STAT_XMAC_TX_GOOD] =
-		zx279133_hw_stat(eth, ZX279133_XMAC1_BASE +
+		zx279133_hw_stat(eth, zx279133_xmac_base() +
 				 ZX279133_XMAC_STAT_TX_GOOD);
 	data[ZX279133_STAT_SOPC_READY] =
-		zx279133_hw_stat(eth, ZX279133_XMAC1_SOPC_READY);
+		zx279133_hw_stat(eth, zx279133_sopc_ready());
 	data[ZX279133_STAT_SOPC_SEND] =
-		zx279133_hw_stat(eth, ZX279133_XMAC1_SOPC_SEND_ENABLE);
+		zx279133_hw_stat(eth, zx279133_sopc_send_enable());
 	data[ZX279133_STAT_NPPT_XMAC_ERR] =
 		zx279133_hw_stat(eth, ZX279133_NPPT_XMAC_ERR);
 	data[ZX279133_STAT_SMCT_DONE] =
