@@ -750,3 +750,52 @@ frame=0x80000001` 是**同一趟开机几分钟之后**的值。两边都对，�
   于是**把一份完整的 12 字捕获判成 BAD-PARSE 并交了回板子**，白烧一个约 20 分钟的窗口。守卫已在
   已知好的数据上重放验证（`10 of 12`，缺的两字正是补零那两个），并在注释里写明它现在防的是什么。
   `0x19143400` 一行四个 `00002000` 相同**未做解释**，只是原始形状。
+
+## 23. 00:51 不用上板的一条：`VENDOR_FRAME_CFG` 这个常数和它自己的来源差一个 bit0
+
+§21 记下"mainline 把通着的四个比特改坏了"，但没说清**它为什么这么写**。去翻常数来源，答案是
+**一处转写错**，而且是本篇唯一一个"改一个数就能对齐三条独立证据"的点。
+
+`zx279133-switch.c:110`：
+
+	#define ZX279133_XMAC_VENDOR_FRAME_CFG	0x80000000
+
+而这段 `xmac_program()` 抄的对象——恢复出来的原厂 mac 驱动 `staging/base/zx279133-mac.c:411-437`——
+在同一个位置写的是：
+
+	writel(0x00010000, xmac + ZX279133_XMAC_TX_CTRL);   /* 然后 SPEED_MASK=GENMASK(31,29) 塞 speed_code */
+	writel(0x3e800086 | ZX279133_XMAC_RX_IPC, xmac + ZX279133_XMAC_RX_CTRL);
+	writel(0x80000001, xmac + ZX279133_XMAC_FRAME_CFG);      <-- bit0 是 1
+	writel(2, xmac + ZX279133_XMAC_MODE_CFG);
+	value = readl(MISC_CFG); writel(value | BIT(9), MISC_CFG);
+
+三条独立证据都站在 `0x80000001` 一边：
+
+| | `FRAME_CFG` |
+|---|---|
+| 恢复源码 `staging/base/zx279133-mac.c:431` | `0x80000001` |
+| 今晚通流开机交下来的值（§21 表 / 两个 boot 的 `lane pre-serdes`） | `0x80000001` |
+| 2026-10-19 `xmac_test xmac_work_mode_set 0 2` 之后的签名（docs/92 §20 引 `staging/ctl/smac6.log` 的 A/B diff） | `0x80000001` |
+| **我们仓库现在写的** | `0x80000000` ← 唯一不合的那一个 |
+
+`staging/base` 的 `speed_code` 表也顺手解释了 TX_CTRL 的高三位：`SPEED_2500 → 6`
+（`staging/base/zx279133-mac.c:396-406`），`GENMASK(31,29)` 塞 6 就是 `0x60000000`，加上
+`0x00010000` 那一步 = `0x60010000` = 通流值；mainline 也是 `0x6001000x`，所以**速率编码两边本来就一致**，
+不需要动。
+
+**同一次比对里要记的两条反向结论**（免得下一个读的人把 `staging/base` 当成逐字正确的原厂码）：
+
+- `staging/base` 的 `RX_CTRL` 那行算出来是 `0x3e800086 | BIT(9)` = **`0x3e800286`**，而通流开机读到的
+  是 `0x3e8000c6`（= `0x86 | bit6`，**bit9 不在里面**）。也就是说这份转写在 RX_CTRL 上是错的，而我们
+  仓库的 `VENDOR_RX_CTRL = 0x3e8000c6` 与实测一致——`switch.c:866-870` 那段注释说的"IPC 位 0x200 属于
+  MISC_CFG，被误写进 RX_CTRL；RX_CTRL bit6 在原厂置 1 的地方被清掉"是对的，这次算是它的一个旁证。
+- 唯一还没被解释的偏离是 `MISC_CFG`：`xmac_program()` 按原厂置 `BIT(9)`（我们也是），但**通流开机里
+  它是 `0x2000`（bit9 干净），刚进 U-Boot 提示符时也是 `0x2000`**；mainline 编完读 `0x2200`。
+  `0x2000` = bit13，像是上电默认。所以引导程序那次会话并没有把 IPC 位写进 MISC——**这是"原厂会话到底
+  写了哪些字"这个问题上目前唯一一条与 `staging/base` 相反的证据**，下一轮 `ubingress.sh` 的
+  `bring-up = pinged-pre` 那一列正是量它的。
+
+**这条为什么重要**：它是本篇第一次出现"改一个常数就能同时满足三条证据"的补丁形状，而不是又一轮
+运行时写寄存器。docs/65 §5 那个"帧被交给 RED 时长度是 0"的形态，如果成立，最自然的归属就是这个成帧字。
+但**先别推**：它能不能让收侧活，要等 `ubingress`（通着的 U-Boot 里到底有没有东西数网线帧）和
+`lineth0ping`（挂上 eth0 的地址后能不能被 ARP 到）这两个读数；`§21` 已经证明现在手上那把芯片尺不灵。
