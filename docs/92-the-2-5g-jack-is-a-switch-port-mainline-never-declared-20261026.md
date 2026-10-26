@@ -1336,3 +1336,37 @@ UNI 口的 `0xa6a5`**，所以 §11 否证的是"整份 UNI 配方覆盖 5 号"�
 
 判据 1 成立时的回归面很小（只动一个字的镜像），但仍必须按规矩跑 `g4verify.sh` + 四口 jack-walk，
 因为 5 号记忆是四个能用的口每天经过的那条 lane。
+
+## 36. 02:21：§33(一) 自我撤销 —— A（eth0 改绑 XMAC0）复活，而且它和 §35 是同一件事
+
+**推翻我上一条推理的不是新测量，是同一份文件里我没读的一张表。** `np.c:2347-2358` 抄的是原厂 CLI
+自己的记忆表（`spa_port_attr_op help`，2026-10-21 量到的原始行）：
+
+	 0 = PON0     1..4 = SMAC0..3 (the four UNI jacks)     5 = XMAC0
+	 6 = XMAC1    7 = RGMII1     8 = LOOP_SOPC    10 = XMAC_B
+	 12 = PON_PTL 14 = PON1      15 = CPU (the trap port)  16 = WIFI0
+
+**四个 UNI 丝印口是 SMAC0..3（SoC 自带的四个 GE MAC，SPA 记忆 1..4），不经过 XMAC0。** 于是 §33(一)
+的整个前提没了：我当时用 `zx279133-switch.c:1-56` 那句"9132 挂在 XMAC0 上"去否证 A，**那是本仓库里
+一份带注释的断言**；而 §14 是**一条被证明通着的线**给出的读数（通流开机里 `0x19140000` = XMAC0 在
+计数，`0x19180000` = XMAC1 整个窗口全 0）。断言对测量，**这次该听测量**——何况那张 help 表本身就是
+测量，是原厂 CLI 打出来的。**§33(一) 撤销，A 活着。**
+
+docs/90 §5 也在这条线上：那轮把丝印 LAN2/3/4 一个个映射到 `txp 2/3/4`，而 `txp` 写的值是**口号**
+（`ZX279133_LAN_TX_PORT 2` = 记忆 2 = SMAC1）——四个能用的口从来就是 SMAC，`lan-cpu0` 是 trap 15。
+XMAC0 因此是空的，空的正好是那根 2.5G 线要用的一条。
+
+**A 与 §35 是同一件事的两半**：`port_attr_def_src_is_extend_port_flag_set(5, 1)` 所在的分支名字就叫
+`xmac0_to_extend`——原厂把**记忆 5（XMAC0）标成 extend 口**，也就是「这块 MAC 的外面挂的是 outerphy
+（`outerphy_mode=5, phy_RTL8226`）」。mainline 两头都不对：MAC 编在 XMAC1（`mac.c` 三处 `+0x180000`、
+复位 `BIT(11)`、send `0x342c4`、ready `0x342a8`），而属性字的 extend 位给了记忆 6（`np.c:4018` 一族）。
+所以 §27「XMAC0 的四个控制字写对了还是死」完全在意料之中——**它写对了字，但口没被标成 outerphy，
+eth0 的环也还在另一块 MAC 上。**
+
+**动作**：
+1. **运行期先验第二半**（不用出包）：`sh tools/mem5extend.sh 0x000c2000`（= 原厂那份 `0x00042000`
+   或上 bit19；位号来自 docs/36 的 setter 表，`0xbc3cc`，并要求镜像 ERAM `0x7d`）→ `tools/lan1arrive.sh`
+   + `tools/pcrxwatch.ps1`。**只动属性字，不动 `word0 = 0x8015`**，这是它与 §11 的唯一但足够的分别。
+2. **出包做第一半**：`mac.c` 的三处基址 + 复位位 + SOPC send/ready + duplex 位（`BIT(5)`→`BIT(4)`，
+   `switch.c:125`）改成 XMAC0，并且**做成可切换**（默认仍是今天的 1，RAM kit 里写 0 再验），因为
+   `switch.c` 也在编 XMAC0——它那份编程撑着什么，只有 jack-walk + `g4verify.sh` 能说。
