@@ -2147,12 +2147,23 @@ owner 口径原话：**「默认都是 lan 口 需要 wan口的 用户自己去�
   重读 `network.wan.device`，指向 `eth0` 时装在一条不通的链路上=无副作用，用户一改口 NAT 自己跟上，
   **sk-nat 一行没动**。另外 `eth0` 不存在时不建 `wan`（`[ -e /sys/class/net/eth0 ]` 守卫）。
 - **生效条件**（别把「镜像默认」和「板上现状」混起来）：`/etc/config/network` 只在**文件缺失**时由
-  `config_generate` 生成，所以这个默认只对**下一次刷 root 之后第一次启动**生效。当前这块板要靠
-  `tools/portsall.sh` 现场装同样的形状并 `uci commit`。**本次没做完**：15:21 板子的
-  `lan2: Link is Down`（dmesg `[2448.57]`）—— 网线离开了 LAN2，`lan1..lan4` 四个 `carrier` 全 0，
-  `192.168.9.1` 上 ARP 解析不了、ssh 不应；而本 PC 的 Realtek 网卡仍报 `Connected / 1 Gbps`，
-  这个组合最像**线被插到了 LAN1（`eth0`/RTL8226）**，即 docs/90 §6 那个「发 0 字节」的口。
-  先把线放回 **LAN2/LAN3/LAN4 任一**再跑 `tools/portsall.sh`。
+  `config_generate` 生成，所以这个默认只对**下一次刷 root 之后第一次启动**生效；owner 2026-10-26 明确
+  **不为这条单独刷 root**（「不单独刷，留给下轮」）。当前这块板的活配置已用**控制台**装成同一形状并
+  `uci commit`（16:15–16:25 实测回读）：`br-lan = lan1 lan2 lan3 lan4 lan-cpu0`、
+  `network.wan.device = eth0`、`wan6.device = eth0`、`br-lan` 上仍是 `192.168.9.1/24`。
+- **为什么这次是手敲控制台而不是 `tools/portsall.sh`**：ssh 走不通——15:21 板子日志
+  `lan2: Link is Down`（dmesg `[2448.57]`），之后 `lan1..lan4` 四个 `carrier` 全 0，PC ping
+  `192.168.9.1` 解析不到 ARP，而 PC 的 Realtek 网卡仍报 `Connected / 1 Gbps`。owner 确认
+  **线就在 LAN1（2.5G/`eth0`）**，也就是 docs/90 §6 那个「CPU 交得出、线上一条不出」的口——
+  PC 侧 1 Gbps 协商成功，进一步把故障限定在 PHY 之上（XMAC/NP/IDM），不是线或 PHY 不该链。
+  `portsall.sh` 因此第一步就正确退出（它明确让你先扫 `txp`，但这次不是 `txp`，是线不在 LAN 口上）。
+  控制台那批 `uci` 命令每条 40 上下字节，正好压在 PL011 16-word FIFO 的截断边缘：
+  **`delete` 静默成功、后面的 `add_list` 也一样**，中途一度只剩 `ports='lan3'`（已按序重建并回读，
+  最终串正确）。留下的教训：setter 没有输出，`q.py` 原先把「没有输出」当成「控制台可能没挂上
+  shell」报，16:15 连着五条静默命令都这么报，看着像板子死了 —— `q.py` 现在按 echo 是否整条回来
+  分开报（回来 ⇒ 「setter 本来就静默，回读确认」；没回来 ⇒ 才是没挂 shell）。
+  **四口走查（每个丝印口 4/4 双向）还没做**，它要线离开 LAN1：插到 LAN2/LAN3/LAN4 任一口再跑
+  `staging/ctl/jackok.sh`。
 - **用户怎么自己设 WAN**（两个入口，代价都写清）：
   LuCI「网络 → 接口 → wan → 物理设置」换成想要的丝印口；或串口/ssh：
   `uci set network.wan.device=lan3 && uci set network.wan6.device=lan3 && uci commit network &&

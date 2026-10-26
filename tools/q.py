@@ -80,6 +80,7 @@ def main():
         # whole and it is sent again.  Short commands and a quiet console
         # make it rare, but it has to be checked rather than hoped for.
         text = ""
+        arrived = False
         for attempt in range(1, 6):
             if attempt == 2:
                 # Nothing has the console open yet.  OpenWrt boots with
@@ -95,6 +96,7 @@ def main():
             text = ANSI.sub("", read_from(off))
             flat = text.replace("\r", "").replace("\n", " ")
             if cmd.strip() in flat:
+                arrived = True
                 break
             if attempt < 5:
                 # The shell is sitting on half a line now, and a line that
@@ -122,9 +124,19 @@ def main():
             print(ln)
         if not keep:
             # Say what the empty answer can and cannot mean, rather than
-            # letting the caller read it as "the board is gone".
-            print("(no board text came back; the console may still have no "
-                  "shell attached - tools/armu.sh streams CRs and pulls one in)")
+            # letting the caller read it as "the board is gone".  The two
+            # meanings are different: an echo that came back whole proves the
+            # line reached the shell, and `uci set`, `uci add_list`, `uci
+            # commit` and a detached restart then print nothing at all - that is
+            # success.  Measured 2026-10-26 16:15, when five such commands each
+            # drew this note and the board's config was in fact changing under
+            # them.
+            if arrived:
+                print("(echoed back whole and printed nothing - normal for a "
+                      "setter; read the value back before believing it)")
+            else:
+                print("(no board text came back; the console may still have no "
+                      "shell attached - tools/armu.sh streams CRs and pulls one in)")
         print()
     return 0
 
