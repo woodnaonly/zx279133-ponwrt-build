@@ -3,21 +3,27 @@
 #
 #	sh tools/portsall.sh
 #
-# The LAN four-port measurement needs all four jacks to be the same kind of
-# port.  The board is still in the shape the NAT round left it in - br-lan is
-# lan1 lan2 lan4 lan-cpu0 and `network.wan.device` is lan3 - and a jack that
-# netifd has taken for WAN answers nothing on 192.168.9.1, which would be
-# read as "that jack is dead" when it is only a different interface.
+# This is the shape the image's own default produces (board.d/02_network), and the
+# owner's rule behind it, stated 2026-10-26: 「默认都是 lan 口 需要 wan口的
+# 用户自己去设置」.  It is also what tools/restore.sh runs at the end of a NAT
+# round, so the default is held in exactly one script and a round cannot leave a
+# jack reserved behind it.
+#
+# Why it exists at all: a jack that netifd has taken for WAN answers nothing on
+# 192.168.9.1, so a measurement that walks the panel jacks without first putting
+# them all in the bridge reports a working jack as dead.  That is how the LAN
+# jacks were being mis-read before the egress defect was found (docs/90).
 #
 # The WAN interface is pointed at eth0 rather than deleted, because eth0 is
 # the NPPT netdev and not one of the four UNI jacks: it cannot steal a jack
 # from the bridge.  It takes no lease, which is the same no-op it has always
-# been, and the round that wants a WAN port moves it back afterwards.
+# been, and the round - or a user - that wants a WAN port moves it.
 #
-# `uci commit` is not optional: the smart plug cuts this board for twenty
-# seconds every fifteen and a half minutes, and a running config that was
-# never committed is gone at the next cut (measured 2026-10-25, portmove.sh's
-# header has the record).
+# `uci commit` is not optional: a running config that was never committed is gone
+# at the next power cut, and the plug is now on the owner's hands (the timer was
+# switched off on 2026-10-26, so a cut comes when they decide, not on a schedule
+# that could be timed around).  portmove.sh's header carries the record of the
+# change that was lost this way on 2026-10-25.
 set -eu
 cd "$(dirname "$0")"
 export MSYS_NO_PATHCONV=1

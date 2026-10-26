@@ -1,20 +1,34 @@
 #!/bin/sh
-# Move the board's WAN port over the serial console, and commit it.
+# Take one panel jack away from the LAN bridge and hand it to the WAN, and commit it.
 #
-#   sh tools/portmove.sh [move|back]
+#   sh tools/portmove.sh move [wan-port]      # default wan-port: lan2
+#
+# This is the bench's NAT round asking for a topology the *image default refuses
+# to give*: the shipped default leaves every UNI jack in br-lan and points the
+# `wan` slot at eth0 (board.d/02_network), because the owner's rule is 「默认都是
+# lan 口 需要 wan口的 用户自己去设置」.  So this script is one of those "users",
+# it says which jack it wants, and tools/portsall.sh puts the default back when
+# the round is over.  There used to be a `back` mode here that hard-coded the old
+# default - it restored `lan1 lan2 lan4 lan-cpu0` plus `wan=lan3`, and every NAT
+# round therefore wrote a LAN-only user's worst case back into flash.  It is gone,
+# and one default lives in one place.
+#
+# The bridge is read from the board rather than written from a constant, and the
+# jack that is *currently* the WAN is put back into it first.  Both of those are
+# about the same thing: a round that assumes "the bridge is what the last round
+# left" measures a jack that is not really a LAN port, and reports it dead.
 #
 # WHY THE CONSOLE
 #
-# The board is on a smart plug that cuts its power for about fifteen seconds
-# every fifteen and a half minutes.  That is how the bench produces the cold
-# boots the acceptance needs, and it also means a change that waits for
-# something is racing the plug.  Measured on 2026-10-25: the port was moved
-# over ssh at 10:25, the board rebooted before the lease could be read, and
-# it came back with wan=lan3 - the change had gone with the power.
+# The change has to survive the board's LAN address leaving this PC's segment,
+# and it has to survive a power cut - the plug is on the owner's hands now (they
+# switched the timer off on 2026-10-26), which makes it a thing that *can* happen
+# mid-round rather than a schedule to race.  Measured on 2026-10-25: the port was
+# moved over ssh at 10:25, the board rebooted before the lease could be read, and
+# it came back with the last committed WAN - the change had gone with the power.
 #
-# The console is the way out of that: it does not depend on the network at
-# all, so the change survives the port leaving the bridge (which is what
-# takes the board's LAN address off this PC's segment).
+# The console is the way out of that for the steps that need it: it does not
+# depend on the network at all.
 #
 # WHY THE QUOTES
 #
@@ -25,7 +39,7 @@
 # no such name, so what reaches uci is not what was typed.  With the
 # argument quoted, uci sees it literally:
 #
-#     uci -q get "network.@device[0].ports"   ->   lan1 lan2 lan4 lan-cpu0
+#     uci -q get "network.@device[0].ports"   ->   lan1 lan2 lan3 lan4 lan-cpu0
 #
 # WHY ONE COMMAND AT A TIME
 #
@@ -46,9 +60,9 @@
 # WHY THE COMMIT
 #
 # Without `uci commit` the change is in the running config only, and the
-# board's next boot reads the file on flash, which still says lan3.  The
-# commit is what makes the change survive the plug's power cut - and it is
-# also what makes it survive this round, if the round has to be redone.
+# board's next boot reads the file on flash and puts the default back.  The
+# commit is what makes the move survive a power cut - and it is also what
+# makes it survive this round, if the round has to be redone.
 #
 # Git bash rewrites an argument that looks like an absolute path into a
 # Windows one before Python sees it, which turns "/etc/init.d/..." into
@@ -59,6 +73,7 @@ cd "$(dirname "$0")"
 export MSYS_NO_PATHCONV=1
 
 MODE=${1:-move}
+WAN_PORT=${2:-lan2}
 
 # The board over ssh, with the source address pinned: this PC has a static
 # neighbour entry for 192.168.9.1 on the WLAN adapter, so an unpinned packet
@@ -76,18 +91,12 @@ console() {
 	python q.py "$1" 2>&1 | tail -4
 }
 
-# The bridge's port list, as the board has it right now.
-read_ports() {
-	python q.py 'uci -q get "network.@device[0].ports"' 2>&1 |
-		sed -n '/^### /,$p' | sed -e '1d' -e '/^$/d' | head -1
-}
-
 # Set the bridge's port list to exactly the ports given, and prove it.
 #
 # The list is written as a delete followed by one add per port, because that
 # is the only way uci will write a list: `uci set` would store the whole
 # thing as one string with spaces in it, and the bridge would then be told
-# about a port called "lan1 lan4 lan-cpu0".
+# about a port called "lan1 lan3 lan4 lan-cpu0".
 #
 # The commands go over SSH, and they used to go over the console.  Over the
 # console they did not take effect on 2026-10-25 at 23:16: the delete
@@ -143,9 +152,62 @@ sh bssh2.sh cmd-portstate.txt 2>&1 || true
 case "$MODE" in
 move)
 	echo
-	echo "=== the move, over ssh ==="
-	set_ports "lan1 lan4 lan-cpu0"
-	set_wan lan2
+	echo "=== the move, over ssh: $WAN_PORT becomes the wan ==="
+	# The bridge as the board has it, plus the jack that is the wan right now.
+	# Read, never assumed: the default keeps every UNI in the bridge, but a user
+	# may have moved the wan to a jack of their own before this round started,
+	# and a jack left behind outside the bridge looks, to the next measurement,
+	# exactly like a jack that is broken.
+	cur=$(
+		{
+			echo 'uci -q get "network.@device[0].ports"'
+			echo 'uci -q get network.wan.device'
+		} | $SSH sh -s 2>&1 | tr -d '\r'
+	)
+	ports=$(printf '%s\n' "$cur" | head -1)
+	old_wan=$(printf '%s\n' "$cur" | sed -n '2p')
+	case "$ports" in
+	*lan*) ;;
+	*)
+		echo "portmove: the bridge's port list did not come back ('$ports')" >&2
+		echo "portmove: refusing to write a list it had to guess" >&2
+		exit 1
+		;;
+	esac
+	want=""
+	for d in $ports; do
+		want="$want${want:+ }$d"
+	done
+	# The jack the round is leaving behind goes back in, but only if it was one of
+	# the panel's jacks: on the shipped default the wan sits on eth0, and eth0 must
+	# not be dragged into the LAN bridge by a round that only meant to move a jack.
+	case "$old_wan" in
+	lan*)
+		case " $want " in
+		*" $old_wan "*) : ;;
+		*) want="$want${want:+ }$old_wan" ;;
+		esac
+		;;
+	esac
+	# The jack this round takes goes out - whatever the list came from.
+	rest=""
+	for d in $want; do
+		[ "$d" = "$WAN_PORT" ] && continue
+		rest="$rest${rest:+ }$d"
+	done
+	want=$rest
+	# And the CPU port is never a candidate for the wan, because a bridge without
+	# it reaches the jacks and never the router (board.d/02_network has the reason).
+	case " $want " in
+	*" lan-cpu0 "*) ;;
+	*) want="$want${want:+ }lan-cpu0" ;;
+	esac
+	case " $ports " in
+	*" $WAN_PORT "*) ;;
+	*) echo "portmove: note, $WAN_PORT was not in the bridge to begin with" >&2 ;;
+	esac
+	set_ports "$want"
+	set_wan "$WAN_PORT"
 	{
 		echo 'uci commit network'
 	} | $SSH sh -s 2>&1 | tail -2
@@ -159,21 +221,8 @@ move)
 	console 'setsid /etc/init.d/network restart >/tmp/netr.log 2>&1 &'
 	sleep 10
 	;;
-back)
-	echo
-	echo "=== putting lan2 back into the bridge ==="
-	set_ports "lan1 lan2 lan4 lan-cpu0"
-	set_wan lan3
-	{
-		echo 'uci commit network'
-	} | $SSH sh -s 2>&1 | tail -2
-	echo
-	echo "=== restarting the network, over the console ==="
-	console 'setsid /etc/init.d/network restart >/tmp/netr.log 2>&1 &'
-	sleep 10
-	;;
 *)
-	echo "usage: portmove.sh [move|back]" >&2
+	echo "usage: portmove.sh move [wan-port]" >&2
 	exit 2
 	;;
 esac

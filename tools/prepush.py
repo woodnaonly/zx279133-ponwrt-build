@@ -22,6 +22,10 @@ not have to:
      is made over the staging directory and names the flasher as well as
      the images; the release's file list is a second, hand-written list, and
      run 181's release published four of the five files its manifest names.
+  7. the board's first-boot network default.  Which panel jack is a LAN port
+     and which one the WAN takes is decided by a shell file that only ever
+     runs on the board, so nothing here would notice if it took a LAN jack
+     away again; tests/test_net_config_reach.sh runs it and is called.
 
 Exit status 0 means clean.
 """
@@ -129,6 +133,46 @@ def repo_tests():
             last = [ln for ln in r.stdout.strip().splitlines() if ln.strip()]
             print("prepush: %s: %s" % (name, last[-1] if last else "ok"))
     return bad
+
+
+def board_config_check():
+    """Run the image's first-boot network default against its own sandbox.
+
+    02_network decides which panel jack is a LAN port and which one the WAN
+    takes, and nothing else in this repository can see that decision: it is
+    shell, base-files executes it on a board that is not here, and the property
+    that matters - that no LAN jack is reserved by default, which the owner
+    asked for on 2026-10-26 - has no compiler behind it.  The rehearsal suite
+    runs the shipped script with the image's real shell libraries and asserts
+    what it asks for; case E is that assertion, and case E failed against the
+    file as it was before the change, which is what makes it a gate.
+
+    It needs the built root to read the shell libraries out of, so a machine
+    without one reports NOT checked rather than ok: a gate that prints a pass it
+    did not earn is the failure mode this project has been bitten by most often.
+    """
+    t = os.path.join(REPO, "tests", "test_net_config_reach.sh")
+    if not os.path.exists(t):
+        print("prepush: tests/test_net_config_reach.sh is gone - that is a problem")
+        return 1
+    img = os.path.join(os.path.dirname(os.path.abspath(REPO)),
+                       "staging", "trial", "flash-rootfs.jffs2")
+    if not os.path.exists(img):
+        print("prepush: the board's network default NOT checked (no %s)" % img)
+        return 0
+    r = subprocess.run(["sh", t], capture_output=True, text=True,
+                       encoding="utf-8", errors="replace")
+    lines = [ln for ln in (r.stdout or "").strip().splitlines() if ln.strip()]
+    if r.returncode != 0:
+        print("prepush: the shipped network default does not match what it claims")
+        for ln in lines[-14:]:
+            print("  %s" % ln)
+        if (r.stderr or "").strip():
+            print(r.stderr.strip())
+        return 1
+    print("prepush: the board's network default: %s"
+          % (lines[-1] if lines else "ok"))
+    return 0
 
 
 def flat_target(name):
@@ -332,6 +376,7 @@ def main():
     # says "yes" to a bad one costs the same.
     bad += gate_selftest()
     bad += repo_tests()
+    bad += board_config_check()
     bad += gate_against_snapshot()
     bad += release_manifest_check()
     bad += overlay_modes_check()

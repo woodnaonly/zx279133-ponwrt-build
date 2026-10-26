@@ -43,7 +43,12 @@ def main():
             print(f"{time.time()-t0:07.0f}s api unusable: {msg} "
                   f"(switch to tools/watchtags.py)", flush=True)
         else:
-            jobs = api(f"/actions/runs/{run_id}/jobs") or []
+            # {} and not []: api() returns None when curl fails or the rate limit
+            # answers, `or []` then made the next line raise AttributeError on a
+            # list, and the watcher died mid-run - measured on run 186, where it
+            # printed 1492 s of in_progress and then crashed with the build still
+            # in flight, leaving no terminal state for anyone to read.
+            jobs = api(f"/actions/runs/{run_id}/jobs") or {}
             line = (f"{time.time()-t0:07.0f}s {run['status']} {run['conclusion']} "
                     f":: {run.get('display_title','')[:50]}")
             print(line, flush=True)

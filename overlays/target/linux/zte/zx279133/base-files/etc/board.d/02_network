@@ -1,14 +1,24 @@
 #!/bin/sh
 # Overlaid on cnjn's file, so the sr1010 case is kept exactly as upstream has it.
 #
-# SK-D840N: the only netdev mainline can drive is the NPPT port whose PHY is the
-# external RTL8226, which the vendor image calls `wan`/eth0 (uci show network here:
-# lan bridge = eth1 eth2 eth3, wan.device = eth0). eth1..eth3 come out of the
-# SoC-internal "9132" UNI switch, which has no mainline driver - the vendor drives
-# it through /dev/ethdriver without phylib or DSA - so there is nothing to name
-# lan1..lanN here, and 99-default_network cannot fill the gap either: it exits as
-# soon as /etc/config/network already has a network object. Left unhandled the
-# image would boot with an address on a port that does not exist.
+# SK-D840N: the interface names here decide the address the board answers on, so
+# they decide whether anyone holding a cable can see the board at all.
+#
+# What this header used to claim - that the only netdev mainline could drive was
+# the NPPT's eth0, because the SoC-internal 9132 UNI switch had no mainline
+# driver and the vendor drove it through /dev/ethdriver without phylib or DSA -
+# is out of date.  The 9132 has been a registered DSA switch since run 100, and
+# on the flashed system lan1..lan4 and the lan-cpu0 conduit all exist and carry
+# traffic (docs/24 for the bring-up, docs/90 for the per-jack egress fix).
+# 99-default_network still cannot fill any of it in: it exits as soon as
+# /etc/config/network already has a network object, so this file is the one place
+# the default is decided.
+#
+# The vendor's own naming is the reason for the care below.  Its
+# /etc/config/network says "lan bridge = eth1 eth2 eth3, wan.device = eth0", but
+# those ethN are vendor switch ports rather than Linux netdevs, and taking them
+# for netdevs is how this board's panel map got wrong - eth0 is the panel's LAN1
+# 2.5G jack, not a fourth LAN port (docs/90 §6, measured).
 
 . /lib/functions/uci-defaults.sh
 . /lib/functions/system.sh
@@ -43,57 +53,74 @@ skyworth,sk-d840n)
 	# Which netdev carries the LAN depends on what the 9132's driver managed to bring up,
 	# and all three cases are real:
 	#
-	#   lan1 lan2 lan3 lan4  the 9132's four UNI jacks as separate DSA ports.  This is the
-	#                        one that gives a port per jack, and the one a lab router
-	#                        needs: one jack as the WAN uplink, the rest as the LAN.
-	#   lan-cpu0             the conduit - the 9132's CPU port, which reaches all four
-	#                        jacks as one flat network.
-	#   eth0                 the NPPT's own port, jack 4 (the external RTL8226).  The
-	#                        fallback: an image whose lane did not come up still has an
-	#                        address and still answers, instead of coming up with none.
+	#   lan1 lan2 lan3 lan4  the 9132's UNI jacks as separate DSA ports, one netdev
+	#                        per jack.  All of them are LAN - see the note under
+	#                        the loop.
+	#   lan-cpu0             the conduit - the 9132's CPU port.  It is a member of the
+	#                        LAN bridge, never the LAN's only member and never a WAN.
+	#   eth0                 the NPPT's own netdev, the panel's LAN1 2.5G jack (external
+	#                        RTL8226).  Two jobs: it is the `wan` slot, and it is the
+	#                        fallback LAN, so an image whose lane never came up still has
+	#                        an address and still answers instead of coming up with none.
+	#
+	# `uni` is set by the loop rather than testing the finished string, because the old
+	# predicate was a glob on the first name (`case "$lan_dev" in lan1*`) and a board that
+	# registered lan3 but not lan1 fell through it - losing the CPU port from its bridge,
+	# which is the one thing that makes every jack reachable from the router.
 	lan_dev=""
+	uni=""
 	for d in lan1 lan2 lan3 lan4; do
-		[ -e "/sys/class/net/$d" ] && lan_dev="$lan_dev${lan_dev:+ }$d"
+		[ -e "/sys/class/net/$d" ] && { lan_dev="$lan_dev${lan_dev:+ }$d"; uni=1; }
 	done
 	[ -n "$lan_dev" ] || { [ -e /sys/class/net/lan-cpu0 ] && lan_dev="lan-cpu0"; }
 	[ -n "$lan_dev" ] || lan_dev="eth0"
 	#
-	# The lab router needs one jack as the WAN and another as the LAN, and
-	# the two must be separate segments - that is the whole point of the
-	# NAT test.  So when the per-port netdevs are there, the jack the test
-	# PC is plugged into becomes the LAN bridge and the jack that already
-	# carries the uplink cable becomes the WAN, and the WAN takes a DHCP
-	# lease from whatever is upstream instead of carrying the bench's
-	# static address.
+	# By default every jack on the panel is a LAN jack and none of them is a
+	# WAN.  That is the owner's rule, stated 2026-10-26: 「默认都是 lan 口
+	# 需要 wan口的 用户自己去设置」.  Reserving a jack is not a neutral choice:
+	# a port netifd has handed to the WAN stops answering on 192.168.9.1, so to
+	# anyone holding a cable it is indistinguishable from a dead port - which is
+	# how three of the four jacks were being reported while the egress defect of
+	# docs/90 was still in the way.  The NAT round is the one caller that wants a
+	# WAN; it makes one for itself and puts this default back afterwards
+	# (tools/portmove.sh, tools/restore.sh).
 	#
-	# Which DSA port is which physical jack is measured, not guessed:
+	# A `wan` section still exists, on `eth0`, rather than being deleted.  Three
+	# reasons, each of them about what breaks without it:
 	#
-	#   DSA port 4 = PPU 1 = PHY 0x0a = the 9132's UNI1
-	#   DSA port 5 = PPU 2 = PHY 0x0b = the 9132's UNI2  <- the test PC
-	#   DSA port 6 = PPU 3 = PHY 0x0c = the 9132's UNI3  <- the uplink
-	#   DSA port 7 = PPU 4 = PHY 0x0d = the 9132's UNI4
+	#   * `uci set network.wan.device=lanX` - which is what a user does and what
+	#     every bench script does - writes into a section that has to exist.
+	#     Without one they would have to `uci add` first, and a uci failure on a
+	#     board nobody can look at reads as a dead port.
+	#   * `wan6` is generated alongside `wan`, so keeping the section keeps the
+	#     pair consistent - tools/portsall.sh sets both fields.
+	#   * /etc/init.d/sk-nat re-reads network.wan.device every 15 s and puts the
+	#     masquerade wherever it points.  On eth0 the rule sits on a link that
+	#     carries nothing, which is the no-op wanted; on a real uplink it works
+	#     with nothing else to change, so the NAT half of this board needs no
+	#     rebuild when a user picks a WAN port.
 	#
-	# The vendor's own naming confirms the last two: the vendor prints
-	# "[eth1] port 1 link up:1000M" for the jack the PC is in and calls
-	# that switch port 1, and its sw_port table says switch port 1 is
-	# smac_1, which is PPU 2.  The vendor's eth2 is switch port 2 = smac_2
-	# = PPU 3, and it is the port that has a cable in it on this bench.
+	# The panel, measured on run 185 and written up in docs/90 §6.  This replaces
+	# a table here that was inherited from jack walks run on an image in which
+	# only eth0 could send, and it got eth0 wrong twice: eth0 is the panel's
+	# LAN1, not "jack 4", and the `carrier=1` it reports comes from the DTS
+	# `fixed-link` rather than from a cable, so no question about this jack can be
+	# answered by reading carrier.
 	#
-	# The labels in the device tree follow the DSA port number (lan1 is
-	# DSA port 4), so the PC's jack is lan2 and the uplink's is lan3.
+	#   DSA port 4 = PPU 1 = PHY 0x0a = lan1   no jack on this SKU
+	#   DSA port 5 = PPU 2 = PHY 0x0b = lan2   panel LAN2
+	#   DSA port 6 = PPU 3 = PHY 0x0c = lan3   panel LAN3
+	#   DSA port 7 = PPU 4 = PHY 0x0d = lan4   panel LAN4
+	#   (not DSA)    NPPT   = RTL8226  = eth0  panel LAN1, the 2.5G jack
 	#
-	# The rest of the cases keep the single-interface behaviour above:
-	# one address on the one netdev that exists, so the board is still
-	# reachable on the bench.
+	# lan1 being a netdev with no jack behind it is why leaving it in the bridge
+	# costs nothing and why it must not be "tidied" out of one.
 	#
-	case "$lan_dev" in
-	lan1*)
-		lan_ports=""
-		wan_port=""
-		for d in $lan_dev; do
-			[ "$d" = lan3 ] && { wan_port="lan3"; continue; }
-			lan_ports="$lan_ports${lan_ports:+ }$d"
-		done
+	# The other cases keep the single-interface behaviour above: one address on
+	# the one netdev that exists, so the board is still reachable on the bench.
+	#
+	if [ -n "$uni" ]; then
+		lan_ports="$lan_dev"
 		#
 		# The DSA CPU port has to be in the bridge as well.
 		#
@@ -101,15 +128,15 @@ skyworth,sk-d840n)
 		# itself is delivered to the switch's CPU port, and every frame the
 		# router sends towards a jack leaves through it.  It is a netdev of
 		# its own (lan-cpu0) and the bridge is what the host side of the
-		# switch is attached to - the four user ports are bridges of their
-		# own and the CPU port is not one of them.  A bridge without the
-		# CPU port forwards between the jacks and never reaches the host:
-		# the router's own address is on the bridge, the frames arrive on
-		# the CPU port, and nothing on the CPU port belongs to the bridge,
-		# so they are dropped there and no netdev ever counts a byte.
+		# switch is attached to - the user ports are bridges of their own and
+		# the CPU port is not one of them.  A bridge without the CPU port
+		# forwards between the jacks and never reaches the host: the router's
+		# own address is on the bridge, the frames arrive on the CPU port, and
+		# nothing on the CPU port belongs to the bridge, so they are dropped
+		# there and no netdev ever counts a byte.
 		#
-		# Measured on the trial image on 2026-10-23: br-lan carried
-		# lan1, lan2 and lan4, and lan-cpu0 was in no bridge at all.
+		# Measured on the trial image on 2026-10-23: br-lan carried lan1, lan2
+		# and lan4, and lan-cpu0 was in no bridge at all.
 		[ -e /sys/class/net/lan-cpu0 ] && \
 			lan_ports="$lan_ports${lan_ports:+ }lan-cpu0"
 		#
@@ -121,23 +148,17 @@ skyworth,sk-d840n)
 		# what this file exists to prevent: the network service puts the
 		# default 192.168.1.1 on the bridge, the bench PC waits on
 		# 192.168.9.1, and the board looks dead while it is up.
-		if [ -n "$wan_port" ] && [ -n "$lan_ports" ]; then
-			ucidef_set_interface "lan" device "$lan_ports" protocol "static" \
-				ipaddr "192.168.9.1" netmask "255.255.255.0"
-			ucidef_set_interface "wan" device "$wan_port" protocol "dhcp"
-		elif [ -n "$lan_ports" ]; then
-			ucidef_set_interface "lan" device "$lan_ports" protocol "static" \
-				ipaddr "192.168.9.1" netmask "255.255.255.0"
-		else
-			ucidef_set_interface "lan" device "$lan_dev" protocol "static" \
-				ipaddr "192.168.9.1" netmask "255.255.255.0"
-		fi
-		;;
-	*)
+		ucidef_set_interface "lan" device "$lan_ports" protocol "static" \
+			ipaddr "192.168.9.1" netmask "255.255.255.0"
+		# The slot only exists if the port it names does; tests/test_network_binding.sh
+		# is what proves eth0 is there, and if it ever is not, a WAN pointing at
+		# nothing would be netifd chasing a netdev that was never registered.
+		[ -e /sys/class/net/eth0 ] && \
+			ucidef_set_interface "wan" device "eth0" protocol "dhcp"
+	else
 		ucidef_set_interface "lan" device "$lan_dev" protocol "static" \
 			ipaddr "192.168.9.1" netmask "255.255.255.0"
-		;;
-	esac
+	fi
 	;;
 *)
 	echo "Unsupported hardware. Network interfaces not initialized"

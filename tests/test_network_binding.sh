@@ -5,7 +5,9 @@
 # The invariant 02_network depends on: everything the NPPT ethernet path reaches must have a
 # real driver in the kernel that is actually being flashed.
 #
-# 02_network binds lan to device "eth0". eth0 comes from the NPPT ethernet node, and that node
+# 02_network names eth0 in two places: it is the `wan` slot while the 9132's UNI jacks are up
+# (the LAN default keeps every one of them, since 2026-10-26), and it is the fallback `lan` when
+# there is no UNI netdev at all. eth0 comes from the NPPT ethernet node, and that node
 # takes all six of its clocks from zte,zx279133-topcrm. If topcrm has no driver, clk_get fails,
 # the probe fails, and there is no eth0 - the board would come up on config_generate's
 # 192.168.1.1, which is the address this PC's own router answers on. Everything else in the

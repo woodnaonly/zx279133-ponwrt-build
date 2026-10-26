@@ -22,7 +22,16 @@ $SSH "root@$WAN" 'cat /proc/net/nf_conntrack 2>/dev/null | grep "src=192.168.9."
 
 echo
 echo "=== the wan side's own counters ==="
-$SSH "root@$WAN" 'cat /sys/class/net/lan2/statistics/tx_bytes; echo "--- rx"; cat /sys/class/net/lan2/statistics/rx_bytes' 2>&1
+# The netdev is asked for, not assumed.  This line used to name lan2, which was
+# only right while the round always took lan2; read against a different jack it
+# reports "the wan carried nothing" about a wan that is working fine.
+wanif=$($SSH "root@$WAN" 'uci -q get network.wan.device' 2>&1 | tr -d '\r' | tail -1)
+case "$wanif" in
+"") echo "natcounters: network.wan.device did not come back from $WAN" >&2; exit 1 ;;
+*[^a-zA-Z0-9._-]*) echo "natcounters: refusing the device name '$wanif'" >&2; exit 1 ;;
+esac
+echo "the wan is $wanif"
+$SSH "root@$WAN" "cat /sys/class/net/$wanif/statistics/tx_bytes; echo '--- rx'; cat /sys/class/net/$wanif/statistics/rx_bytes" 2>&1
 
 echo
 echo "=== and the client, from inside its own namespace ==="

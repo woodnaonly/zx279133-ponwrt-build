@@ -1,22 +1,30 @@
 #!/bin/sh
 # The whole NAT acceptance round on the flashed image, in one go.
 #
-#   sh tools/natround.sh
+#   sh tools/natround.sh                      # the wan is taken from lan2
+#   WAN_PORT=lan4 sh tools/natround.sh        # ... or from a jack you choose
 #
-# The board is on a smart plug that cuts its power every fifteen and a half
-# minutes, so the round is built to fit in one power cycle and to survive
-# being interrupted: every step that changes the board is made over the
-# serial console, which does not depend on the network, and every change is
-# committed, so a power cut in the middle of the round leaves the board in a
-# state the next run can still work with.
+# WHAT THIS ROUND DOES TO THE BOARD, AND WHY IT HAS TO GIVE IT BACK
+#
+# The image's default is LAN-only: every UNI jack sits in br-lan and the `wan`
+# slot points at eth0, because the owner's rule is 「默认都是 lan 口 需要 wan口的
+# 用户自己去设置」 (board.d/02_network).  A NAT test needs two separate segments,
+# so this round *is* one of those users: it takes one jack for the wan for the
+# length of the round and hands the default back at the end.  Nothing here may
+# leave a jack reserved, and the restore is not cleanup cosmetics - a board
+# committed in wan mode answers nothing on 192.168.9.1 on that jack, which every
+# other tool on this bench reads as a dead port.
+#
+# The power is on the owner's hands (the smart plug's timer was switched off on
+# 2026-10-26), so the round is still built to survive being interrupted: every
+# change is committed, so a cut in the middle leaves a state the next run can
+# work with rather than a half-written config.
 #
 # The steps, and why each one is where it is:
 #
-#   1. the WAN port moves to lan2, over the console.  The board's LAN
-#      address leaves this PC's segment when lan2 leaves the bridge, so the
-#      change cannot be made over ssh - and a change made over ssh was
-#      measured going with the power when the plug cut the board before the
-#      lease could be read.
+#   1. one jack is taken for the WAN, over ssh, and committed; the network
+#      restart that follows is the console's, because the board's LAN address
+#      leaves this PC's segment when that jack leaves the bridge.
 #   2. this PC turns on the sharing, so it becomes the upstream with a DHCP
 #      server on 192.168.137.x.
 #   3. the board takes a lease on that subnet; it is found by asking it, not
@@ -31,8 +39,9 @@
 #   6. the evidence is read: the masquerade rule and its counter, the
 #      client's flow in the conntrack table with the address rewritten, the
 #      client's own ping to the internet.
-#   7. everything is put back: the client, the port, dropbear, and this
-#      PC's sharing.
+#   7. everything is put back: the client, the bridge, dropbear, and this
+#      PC's sharing - the bridge going back to the LAN-only default, not to
+#      whatever jack this round happened to use.
 set -e
 set -o pipefail
 # The round leaves the bench in a state that only this script knows how to
@@ -51,7 +60,7 @@ natround_cleanup() {
 	if [ "$RESTORED" = 0 ]; then
 		echo "natround: the round stopped before the restore - putting the bench back" >&2
 		sh restore.sh "${WAN:-}" >&2 2>&1 ||
-			echo "natround: the restore itself failed; the board may still be in wan mode - use the console (portmove.sh back)" >&2
+			echo "natround: the restore itself failed; the board may still be in wan mode - run tools/portsall.sh over the console" >&2
 	fi
 	if [ "$ICS_ON" = 1 ]; then
 		if command -v pwsh >/dev/null 2>&1; then
@@ -108,6 +117,10 @@ say() { echo; echo "############ $* ############"; }
 # through tee: the evidence is in the output, and the output is the only
 # thing that has it while the board is in wan mode.
 LOG=${NATROUND_LOG:-"$ROOT/staging/ctl/g4nat-round.txt"}
+# The jack this round borrows for the WAN.  One variable, because step 1 moves
+# it and step 3 has to ask that same netdev for its lease - and two literals is
+# how a round ends up polling an interface it never took.
+WAN_PORT=${WAN_PORT:-lan2}
 mkdir -p "$(dirname "$LOG")"
 echo "the round is being written to $LOG"
 
@@ -117,8 +130,8 @@ echo "upstream script: $UPSTREAM"
 test -f "$UPSTREAM_POSIX" || {
 	echo "no upstream script at $UPSTREAM_POSIX"; exit 1; }
 
-say "1. the WAN port moves to lan2, over the console"
-sh portmove.sh move 2>&1 | tail -30
+say "1. the WAN takes $WAN_PORT, and the jack the board had reserved goes back to the LAN"
+sh portmove.sh move "$WAN_PORT" 2>&1 | tail -30
 
 say "2. this PC becomes the upstream"
 if command -v pwsh >/dev/null 2>&1; then
@@ -161,7 +174,7 @@ noconv q.py 'ifup wan' 2>&1 | tail -4
 # still asking, and while it is unreachable from this PC at all.
 WAN=""
 for i in $(seq 1 30); do
-	addr=$(noconv q.py 'ip -4 addr show lan2 | grep inet' 2>/dev/null |
+	addr=$(noconv q.py "ip -4 addr show $WAN_PORT | grep inet" 2>/dev/null |
 		grep -o '192\.168\.137\.[0-9]*' | head -1 || true)
 	if [ -n "$addr" ]; then
 		WAN=$addr
@@ -172,7 +185,7 @@ done
 if [ -z "$WAN" ]; then
 	echo "the board has no address on the shared subnet yet"
 	echo "the board's own view:"
-	noconv q.py 'ip link show lan2' 'ip route show default' 2>&1 | tail -12
+	noconv q.py "ip link show $WAN_PORT" 'ip route show default' 2>&1 | tail -12
 	exit 1
 fi
 echo "the board is at $WAN"

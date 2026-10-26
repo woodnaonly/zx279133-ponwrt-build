@@ -7,8 +7,14 @@
 #
 #   * the client (a veth pair and a network namespace) is removed, so the
 #     board has no client behind it any more;
-#   * lan2 goes back into the bridge and lan3 goes back to being the wan,
-#     which is the image's own configuration;
+#   * the jack the round borrowed goes back into br-lan and the wan goes back to
+#     eth0 - which is the image's own default: every panel jack is a LAN port and
+#     no jack is reserved (board.d/02_network, the owner's 「默认都是 lan 口
+#     需要 wan口的 用户自己去设置」).  This used to restore the *old* default -
+#     `lan1 lan2 lan4 lan-cpu0` with `wan=lan3` - so every round wrote back a
+#     reservation the user never asked for, and the next jack walk read that jack
+#     as dead.  The default is not restated here: tools/portsall.sh holds it and
+#     the restore runs that script.
 #   * dropbear goes back to listening on the lan only, which is what the
 #     image ships;
 #   * and this PC's sharing goes off, so the wired adapter has its
@@ -19,8 +25,8 @@
 #
 #   * the port move comes FIRST, and it goes over ssh to the board's WAN
 #     address - the address the round found the board on.  It cannot go to
-#     192.168.9.1: lan2 is the wan at this point, so the board's LAN
-#     address is not on this PC's segment and never was.
+#     192.168.9.1: the borrowed jack is the wan at this point, so the board's
+#     LAN address is not on this PC's segment and never was.
 #   * dropbear goes back to the lan only AFTER that, because the ssh the
 #     port move arrived on is the one that has to be listening on the wan
 #     until the move is done.
@@ -42,7 +48,7 @@ echo "=== removing the client ==="
 python q.py 'ip netns del labcli' 'ip link del labhost0' 2>&1 | tail -6
 
 echo
-echo "=== putting lan2 back into the bridge ==="
+echo "=== putting the borrowed jack back into the bridge ==="
 # Over ssh, to the address the round found the board on.  The port move
 # itself used ssh too (the change and its commit are made before the
 # network is restarted, so they have no reason to be on the fragile
@@ -58,15 +64,17 @@ if [ -n "$WAN" ]; then
 	# so the port was never put back, the board kept the committed wan, and
 	# the log still said the round was done.  Measured 2026-10-26 01:12.
 	if ipconfig | tr -d '\r' | grep -aq '192\.168\.137\.1'; then
-		export SKD_BIND=192.168.137.1
-		echo "the sharing is still on: this PC reaches the board's wan from 192.168.137.1"
+		BIND=192.168.137.1
+		echo "the sharing is still on: this PC reaches the board's wan from $BIND"
+	else
+		BIND=192.168.9.25
 	fi
-	# No `| tail` here: `portmove.sh back` reads the bridge's port list back
-	# over the console and exits 1 when it is not the list it was asked for,
-	# and that judgement is the whole point of putting the port back.
-	SKD_HOST="$WAN" sh portmove.sh back
+	# No `| tail` here: portsall.sh reads the bridge's port list back and stops
+	# on a list that is not the one it asked for, and that judgement is the
+	# whole point of putting the port back.
+	SKD_HOST="$WAN" SKD_BIND="$BIND" sh portsall.sh
 else
-	sh portmove.sh back
+	sh portsall.sh
 fi
 
 echo

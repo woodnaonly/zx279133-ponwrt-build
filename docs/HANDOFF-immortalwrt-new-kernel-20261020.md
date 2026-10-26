@@ -2115,9 +2115,9 @@ wan 仍是 lan3，规则仍在 lan3，SSH 已验证可达。
   配 `192.168.9.2/24`，PC 侧 0/4，板上 `tx_bytes=1106 / rx_bytes=0`（CPU 交了出去、线上没出来）。
   本次修复不覆盖它，也没被它影响。
 
-- **板子现在的活配置**是 NAT 轮恢复后的形状，不是 `portsall.sh` 的形状：
-  `br-lan = lan1 lan2 lan4 lan-cpu0`、`wan = lan3`、`wan.device = lan3`，网线在 **LAN2**。
-  要再走丝印口，先 `tools/portsall.sh` 把四口全进桥。
+- **板子当时的活配置**（run 185 那轮 NAT 结束后的形状，**已被 §10.10 作废**）：
+  `br-lan = lan1 lan2 lan4 lan-cpu0`、`wan.device = lan3`，网线在 **LAN2**。
+  `lan3` 被划成 WAN，所以 LAN3 那个丝印口当时不是 LAN 口。
 
 - **供电口径变了（重要）**：owner 于 2026-10-26 把智能开关的定时关掉 ——「我关掉了 定时 断掉 了」。
   所以 §2、§10.8 里「每 ~15 分钟自动断 ~35 s」**不再成立**，`staging/ctl/plugphase.log` 不再是未来
@@ -2130,3 +2130,52 @@ wan 仍是 lan3，规则仍在 lan3，SSH 已验证可达。
   `omci` netdev + `AF_PACKET/SOCK_RAW` ethertype `0xBABA`；`zxic_omci_api_send_to_drv@0x50c50` 的
   `sendto`；端口绑定 ioctl 属于 `bin/cspd` 走 `/dev/ethdriver`），但一行代码没动。
   厂商 4.19 的 RAM 启动按 owner 口径**只准备、不跑**。
+
+### 10.10 默认改成「四个 LAN 口全是 LAN」（2026-10-26 16:09）
+
+owner 口径原话：**「默认都是 lan 口 需要 wan口的 用户自己去设置」**。这一节取代 §10.9 里
+「`wan.device = lan3`」那条活配置记录，也取代镜像的出厂默认。
+
+- **改的是哪里**：`overlays/target/linux/zte/zx279133/base-files/etc/board.d/02_network` 的
+  `skyworth,sk-d840n` 分支。旧代码在 `lan1*` 分支里把 `lan3` 抠出来 `ucidef_set_interface wan device
+  lan3 protocol dhcp`，`br-lan` 只剩 `lan1 lan2 lan4 lan-cpu0`；现在桥 = **存在的全部 UNI +
+  `lan-cpu0`**，`wan` 仍建一段但 `device=eth0`（面板 LAN1 那块 2.5G，**不是 9132 UNI，偷不走 LAN 口**）。
+  判定条件从 `case "$lan_dev" in lan1*` 换成循环里置的 `uni` 标志——旧的 glob 匹配的是**第一个口名**，
+  一块只注册出 `lan3` 的板会掉进 `*)` 分支，连带丢掉 `lan-cpu0`，那就是「四个口全不通」。
+- **为什么不干脆删掉 `wan`**（三条都写在注释里）：① `uci set network.wan.device=…` 是用户和 bench
+  脚本唯一的入口，section 不在就打不进去；② `wan6` 随 `wan` 一起生成；③ `/etc/init.d/sk-nat` 每 15 s
+  重读 `network.wan.device`，指向 `eth0` 时装在一条不通的链路上=无副作用，用户一改口 NAT 自己跟上，
+  **sk-nat 一行没动**。另外 `eth0` 不存在时不建 `wan`（`[ -e /sys/class/net/eth0 ]` 守卫）。
+- **生效条件**（别把「镜像默认」和「板上现状」混起来）：`/etc/config/network` 只在**文件缺失**时由
+  `config_generate` 生成，所以这个默认只对**下一次刷 root 之后第一次启动**生效。当前这块板要靠
+  `tools/portsall.sh` 现场装同样的形状并 `uci commit`。**本次没做完**：15:21 板子的
+  `lan2: Link is Down`（dmesg `[2448.57]`）—— 网线离开了 LAN2，`lan1..lan4` 四个 `carrier` 全 0，
+  `192.168.9.1` 上 ARP 解析不了、ssh 不应；而本 PC 的 Realtek 网卡仍报 `Connected / 1 Gbps`，
+  这个组合最像**线被插到了 LAN1（`eth0`/RTL8226）**，即 docs/90 §6 那个「发 0 字节」的口。
+  先把线放回 **LAN2/LAN3/LAN4 任一**再跑 `tools/portsall.sh`。
+- **用户怎么自己设 WAN**（两个入口，代价都写清）：
+  LuCI「网络 → 接口 → wan → 物理设置」换成想要的丝印口；或串口/ssh：
+  `uci set network.wan.device=lan3 && uci set network.wan6.device=lan3 && uci commit network &&
+  /etc/init.d/network restart`。
+  代价：**那个口立刻不再是 LAN 口**（netifd 拿走它，`192.168.9.1` 不在它上面应答，看着就像坏口）。
+  禁忌：**永远不要把 `lan-cpu0` 划成 WAN**，那是 9132 的 CPU 口，桥里没它四个口集体失联。
+- **门（这次第一次能红）**：`tests/test_net_config_reach.sh` 的 A–D 从来没走过 `lan1*` 分支，
+  所以旧行为没有任何门。新增 case E（伪造 `/sys/class/net/lan1..4 + lan-cpu0 + eth0`，断言桥的精确
+  串、断言 `wan` 里不出现任何 `lan*`、断言 `wan device eth0`）与 case F（没有 `eth0` ⇒ 不凭空造
+  `wan`）。两头控制都做了：
+  `NET=/tmp/02_network.old sh tests/test_net_config_reach.sh` → **FAIL**，并打出
+  `ucidef_set_interface wan device lan3`（就是要抓的那条）；改后的文件 → `all 9 checks passed`。
+  这条套件本机原先**跑不起来**：`cd /mnt/c/ugit/SK-D840N4` 是 WSL 路径（失败后 `set -u` 不拦，报的
+  是「02_network missing」，看着像缺夹具）；`jefferson` 在本机 python 上会死在 `dev/console`
+  （Windows 的 `os` 没有 `mknod`/`makedev`），现在按上打桩绕过并检查真产物在不在。
+  `tools/prepush.py` 里新增 `board_config_check()`，没夹具时打印 **NOT checked**（不冒充通过）。
+- **bench 侧同步**：`portmove.sh` 的 `move` 不再写死桥列表，改成**读板上现在的桥 + 把当前 WAN 口放回
+  去 − 本轮要借的口 + 补 `lan-cpu0`**（四种起点用文件里抽出的真代码段仿真过）；`back` 模式删掉（它就是
+  那份旧默认的副本，留着每轮 NAT 都会把 `wan=lan3` 写回 flash）；`restore.sh` 改为调
+  `portsall.sh`（默认只在一处）；`natround.sh` 的 `WAN_PORT`（默认 `lan2`）统一控制搬哪个口和之后问哪个
+  口的 lease；`natcounters.sh` 的 wan 计数器不再写死 `lan2`，改为问 `network.wan.device`。
+  `portmove.sh`/`portsall.sh`/`natround.sh` 里「智能开关每 15 分钟自动断电」的说法都已按 §10.9 改成
+  「owner 手工断电」，`uci commit` 仍然强制。
+- 顺带修的工具 bug：`tools/watchrun.py` 在 jobs API 抖动时 `api()` 返回 `None`，`or []` 之后
+  `jobs.get(...)` 抛 `AttributeError`，watcher 在 run 186 跑到 1492 s 时自己死了，终态没人报
+  —— 已改成 `or {}`。
