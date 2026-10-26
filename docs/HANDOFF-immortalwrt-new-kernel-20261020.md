@@ -2089,3 +2089,44 @@ wan 仍是 lan3，规则仍在 lan3，SSH 已验证可达。
 - **审计后澄清的两条（别再当 bug 修）**：`g4verify.sh:118` 取的是 `serial.log` 最后 300 KB，看着像「混用多次启动」，但紧接着的 `awk '/Linux version/{n=NR}…END{for(i=n;i<=NR;i++)…}'` 把窗口**起点重定到窗口里最后一条 banner**，而一次启动只产 ~57 KB（01:48 那次：103382771→103439624），所以 `flood lines this boot` 的「this boot」是**准确的**；第 14 项（banner 在日志里）则是**装饰**——它靠的正是那条用来重定起点的 banner，永远真。真正的「本次启动」身份证据是 `coldboot.sh` 的字节偏移（它先记录 `the console log is N bytes now`，再等 N 之后出现 banner）加 `uname -r` 加 `uptime < 600`，不是这一项。
   可能吃到 netifd 横幅、`g4verify.sh:114` 的 `|| true`、验收不看 `plugphase.log` 避开断电；
   ③ 关键路径第 2 项（PON 状态机）才决定它能不能当光猫用。
+
+### 10.9 四个 LAN 口只有 LAN2 通：已修，并在 flash 上验收（2026-10-26 15:29）
+
+完整过程在 **`docs/90-the-cpu-sent-every-lan-frame-out-one-jack-20261026.md`**，这一节只记交接状态。
+提交：`f5df6d8`（驱动）、`b885533`（`tools/portsall.sh` + `tools/txpwalk.sh`）、`e466768`（`tools/q.py` 叫醒控制台）。
+产物：CI run **185**（`skd840n_flash_185_40257525883` / `skd840n_initramfs_185_40257525883`）。
+
+- **根因一句话**：IDM TX 描述符的「输出端口」字段我们写的是**一个标量** `eth->lan_tx_port =
+  ZX279133_LAN_TX_PORT = 2`（`zx279133-netdev.c:367`、`:397`），而目标丝印口的身份本来就在帧里
+  （DSA tagger 写的 `VID = 55 + dp->index`，`lan1..lan4` ⇒ VID 59..62 ⇒ PPU 1..4），
+  `zx279133_lan_strip_transport_vlan()` 已经把它解出来了又丢掉。所以每一帧 CPU→LAN 都被强制从
+  2 号口出去 —— 与 owner「只有 LAN2 对，其它口灯亮连不上」完全吻合。
+  改法只有一处：剥标签的函数报告剥掉的 VID，按帧传进公共 xmit，`txp` 退化成「无标签帧的缺出口 +
+  逃生开关」。不动描述符格式、不动 tagger、不动 DTS。
+- **验收（都不再需要手工 `txp`）**：LAN2/LAN3/LAN4 各 4/4 双向，`txp-writes=0`；三分区回读 md5 与
+  release 三个文件相同（`mtd2 b7c16ab7…`、`mtd3 8c460c97…`、`mtd5 9ab070bf…`）；两次手工冷启动各自
+  `g4: 16 pass / 0 fail` + `verify: 5 pass / 0 fail`；NAT 轮 `rc=0`、`natverdict: PASS`。
+- **面板对应（这次是量出来的，§3 里那张旧表作废）**：`LAN1 = eth0`（2.5G，RTL8226 @
+  `14f02000.mdio:05`）、`LAN2 = lan2`（PPU2/smac_1/PHY 0x0b）、`LAN3 = lan3`、`LAN4 = lan4`。
+  三条要记住：**`lan1` 在这个 SKU 上没有对应丝印口**（所以 `txp 1` 不通不是 bug）；
+  以前记的「eth0 = 丝印第 4 口」是错的；**`eth0` 的 `carrier=1` 是 DTS `fixed-link` 造出来的假象**，
+  判断 2.5G 那条链路只能看流量，不能看 carrier。
+- **LAN1 的 2.5G 仍然不通，是另一个 bug**：线插 LAN1、四个 `lan*` 全 `carrier=0`、运行时给 `eth0`
+  配 `192.168.9.2/24`，PC 侧 0/4，板上 `tx_bytes=1106 / rx_bytes=0`（CPU 交了出去、线上没出来）。
+  本次修复不覆盖它，也没被它影响。
+
+- **板子现在的活配置**是 NAT 轮恢复后的形状，不是 `portsall.sh` 的形状：
+  `br-lan = lan1 lan2 lan4 lan-cpu0`、`wan = lan3`、`wan.device = lan3`，网线在 **LAN2**。
+  要再走丝印口，先 `tools/portsall.sh` 把四口全进桥。
+
+- **供电口径变了（重要）**：owner 于 2026-10-26 把智能开关的定时关掉 ——「我关掉了 定时 断掉 了」。
+  所以 §2、§10.8 里「每 ~15 分钟自动断 ~35 s」**不再成立**，`staging/ctl/plugphase.log` 不再是未来
+  断电的权威；冷启动、进 U-Boot、断电重试都要**明确请 owner 手工断电 15 s 再通电**。
+  「改动必须 `uci commit`」这条继续有效，但理由从「定时器随时会切」变成「owner 随时会切」。
+
+- **G5（PON/ONU）仍是开着的**：owner 2026-10-26 解冻（「是光猫需要修复 pon口」），但也确认
+  **实验台没有可用 OLT，也搞不到** —— 所以「注册成功」在这台板子上永远无法端到端证明，任何交付
+  只能说「MAC/serdes 起得来、对无光反应正确」。厂商 OMCI 的发送门已经定位（`np_133.ko` 建的
+  `omci` netdev + `AF_PACKET/SOCK_RAW` ethertype `0xBABA`；`zxic_omci_api_send_to_drv@0x50c50` 的
+  `sendto`；端口绑定 ioctl 属于 `bin/cspd` 走 `/dev/ethdriver`），但一行代码没动。
+  厂商 4.19 的 RAM 启动按 owner 口径**只准备、不跑**。
