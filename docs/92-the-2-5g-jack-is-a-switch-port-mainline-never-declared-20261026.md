@@ -1297,3 +1297,42 @@ probe 里的顺序是 **`bringup`（`:5303`）→ `port_init`（`:5313`）**。
 §12.1 的那几项加宽到这七项。两种结果都有用：**逐字相同** ⇒ 芯片侧对 5 号口已经等价，缺口就只剩
 §33(三) 的 netdev 与转发表，下一个包照 (三) 做；**不同** ⇒ 差出来的那个字就是补丁，而且它现在是
 *量出来的差*，不再是猜的形状。现网这次开机 02:2x 会随断电清掉，以上所有读数都是仪表不是修复。
+
+## 35. 02:17（预登记，判据先写死再看数）：属性字按 docs/36 的解码表重读，19 号位放错了口
+
+`docs/36` 那张从 `np_133.ko` 逐 setter 解出来的表把 bit 号钉死了：bit13 `route_mode_en`、
+bit18 `input_vlan_check_en`、**bit19 `src_is_extend_port_flag`**（setter `0xbc3cc`，并且要求镜像到
+ERAM `0x7d` 表 word0 的同一位）、bit26 `mul_flood_en`、bit28 `DA lookup`、bit31 `SA learn`、bit0 `TLB_VLD`。
+按这张表重读 §34 量到的三个字，形状是这样的：
+
+| SPA memory | 属性字 19 | 置起的位 | 谁写的 |
+|---|---|---|---|
+| 1（一个真能用的 UNI 口） | `0x96040001` | 0,18,26,28,31 | mainline `port_init` |
+| **5（CPU 侧那条 XMAC0 lane）** | `0x00042000` | **只有 13,18** | mainline `lan_port_bringup`（`np.c:3996`） |
+| **6（mainline 称作 WAN 的那个口）** | `0x148e0000` | 17,18,**19**,23,26,28 | mainline `wan_port_bringup`（`np.c:4040`） |
+
+而 `zx279133.h:35-38` 记的是原厂的调用：**`port_attr_def_src_is_extend_port_flag_set(5, 1)`**，
+在它的 `xmac0_to_extend` 分支里——**原厂把 extend 位加在 5 号记忆上，mainline 把这个位给的是 6 号。**
+
+**这条比 §33(二)/§34 那个错补丁好在两点**：它不动 `word0 = 0x8015`（"Table valid, start PC 10, flow 1,
+as on the factory system"，原厂入口程序），也不动 10/13/14；而 **§11 运行期那次恰恰把 `word0` 写成了
+UNI 口的 `0xa6a5`**，所以 §11 否证的是"整份 UNI 配方覆盖 5 号"，**不是**"5 号该有 extend 位"。
+这两个假设到这里第一次被分开。
+
+**预登记的判据**（02:2x 窗口里 `tools/ubattr.sh` 正在读 mem 1/5/6 的 attr `0 1 3 5 10 13 14 17 18 19`，
+先 `ping` 证明那次开机是通流的）：
+
+1. 通流开机里 **mem 5 的 attr 19 含 bit19** ⇒ 5 号就是那条被声明成 extend 的口，下一个包写
+   `word19 = 0x960C0001`（= 真能用的口那 5 位 `0x96040001` **或上** bit19 `0x00080000`）**并且只改
+   `word19`**，同步 `zx279133_mf_eram_attr_set(eth, 5, 0x960C0001)`（表里 bit19 要求镜像，`docs/36`
+   最后一列），`word0/10/13/14` 一个字都不碰。
+2. 通流开机里 **mem 5 的 attr 19 = `0x00042000`**（和 mainline 一样、不含 bit19）⇒ extend 位不是这条
+   lane 的开关，`h:35-38` 那句 `set(5, 1)` 就要重新解释（可能是 4.19 的 `xmac0_to_extend` 分支在这块
+   板上根本不走），届时缺口回到 §33(三) 的 netdev 与转发表。
+3. 两种情况都要看的对照：**mem 6 的 attr 19 在通流开机里是不是也含 bit19**——含，则 mainline 那份
+   `0x148e0000` 抄对了，6 号口与这根线无关；不含，则 mainline 把整个 WAN 配方按到了这板上，而
+   `zx279133_wan_port_bringup()` 在 SK-D840N 上就是多余甚至有害的（它给 eth0 的那块 MAC 记忆挂上
+   `iswanport`），这本身就是下一个可测的减法。
+
+判据 1 成立时的回归面很小（只动一个字的镜像），但仍必须按规矩跑 `g4verify.sh` + 四口 jack-walk，
+因为 5 号记忆是四个能用的口每天经过的那条 lane。
