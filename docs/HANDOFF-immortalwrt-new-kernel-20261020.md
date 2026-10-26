@@ -2437,3 +2437,40 @@ a79d9e9 63d1f25 47800d5`）与第一个补丁提交**一起推**——推 = disp
 **不变的红线**：不给 mainline 发 `reboot`；任何写 flash 先要 owner 点头；断电由智能开关自己走
 （20 min 通 / 20 s 断），要冷启动就先 arm 再开口；subagent 不碰串口/继电器/板子，也不读
 `C:\UGit\SSH`，它们报的"现网状态"一律重新读一遍再动。
+
+### 10.16 暂停点的状态（2026-10-27 02:34）—— 恢复时照这一段走，不用重新推导
+
+**目标未完成**：网线在面板 LAN1（2.5G），该口在 mainline 下收发仍是 0 字节。owner 口径
+「默认都是 lan 口 需要 wan口的 用户自己去设置」已落在镜像默认与 bench 里（§10.10 那条线，
+`grand-tor-quail` 计划六步全完）。PON/G5 仍按「无 OLT、注册不可证」搁置（#8–#11）。
+
+**在飞的两件事，都会自己收尾**：
+- CI **run 190**（`40375345669`，`27e79e4`）——**废包**：它含 `143141e`（开机时把整份 UNI 配方盖到
+  SPA memory 5 上，而 `lan_port_bringup` 跑在 `port_init` 之前），已本地撤销为 `e1b3d30`。
+  **不要 boot 它，更不要刷它。** 它到终态之前**不能推任何东西**（推 = dispatch）。
+- `tools/ubattr.sh` 的 Phase 1.5（后台任务，`UB_MEMS="1 5 6" UB_ATTRS="3 19"` + `UB_MD` 六个状态字）：
+  约 02:43 那次断电自动接 U-Boot，**先 `ping` 证明通流再读**，读 `nppt+0x84/0x90`、
+  `0x140000/0x140010`、`0x19180000/0x19180010` → `staging/ctl/ubattr-state.txt`，然后 `run bootcmd`
+  交还板子。只读，不写 flash。
+
+**本地 ahead 8 的恢复动作（按顺序，一步都不能省）**：
+1. `curl -s https://api.github.com/repos/woodnaonly/zx279133-ponwrt-build/actions/runs?per_page=1`
+   看到 run 190 `completed` 才继续（watcher 后台任务 `bavlaq7m5` 也会报）。
+2. `cd ci-build-repo && python tools/prepush.py > /tmp/pp.txt 2>&1; echo rc=$?` —— **必须 rc=0**，
+   且不要用 `| tail` 之后看 `$?`（本会话已犯过两次）。
+3. `git push origin main` → 这是 **run 191**，内容 = 撤销 + `3a508cd`（eth0 的 MAC 窗口可切换）+
+   §32–§38 更正。
+4. 取 kit 后**在一次开机里两头都测**（这就是这个包的价值，不需要第二次编译）：
+   `sh tools/xmacswitch.sh 1` → `sh tools/g4verify.sh` + 四口 jack-walk（**先证明 LAN2/3/4 没退化**）
+   → `sh tools/xmacswitch.sh 0` → `PINGCOUNT=20 sh tools/lan1arrive.sh` + `tools/pcrxwatch.ps1`。
+5. §38 的判据决定下一步：通流开机的 `+0x84/+0x90` 若与 mainline 当前同态（`1 / 0x2c03`），
+   缺口就只剩绑定，run 191 就是那一测；若是 `(0, 0x380b)`，还要把 XPCS0/SerDes 的 bring-up 进包。
+
+**今晚新增的否证（别再走）**：出口端口号（§2、§3、§31 撤销后仍只剩 §3 那一个有效读数）；
+XMAC0 四个控制字写对（§27，字对而队列绑在另一块 MAC）；SPA memory 5 声明成 UNI 口（§11 整份配方、
+§37(二) 只加 extend 位——**两种形状都量死**）；原厂 CLI 的属性对照（§37(一)：mem 1/5/6 十项一字不差，
+且它的 `port_attr_id` **不是** SPA 字下标）；SoC 侧 SerDes 镜像重写（§28）；PHY 侧（run 189 的 `m45`
+十个 CL45 字与通流开机全等）；`zx279133_idm_rx_parsed()` 当收方向过滤器（§32：它只管 checksum）。
+
+**红线**：不给 mainline 发 `reboot`/sysrq-b；写 flash 与任何断电都要 owner 点头；subagent 不碰
+串口/继电器/板子、不读 `C:\UGit\SSH`；运行期写随每次 20 s 断电消失，所以它们只能是仪表。
