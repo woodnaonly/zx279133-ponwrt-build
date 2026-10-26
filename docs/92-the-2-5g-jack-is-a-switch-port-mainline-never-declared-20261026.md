@@ -995,3 +995,39 @@ SerDes 镜像**（`0x16100000` 块，mainline 读不到、U-Boot 能读）：doc
 的分隔符**（`echo NAME=$(cat a)-$(cat b)`），不能靠"名字=值"的行尾形状——中继回显会把长命令折行，
 折出来的半行正好形如 `NAME=<别的数字>`。这一类比 `%06x` 更阴，因为它给出的是**看起来合理的错数字**，
 不是空值。
+
+## 28. 01:22 窗口：SoC 侧 SerDes 也关掉了——mainline **根本不重写**那份镜像，而那个"未解释的差"是只读状态
+
+`tools/ubserdesimg.sh` 在 01:21 那个沿抓到 U-Boot，**先 ping 并要求 `is alive`（本轮 =1）**再取
+`0x16100000` 块的 0x00..0x130，落到 `staging/ctl/ubserdesimg.txt`；
+`python3 tools/serdesimgdiff.py` 对着 `phy-zx279133-uni-serdes.c` 的 `zx279133_uni_1g_profile[]`
+数出 **28 个字不同**——与 mainline 自己打印的 `image differs in 28/49 word(s)` **一字不差**，
+所以两边的解析都对。
+
+然后是这一节真正的判决，来自驱动源码而不是板子：`phy-zx279133-uni-serdes.c:203-215` 在链路已起的
+分支里**只做比较、然后 `goto out_unlock`**，既不做 `reset_pulse` 也不做 `write_profile`（那两个在
+:218-222 的另一条路上）。今晚每一趟启动打印的都是这条：
+
+	Uni SerDes 1G inherited: mode 0x101 already, image differs in 28/49 word(s), status 0xc880bb83/0x1000706
+
+⇒ **`28/49` 是"活块 vs 我们那张表"的差，而这张表在这条分支里一次都没被写进块。** mainline 拿到的是
+引导程序留下的镜像**原封不动**，所以 §15/§17 之后剩下的最后一条"SoC 侧 SerDes 内容不同"也关门了。
+（对照另一颗口：`mode 0x1 already, image differs in 0/49` — 那条口块与表全等，说明比较本身有效。）
+
+顺带结掉 §15 那条挂着的不一致：同一个地址 `0x161000d0` 在几趟开机里读到过
+**`c880bb83` / `c87ebb83` / `c87fbb83`** 三个值（差别在 bit16..bit21 这一段）。
+**一个自己会变的字是只读状态/自适应字段，不是配置**，谁都不要再把它当"引导程序与内核写了不同的值"。
+`0x161000e4 = 01000706`（RX LOS 清）两边一致，与 §15 相同。
+
+**至此今晚的排除表**（每条都有正控制）：PHY 侧全等（§17）、SerDes 镜像 mainline 不动（§28）、
+XMAC0 四个字写成通流形状仍双向不通（§27，写入有四次回读）、SPA 口声明单独无效（§11）、
+入口计数不数网线帧（§21/§26，U-Boot 与 mainline 两边都试过）、`0x342c0` 本来就是 1（§27）。
+唯一还站着的结构性事实是 §18/§27 那条：
+**mainline 下 `eth0` 的收发环都挂在 XMAC1 上（`zx279133-mac.c:31/413/447` + 复位 `BIT(11)`），
+而这条 lane 的 MAC 是 XMAC0**——引导程序证明过 XMAC0 才是会数这根线的块（§26：一次 ping 就把
+`60010000/3e8000c6/80000001` 写下去并把 `nppt+0x84` 变成 1）。
+所以补丁的形状只剩一个：**把 eth0 的 MAC 从 XMAC1 挪到 XMAC0**（三处基址 + 复位位 `BIT(10)` +
+DTS 的 `pcs-handle` + 让 `zx279133-switch.c` 不再占 XPCS0/XMAC0），并在 RAM 里判。
+`lan-cpu0` 不是这条 lane 的用户（docs/44：它是 IDM netdev，SPA CPU 15），所以这个改动有理由不动
+四个 UNI 口的通路——**但这是推断，必须在 RAM 里连同 `g4verify`/四口 jack-walk 一起回验**，
+因为如果 `switch.c` 对 XMAC0 的编程真的撑着什么，退化会立刻现形。
