@@ -2162,8 +2162,12 @@ owner 口径原话：**「默认都是 lan 口 需要 wan口的 用户自己去�
   最终串正确）。留下的教训：setter 没有输出，`q.py` 原先把「没有输出」当成「控制台可能没挂上
   shell」报，16:15 连着五条静默命令都这么报，看着像板子死了 —— `q.py` 现在按 echo 是否整条回来
   分开报（回来 ⇒ 「setter 本来就静默，回读确认」；没回来 ⇒ 才是没挂 shell）。
-  **四口走查（每个丝印口 4/4 双向）还没做**，它要线离开 LAN1：插到 LAN2/LAN3/LAN4 任一口再跑
-  `staging/ctl/jackok.sh`。
+  **四口走查（每个丝印口 4/4 双向）在全 LAN 默认下重做了一遍**（owner 三次换线，
+  `staging/ctl/jackwalk.log` 末尾三行）：LAN2 16:19、LAN3 16:21、LAN4 16:22，各自
+  `pc->board=4/4`、`board->pc=4/4 0% loss`、`txp-writes=0`，carrier 表每次都只有插线的大口为 1。
+  LAN3 这一行是这条改动的判决：**它就是旧默认抠去当 WAN 的那个口**，现在它是正常 LAN 口。
+  另外 LAN2 从 16:10 那个「四个 `lan*` 全 `carrier=0`」的状态里，在**同一次启动、不重启**的前提下恢复了
+  —— 线插回来 phylink 就报链路，说明那次不是 PHY 死了，是真的没线。
 - **用户怎么自己设 WAN**（两个入口，代价都写清）：
   LuCI「网络 → 接口 → wan → 物理设置」换成想要的丝印口；或串口/ssh：
   `uci set network.wan.device=lan3 && uci set network.wan6.device=lan3 && uci commit network &&
