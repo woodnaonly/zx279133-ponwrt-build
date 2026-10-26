@@ -59,6 +59,13 @@ def read_from(off):
         return fh.read().decode("utf-8", "replace")
 
 
+def wake():
+    """Hand the console a couple of CRs, to attach askfirst's shell."""
+    with open(CMD, "wb") as fh:
+        fh.write(b"\r\r")
+    time.sleep(2.0)
+
+
 def main():
     for cmd in sys.argv[1:]:
         # The console is a 115200 baud PL011 with a sixteen-word receive
@@ -74,6 +81,16 @@ def main():
         # make it rare, but it has to be checked rather than hoped for.
         text = ""
         for attempt in range(1, 6):
+            if attempt == 2:
+                # Nothing has the console open yet.  OpenWrt boots with
+                # askfirst, which prints "Please press Enter to activate this
+                # console." and only then execs a shell, and until something
+                # reads the tty the board echoes nothing - so a silent
+                # exchange after a boot looks exactly like a dead wire.
+                # Measured 2026-10-26 10:48-11:16: five commands in that state
+                # drew no text at all, and a CR stream attached the shell
+                # within a second and the BusyBox banner came out.
+                wake()
             off = send(cmd)
             text = ANSI.sub("", read_from(off))
             flat = text.replace("\r", "").replace("\n", " ")
@@ -103,6 +120,11 @@ def main():
         print("### %s" % cmd)
         for ln in keep:
             print(ln)
+        if not keep:
+            # Say what the empty answer can and cannot mean, rather than
+            # letting the caller read it as "the board is gone".
+            print("(no board text came back; the console may still have no "
+                  "shell attached - tools/armu.sh streams CRs and pulls one in)")
         print()
     return 0
 
