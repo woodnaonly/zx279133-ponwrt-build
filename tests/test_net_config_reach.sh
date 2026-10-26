@@ -33,18 +33,21 @@
 # The working copy is found from this script's own path, and /tmp/rootcheck holds
 # the unpacked root (set ROOTCHECK_DIR to move it).
 set -u
-# Where the working copy is, derived rather than remembered.  This used to be a
-# literal WSL path (cd /mnt/c/ugit/SK-D840N4), and on any other machine the `cd`
-# fails, `set -u` does not stop the script, and the next line reports
-# "…/02_network missing" - which reads exactly like a missing fixture and is
-# really a missing `cd`.
+# Where things are, derived from this script's own path rather than remembered.
+# It used to be a literal WSL path (cd /mnt/c/ugit/SK-D840N4): on any other
+# machine the `cd` fails, `set -u` does not stop the script, and the next line
+# reports "…/02_network missing" - which reads exactly like a missing fixture and
+# is really a missing `cd`.  Nothing here depends on the checkout being named
+# `ci-build-repo` either, which the remembered relative path did.
 HERE=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
-cd "$HERE/../.." || { echo "cannot reach the working copy from $HERE" >&2; exit 1; }
+REPO=$(CDPATH= cd -- "$HERE/.." && pwd)
+WS=$(CDPATH= cd -- "$REPO/.." && pwd)
 
 OUT=${ROOTCHECK_DIR:-/tmp/rootcheck}
+IMG=${IMG:-$WS/staging/trial/flash-rootfs.jffs2}
 # NET= lets a second copy of the script be put through the same cases, which is
 # how the control group runs: the file before the change must fail case E.
-S=${NET:-ci-build-repo/overlays/target/linux/zte/zx279133/base-files/etc/board.d/02_network}
+S=${NET:-$REPO/overlays/target/linux/zte/zx279133/base-files/etc/board.d/02_network}
 [ -f "$S" ] || { echo "$S missing" >&2; exit 1; }
 # Self-contained: extract the image if it is not already unpacked, so this suite can be run on
 # its own. jefferson refuses an existing destination.
@@ -64,7 +67,7 @@ os.makedev = lambda ma, mi: (ma << 8) | mi
 os.mknod = lambda path, mode=0o600, *a: open(path, "wb").close()
 from jefferson.cli import main
 main()
-' -d "$OUT" staging/trial/flash-rootfs.jffs2 2>&1 | tail -3
+' -d "$OUT" "$IMG" 2>&1 | tail -3
 	test -f "$OUT/lib/functions/uci-defaults.sh" \
 		|| { echo "the image did not unpack - python -c 'import jefferson' must work" >&2; exit 1; }
 fi
@@ -80,8 +83,18 @@ mkdir -p "$T/lib/functions" "$T/usr/share/libubox" "$T/etc/board.d" "$T/tmp/sysi
 # The image's real shell libraries, with /lib/... and /tmp/sysinfo repointed into the sandbox.
 # /tmp/sysinfo has to move too: board_name() reads that absolute path to decide which case to
 # take, so leaving it alone would test the host's leftovers, not this board.
+#
+# lib/config/uci.sh is in the list because functions.sh sources it from *inside* a
+# line (`[ -z "$IPKG_INSTROOT" ] && [ -f /lib/config/uci.sh ] && . /lib/config/uci.sh`),
+# which the anchored rewrite above cannot see: left alone, a Linux host that has that
+# file would run the host's copy and a Windows box would run nobody's, and neither is
+# the image. Every form is rewritten to the sandbox, so the guard and the source agree.
+mkdir -p "$T/lib/config"
+cp "$OUT/lib/config/uci.sh" "$T/lib/config/uci.sh" 2>/dev/null || : >"$T/lib/config/uci.sh"
 for f in lib/functions.sh lib/functions/uci-defaults.sh lib/functions/system.sh; do
-	sed 's#^\. /lib/#. '"$T"'/lib/#; s#^\. /usr/share/#. '"$T"'/usr/share/#; s#/tmp/sysinfo#'"$T"'/tmp/sysinfo#g' \
+	sed -e 's#^\. /lib/#. '"$T"'/lib/#' -e 's#^\. /usr/share/#. '"$T"'/usr/share/#' \
+		-e 's#/tmp/sysinfo#'"$T"'/tmp/sysinfo#g' \
+		-e 's#/lib/config/uci.sh#'"$T"'/lib/config/uci.sh#g' \
 		"$OUT/$f" >"$T/$f.raw" || exit 1
 done
 # jshn.sh needs ubus binaries; an empty file satisfies the ". file" without running anything.

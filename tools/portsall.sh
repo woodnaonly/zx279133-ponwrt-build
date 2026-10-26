@@ -70,7 +70,52 @@ fi
 echo "portsall: the port list is '$got'"
 
 echo 'uci commit network' | board | tail -2
-echo "portsall: wan is now $(echo 'uci -q get network.wan.device' | board | tail -1 | tr -d '\r')"
+# The WAN half is compared, not printed.  A board whose bridge came back right and
+# whose wan still names a UNI jack is the exact state this script exists to remove,
+# and it is the one state that makes a panel jack look dead - so a read-back that
+# only echoes cannot be the proof.  (It used to echo: `uci set network.wan.device=`
+# on an image with no wan section fails quietly, the bridge check passed anyway, and
+# the script said "done".)
+got_wan=$(echo 'uci -q get network.wan.device' | board | tail -1 | tr -d '\r')
+if [ "$got_wan" != "$WAN" ]; then
+	echo "portsall: the wan is '$got_wan', and it should be '$WAN'" >&2
+	echo "portsall: a wan on a UNI jack is a LAN port the user did not agree to lose" >&2
+	exit 1
+fi
+got_wan6=$(echo 'uci -q get network.wan6.device' | board | tail -1 | tr -d '\r')
+if [ "$got_wan6" != "$WAN" ]; then
+	echo "portsall: the wan6 is '$got_wan6', and it should be '$WAN'" >&2
+	exit 1
+fi
+echo "portsall: wan and wan6 are both on '$WAN'"
+# Then the file, not only the running config.  Every read-back above went through
+# `uci`, which merges the staged delta with the file, so it cannot tell a committed
+# change from one that never landed - and a bridge that exists only until the next
+# power cut is the failure this script's header says it exists to avoid (the plug
+# is the owner's to pull, and they pull it).
+set -- $WANT_PORTS
+want_n=$#
+file=$(
+	{
+		echo 'grep -ac "^list ports" /etc/config/network'
+		echo "grep -a -A3 'interface wan' /etc/config/network"
+	} | board 2>&1 | tr -d '\r'
+)
+nports=$(printf '%s\n' "$file" | sed -n '1p')
+if [ "$nports" != "$want_n" ]; then
+	echo "portsall: /etc/config/network holds $nports port lines, not $want_n" >&2
+	printf '%s\n' "$file" | sed 's/^/  /' >&2
+	exit 1
+fi
+case "$file" in
+*"device '$WAN'"*) : ;;
+*)
+	echo "portsall: the committed file has no wan on $WAN" >&2
+	printf '%s\n' "$file" | sed 's/^/  /' >&2
+	exit 1
+	;;
+esac
+echo "portsall: the committed file carries $nports ports and the wan on $WAN"
 
 # The restart goes over the console and detached, because the board's LAN
 # address leaves this PC's segment while it runs and the session it arrived

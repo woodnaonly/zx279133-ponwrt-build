@@ -43,12 +43,23 @@ $SSH "root@$WAN" 'chmod 755 /tmp/S27labclient; sh -n /tmp/S27labclient && echo "
 
 echo
 echo "=== waiting for the client to take a lease from the board ==="
+# The window is long on purpose, and it says how long it waited.
+#
+# Measured 2026-10-26 15:51-15:54 (board clock), in the LAN-only default with a
+# veth client on br-lan: the board's dnsmasq answered the client - the log has the
+# whole exchange, `DHCPDISCOVER(br-lan) ee:8e:dc:6d:ad:0f` through `DHCPACK ...
+# 192.168.9.126` - and the namespace then held `192.168.9.126/24` with
+# `default via 192.168.9.1` and pinged the board 2/2, but the ACK landed *after*
+# the 40 x 3 s window this loop used to allow, so the round reported "the client
+# took no lease" about a client that had, in fact, taken one.  The board's DHCP
+# server was not the failure and must not be written up as if it were.
 i=0
-while [ "$i" -lt 40 ]; do
+while [ "$i" -lt 100 ]; do
 	i=$((i + 1))
 	status=$($SSH "root@$WAN" 'cat /tmp/labclient.status 2>/dev/null' 2>/dev/null || true)
 	case "$status" in
 	*lease:*192.168.9.*)
+		echo "clientrun: lease after $((i * 3)) s"
 		break
 		;;
 	esac

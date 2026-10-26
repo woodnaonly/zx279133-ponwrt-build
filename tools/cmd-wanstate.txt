@@ -1,8 +1,11 @@
-echo "--- the address on the wan port"
-ip -4 addr show lan2 | grep inet
+echo "--- the wan's own name and address"
+W=$(uci -q get network.wan.device); echo "wan=$W"
+ip -4 addr show "$W" 2>&1 | grep inet
 echo "--- the default route"
 ip route show default
 echo "--- the masquerade rule"
 nft list table ip nat 2>&1 | head -8
+echo "--- what the lan bridge holds"
+uci -q get "network.@device[0].ports"
 echo "--- uptime"
 cat /proc/uptime

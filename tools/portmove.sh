@@ -74,6 +74,26 @@ export MSYS_NO_PATHCONV=1
 
 MODE=${1:-move}
 WAN_PORT=${2:-lan2}
+# Refuse the two names that would make this script destroy the LAN instead of
+# borrowing a jack from it.  `lan-cpu0` is the switch's CPU port: the bridge loses
+# it, every jack stops reaching the router, and the `uci commit` below makes that
+# survive the next power cut - so the board comes back with no LAN at all and no
+# ssh, from a config that looks perfectly reasonable.  `eth0` is not in the bridge
+# to begin with (it is the default wan), so "moving" the wan there changes nothing
+# while reporting success.
+case "$WAN_PORT" in
+lan1|lan2|lan3|lan4) : ;;
+lan-cpu0)
+	echo "portmove: lan-cpu0 is the DSA CPU port, not a jack that can be the wan." >&2
+	echo "portmove: it stays in the bridge on every round, or no jack reaches the" >&2
+	echo "portmove: router at all - and the commit would keep it that way." >&2
+	exit 2
+	;;
+*)
+	echo "portmove: the wan must be one of lan1 lan2 lan3 lan4, not '$WAN_PORT'" >&2
+	exit 2
+	;;
+esac
 
 # The board over ssh, with the source address pinned: this PC has a static
 # neighbour entry for 192.168.9.1 on the WLAN adapter, so an unpinned packet
@@ -208,9 +228,29 @@ move)
 	esac
 	set_ports "$want"
 	set_wan "$WAN_PORT"
-	{
-		echo 'uci commit network'
-	} | $SSH sh -s 2>&1 | tail -2
+	# The commit is proven from /etc/config/network, not from `uci get`.  Both
+	# read-backs above run *before* it, and a `uci` invocation merges the staged
+	# delta with the file - so `uci get` after a commit that failed (a read-only
+	# mount, a full jffs2) still answers with the new value while the board comes
+	# back after the next power cut with the old one.  That is the failure this
+	# script's own header was written about, and it was invisible.
+	committed=$(
+		{
+			echo 'uci commit network'
+			echo "grep -a -A3 \"interface .wan.\" /etc/config/network | tr -d '\\r'"
+		} | $SSH sh -s 2>&1
+	)
+	case "$committed" in
+	*"device '$WAN_PORT'"*) : ;;
+	*)
+		echo "portmove: /etc/config/network does not carry the wan on $WAN_PORT" >&2
+		echo "portmove: the running config says one thing and the flash another -" >&2
+		echo "portmove: the next power cut puts the board back, mid-round" >&2
+		printf '%s\n' "$committed" | tail -5 >&2
+		exit 1
+		;;
+	esac
+	echo "the wan in the committed file is $WAN_PORT"
 	# The network is restarted, because a changed config is not a changed
 	# network: netifd reads the file when it is told to, and until then the
 	# old bridge is still the bridge and the wan interface is still down.

@@ -203,13 +203,20 @@ echo
 sh natevidence.sh "$WAN" 2>&1
 
 say "7. putting everything back"
+# RESTORED means *attempted*, not succeeded.  With it set after the call, any
+# non-zero from the restore made `set -e` leave the script, the EXIT trap saw 0,
+# and the whole restore ran a second time - which reported a board that "may still
+# be in wan mode" while the first pass had in fact already put the default back
+# (measured 2026-10-26 16:2x: the port list and `wan=eth0` were right on the board before
+# the replay started).  The failure is still the script's status: `set -e` leaves
+# the exit code of the restore, and the trap only adds the sharing teardown.
+RESTORED=1
 # The sharing is still on here on purpose: the board's wan address is the one
 # the restore talks to, and that address only exists while the sharing holds
 # 192.168.137.1.  No `| tail` either - the restore's own verdict (did the
 # port really go back, proven by reading the bridge over the console) has to
 # reach this script's exit status.
 sh restore.sh "$WAN"
-RESTORED=1
 if command -v pwsh >/dev/null 2>&1; then
 	pwsh -NoProfile -File "$UPSTREAM" -Mode off 2>&1 | tail -4
 else

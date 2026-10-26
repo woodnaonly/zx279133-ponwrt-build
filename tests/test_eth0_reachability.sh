@@ -139,16 +139,28 @@ grep -q '9132' "$DTS" && ok "and the reason (the 9132) is still written down" \
 	|| note "the 9132 explanation is gone"
 
 echo
-echo "=== 5. the management address is on eth0, and says so ==="
-grep -q 'ucidef_set_interface "lan" device "eth0"' "$NET" \
-	&& ok "SK-D840N puts lan on eth0" || bad "the SK-D840N case no longer names eth0"
+echo "=== 5. eth0's two roles, and the address it carries ==="
+# This section used to assert `ucidef_set_interface "lan" device "eth0"` - true
+# only while the 9132 had no mainline driver and eth0 was the one netdev that
+# could carry the management address.  eth0 is now the wan slot, and the lan
+# fallback, and a literal grep for the old line is a stale claim rather than a
+# check (it would also fail every future edit that rewraps the line).
+grep -q 'ucidef_set_interface "wan" device "eth0"' "$NET" \
+	&& ok "eth0 is the wan slot, so no UNI jack is reserved by default" \
+	|| bad "the wan is no longer on eth0 - some jack has been taken back"
+grep -q 'lan_dev="eth0"' "$NET" \
+	&& ok "and it is still the last-resort lan, so a board whose lane never came up has an address" \
+	|| bad "eth0 is no longer the lan fallback"
 grep -q 'ipaddr "192.168.9.1"' "$NET" && ok "at 192.168.9.1" || bad "the address is no longer 192.168.9.1"
 grep -q 'ucidef_set_interfaces_lan_wan "lan1 lan2 lan3 lan4" "eth0"' "$NET" \
 	&& ok "the sr1010 case is preserved verbatim (lan1-4, wan eth0)" \
 	|| bad "the sr1010 case was changed"
-grep -q 'no mainline equivalent' "$NET" || grep -q 'has no mainline driver' "$NET" \
-	&& ok "the file still explains why eth1..eth3 are not named" \
-	|| note "the explanation about eth1..eth3 is gone"
+# The default itself, in the words the owner gave, is what the case-E check in
+# test_net_config_reach.sh proves by running the script; here it is enough that the
+# file still says out loud why nothing is carved out.
+grep -q '默认都是 lan 口' "$NET" \
+	&& ok "the file records the LAN-only default and who set it" \
+	|| note "the reason the wan sits on eth0 is no longer written in the file"
 
 echo
 echo "=== 6. the CI gate reads the merged .config, not the edited file ==="
