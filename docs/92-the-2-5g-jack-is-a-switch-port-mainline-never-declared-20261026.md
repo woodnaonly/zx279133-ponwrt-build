@@ -369,3 +369,58 @@ SerDes/XPCS 状态。判决测量是 run 189 的 `m45`：把 §12.2 那十个已
   `lan-cpu0` 一旦开始计数，方向被现场证明，再写成代码。
 
 `tools/lanerate.sh` 的价值就在第二段：任何「计数器随流量涨」的结论，必须先证明它在 PC 静默时不涨。
+
+## 14. 23:09 窗口：第一条**正向对照** —— 通流的那次开机里，计数只涨在 `0x19140000` 窗口
+
+`tools/ubmacrate.sh` 在 23:09:08 抢到 U-Boot（23:08 那次断电带来的窗口），同一个 boot 里
+先 ping 通、再打 4 次 ping、再读一次同一批字。ping 的判决行每次都是 `host 192.168.9.25 is alive`，
+原厂 CLI 每次还顺手打出自己的一条映射：
+
+```
+phy_id:0x5;  port:0x4;
+test:cur 0 phy sereds mode : 0x6, last mode0 : 0x6, last mode1 : 0xc
+```
+
+量到的（`staging/ctl/ubmacrate.txt`，`md <addr> 8` 的第一行）：
+
+| 字 | PRE | POST（5 个 ping 之后） | 说明 |
+|---|---|---|---|
+| `0x19142400` | `00000003` | `0000000d` | **+10**，XMAC0 窗口 |
+| `0x19142070` | `00000002` | `0000000b` | **+9**，XMAC0 窗口（zx279133.h:878 命名它为 TX_FRAMES） |
+| `0x19182400` | `00000000` | `00000000` | 0，XMAC1 窗口 |
+| `0x19182070` | `00000000` | `00000000` | 0，XMAC1 窗口 |
+| `0x19140000` | `60010000` | `60010000` | 控制字不动（bit0 = 0） |
+| `0x19180000` | `00000000` | `00000000` | 整个窗口在通流的开机里是**全 0** |
+
+**推出的**：丝印 LAN1 这条线在芯片里的 MAC 是 `0x19140000` 那一块。这不是反汇编猜的，是**一条被证明通着的
+线**把它自己的计数指出来：`0x19180000` 窗口在 U-Boot 里连控制字都是 0，而 mainline 的 eth0 恰恰只驱动
+那一块（`zx279133-mac.c:31,413,447` 只用 `ZX279133_XMAC1_BASE`，DTS 又给它 `pcs-handle = <&xpcs1>`，
+`xpcs1` 在 SoC 的 dtsi 里挂的是 PON_SERDES_PCLK）。§9 那句「所有证据都说 eth0 在驱动一条 U-Boot 根本不用的
+lane」到这里第一次有了正向证据，而不只是两份状态表的差值。
+
+**我的仪表又错了一次，记下来**：脚本末尾的 verdict 段用 `cut -d' ' -f3-` 比较 PRE/POST，而 `PRE ` 是两个空格、
+`POST ` 是一个，字段对不齐 ⇒ 六行**全部**打印 `MOVED`，包括那两行本来就全 0 的。表格是对的，verdict 行是假的。
+这正是 docs 里已经写过的那类「只会打印通过的门」；`tools/ublanewords.sh` 改成了按地址前缀取单字、用 `awk` 定点切。
+
+**还没定的**：+10 与 +9 谁收谁发。一个 ping 是两个方向（board 发 ARP+request、PC 回 ARP+reply），
+所以这两个数只能证明「这俩字跟着这条线动」，不能证明哪个是收。`tools/ublanewords.sh` 用**只有 PC 发、
+板子一声不出**的那一段来定：先把板子 U-Boot 的 MAC 钉进 PC 的 ARP 表，再从 PC 打 20 个 ping，
+U-Boot 坐在提示符上不回任何东西 —— 这时涨的那个字就是收计数。同一段顺带把四个 SMAC 窗口（`0x1904/08/0c/10`
++0x2400/+0x2070）也一起读，因为原厂 CLI 把这个 PHY 报成 `port:0x4`，SMAC3 没有被排除。
+
+**今晚第一条能变成补丁的机制**（从已有日志里挖出来的，不用新窗口）：mainline 自己 23:09 之后那次开机打的字——
+
+```
+lane pre-serdes: XPCS0 status=0x2c03 link=down XMAC link=0x0001
+lane pre-serdes: XMAC0 tx=0x60010000 rx=0x3e8000c6 frame=0x80000001 mode=0x00000000 duplex=0x00000100 misc=0x00002000
+Uni SerDes 1G inherited: mode 0x101 already, image differs in 28/49 word(s), status 0xc87fbb83/0x1000706
+SOPC mac 0 ready=0x00000000 send=0x00000001
+```
+
+`pre-serdes` 就是「引导程序交下来的原状」（`switch.c` 在动它之前读的）。可 `zx279133-switch.c:2059` 的
+「引导程序把 PCS 链路留着了，继承它」分支要求 `(status & 0x3800) == 0x3800`，而 `0x2c03` 缺 bit11、bit12
+⇒ **这个分支在本板上永远走不到**，于是每次开机都会走另一条：`xpcs_sgmii()` + `xpcs_bypass(true)` +
+`xmac_configure(do_reset=true)`（:2068-2089）——把引导程序**已经调通**的那条 lane 重新编程一遍。
+0x3800 这个掩码是从本仓库的 RTL8372N 驱动抄来的（:2104 的注释自己这么说），它是不是这颗芯片这条 lane
+的可用签名，从来没人对着一条通着的线验过。`md 0x19000090` 在通流的 U-Boot 里读到的值就是这一句的判决：
+如果它也读 `0x2c03`，那 `link=down` 是 mainline 的**误读**，而这次误读正是它去覆盖引导程序配置的理由。
