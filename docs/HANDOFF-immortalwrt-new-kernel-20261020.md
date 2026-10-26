@@ -2340,3 +2340,65 @@ run 189 已于 23:29 发布、CI 空闲，但推 = dispatch，docs-only 会白�
 **旁证一条（owner 那个默认口径）**：22:48 那次真断电之后板子从 flash 起进的就是新默认，
 串口日志里 `br-lan: port 1..4(lan1..lan4)` + `port 5(lan-cpu0)`、`sk-nat: masquerade installed on eth0`
 ——四个丝印 LAN 口全在桥里、`wan` 指向 `eth0`，经一次真实断电仍然成立。
+
+### 10.14 LAN1：把「继承就好」划掉，把仪表换成 PC 自己的网卡计数（2026-10-27 00:49）
+
+目标原话仍是「板子插在智能开关上面 设定20分钟通电，20秒钟断电循环，要求你持续跟进，网线插在
+lan1 2.5g 口 并调通」。owner 22:xx 定的「先不动线，只等 189 的读数」仍然有效，线在 **LAN1**。
+
+**这一节只有三件事是新的，其余都在 docs/92 §14–§22。**
+
+1. **`m45` 把 PHY 侧彻底关掉了**（run 189，00:04 量到）：mainline 下十个 CL45 字与通流 U-Boot 的
+   快照逐字相同（含 `1e.758d=801E`），`tools/phyfix.sh` 无事可做。附带一条永久有效的旁注：
+   **这颗 PHY 的 `0.0001` BMSR 在通流的开机里也读 `0000`**，谁都不要拿 C22 bit2 当链路判据。
+2. **原厂引导程序是"会话时"才配 XMAC0 的**（docs/92 §22，纯离线，`grep|sort|uniq -c` 数整晚 323 趟
+   mainline 开机）：
+   - **311 趟正常冷启动**：`XPCS0 status=0x380b`（掩码 `0x3800` **成立 → 走继承**）、`XMAC link=0`、
+     XMAC0 `tx/rx/frame` **全 0**；
+   - **12 趟我让 U-Boot 跑过 ping 会话的**：`0x2c03`（掩码不成立 → 走重编）、`XMAC link=1`、
+     配方齐全 `tx=60010000 rx=3e8000c6 frame=80000001 misc=2000`。
+   两簇完全反相关 ⇒ **用户正常上电时无可继承**，所以 §10.13 末尾"改继承判据 = 一处"这个补丁方向
+   **划掉**（而且继承分支 `switch.c:2064` 本来也调 `xmac_configure(..., true)`）。真正没人量过的是
+   **那次会话除了这四个字还写了什么**。
+3. **mainline 在一条通着的 lane 上动的是五个字，不是四个**：四个 MAC 位之外还有 PCS vend2
+   `AN_CTRL 0x0005 → 0x0015`（bit4）；`DIG_CTRL1/BMCR/pcs BMCR` 与 `XPCS0 status` 它都没改。
+   `tools/xmacrx.sh` 只覆盖前四个，所以 AN_CTRL 是**唯一没二分过的那一位**。
+
+**仪表这条要重点记住，因为它把前面几轮的"null"重新定价了。**
+`tools/liningress.sh` 读的原厂入口计数在 mainline 下**不是到达仪表**：`nppt+0x20204/0x20210` 在八个
+窗口里都以 `0.32~0.35 字/秒`匀速增长，对「PC 的 40 帧单边 burst」和「板子 10 次 ping」都没有台阶，
+`0x200b8`（长度 0 丢弃）恒 0——docs/65 §5 的形态没复现。最合理的解释是它们数的是**CPU 交给转发器、
+然后死在芯片里**的帧（默认 `wan.device=eth0` 上 udhcpc 每几秒一发，而 PC 侧一个字节都没收到）。
+换成 PC 自己的网卡计数之后，同一趟立刻得到两条硬证据（`tools/pcrxwatch.ps1`，00:39）：
+
+- mainline 下 ifIndex 19 的 **`rx_delta` 连续 80 s 为 0**（通流 U-Boot 里每个 ping +194）⇒ 这条 lane
+  在 mainline 下**双向都不通**，不只是"收不到"；
+- **`tx_delta` 在 burst 那 2 s 打出 +1962 的尖峰**（基线 84 B/2 s）⇒ 激励**确实上过线**，
+  这正是 §19 那轮缺的正控制。
+
+**两个假阴性教训（同一类，已写进 tools 注释）**：debugfs 打偏移用 `%06x`（`reg 0x20204` → 日志里
+是 `+0x020204`），U-Boot `md` 打行首用 `%08x`（`md 0x19028e0` → `019028e0:`）。按短形式 grep 会**静默
+返回空**，与"这个字不动"一模一样。`liningress.sh`/`linrx.sh`/`ubingress.sh` 都已补零。另有两处自伤：
+`xmacrx.sh` 的 `readone` 漏传参（四行 `WRITE-DID-NOT-TAKE` 是工具的错，写入其实四次回读都在）；
+`ubingress.sh` 第一轮的守卫查了 `$3`（名字）而不是 `$4`（值），**把一份完整的 12 字捕获判成
+BAD-PARSE 并交了回板子，白烧一个约 20 分钟窗口**——守卫已在已知好数据上重放（10 of 12）。
+
+**现在排在路上的两步**（`staging/ctl/chain5.log`，串行，同一时刻只有一个 sercmd 主人）：
+① `tools/ubingress.sh`（已上膛，等 ~01:01 那个沿）——顺序改成 `pre`（刚进提示符，实测全 0）→ 板子
+自己 ping 两次（**既是拉起动作也是通流证明**，日志必须有 `is alive`）→ `pinged` → PC 单边 burst →
+`rxburst` → 再 ping 一次 → `after`；每个字给两个数：`bring-up = pinged-pre`（引导程序为打开这条
+lane 写了它吗——mainline 缺的就是这份配方）与 `rx-only = rxburst-pinged`（一条**已证明通着**的 lane
+上到底有没有任何东西数网线进来的帧）。
+② 交回板子进 Linux 后 `tools/lineth0ping.sh`——给 `eth0` 挂一个只有它有的地址（默认里 `wan=eth0` 无
+lease，`192.168.9.1` 属于 br-lan，所以"能被 ARP 到"本身就意味着这条 lane 交付过帧），PC 绑源地址
+ping 它，读 `eth0 rx/tx_packets` 差与 `Get-NetNeighbor` 状态，三档判决：有回=双向通；无回但 rx 动=
+收活发死；rx 也 0=MAC 从没往上交付过。
+
+**补丁范围（等①②的读数决定先做哪个，都不动 flash，先 RAM）**：
+(a) 让 mainline **复刻 U-Boot 会话的拉起动作**——`xmac_program()` 的四个值改成
+`tx=60010000 rx=3e8000c6 frame=80000001`（misc 不加 bit9），必要时补 `AN_CTRL` 那一位；
+(b) 把 eth0 挪到 XMAC0 = `mac.c` 三处基址 + 复位位（现脉冲 `BIT(11)`，`switch.c:120` 说 XMAC0 是
+`BIT(10)`）+ DTS `pcs-handle` + 让 `switch.c` 不再占 XPCS0/XMAC0；
+(c) 在一条**通着的** lane 上把 8226 声明成交换机的口（§11 的否证只在被 mainline 重编过的 lane 上做
+过，条件不足）。压着的 10 个 docs 提交（`19412c7 d6a84a4 be8b6c1 50a0d9c a8797a1 ed5c13d 528ece6
+a79d9e9 63d1f25 47800d5`）与第一个补丁提交**一起推**——推 = dispatch，docs-only 会白占构建机 80 分钟。
