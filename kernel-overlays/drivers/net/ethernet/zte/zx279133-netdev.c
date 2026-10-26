@@ -318,7 +318,8 @@ static bool zx279133_tx_csum_supported(struct sk_buff *skb)
 
 static netdev_tx_t zx279133_start_xmit_common(struct sk_buff *skb,
 					      struct net_device *hw_ndev,
-					      struct net_device *ndev)
+					      struct net_device *ndev,
+					      u8 lan_out_port)
 {
 	struct zx279133_eth *eth = netdev_priv(hw_ndev);
 	unsigned int queue = skb_get_queue_mapping(skb);
@@ -364,7 +365,14 @@ static netdev_tx_t zx279133_start_xmit_common(struct sk_buff *skb,
 		zx279133_stats_tx_dropped(eth, ndev);
 		return NETDEV_TX_OK;
 	}
-	tx_port = ndev != hw_ndev ? eth->lan_tx_port : zx279133_tx_port;
+	/* The tag the DSA tagger left on a LAN frame names the jack that frame
+	 * is for.  eth->lan_tx_port is only what a frame with no tag gets, and
+	 * what the debugfs "txp" knob turns.
+	 */
+	if (ndev == hw_ndev)
+		tx_port = zx279133_tx_port;
+	else
+		tx_port = lan_out_port ? lan_out_port : eth->lan_tx_port;
 
 	dma = dma_map_single(eth->dev, skb->data, skb->len, DMA_TO_DEVICE);
 	if (dma_mapping_error(eth->dev, dma))
@@ -447,7 +455,10 @@ drop:
 static netdev_tx_t zx279133_start_xmit(struct sk_buff *skb,
 				       struct net_device *ndev)
 {
-	return zx279133_start_xmit_common(skb, ndev, ndev);
+	/* Not a LAN frame, so no jack is named and the LAN output port does
+	 * not apply to it.
+	 */
+	return zx279133_start_xmit_common(skb, ndev, ndev, 0);
 }
 
 int zx279133_xdp_enqueue(struct zx279133_eth *eth, struct xdp_frame *xdpf)
@@ -1776,15 +1787,20 @@ zx279133_lan_netdev_setup_tc(struct zx279133_lan_service *service,
  * the jack and the client on the other end would drop the frame as an
  * unknown VLAN.
  *
- * The tag therefore comes off again here, on the way to the wire.  The 9132
- * picks the egress port by MAC - it learns the client's address from the
- * frames the client sends - so the tag is not needed to route the frame, and
- * the frame the client sees is the frame it sent.
+ * The tag therefore comes off again here, on the way to the wire.  The frame
+ * the client sees is the frame it sent.
+ *
+ * The VID that comes off is not thrown away: it names the jack this frame is
+ * for, and the IDM TX descriptor is told the same thing, so a frame leaves
+ * through the jack DSA chose instead of through whatever the last "txp" wrote
+ * - which is the difference between one working jack and four.
  */
-static void zx279133_lan_strip_transport_vlan(struct sk_buff *skb)
+static void zx279133_lan_strip_transport_vlan(struct sk_buff *skb, u8 *out_port)
 {
 	u8 *data;
 	u16 vid;
+
+	*out_port = 0;
 
 	/* The frame has to be in one piece to have a hole taken out of it. */
 	if (skb->data_len && skb_linearize(skb))
@@ -1801,6 +1817,15 @@ static void zx279133_lan_strip_transport_vlan(struct sk_buff *skb)
 	if (vid < ZX279133_LAN_TRANSPORT_VID_MIN ||
 	    vid > ZX279133_LAN_TRANSPORT_VID_MAX)
 		return;
+
+	/* The tagger writes BASE + dp->index and the four UNI jacks are DSA
+	 * ports 4..7, so the VID the tag carries is the jack's PPU number
+	 * offset by the same amount: 59 is smac_0, 62 is smac_3.  Measured on
+	 * this bench: with the cable in the jack the driver calls lan4, only
+	 * "txp 4" answers, and 1, 2 and 3 lose 4/4 in both directions.
+	 */
+	*out_port = vid - (ZX279133_LAN_TRANSPORT_VID_MIN -
+			   ZX279133_9132_UNI_PPU_FIRST);
 
 	/*
 	 * The tag is four bytes at offset 2 * ETH_ALEN: the TPID, the TCI
@@ -1840,6 +1865,7 @@ zx279133_lan_netdev_xmit(struct zx279133_lan_service *service,
 			 struct sk_buff *skb, struct net_device *ndev)
 {
 	struct zx279133_eth *eth = zx279133_lan_service_to_eth(service);
+	u8 out_port = 0;
 	netdev_tx_t ret;
 
 	if (!(READ_ONCE(eth->datapath_users) & ZX279133_DATAPATH_USER_LAN) ||
@@ -1847,10 +1873,10 @@ zx279133_lan_netdev_xmit(struct zx279133_lan_service *service,
 	    !READ_ONCE(eth->hardware_prepared))
 		return NETDEV_TX_BUSY;
 
-	zx279133_lan_strip_transport_vlan(skb);
+	zx279133_lan_strip_transport_vlan(skb, &out_port);
 
 	skb->dev = eth->ndev;
-	ret = zx279133_start_xmit_common(skb, eth->ndev, ndev);
+	ret = zx279133_start_xmit_common(skb, eth->ndev, ndev, out_port);
 	if (ret == NETDEV_TX_BUSY)
 		skb->dev = ndev;
 

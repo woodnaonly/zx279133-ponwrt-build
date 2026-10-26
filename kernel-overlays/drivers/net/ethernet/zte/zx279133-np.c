@@ -1525,11 +1525,15 @@ static ssize_t zx279133_9132_write(struct file *file, const char __user *ubuf,
 	 * way a frame leaves the board, both of them settled by experiment
 	 * rather than by reading:
 	 *
-	 *	"txp 1"	the IDM TX descriptor's output port for the LAN
-	 *			path.  The descriptor's byte 0x0a holds it in
-	 *			bits 0..5; the vendor writes 1 (smac_0) and
-	 *			never 5, this driver writes 5 (xmac_0, the
-	 *			9132's own CPU port).
+	 *	"txp 1"	the output port the IDM TX descriptor names for
+	 *			a LAN frame that carries no transport VID.  The
+	 *			descriptor's byte 0x0a holds it in bits 0..5 and
+	 *			its "output port valid" flag in bit 6; the value
+	 *			is the jack's chip port, 1..4, the same numbering
+	 *			the vendor's LAN path writes.  Tagged frames name
+	 *			their own jack now, so this is the fallback -
+	 *			which is why the jack walk still works: turn it
+	 *			and the frames with no tag follow.
 	 *	"usv 1"	give the four UNI ports the untag SVID their
 	 *			transport VID asks for, so the tag the DSA
 	 *			tagger puts on the conduit is taken off

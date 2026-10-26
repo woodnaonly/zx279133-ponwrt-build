@@ -1011,15 +1011,19 @@ struct zx279133_eth {
 	 */
 	unsigned long lan_wan_vports;
 	/*
-	 * The port id the IDM TX descriptor names for the LAN path.
+	 * The port id the IDM TX descriptor names for a LAN frame that carries
+	 * no transport VID, and the value the debugfs "txp" command turns.
 	 *
 	 * The descriptor's byte 0x0a holds the output port in bits 0..5 and the
 	 * "output port valid" flag in bit 6 (the vendor's own dump_desc_tx()
 	 * names both).  The vendor's LAN path writes the *target UNI jack's*
 	 * chip port there - 1..4 - and never 5, which is xmac_0, a 10G SerDes
 	 * MAC that has no peer on this board and that the vendor never
-	 * programs.  The value starts at ZX279133_LAN_TX_PORT and the debugfs
-	 * "txp" command can still turn it while the per-jack case is open.
+	 * programs.  A frame the DSA tagger has tagged does not come here: it
+	 * names its own jack, and the tag is what zx279133_lan_netdev_xmit()
+	 * reads.  This field is only the fallback, and measured on this bench
+	 * as the single value that decided all four jacks while it was the only
+	 * one there was: with it compiled as 2, only one jack answered.
 	 */
 	u8 lan_tx_port;
 	/*
