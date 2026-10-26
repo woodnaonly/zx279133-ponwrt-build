@@ -8,6 +8,7 @@
 #include <linux/if_vlan.h>
 #include <linux/io.h>
 #include <linux/ip.h>
+#include <linux/moduleparam.h>
 #include <linux/netdevice.h>
 #include <linux/phy.h>
 #include <linux/phylink.h>
@@ -22,6 +23,15 @@
 
 #include "zx279133.h"
 #include "zx279133-lan.h"
+
+/* The port an NPPT-side frame is told to leave by, and the port an incoming
+ * frame has to name to be counted on that side. Kept writable so one boot can
+ * sweep the candidates the vendor's two numbering spaces disagree about; see
+ * zx279133.h.
+ */
+u16 zx279133_tx_port = 4;
+module_param(zx279133_tx_port, ushort, 0644);
+MODULE_PARM_DESC(zx279133_tx_port, "IDM TX output port for frames sent on the NPPT device, and the port an RX frame must name to be counted there");
 
 static int zx279133_shared_idm_prepare(struct zx279133_eth *eth)
 {

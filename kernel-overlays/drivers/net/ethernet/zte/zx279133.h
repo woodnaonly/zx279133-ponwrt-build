@@ -22,7 +22,50 @@
 
 /* Validated WAN/LAN hardware constants. */
 #define ZX279133_IDM_CPU_TX_FIRST	1
-#define zx279133_tx_port		6
+/*
+ * The port the NPPT-side transmit descriptors name.
+ *
+ * It was `#define ... 6` and nothing could change it: the debugfs "txp" verb
+ * writes eth->lan_tx_port, which only the LAN branch reads (zx279133-netdev.c
+ * picks zx279133_tx_port for the NPPT device), so 6 was compiled into every
+ * frame on that side for the whole history of this port.
+ *
+ * Two things say the number is wrong for this board's 2.5G jack, and one says
+ * the sweep has to be repeated:
+ *
+ *  - Measured 2026-10-26 18:01 with the cable in panel LAN1: vendor U-Boot
+ *    pings this PC through that jack - "current idm tx outport is 4", "host
+ *    192.168.9.25 is alive", its own RX ring 0xb0028000 full of received
+ *    frames - while mainline, on the same wire, leaves the PC's adapter at
+ *    1 Gbps/Connected (so the PHY's copper side has negotiated) and receiving
+ *    nothing, with 192.168.9.1 Unreachable in the PC's own ARP table. The lane
+ *    works; what is in this field does not.
+ *  - The vendor's own numbering puts the RTL8226 at switch port 4 / chip port 5
+ *    (docs/15, and np_133.ko's np_user_table_init() calls
+ *    port_attr_def_src_is_extend_port_flag_set(5, 1) for its xmac0_to_extend
+ *    case). So the working value is 4 or 5, in whichever of the two spaces the
+ *    descriptor counts, and 6 - which is this file's own legend for XMAC1, a
+ *    MAC with no peer here - is not either of them.
+ *  - The sweep was already run once, on 2026-10-19 (run 69, docs/07 补八十九),
+ *    and all eight values answered "0 received". That negative does not bind:
+ *    the same round recorded `xmac_tx_frames: 0` and `idm_tx_done: 5` against
+ *    71 submitted frames, so the hardware had taken no descriptor at all and no
+ *    port value could have produced a frame on the wire. With that upstream
+ *    blocker since fixed, today's read of the same counters on this jack is
+ *    `xmac_tx_frames 744 / xmac_tx_good_frames 757 / idm_tx_done 8497`: frames
+ *    really do leave, and really do not arrive.
+ *
+ * So it is a parameter, 0644, and one kit sweeps every candidate:
+ *
+ *	echo 5 > /sys/module/zx279133/parameters/zx279133_tx_port
+ *
+ * The default is the value the traffic-proven bootloader carries. The same
+ * variable names the port an *incoming* frame has to match for the NPPT side to
+ * count it (zx279133-idm.c:372), which is why it is one variable and not two:
+ * a frame that arrives with a different number in its word 1 is silently not
+ * accounted, and that is the other half of the same wrong number.
+ */
+extern u16 zx279133_tx_port;
 /*
  * The chip port the LAN path's transmit descriptors name.
  *
