@@ -1061,3 +1061,49 @@ mainline 的 `eth0` 把环挂在 XMAC1 上（`mac.c:31/413/447` + `XMAC1_SOPC_SE
 下一个读数因此是 U-Boot 里那条通着的 lane 的 `idm_tx_debug` / `idm_rx_debug` 描述符（原厂 CLI 自己会打印
 在用的描述符，见 docs/19/HANDOFF 的 U-Boot CLI 一节），与 mainline 给 `eth0` 编出来的描述符逐字段比。
 **在此之前不出包**：现在推一个构建回答不了任何新问题，只是占住构建机。
+
+## 30. 01:42 窗口：**原厂把描述符自己打印出来了——这把尺存在，而且它同时给出收与发两个方向的号码**
+
+`tools/ubdesc.sh` 01:42:41 抓到 U-Boot，`idm_tx_debug 1` / `idm_rx_debug 1` 两个 CLI **都生效**
+（日志里没有 `Unknown command`），然后板子 ping 三次（`is alive` 有）、PC 单边发 40 帧广播
+（`PC handed 680 bytes`）。落盘 `staging/ctl/ubdesc.txt`，123 行，统计如下（`python3` 数的）：
+
+	接收描述符打印 = 39 条
+	source_port 直方图 = {5: 39}        <-- 全部来自 5 号
+	output     直方图 = {15: 39}       <-- 全部上送 CPU(15)
+	ptk_len    = 183×8, 169×8, 60×5, 70×4, 90×4, 179×3, 110×3, 580, 600, 184, 170
+	环槽位      = b0028540 .. b0028a00，步进 0x20（39 个不同槽位，单调递增）
+	缓冲地址    = b00ffa00 .. b0328000，每条后面跟 `buff address : <addr+0x40>, len : <ptk_len>`
+
+	发送描述符打印 = 1 条（就是板子那几次 ping 里的一条）
+	tx desc 0xb0008100: address 0xb0328000, addr_type 0, ptk_len 42, offset 128,
+	  checksum_en 0, inport 15, ipv4_ipv6_flag 0, tcp_udp_flag 0, omci_flag 0,
+	  l3_offset 0, l4_offset 0, output_port_valid 1, **output_port 4**
+
+**四件事，按硬度排序。**
+
+1. **`idm_rx_debug` 就是那把找了整晚的尺。** 40 帧广播里有 **39 帧**留下了描述符——今晚所有芯片
+   计数（XMAC 统计、RED、USCH、CPU-DMA）在这一激励下全部不动（§21/§26），而原厂 CLI 直接数得出
+   每一帧。**以后任何"收到了/没收到"的断言，只准引用这个打印，不准再引用那些计数。**
+2. **这条 lane 的 SPA 号是 5，且原厂对它的收方向默认动作是"上送 CPU"（output 15）。** 这是从芯片
+   自己的字段里读出来的，不是我们推算的（§14/§26 的推断到此变成实测）。
+3. **发方向的 ground truth 是 `output_port 4`，不是 5。** CPU 发出的帧（`inport 15`）在原厂手里写
+   的是出口 4。收是 5、发是 4——**这条 lane 在原厂编号里收散发号不同**，这正好解释 §8 那次"扫 0..7
+   没有一个能用"为什么不能算否证（那轮还是用未绑源地址的 ping 做的，见 `ref-sk-d840n-panel-jack-map`），
+   也说明要找的值是**一个具体的 4**，而不是"随便哪个 MAC 基址"。
+4. **mainline 完全不解析这个字段。** `grep source_port|src_port` 在
+   `kernel-overlays/drivers/net/ethernet/zte/` 下**零命中**（只有 `zx279133.h:132` 的一句注释讲
+   TX 描述符的 `inport = 0x0f`）。也就是说：芯片给每一帧标了它是从哪个口进来的，我们的驱动**从来
+   没读过**；同理我们的 TX 描述符里的 output port 是驱动自己算的（`netdev.c:332-385` 的
+   `lan_out_port ? : eth->lan_tx_port`），不是原厂那个 4。
+
+**顺手记一个自己的错**：脚本里那条 `mw.b 0x192800a8 1` 是按"`0x280180` 是 nppt+0x280180 的 CPU-DMA
+计数"推的 IDM 基址，回读 `md.b 0x192800a8 4` = `00 00 00 00` 而打印照样出来 ⇒ **那个基址推错了，
+生效的是 CLI**。下次别再猜地址，`idmcensus2.txt:46460` 里 `idm_tx_debug_set` 写的 `#0xa8` 是**另一个
+IDM 实例**的偏移，不是 nppt+0x280000。
+
+**下一步（明确、可运行期先验）**：`txp` 这个 debugfs token（`np.c:1625`）写的就是
+"IDM TX 描述符里那个 output port"。所以先在现网把 `txp 4` 写进去，再从 PC 经 **LAN1** ping
+`192.168.9.1`：如果开始有回复，那么"LAN1 变成一个能用的 LAN 口"这件事就同时被运行时证明，
+补丁也就是把 4 这个值按口的来源正确地理进去（RX 侧则必须开始解析 `source_port`，把 5 号帧交给
+一个 netdev——§29 只声明了 SPA 表而没有 netdev 认领它，这很可能正是 §29 全 0 的原因）。
