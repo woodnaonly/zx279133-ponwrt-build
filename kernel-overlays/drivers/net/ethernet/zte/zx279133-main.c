@@ -8,6 +8,7 @@
 #include <linux/dma-mapping.h>
 #include <linux/etherdevice.h>
 #include <linux/firmware.h>
+#include <linux/gpio/consumer.h>
 #include <linux/hash.h>
 #include <linux/if_vlan.h>
 #include <linux/io.h>
@@ -15,6 +16,7 @@
 #include <linux/ip.h>
 #include <linux/interrupt.h>
 #include <linux/jiffies.h>
+#include <linux/leds.h>
 #include <linux/mfd/syscon.h>
 #include <linux/mdio.h>
 #include <linux/module.h>
@@ -789,6 +791,31 @@ static void zx279133_rx_mode_work_cancel(void *data)
 	cancel_work_sync(&eth->rx_mode_work);
 }
 
+static void zx279133_pon_led_cancel(void *data)
+{
+	struct zx279133_eth *eth = data;
+
+	cancel_delayed_work_sync(&eth->pon_led_work);
+}
+
+static void zx279133_pon_led_work(struct work_struct *work)
+{
+	struct zx279133_eth *eth =
+		container_of(to_delayed_work(work), struct zx279133_eth,
+			     pon_led_work);
+	int rxsd;
+
+	if (!eth->opsd_gpio || !eth->los_led)
+		return;
+
+	rxsd = gpiod_get_value_cansleep(eth->opsd_gpio);
+	if (rxsd >= 0)
+		led_set_brightness(eth->los_led,
+				   rxsd ? LED_OFF : eth->los_led->max_brightness);
+
+	schedule_delayed_work(&eth->pon_led_work, msecs_to_jiffies(200));
+}
+
 static int zx279133_eth_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
@@ -841,6 +868,7 @@ static int zx279133_eth_probe(struct platform_device *pdev)
 	INIT_DELAYED_WORK(&eth->rx_refill_work,
 			  zx279133_idm_rx_refill_work);
 	INIT_WORK(&eth->rx_mode_work, zx279133_rx_mode_work);
+	INIT_DELAYED_WORK(&eth->pon_led_work, zx279133_pon_led_work);
 	mutex_init(&eth->xmac_lock);
 	mutex_init(&eth->datapath_lock);
 	mutex_init(&eth->np_ind_lock);
@@ -852,6 +880,36 @@ static int zx279133_eth_probe(struct platform_device *pdev)
 		if (!eth->tx[i].slots)
 			return -ENOMEM;
 	}
+
+	/*
+	 * The optical RX signal detect is optional: without it the red LOS
+	 * lamp keeps its fail-safe "on" state.  Both lookups may defer until
+	 * the GPIO controller and the gpio-leds device exist.
+	 */
+	eth->opsd_gpio = devm_gpiod_get_optional(dev, "opsd", GPIOD_IN);
+	if (IS_ERR(eth->opsd_gpio)) {
+		ret = PTR_ERR(eth->opsd_gpio);
+		if (ret == -EPROBE_DEFER)
+			return ret;
+		dev_warn(dev, "no optical RX signal detect GPIO: %d\n", ret);
+		eth->opsd_gpio = NULL;
+	}
+
+	eth->los_led = devm_led_get(dev, "los");
+	if (IS_ERR(eth->los_led)) {
+		ret = PTR_ERR(eth->los_led);
+		if (ret == -EPROBE_DEFER)
+			return ret;
+		dev_warn(dev, "no LOS LED: %d\n", ret);
+		eth->los_led = NULL;
+	}
+
+	ret = devm_add_action_or_reset(dev, zx279133_pon_led_cancel, eth);
+	if (ret)
+		return ret;
+
+	if (eth->opsd_gpio && eth->los_led)
+		schedule_delayed_work(&eth->pon_led_work, 0);
 
 	eth->base = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(eth->base))
@@ -1030,6 +1088,33 @@ static int zx279133_eth_probe(struct platform_device *pdev)
 
 	eth->xpcs = xpcs_create_fwnode(of_fwnode_handle(pcs_np));
 	of_node_put(pcs_np);
+
+	/*
+	 * The LAN lane's PCS, optional: a board whose outerphy hangs off XMAC0
+	 * names it, and zx279133_eth0_xmac=0 needs it to be the PCS of the MAC
+	 * it just moved.  Not fatal when absent - the parameter's default does
+	 * not use it, and every older DT still probes.
+	 */
+	pcs_np = of_parse_phandle(dev->of_node, "zte,lan-pcs-handle", 0);
+	if (pcs_np) {
+		eth->xpcs_lan_mdiodev = fwnode_mdio_find_device(of_fwnode_handle(pcs_np));
+		if (!eth->xpcs_lan_mdiodev) {
+			of_node_put(pcs_np);
+			return dev_err_probe(dev, -EPROBE_DEFER,
+					     "LAN XPCS MDIO device is unavailable\n");
+		}
+		ret = devm_add_action_or_reset(dev, zx279133_mdio_device_put,
+					       eth->xpcs_lan_mdiodev);
+		if (ret) {
+			of_node_put(pcs_np);
+			return ret;
+		}
+		eth->xpcs_lan = xpcs_create_fwnode(of_fwnode_handle(pcs_np));
+		of_node_put(pcs_np);
+		if (IS_ERR(eth->xpcs_lan))
+			return dev_err_probe(dev, PTR_ERR(eth->xpcs_lan),
+					     "failed to create the LAN XPCS\n");
+	}
 	if (IS_ERR(eth->xpcs))
 		return dev_err_probe(dev, PTR_ERR(eth->xpcs),
 				     "failed to create XPCS handle\n");

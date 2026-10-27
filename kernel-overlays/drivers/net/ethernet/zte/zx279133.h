@@ -1208,6 +1208,16 @@ struct zx279133_eth {
 	struct phy *serdes;
 	struct dw_xpcs *xpcs;
 	struct mdio_device *xpcs_mdiodev;
+	/*
+	 * The second PCS on the die: XPCS0, the LAN lane's, from
+	 * "zte,lan-pcs-handle".  eth0's MAC block can be pointed at XMAC0 with
+	 * zx279133_eth0_xmac (mac.c), and a MAC without its own PCS is not the
+	 * same experiment as a MAC with it - docs/92 41 measured the pair half
+	 * done (MAC moved, PCS left on XPCS1) and got zero frames in both
+	 * directions, so this field is what completes that test.
+	 */
+	struct dw_xpcs *xpcs_lan;
+	struct mdio_device *xpcs_lan_mdiodev;
 	struct phylink_config phylink_config;
 	struct phylink *phylink;
 	phy_interface_t host_interface;

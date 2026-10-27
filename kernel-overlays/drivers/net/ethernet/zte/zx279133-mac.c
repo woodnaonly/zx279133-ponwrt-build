@@ -13,6 +13,21 @@
 
 #include "zx279133.h"
 
+/*
+ * Which PCS serves eth0, given the MAC window zx279133_eth0_xmac selected.
+ *
+ * The two have to move together.  docs/92 41 switched only the MAC and got
+ * zero frames in both directions on a lane whose PCS was still the other
+ * lane's; the same boot's +0x90 read a healthy XPCS0, so the PCS side has
+ * to be the one the MAC is on, not whichever one happens to be first in DT.
+ */
+static struct mdio_device *zx279133_xpcs_dev(struct zx279133_eth *eth)
+{
+	if (!zx279133_eth0_xmac)
+		return eth->xpcs_lan_mdiodev;
+	return eth->xpcs_mdiodev;
+}
+
 static struct phylink_pcs *
 zx279133_mac_select_pcs(struct phylink_config *config,
 			phy_interface_t interface)
@@ -24,6 +39,11 @@ zx279133_mac_select_pcs(struct phylink_config *config,
 	    interface != PHY_INTERFACE_MODE_SGMII)
 		return ERR_PTR(-EOPNOTSUPP);
 
+	if (!zx279133_eth0_xmac) {
+		if (!eth->xpcs_lan)
+			return ERR_PTR(-EOPNOTSUPP);
+		return xpcs_to_phylink_pcs(eth->xpcs_lan);
+	}
 	return xpcs_to_phylink_pcs(eth->xpcs);
 }
 
@@ -129,19 +149,31 @@ void zx279133_xmac_set_enabled(struct zx279133_eth *eth, bool enabled)
  */
 static int zx279133_xpcs_read(struct zx279133_eth *eth, int devad, int reg)
 {
-	return mdiodev_c45_read(eth->xpcs_mdiodev, devad, reg);
+	struct mdio_device *xpcs = zx279133_xpcs_dev(eth);
+
+	if (!xpcs)
+		return -ENODEV;
+	return mdiodev_c45_read(xpcs, devad, reg);
 }
 
 static int zx279133_xpcs_write(struct zx279133_eth *eth, int devad, int reg,
 			       u16 val)
 {
-	return mdiodev_c45_write(eth->xpcs_mdiodev, devad, reg, val);
+	struct mdio_device *xpcs = zx279133_xpcs_dev(eth);
+
+	if (!xpcs)
+		return -ENODEV;
+	return mdiodev_c45_write(xpcs, devad, reg, val);
 }
 
 static int zx279133_xpcs_modify(struct zx279133_eth *eth, int devad, int reg,
 				u16 mask, u16 set)
 {
-	return mdiodev_c45_modify(eth->xpcs_mdiodev, devad, reg, mask, set);
+	struct mdio_device *xpcs = zx279133_xpcs_dev(eth);
+
+	if (!xpcs)
+		return -ENODEV;
+	return mdiodev_c45_modify(xpcs, devad, reg, mask, set);
 }
 
 static int zx279133_xpcs_init(struct zx279133_eth *eth)
