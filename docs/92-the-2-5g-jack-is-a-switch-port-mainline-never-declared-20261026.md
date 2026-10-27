@@ -5873,3 +5873,261 @@ RTL8226」一整条 base-X 链；mainline 继承了一半（Uni SerDes），改�
 * 没有改 XPCS0、没有给 XMAC0 挂 PHY —— 这两件是模型 B 的正题，但 §73.3 的
   判据还没出来（run199 的「2.5G jack's lane: frames N」），先做可能白做。
 * 没有把 §70/§71/§73 里那些「模型 A/B 还没定」的措辞改成定论。
+
+
+## 75. 厂商的 1000BASE-X 序列挖出来了，§74 的两条路线作废（2026-10-28 05:28–06:30）
+
+§74 留了三个问号：XPCS0 该继承还是该重写、Uni SerDes 要不要加 1000BASE-X、
+XMAC0 要不要挂 PHY。这一节把三个都答了，答完之后要干的活比 §74 估的少得多。
+
+### 75.1 三个问号的答案
+
+| §74 的问号 | 答案 |
+|---|---|
+| XPCS0 继承还是重写？ | **只能重写，不能继承。** U-Boot 里根本没有 XPCS 的驱动：厂商 DT 的 `xpcs@1a000000` 是 `status = "disabled"`，U-Boot 读 `0x1a000000` 窗口全是 0。 |
+| Uni SerDes 要加 1000BASE-X 吗？ | **不用加。** base-X 是 **XPCS 侧**的模式，Uni SerDes 只当 PMA。 |
+| XMAC0 要挂 PHY 吗？ | **先不挂。** RTL8226 在 U-Boot 阶段就是 link up 的状态（PCS status 0x0069），Linux 只要不碰它就行。 |
+
+### 75.2 「继承」路线作废的证据
+
+2026-10-28 05:32，在板子自己的 U-Boot 提示符上（板子 05:28:06 上电，relay
+用空格打断了 autoboot）：
+
+```
+=> md 0x1a000000 0x8
+1a000000: 00000000 00000000 00000000 00000000
+1a000010: 00000000 00000000 00000000 00000000
+```
+
+⇒ 读得到（不 abort），但**全是 0**。厂商 np_133.ko 里那几个直接映射的偏移
+也一样：
+
+```
+=> md 0x1a7c0000 0x20          <- 厂商的 SR_MII 块
+1a7c0000: 00000000 00000000 00000000 00000000
+```
+
+**⇒ 不是「地址不对」，是「U-Boot 没配过它」** —— 与 DT 里
+`xpcs@1a000000` 是 disabled 一致。**U-Boot 没有 XPCS 的驱动，所以没有
+可继承的状态。** §74 的第 1 步「别再重写 XPCS0，改成继承」不成立。
+
+**⇒ 反过来：XPCS0 必须由 mainline 自己按厂商序列配出来。**
+
+### 75.3 Uni SerDes 不需要 1000BASE-X（§74 第 3 条清单错了）
+
+U-Boot 里 Uni SerDes 的模式表（`help userdes`）只有七个：
+
+```
+init_change [uni][mode], MODE_SGMII 0, MODE_HSGMII 1, MODE_USXGMII_2P5G 2,
+MODE_5GBASE_R 3, MODE_USXGMII_5G 4, MODE_10GBASE_R 5, MODE_USXGMII_10G 6
+```
+
+**没有 1GBASE_X。** 而带 `0x10:ETH_1GBASE_X` 的那张表是 **pserdes**（PON
+SerDes）的，它带 EPON/GPON/XGPON。
+
+**⇒ base-X 是 XPCS 的模式，Uni SerDes 两端都是 1.25 Gbaud，它只做 PMA，
+不关心编码。** §74 第 3 步「给 uni-serdes 驱动加
+`PHY_INTERFACE_MODE_1000BASE_X`」**作废**。
+
+### 75.4 XMAC 侧 mainline 已经和厂商一致
+
+厂商的 `xamc_init_conf_by_speed()`（np_133.ko 0x1a200）写 XMAC 的序列：
+
+```
+[0x140000] = 0x00010000            TX_CTRL
+xmac_set_speed_sel(xmac, speed)
+xmac_set_duplex_mode(xmac, 1)
+[0x140010] = 0x3e8000c6            RX_CTRL
+[0x140020] = 0x80000001            FRAME_CFG
+[0x140280] = 2                     MODE_CFG
+[0x143400] |= 0x200
+```
+
+**⇒ 与 mainline 的 `zx279133_switch_xmac_program()` 逐字相同**（RX_CTRL
+`0x3e8000c6`、FRAME_CFG `0x80000001`、MODE_CFG 2）。
+
+**⇒ §73.3 说「XMAC0 缺一颗 PHY」是对的，但「XMAC 的寄存器也要改」是错的
+—— XMAC 侧一个字都不用动。错的只有 XPCS 那一侧。**
+
+### 75.5 厂商的两个 1G profile 只差一个值（决定性）
+
+np_133.ko 里两个函数结构完全相同（116 字节，大小都一样）：
+
+```
+xpcs_sgmii_mode_conf(xmac, speed, duplex):        // 0x1c874
+        prepare_for_switch_mode(xmac, 3)
+        helper(xmac, speed, duplex, 2)             // <- 第四个参数 = 2
+        lx[xmac] = 3
+
+xpcs_1000base_x_conf(xmac, speed, duplex):        // 0x1c608
+        prepare_for_switch_mode(xmac, 2)
+        helper(xmac, speed, duplex, 0)             // <- 第四个参数 = 0
+        lx[xmac] = 2
+```
+
+那个 helper（0x1bc0c）的第四个参数一路传到
+`xpcs_set_vr_mii_an_ctrl_pcs_mode()`，而后者写的是
+
+```
+VR_MII_AN_CTRL (0x7e0004):  value &= ~0x6;  value |= (pcs_mode & 3) << 1
+```
+
+**⇒ PCS mode 字段在 bits 2:1，base-X = 0，SGMII = 2。**
+**⇒ mainline 一直在写 2。**
+
+**⇒ 这是 §74 那个「要改哪里」问题的答案，而且是一个值的事。**
+
+### 75.6 RTL8226 是 1000BASE-X 器件（U-Boot 实测）
+
+```
+=> mii 45read 5 7 0x00      -> 3000    PCS BMCR: 1000BASE-X 速率 + AN 打开
+=> mii 45read 5 7 0x01      -> 0069    PCS status: link up + block lock + sync + RX valid
+=> mii 45read 5 1 0x00      -> 2058    PMD BMCR
+=> mii 45read 5 1 0x01      -> 0002    PMD status: "1000BASE-X capable"
+=> mii 45read 5 1e 0x00     -> DEAD    Realtek 私有 devad 在 base-X 下不响应
+```
+
+**⇒ 三个独立的字段都指向 base-X，而且链路当时是 up 的。**
+**⇒ 也说明 §74 第 4 步「RTL8226 的 SerDes 侧要另写」是多余的：U-Boot 已经
+把它配好了，Linux 只要不去 reset 它。**
+
+### 75.7 XPCS 的寄存器基址 = 0x1a000000（实测确认）
+
+厂商 np_133.ko 用直接 MMIO，偏移是 `xpcs_index * 0x1000000 + reg`：
+
+| 厂商偏移 | 内容 |
+|---|---|
+| +0x7c0000 | SR_MII 块（速度字在 +0x10） |
+| +0x7e0004 | VR_MII_AN_CTRL（PCS mode 在 bits 2:1） |
+| +0xc0000 | SR_XS_PCS_CTRL1（soft reset 在 bit 11） |
+| +0xe0040 | VR_XS_PCS_DIG_STS（pseq state 在 bits 4:2，idle = 4） |
+
+在 U-Boot 上设成 base-X 之后读：
+
+```
+=> md 0x1a7c0000 0x20
+1a7c0000: 00000140 00000109 00007996 0000ced0
+1a7c0010: 00000020 00000000 00000000 00000000
+=> md 0x1a7e0000 0x10
+1a7e0000: 00002000 00000000 0000000a 00000000
+```
+
+**⇒ 0x1a7c0010 = 0x00000020**，正好是厂商 `xpcs_set_sr_mii_ctrl_speed()`
+的 speed 2（xpcs_1000base_x_conf 传的就是 2）。
+**⇒ 0x1a7e0004 = 0x00000000**，PCS mode 字段确实是 0。
+
+**⇒ 两个可执行的改动点，都是「mainline 抄 RTL8372N 抄错了」：**
+
+| | mainline 写的 | 厂商的 1000BASE-X |
+|---|---|---|
+| VR_MII_AN_CTRL 的 PCS mode（bits 2:1） | 2（SGMII） | **0** |
+| SR-MII 速度字 | BIT(6) = 0x40 | **BIT(5) = 0x20** |
+
+**⚠️ 读 0x1ac0000 会 Synchronous Abort 并复位**（2026-10-28 05:40 试过，
+U-Boot 打印了 `Synchronous Abort handler, esr 0x96000010` 然后
+`Resetting CPU`）。**那个地址没有映射，别再试。**
+（顺带：0x1a000000 起 8 MB 的窗口在 U-Boot 里是能读的，只有 0x1ac0000
+不行。）
+
+### 75.8 Uni SerDes 的 28/49 差异是 Linux 自己造成的
+
+§74 说 mainline 启动时读到「image differs in 28/49 word(s)」，并把它归给
+U-Boot 的 `userdes init_change 0 0`。**这个归因错了。**
+
+2026-10-28 05:33，在 U-Boot 刚做完 net init 之后读那 49 个字：
+
+```
+=> md 0x16100000 0x31
+16100000: c0000004 50a840a7 012e064f 1fd0c093
+16100010: 00000044 00000000 00f00000 00230120
+...（49 个字）
+```
+
+**⇒ 与 mainline 的 `zx279133_uni_1g_profile[]` 49/49 逐字相同，0 个不同。**
+
+**⇒ U-Boot 留下的就是 mainline profile 那一份，那 28 个字是 Linux 起来之后
+被改的。** §74 的「Uni SerDes 没被弄坏、坏的是 XPCS0」这句结论方向对，但
+理由不对：**Uni SerDes 也被 Linux 弄过，只是改的不是那 49 个字。**
+（这 28 个字是谁改的还没查清，是下一个问题。）
+
+### 75.9 U-Boot 自己也没把这条 lane 配成 base-X
+
+`help` 里有一条 `xmac_test xmac_work_mode_set [xmac_id] [work_mode]`：
+
+```
+=> xmac_test xmac_work_mode_set 0 2
+mode_eth_1gbase_x_cfg
+com_pll_lock_ready
+rx los =0 rx data in
+cdr_lock_ready
+uni serdes init succeed
+work in 1000BASE-X mode. ret = 0
+uni 0 serdes reset ok
+uni 0 serdes reset ok
+```
+
+**⇒ work mode 2 = 1000BASE-X，work mode 3 = SGMII 1G AUTO。**
+**⇒ 与 np_133.ko 的 `lx[]` 编号一致（1000BASE-X = 2，SGMII = 3）。**
+
+**⇒ 但 U-Boot 的 net init 走的不是这条路**，它去读 RTL8226 的扩展寄存器来
+决定 XMAC 的模式，而这一步是坏的：
+
+```
+phy_id:0x5;  port:0x4;
+PHY_RLT8226_MDIO_READ_EXTENDED(0xd) in RTL_8226
+xmac doesn't support this pcs mode(d) in RTL_8226
+ERROR: [port:4][phy_name:phy_RTL8]get speed mode failed!
+test:cur 0 phy sereds mode : 0xc, last mode0 : 0xc, last mode1 : 0xc
+sg_interval_cnt = 20, uni_link_status:0x1, uni_status:0x402
+```
+
+**⇒ 读到的值两次不一样（0xd 和 0x1e），都不在它自己的表里 ⇒ 每次
+`ping` 都失败（`ping failed; host 192.168.9.25 is not alive`）。**
+**⇒ 但 `uni_link_status:0x1` 说明 Uni SerDes 那一侧是 link up 的。**
+
+**⇒ 所以 §74 引的那句「U-Boot 用这条 lane 把 11 MB 搬过去」要么是另一个
+电源周期、要么是 U-Boot 换了路径；这一轮的 U-Boot 确实没配成。**
+**⇒ 对 mainline 的意义：不能指望「继承 U-Boot 的 XPCS 状态」，只能自己配
+—— 这与 75.2 的结论一致，两条独立证据。**
+
+**⇒ 另外：work mode 2 与 3 两种设置下，NPPT 的 PCS 状态区
+（0x19000080..0x190000bf）一个字节都没变：**
+
+```
+19000080: 000001fd 00000000 00000670 00000071
+19000090: 0000280b 0000380b 0000069b 0000069b
+190000a0: 00000000 00000000 00210fff 0000000f
+190000b0: 000000ff 00000fff 00000000 00000020
+```
+
+**⇒ 状态字不是判据（0x0090 的 bits 11..13 = 0x2800，不是 link up 的
+0x3800；0x380b 在 +4 处）。**
+
+### 75.10 这一轮 push 的两笔
+
+| commit | 改什么 | CI |
+|---|---|---|
+| `9c0cf08` | XPCS0 的 PCS mode：2（SGMII）→ **0（1000BASE-X）**，三处 | run202 |
+| `c8d162f` | SR-MII 速度字：BIT(6) → **BIT(5) = 0x20** | run203 |
+
+**⇒ 两笔都是单变量，每一笔都能独立判读。**
+
+### 75.11 现在的阻塞项（物理动作，owner 做）
+
+**flash 里的内核是 10 月 23 日那一版**（`Linux version 6.18.38+ ... #0 SMP
+Fri Oct 23 22:18:27 2026`），**它能起来**（14.9 秒，`sk-nat: masquerade
+installed on eth0`），**没有 run195/196 那个环路死机**。
+
+**⇒ 但连不上它**：它的 `eth0` 是 NPPT 的 MAC，走 9132 的 UNI 侧
+（`eth0: configuring for fixed/sgmii link mode. Link is Up - 1Gbps/Full`），
+而 **PC 的网线还插在 LAN1（2.5G 口）**，那条路上没有 PC。
+
+**⇒ 请把 PC 的网线从 LAN1（2.5G）挪到 LAN2/3/4（1G）里的任意一个。**
+这是解锁「活板快速迭代」的唯一办法：不挪线就只能等 CI 一轮 80 分钟。
+
+**⇒ 挪线之后能立刻做的**：在这个活着的内核里读 XMAC0 的统计、读 XPCS 的
+寄存器、用 debugfs 把 2.5G 口的帧计数打开，以及确认「面板标签 ↔ 内部
+PHY 0x0a..0x0d」的对应关系（这条悬案只有连上板子才能解）。
+
+**⇒ 而 PC 挪到 LAN2 之后，2.5G 口的实验就做不了了**（帧到不了 PC），
+但那部分已经由 CI + U-Boot 的读数覆盖了。
