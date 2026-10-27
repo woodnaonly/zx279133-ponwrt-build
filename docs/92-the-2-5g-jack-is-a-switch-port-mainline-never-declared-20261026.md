@@ -6131,3 +6131,160 @@ PHY 0x0a..0x0d」的对应关系（这条悬案只有连上板子才能解）。
 
 **⇒ 而 PC 挪到 LAN2 之后，2.5G 口的实验就做不了了**（帧到不了 PC），
 但那部分已经由 CI + U-Boot 的读数覆盖了。
+
+
+## 76. base-X 与 SGMII 的寄存器 A/B 快照，以及「28/49」的真相（2026-10-28 05:48–05:54）
+
+§75 找到了厂商的 1000BASE-X 序列，但那是逆向出来的代码。U-Boot 的
+`xmac_test` 能在同一块板子上把这条 lane 切进 base-X，于是可以直接把两种
+模式下的寄存器并排读出来对照。这一节是对照结果。
+
+### 76.1 U-Boot 的 work mode
+
+```
+=> xmac_test xmac_work_mode_set 0 3
+mode_eth_1gbase_x_cfg
+...
+work in SGMII 1G AUTO mode. ret = 0
+
+=> xmac_test xmac_work_mode_set 0 2
+mode_eth_1gbase_x_cfg
+...
+work in 1000BASE-X mode. ret = 0
+```
+
+**⇒ work mode 2 = 1000BASE-X，3 = SGMII 1G AUTO，与 np_133.ko 的 `lx[]`
+编号一致。**
+
+**⇒ 两种模式下 XMAC0 的寄存器完全相同**（0x140000 仍是 0x14000001、
+RX_CTRL 0xd5033fdf、FRAME_CFG 0xd5301480）—— U-Boot 的 xmac_test 只动
+XPCS 和 Uni SerDes，不动 XMAC。
+
+**⇒ 而且 U-Boot 这套 XMAC 值与厂商 Linux 的 `xamc_init_conf_by_speed()`
+不同，与 mainline 的 `zx279133_switch_xmac_program()` 相同。**
+**⇒ 所以 XMAC 侧 mainline 抄的是厂商 Linux，对的，不动。**
+
+### 76.2 XPCS 两个模式的并排读数
+
+XPCS 的直接映射基址是 0x1a000000（厂商 np_133.ko 的偏移：
+SR_MII 块 +0x7c0000、VR_MII_AN_CTRL +0x7e0004）。
+
+| 地址 | SGMII (work mode 3) | 1000BASE-X (work mode 2) | 差 |
+|---|---|---|---|
+| 0x1a7e0000 (VR_MII_DIG_CTRL1) | 0x00002200 | **0x00002000** | bit9 = MAC_AUTO_SW |
+| 0x1a7e0004 (VR_MII_AN_CTRL) | 0x00000005 | **0x00000000** | bit0 + bits2:1 |
+| 0x1a7e0008 | 0x0000000a | 0x0000000a | —— |
+| 0x1a7c0000 (VEND2 BMCR) | 0x00001140 | **0x00000140** | bit12 |
+| 0x1a7c0010 (SR-MII speed) | 0x00000020 | 0x00000020 | —— |
+
+**★ 这张表是本轮最硬的东西，它把 §75.5 的逆向结论坐实了：**
+
+* `0x1a7e0004` 在 SGMII 下是 0x0005 = bit0(AN_INTR_EN) + bits2:1 = 0b10
+  = **PCS mode 2**；在 base-X 下是 0x0000 = **PCS mode 0**。
+  **⇒ 完全符合厂商 `xpcs_set_vr_mii_an_ctrl_pcs_mode()` 的编码
+  （value = (value & ~0x6) | ((pcs_mode & 3) << 1)）。**
+* **⇒ base-X 下 AN_CTRL 整个是 0：SGMII 的 link status 位（bit4）和
+  AN 中断使能（bit0）都要清掉。**
+* **⇒ base-X 下 MAC_AUTO_SW 也要清掉**（DIG_CTRL1 0x2200 → 0x2000）。
+* `0x1a7c0000` 在两种模式下只差 bit12。
+
+**⇒ mainline 与这份表的对应关系是逐字对上的**（mainline 日志里
+「XPCS vend2 AN_CTRL = 0x0005」「XPCS vend2 BMCR = 0x1140」正是 SGMII
+那一列）：
+
+| mainline 的 MDIO 访问 | U-Boot 的直接映射 |
+|---|---|
+| `MDIO_MMD_VEND2, 0x8001` (VR_MII_AN_CTRL) | 0x1a7e0004 |
+| `MDIO_MMD_VEND2, 0x8000` (VR_MII_DIG_CTRL1) | 0x1a7e0000 |
+| `MDIO_MMD_VEND2, MII_BMCR` | 0x1a7c0000 |
+
+### 76.3 Uni SerDes：两份 image，差 28 个字
+
+同一块板子上，Uni SerDes 的 49 个字在两种模式下不一样：
+
+```
+U-Boot net init 之后（SGMII 那份）：
+  16100000: c0000004 50a840a7 012e064f 1fd0c093
+  16100010: 00000044 00000000 00f00000 00230120
+  ...
+  模式字 (0x16100054) = 0x00000001
+
+xmac_test xmac_work_mode_set 0 2 之后（base-X 那份）：
+  16100000: e0001004 4fa840a3 013e860f 0210c073
+  16100010: 00000048 00000000 00ff8000 00238620
+  ...
+  模式字 (0x16100054) = 0x00000101
+```
+
+**逐字比对：**
+
+| | mainline 的 1G profile | mainline 的 10G profile |
+|---|---|---|
+| SGMII 那份（实测） | **49/49** | 22/49 |
+| base-X 那份（实测） | **21/49** | 33/49 |
+
+**⇒ base-X 那份与 SGMII 那份正好差 28 个字。**
+**⇒ 而 mainline 一直报的「image differs in 28/49 word(s)」就是这个 28。**
+
+**★ 真相：这个驱动里的参考文件装的是 SGMII 那份（模式字 0x01），
+而板子上从来就是 base-X 那份（模式字 0x101）。**
+
+**⇒ 三条独立证据：**
+
+1. 驱动日志里那句「mode 0x101 already」—— 板子上是 0x101，参考文件里是
+   0x01。
+2. 驱动的 28/49 与两份 image 之间的差异数完全相等。
+3. U-Boot 的 net init 打印 `mode_eth_1gbase_x_cfg` —— 它在把控制权交给
+   Linux 之前就按 base-X 配好了这条 lane。
+
+**⇒ §74 说「那 28 个字是 `userdes init_change 0 0` 造成的」、§75.8 说
+「那 28 个字是 Linux 自己造成的」，两句都错。**
+**⇒ 没有人改它：U-Boot 留下的就是 base-X image，是这个驱动的参考文件
+取错了时机（取到的是 U-Boot 还没按 base-X 配置这条 lane 时的状态）。**
+
+**⇒ 修法就是换一组常量**：把 `zx279133_uni_1g_profile[]` 换成 base-X 那
+份实测值。换完之后继承下来应当是 **0/49**，这就是下一轮的判据。
+
+**⇒ 顺带**：`0x16000000`（PON SerDes）此刻的头 4 个字是
+`e0000004 50a840a1 013e860f 0210c073`，与 base-X 那份的
+`e0001004 4fa840a3 013e860f 0210c073` 相近但不相同 —— §74 关于
+「厂商那份 profile 的头四个字其实是 PON 的 image」的说法方向是对的，但
+base-X 这份既不是 10G profile 也不是 PON image。
+
+### 76.4 这一轮 push 的三笔（全是单变量）
+
+| commit | 改什么 | CI |
+|---|---|---|
+| `24a0963` | XPCS 的 VR_MII_AN_CTRL → 0x0000、VR_MII_DIG_CTRL1 → 0x2000（base-X 实测值）；BMCR 的整字写改成只改 duplex 位 | run206 |
+| `631bf59` | Uni SerDes 的参考文件换成 base-X 那份 49 字 | run207 |
+| `9c0cf08` / `c8d162f` | （上一轮）PCS mode 2→0、SR-MII speed BIT(6)→BIT(5) | run202 / run203 |
+
+**⇒ 其中 `24a0963` 顺手修掉了一个真 bug**：profile 末尾与 apply 末尾原来
+都是 `write(VEND2, MII_BMCR, BMCR_SPEED1000 | BMCR_FULLDPLX)` 整字写，
+**它会把 `c8d162f` 刚写进去的 SR-MII 速度位（0x20）清掉**。现在改成
+`modify()` 只动 duplex 位。
+
+### 76.5 下一轮看什么
+
+| 现象 | 读法 |
+|---|---|
+| **Uni SerDes「image differs in 0/49」** | 参考文件对了，继承到的就是 base-X image。**这是 `631bf59` 的判据。** |
+| **「XPCS0 configured as 1000BASE-X: AN_CTRL = 0x0000, mode = 0」** | `24a0963` 的写生效了。 |
+| **XMAC0 的 TX/RX 计数涨** | 2.5G 口的帧真的进来了 ⇒ base-X 这一路通了。 |
+| **计数还是 0** | 剩下的嫌疑是 XMAC 的 link 没有真正 up（base-X 下 AN 关、速率固定），或者 RTL8226 那侧需要重新 AN；再往下就是 §75.9 那条「U-Boot 自己都读不到 RTL8226 的 sereds mode」的路。 |
+
+### 76.6 这一轮试过但不成立的几条
+
+* **XPCS0 状态字不是判据。** NPPT 的 PCS 状态区
+  （0x19000080..0x190000bf）在 work mode 2 与 3 之下**一个字节都没变**：
+  `0000280b 0000380b 0000069b 0000069b`。mainline 读的 0x0090 的
+  bits 11..13 = 0x2800，不是 link up 的 0x3800（0x380b 在 +4 处）。
+* **0x1ac0000 读不了**：Synchronous Abort 并复位。0x1a000000 起 8 MB
+  窗口里 0x1a7c0000 / 0x1a7e0000 / 0x1ae00040 都能读（后两个全 0）。
+* **0x142000 那一段不是 XMAC 的统计区**，读到的是 PPU 的微码指令。
+  XMAC 的寄存器级计数还没找到；mainline 现在只有 netdev 层
+  （`lan-cpu0` 的 rx/tx packets）。
+* **U-Boot 里 ping 永远失败**，因为它的 net init 每次都重跑 outerphy 那条
+  路，而它读 RTL8226 扩展寄存器得到的值两次不一样（0xd、0x1e），不在它
+  自己的表里 ⇒ `get speed mode failed`。所以 U-Boot 里的
+  `xmac_test ... 1000BASE-X` 只能验证「寄存器写进去了」，验不了「帧通了」。
