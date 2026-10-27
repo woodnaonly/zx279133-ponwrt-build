@@ -206,6 +206,12 @@
 #define ZX279133_XPCS_LOW_POWER		BIT(11)
 #define ZX279133_XPCS_SPEED_SEL		BIT(13)
 #define ZX279133_XPCS_SR_MII_SPEED_MASK (BIT(13) | BIT(6) | BIT(5))
+/*
+ * The SR-MII speed word, as the vendor's xpcs_set_sr_mii_ctrl_speed()
+ * spells it out: a speed number becomes one of 0x2000, 0x40, 0x20, 0x2020,
+ * 0x2040 or 0, for speeds 0..5.  The 1000BASE-X path passes 2.
+ */
+#define ZX279133_XPCS_SR_MII_SPEED_1000BASE_X	BIT(5)
 #define ZX279133_XPCS_DUPLEX		BIT(8)
 #define ZX279133_XPCS_PSEQ_MASK		GENMASK(4, 2)
 #define ZX279133_XPCS_PSEQ_IDLE		0x4
@@ -506,9 +512,19 @@ static int zx279133_switch_xpcs_1000base_x(struct zx279133_switch *priv)
 	/*
 	 * SGMII SerDes stays 1.25G; 10/100/1000 are in-band.  Vendor
 	 * xpcs_sgmii_mode_conf() always programs SR-MII speed 3 / full.
+	 *
+	 * The value here is the one the vendor's 1000BASE-X path uses: its
+	 * xpcs_set_sr_mii_ctrl_speed() (np_133.ko 0x1b910) takes a speed
+	 * number and turns it into exactly one of these bits - 0 -> 0x2000,
+	 * 1 -> 0x40, 2 -> 0x20, 3 -> 0x2020, 4 -> 0x2040, 5 -> 0 - and
+	 * xpcs_1000base_x_conf() calls it with speed 2, i.e. 0x20.
+	 * Read back off the board in U-Boot on 2026-10-28: with XMAC0 set
+	 * to "work in 1000BASE-X mode", the SR-MII speed word at
+	 * 0x1a7c0010 read 0x00000020.  This driver wrote BIT(6) there.
 	 */
 	ret = zx279133_switch_xpcs_modify(priv, MDIO_MMD_VEND2, MII_BMCR,
-					   ZX279133_XPCS_SR_MII_SPEED_MASK, BIT(6));
+					   ZX279133_XPCS_SR_MII_SPEED_MASK,
+					   ZX279133_XPCS_SR_MII_SPEED_1000BASE_X);
 	if (ret)
 		return ret;
 	ret = zx279133_switch_xpcs_modify(priv, MDIO_MMD_VEND2, MII_BMCR,
