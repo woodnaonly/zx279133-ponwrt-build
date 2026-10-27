@@ -1524,3 +1524,50 @@ RAM kit。顺序做对了一半、错了一半，错的这条正是下一个会�
 现在板子停在哪：ctl jump 已发出、4.19 控制面没在串口上应答；**没有任何 flash 写入**，
 `S15trial` 那条 300 s 自复位不适用于此镜像，但智能开关的 20 min 断电会把它带回 run 185，
 watchdog 也会自己兜。所以不用你去按任何东西，等下一次断电就回到已知状态。
+
+## 41. 09:02–09:07：run 191 的 RAM kit 起来了，**换窗口到 XMAC0 双向仍为 0**（干净负面）；bit0 那条不合格
+
+**怎么起来的**（把 §40 的错误顺序纠正后的正确路，四条都是量的）：
+线在 LAN1；'u' 流接住 U-Boot 提示符（`=>`）；`tftpsrv.py staging/trial 69` 发布 ITB
+（12 158 592 B）；U-Boot 里 `setenv ipaddr/serverip` 后
+
+	tftpboot 0x89000000 sk-d840n-initramfs.itb
+	Loading: ##### … ####################################
+	Bytes transferred = 12158592 (b98680 hex)
+
+`bootm 0x89000000` 之后 kit 自报 `trial-blink: start uptime=41.43 … blinks=3`、
+`trial: client: client up: labhost0 is a port of br-lan, labcli0 is the client (netns: 1)` ——
+**RAM 系统起来了，不写 flash**。kexec 那条路两次都是「`kexec_core: Starting new kernel` 之后即死、
+无串口无网络」，**这台板子上 kexec 不可用**，以后只用 U-Boot `tftpboot`+`bootm`。
+
+**认镜像**（§40 的规矩）：`/sys/module/zx279133/parameters` 有 **`zx279133_eth0_xmac`**
+（run 185 只有 `rx_hash rx_hash_ipv6`）⇒ 跑的就是 191。
+
+**干净的那组**（uptime 100→212 s，一次连续开机，其间无任何重启）：
+	P=rx_hash rx_hash_ipv6 zx279133_eth0_xmac …
+	echo 0 > …/zx279133_eth0_xmac → W=0
+	ip link set eth0 down/up → "configuring for fixed/sgmii link mode" → "Link is Up - 1Gbps/Full"
+	E0 = rx0 / tx40 / lan-cpu0 0
+	PC-→板：ping -n 20 -l 64 192.168.9.1 → 20 发 0 收，E1 = rx0 / tx82 / lan-cpu0 0
+	板-→PC：板子 ip addr add 192.168.9.2/24 dev eth0; ping -c 4 -I eth0 192.168.9.25
+	        PC 侧 Get-NetAdapterStatistics(ifIndex 19) 前后 **完全相同**：133691-287773 → 133691-287773
+（同一支 PC 计数在 §21 末尾数到过 +194，所以它是能动的正控制。）
+
+⇒ **换到 XMAC0、链路起在 1G、两个方向都没有一帧过线。****「绑定就是缺口」到此被量死。**
+
+**不合格、不作为结论的一组**：之后我把 XMAC0 `TX_CTRL` 的 bit0 清成原厂通流那个 `0x60010000`
+（回读确认 `soc reg 0x19140000 = 0x60010000`，mainline 自己写的是 `0x60010001`），再打 12 帧 →
+0 收。但日志显示 09:07:0x 出现了 **`root@OpenWrt-failsafe:/#`** 和两条**不是我发的** ping
+（`ping -i 0.2 -c 60`、`ping -c 40`，是 kit 自带的 trial 自检 harness），也就是说那次复测跨了
+**切 failsafe 的瞬间**，读数无效。**下一轮要在稳定开机里重做这一位**，它仍是唯一一个被原厂读数
+（`0x60010000`）和我们的写入（`0x60010001`）直接差出来的字。
+
+**剩下的候选，按证据强度排**：
+1. **§33(三) netdev/转发**——5 号口/outerphy 没有 DSA 用户口；帧即使到 CPU 也没有 netdev 认领。
+2. **PCS/phy-mode**：mainline 给 eth0 的是 `fixed-link 1000` + 1G SGMII（`switch.c` 那套是给
+   9132 的 LAN lane 用的），而原厂 outerphy 的 SoC 侧是 RTL8226 的 2.5G 形态；XMAC0 的 XPCS0
+   在 mainline 下从未按 2.5G 编过。**这一条从没测过，而且它不依赖 SPA 表。**
+3. `TX_CTRL` bit0（上面那组，需要重做）。
+
+**仪表改进**：下一次用 `tools/trialboot.sh`（待写，把 `tftpboot`+`bootm`+认镜像三步固化成一条），
+并且**先关掉 kit 的自检 harness**（failsafe 那次是它触发的），否则测量会撞上自检窗口。
