@@ -1703,3 +1703,66 @@ MAC/PCS。
 **三条工具教训（都已写进脚本/记录）**：busybox ash 里 `0>` 是 fd 重定向；超 ~40 字符的命令会被
 PL011 FIFO 截断（用变量把命令压短）；PC 的字节计数在这块双网卡上不可用作判决（需要按 MAC 过滤的
 抓包或 ARP/ICMP 这种干净见证）。
+
+## 45. 13:39 窗口（预登记，判据先写死）：把 switch 驱动从 XMAC0 上拿走
+
+### 45.1 这一轮在 12:58 那次 RAM boot 里补量的一行
+
+`m45 5 0x1e …` 在同一个还在跑的 run-193 内核里读了 0x7581/0x7588/0x7589/0x758b/0x758d =
+`0000 / 00CE / 035A / 0005 / 801E`。这五个字与 §12.2 那次**能 ping 通的原厂 U-Boot 开机**里的
+读数一字不差，和 §17 在 run 189 上量的十个字同结论：**RTL8226 面向 SoC 那一侧不是缺口**。
+这条只是把 §17 的结论在另一个版本上复述了一次，不构成新证据。
+
+### 45.2 新读到的一条代码事实，和它为什么值得一次窗口
+
+`zx279133-switch.c` 不是「只管 9132 的 DSA」：它在进程里**整块占住 XMAC0 + XPCS0 + uni_serdes**
+（`xmac_lock`、`xpcs_configured`、`saved_xmac_*`，以及 1G SGMII 的 XPCS profile），头注释也写明
+「it owns the XMAC0 datapath, the XPCS0 lane and the Uni SerDes」。而：
+
+- §14 量到 LAN1 的帧只让 `0x19140000`（XMAC0）那个窗口计数 —— LAN1 的 MAC 就是 XMAC0；
+- `zx279133-np.c:5288` 那句注释自己说 **「The external RTL8226 (jack 4) is PPU 5 … it is the SoC's
+  own LAN-side port」**，并且 probe 里**故意不写它**；
+- §44 在 switch 驱动照常运行时把 eth0 搬到 XMAC0（MAC+PCS 成对、MAC 字按通流值手工写回），
+  两个方向仍为 0。
+
+三句话放在一起是一个之前没有被单独测过的可能：**这块板的 9132 并不在 XMAC0 上**，「9132 的 CPU
+口 = XMAC0」是从 SR1010 的 RTL8372N 继承来的设计；switch 驱动开机时把 LAN1 那条 lane 按 1G SGMII
+的 CPU 口形状重编了一遍，并一直持有它 —— 于是 phylink 无论怎么配，都只是与它轮流写同一块寄存器。
+
+### 45.3 判定实验（不出包，只换 DTB）
+
+用 run 193 的 flash 内核（`staging/trial/flash-uImage`）配一份**把 switch 节点 compatible 改掉一个
+字节**的 DTB 起 RAM：
+
+	staging/trial/flash-dtb-noswitch.bin
+	  = flash-dtb.bin，偏移 8751 一个字节 0x68('h') → 0x78('x')
+	    "zte,zx279133-switch" → "zte,zx279133-switcx"
+	  md5 85a1aa5b9756623f92f7cfededc85411（原文件 bac1e7d1…，`cmp -l` 只有这一处）
+
+这样 `zx279133-switch` 不会绑定，XMAC0/XPCS0/uni_serdes 没有人抢；随后
+`echo 0 > /sys/module/zx279133/parameters/zx279133_eth0_xmac`（run 193 带 PCS 配对）、
+`echo 5 > …/zx279133_tx_port`、eth0 起 IP 192.168.9.3/24，线仍在面板 LAN1。
+
+**预登记的判据（三条全中才算 PASS）**：
+
+1. PC `ping 192.168.9.3` 有回包，**且** PC 的邻居表里有板子的 MAC（§4 的规矩：只看 ping 计数会把
+   死口报成活口）；
+2. 板子 `ip neigh show 192.168.9.25` 是 `REACHABLE/STALE/DELAY`，不是 `FAILED`；
+3. 板子 `eth0` 的 `rx_packets` 增长。
+
+**控制组**：
+
+- （负）同一个实验在 switch 驱动**在场**时已经做过（§44），两个方向都是 0 —— 这就是本轮的对照组；
+- （仪表）本 boot 里 `cat /proc/device-tree/soc/switch/compatible` 必须读到 `…switcx`，dmesg 里
+  不能有 switch 驱动的 probe 行，否则「没绑定」这个前提没成立，本轮作废；
+- （正）若 PASS，再把 `zx279133_eth0_xmac` 写回 1：XMAC1 在这块板上没有对端，链路/流量应消失；
+  同一次开机里能红能绿，才算这条 lane 是被这次改动打开的。
+
+**两种结果的读法**：
+
+- **PASS** ⇒ switch 驱动对 XMAC0/XPCS0/uni_serdes 的独占就是 LAN1 的阻塞点；下一个补丁要处理的是
+  「9132 到底在哪条 lane 上」（四个 GE 口今天是从它那里走的，不能直接删），然后用一次 GE 口的
+  线测确认没有回归。
+- **FAIL** ⇒ 这条假设划掉；LAN1 的阻塞留在 MAC 之后（PPU/队列），而且 §11/§29 那两轮已经把
+  mem 5 的 SPA 形状试遍了，剩下的读法是拿 §30 的 `idm_rx_debug` 尺子在**通着的 U-Boot** 里逐帧读
+  一次、再把同样的环状态在 mainline 里比对。
