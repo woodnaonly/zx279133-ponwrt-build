@@ -1571,3 +1571,31 @@ watchdog 也会自己兜。所以不用你去按任何东西，等下一次断�
 
 **仪表改进**：下一次用 `tools/trialboot.sh`（待写，把 `tftpboot`+`bootm`+认镜像三步固化成一条），
 并且**先关掉 kit 的自检 harness**（failsafe 那次是它触发的），否则测量会撞上自检窗口。
+
+## 42. 09:18（预登记，判据先写死再看数）：§41 那次只搬了 MAC 那一半
+
+**读数**：run 191 的 kit DTB（`staging/trial/trial-dtb.bin`，`tools/fdtwalk.py` 逐节点走出来的）
+在 `/soc/ethernet@19000000` 上同时有 `pcs-handle = 0x0f` 与 `zte,lan-pcs-handle = 0x10`。
+
+**代码**：mainline 只解析前者。`eth->xpcs` / `eth->xpcs_mdiodev` 是 XPCS1（`main.c` probe），
+`mac.c` 的 `select_pcs` 和三个 C45 访问器无条件用它们，而 `switch.c` 另有一份自己的 xpcs0。
+所以 §41 的 `echo 0 > …/zx279133_eth0_xmac` 只把 **MAC 窗口**搬到 XMAC0，**PCS 还留在 XPCS1**——
+那是一条 MAC 与 PCS 各在一边的链路，它的 0 不能拿来给「换窗口」判死刑。
+
+**本包**（`3a508cd` 那个可切换绑定的补全）：probe 从 `zte,lan-pcs-handle` 再建一个
+`eth->xpcs_lan`（找不到 MDIO 设备就 `-EPROBE_DEFER`，属性缺失则不管）；`zx279133_eth0_xmac=0`
+时 `select_pcs` 与 C45 访问器都改用它。**没有这个 PCS 时，`xmac=0` 下访问器返回 `-ENODEV`、
+`select_pcs` 返回 `-EOPNOTSUPP`**——该模式下链路起不来，**不静默退回 XPCS1**。§41 的教训就是
+静默的一半会被读成「配对无效」。
+
+**预登记判据**（run 192 的 kit；稳定开机，先确认 kit 自检 harness 不在跑）：
+
+1. **正控制两个**，缺一这组作废：同一次开机里 PC 网卡计数（ifIndex 19）在 PC 发包时必须动
+   （§21 末尾数到过 +194）；板→PC 那组里 `eth0` 的 tx 计数必须先动。
+2. `echo 0 > …/zx279133_eth0_xmac` + `ip link set eth0 down/up` 后读 `0x19140000/0x19140010`，
+   确认 XMAC0 被我们的 init 写过（与 §39 通流开机的 `60010000/3e8000c6` 对照）。
+3. PC→板 20 帧：**PASS = `eth0` 的 rx_packets 增加**；**FAIL = 两个方向都为 0 且两个正控制都动**。
+   FAIL 则 §41 候选 2 划掉，剩下的按 §33(三) netdev/转发走。
+4. **回归**：默认 `xmac=1` 下 `tools/g4verify.sh` 16 pass / 0 fail；线在 LAN2/3/4 的 jack-walk
+   （要 owner 挪线）。`xmac=0` 时 `switch.c` 也在编 XMAC0，四个口若回归那是**这个模式的代价**，
+   回归门只在 `xmac=1` 下判。
