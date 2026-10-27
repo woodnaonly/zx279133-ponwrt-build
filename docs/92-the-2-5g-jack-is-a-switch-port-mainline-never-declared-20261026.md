@@ -5669,3 +5669,207 @@ PC 在 2.5G 口发一帧，桥把它绕回来，每绕一圈就是一份新的�
   先做那一半可能白做。**§71.6 把两条模型的证据列清楚了。**
 * 没有做 §70.5 第 3 条（TX 的 outport）—— U-Boot 用的是 4，mainline 写的是 2，
   这要靠帧真的能回来时才知道。
+
+
+## 73. 把「XMAC0 就是 2.5G 口的 MAC」这件事钉死，以及它改掉的工作量（2026-10-28 05:17–05:24）
+
+§72 找到了风暴的机制（桥的环路）。这一节把 §71 留下的那个模型分歧收敛掉，
+并且给出下一轮要做的具体东西。
+
+### 73.1 U-Boot 的那段输出，按 mainline 自己的注释重读
+
+mainline 的 `zx279133-switch.c:1930-1938` 对这条 lane 写得很清楚：
+
+> The lane's rate is not a free choice. **This board's vendor bootloader runs
+> XMAC0 in SGMII ("xmac 0 speed set 2 in sgmii") and the 9132's CPU port is a
+> 1G port**, while the tree's RTL8372N driver runs this very same
+> XPCS0/Uni-SerDes lane at USXGMII 10G for the RTL8372N's CPU port.
+
+**⇒ mainline 把这条 lane（XMAC0 + Uni SerDes + XPCS0）当作「接 9132 的 CPU 口」的。**
+
+而 U-Boot 在同一块板子上打的是：
+
+```
+phy_id:0x5;  port:0x4;
+PHY_RLT8226_MDIO_READ_EXTENDED(0x2) in RTL_8226
+test:cur 0 phy sereds mode : 0x6, last mode0 : 0xc, last mode1 : 0xc
+mode_eth_1gbase_x_cfg
+com_pll_lock_ready / rx los =0 rx data in / cdr_lock_ready
+uni serdes init succeed
+xmac 0 speed set 2 in sgmii(xmac speed 3)
+mac 4 phy status changed: 1000M full-duplex
+host 192.168.9.25 is alive
+```
+
+**逐句对上：**
+
+| U-Boot 的一行 | 它说的是 |
+|---|---|
+| `phy_id:0x5; port:0x4;` | 这颗 PHY（MDIO 地址 0x05 = RTL8226）在 **sw port 4**，而 sw port 4 → chip port 5（`sw_port_change_to_chip_port` 是 p+1） |
+| `mode_eth_1gbase_x_cfg` | 它被配成 **base-X**（串行），不是 1000BASE-T 铜口 |
+| `uni serdes init succeed` | base-X 的另一端是 **Uni SerDes** |
+| `xmac 0 speed set 2 in sgmii(xmac speed 3)` | **XMAC0 走 SGMII、1G** —— 这正是 mainline 的注释说的那句 |
+| `mac 4 phy status changed: 1000M full-duplex` | 厂商的 mac index 4 = **XMAC0**，它的 PHY 状态是 1G 全双工 |
+| `host 192.168.9.25 is alive` | **U-Boot 用这个 MAC 从 2.5G 口 ping 通了台架 PC** |
+
+**⇒ 全部指向同一件事：这条 lane 的两端是 `RTL8226` 和 `XMAC0`。**
+**⇒ XMAC0 就是 2.5G 口的 MAC，它的 PHY 是外置 RTL8226（MDIO #1 的 0x05）。**
+
+**⇒ 「9132 的 CPU 口」那个说法是 mainline 从树里的 RTL8372N 驱动抄来的**
+（那个驱动的 XMAC0 是接 RTL8372N 的 CPU 口的），**在这块板子上没有对端**。
+
+### 73.2 那 LAN2/3/4 的帧从哪来？—— trap
+
+**⇒ 如果 XMAC0 是 2.5G 口的 MAC，那么 LAN2/3/4 的帧不经过 XMAC0。**
+
+它们的路是：9132 的 UNI 口（内部 GEPHY）→ 9132 交换 → **CPU 陷阱口**
+（ERAM 表 0x18，协议陷阱，不是物理口）→ IDM，描述符 source = 1..4。
+
+**⇒ 这正是 `zx279133_idm_rx_lan_vport()` 的注释说的**（"with the 9132 — it is the
+chip's own port number, 1..4 for the four UNI jacks"），**也是 mainline 一直
+能工作的那半边**：四个 1G 口的 DSA 用户口用 transport VID 59..62 分派，
+而这四个口的帧从来不需要 XMAC0。
+
+**⇒ 所以 mainline 有一处结构性错配**：它把 XMAC0 的 netdev（`lan-cpu0`）当成了
+DSA 的 **conduit**（CPU 端口），可 XMAC0 其实是 2.5G 口的 MAC。
+**§72.2 的环路就是这么来的**：2.5G 口的帧从 XMAC0 进来，被兜底成 LAN4 的
+transport VID，桥把它从 br-lan 发出去，而 br-lan 的第 5 个口正是 `lan-cpu0`
+—— XMAC0 自己。**
+
+### 73.3 于是工作量改了形状
+
+| | §69.5 说的 | 实际的 |
+|---|---|---|
+| 缺什么 | 9132 的第 5 个 DSA 用户口 | **XMAC0 缺一颗 PHY**：RTL8226（MDIO #1 的 0x05），以及 base-X SerDes |
+| 芯片口 | PPU 5 要注册成 DSA 用户口 | **PPU 5 仍然是 2.5G 口的 lane**（厂商的 spa_port_attr_xmac_0），不是 DSA 用户口 |
+| 传输 VID | 要给 source 5 一条 VID | **要，但那是 DSA 侧的事**：XMAC0 的帧在 IDM 里 source=5，要落到一个叫 lan1 的 DSA 用户口上，仍要一条 transport VID |
+| PHY 驱动 | 要新写 | **不用**：树里的 realtek 驱动已经认领 0x001cc849（`zx279133-np.c:1305`），厂商自己还有一整个 `rlt8226b.ko` |
+| SerDes | —— | **要**：厂商把 RTL8226 配成 1G base-X，mainline 的 Uni SerDes 现在只做 SGMII/USXGMII |
+
+**⇒ 一句话：把 XMAC0 从「一条没有对端的 1G SGMII 管线」改成「一颗挂着 RTL8226
+的 base-X 管线」，然后把它的帧从 lan4 那个兜底里拿出来，落到一个自己的
+DSA 用户口上。**
+
+**⇒ run199（f7b1650）只做了后半句**：PPU 5 按厂商 `xmac_0` 写整组 words、
+第五个泛洪组、以及 source 5 的帧**计数后丢弃**（止住 §72.2 的环路）。
+**前半句没做 —— 因为它要先知道 XMAC0 的 PHY 该怎么挂，而那要先看 run199 的
+那个计数：**
+
+| run199 的「2.5G jack's lane: frames N」 | 读法 |
+|---|---|
+| **N 在涨** | 帧**进了 IDM** —— 说明 XMAC0 那条 lane 上确实有东西在发帧（多半是 U-Boot 留下的 RTL8226 配置，Linux 没重置它）。下一步是给它 PHY 与 SerDes 配置，让它成一条正经的管线。 |
+| **N 是零** | 帧连 IDM 都没到。下一步就是给 XMAC0 挂 RTL8226（MDIO #1 的 0x05）+ base-X。 |
+
+**⇒ 两个分支要做的事完全不同，所以这一版先只做计数。**
+
+### 73.4 顺带记下三件小事
+
+* **`reboot` 在这个镜像里不生效，`reboot -f` 生效**（`[ 1168.370434] reboot:
+  Restarting system`）。调试时这条能省 20 分钟的插座节拍。
+* **U-Boot 里读 IDM 的接收描述符会 abort**：2026-10-26 读 0xb0028000 成功过，
+  2026-10-28 同一个地址 `Synchronous Abort` 并复位。**U-Boot 的 IDM 描述符区
+  只映射了发送那一半**（0xb0008000 可读）。
+* **§72.2 的环路推翻 §66/§68 的一句结论**：「风暴里的帧不是 PC 的」——在环路
+  模型下它们恰恰就是 PC 的，每绕一圈多一份。§68 那次没看出来，是因为板子
+  先死了，来不及数。
+
+
+## 74. Uni SerDes 那条 lane 其实没被弄坏，坏的是 XPCS0（2026-10-28 05:19–05:27）
+
+§73 把模型收敛到「XMAC0 就是 2.5G 口的 MAC」。这一节去看这条 lane 在 mainline
+里到底被写成了什么样，结果和「被写坏」的直觉相反。
+
+### 74.1 三个 49 字的档案
+
+`phy-zx279133-uni-serdes.c` 自己的注释（68–88 行）已经把这件事记清楚了：
+
+* **`zx279133_uni_1g_profile[]`** —— 「read out of the board rather than
+  transcribed」。来源是 `md 0x16100000 0x31`（49 个字），**取自 U-Boot 用这条
+  lane 把 11 465 012 字节从 jack 4（2.5G 口）搬过去的那个电源周期**，
+  并且在传输前后各读一次、两次一样。
+  **⇒ 这 49 个字就是「2.5G 口工作时的 lane 状态」。**
+* **`zx279133_uni_10g_profile[]`** —— 厂商 `uni_mode_eth_10gbase_r_cfg()` 的
+  store 列表。注释说它「和板子只对上 21/49」，而且它的头四个字
+  （`0xe0000004 0x4fa840a3 0x013e860f 0x0210c073`）其实是 **PON** SerDes 的
+  image（板子 0x16000000 上就是这四个字）。
+* **`staging/ctl/ubserdesimg.txt`** —— 另一个电源周期的 dump（"waiting for the
+  bootloader from offset 109811902"），采集前 U-Boot 跑过
+  `userdes init_change 0 0`（U-Boot 自己的模式命令）。
+
+**逐字比对的结果很干净**：把 `ubserdesimg.txt` 的前 49 个字和
+`zx279133_uni_1g_profile[]` 对，**相同的正好 21 个、不同的正好 28 个**
+（word 5/11/12/14/17/22/23/24/26/28/30/32–35/38/44–48 相同）。
+**⇒ 那 28 就是 `userdes init_change 0 0` 造成的差异**，与注释里
+「produces a third file that matches neither array (14/49 against both)」对得上。
+
+### 74.2 mainline 在这条 lane 上「什么都不写」
+
+`zx279133_uni_serdes_power_on()` 的 SGMII 分支（158–216 行）做的是：
+
+```c
+	/* Inherit: no reset pulse, no image write, no rate registers.
+	 ...
+	 * Every mainline bring-up that does rewrite it has lost the lane:
+	 * writing zx279133_uni_10g_profile ... linked the PHY but returned
+	 * not one frame ... writing the measured file after a reset pulse
+	 * (run 51, 20:14) did not even link the PHY ... while U-Boot had
+	 * carried 11 MB minutes earlier in the same cycle.  The bring-up
+	 * that can be right is the one that leaves this block alone.
+	 */
+	status = readl(priv->serdes + ZX279133_UNI_SERDES_MODE_CTRL);
+	...
+	for (i = 0; i < ZX279133_UNI_SERDES_PROFILE_WORDS; i++)
+		if (readl(priv->serdes + i * 4) != zx279133_uni_1g_profile[i])
+			mismatch++;
+	dev_info(priv->dev, "Uni SerDes 1G inherited: mode %#x %s, image differs in %u/%d word(s), ...");
+```
+
+**⇒ mainline 不写这个块，只继承 U-Boot 留下的值，并数一数有多少字与它的
+参考文件不同。** 启动日志里那句 `Uni SerDes 1G inherited: mode 0x101 already,
+image differs in 28/49 word(s)` 就是这个计数。
+
+**⇒ 关键：`0x101`（mode 字）与 U-Boot dump 里 `0x16100110 = 0x00000101` 一致，
+而 `ubserdesimg.txt` 里那个 28/49 的差异正好等于它与参考文件的差异。**
+
+**⇒ 所以这条 lane 现在就是「2.5G 口工作时的那份状态」。**
+
+### 74.3 那坏的是谁？—— XPCS0
+
+**⇒ mainline 没有动 Uni SerDes，却动了 XPCS0**：
+`zx279133-switch.c` 里 `zx279133_switch_xpcs_configure()` 一族函数把 XPCS0
+按 **USXGMII/SGMII** 重写了一遍（`XPCS vend2 BMCR = 0x1140`、
+`XPCS pcs BMCR = 0x0440`、`VR_XS_PCS_DIG_CTRL1 = 0x2200` …，都在启动日志里）。
+
+**⇒ 而 XMAC0 的对端是 XPCS0（`zte,lan-pcs-handle`）。**
+**⇒ XPCS0 被改成 SGMII/USXGMII 之后，XMAC0 的 lane 就不是 base-X 了，
+于是它对不上 RTL8226，帧进不来。**
+
+**⇒ §71.5 的「XMAC0 的 RX = 0」和「U-Boot 里 11 MB 过得去、mainline 里一个字节
+都不过来」，到这里就都解释了**：**U-Boot 配的是「XMAC0 + XPCS0 + Uni SerDes +
+RTL8226」一整条 base-X 链；mainline 继承了一半（Uni SerDes），改掉了另一半
+（XPCS0），并且从来没给 XMAC0 挂 PHY。**
+
+### 74.4 模型 B 的实现清单（按代价从小到大）
+
+| # | 要做的事 | 在哪里 | 难度 |
+|---|---|---|---|
+| 1 | **别再重写 XPCS0**，改成继承 U-Boot 留下的那份 | `zx279133-switch.c` 的 `zx279133_switch_xpcs_configure()` 一族 | 中：现在这族函数是照 RTL8372N 驱动抄的，要先确认哪几个字必须保留 |
+| 2 | **给 XMAC0 挂 PHY**：RTL8226 在 MDIO **#1**（0x14f02000）的 **0x05**，Clause 45 | `zx279133-switch.c` 的 XMAC0 netdev 现在是 fixed link | 大：XMAC0 的 phylink 要从 fixed link 变成真 PHY |
+| 3 | **XPCS0 侧要认 1000BASE-X** | `phy-zx279133-uni-serdes.c` 只接受 USXGMII/10GBASER/SGMII，要加 `PHY_INTERFACE_MODE_1000BASE_X` | 中：树里的 XPCS 支持 1000BASE-X，但 image 要照 U-Boot 的来 |
+| 4 | **RTL8226 的 SerDes 侧**：厂商用 devad 0x1e 的 0x7588/0x7589/0x758b/0x758d 配 base-X | 树里的 realtek 驱动不做这件事 | 中：厂商的 `rlt8226b.ko` 里有现成的 |
+
+**⇒ 第 1 步是关键**：它可能只需要「不写」就行 —— 也就是说，把 XPCS0 的配置
+也变成继承，和 Uni SerDes 一样。
+
+**⇒ 而这一步能不能做，取决于一件现在还没测的事**：**XPCS0 在 U-Boot 里留下的
+值是什么。** 厂商 DT 里 XPCS0 在 **0x1a000000**
+（`xpcs@1a000000 { reg = <0x00 0x1a000000 0x00 0x2000000>; }`），
+和 Uni SerDes 一样，**可以在 U-Boot 提示符上 `md 0x1a000000 0x40` 读出来**。
+读之前要记住 §71.4 的教训：**U-Boot 里读未映射的地址会让板子 abort 并复位**，
+所以这一次要先读一个已知安全的地址试探。
+
+### 74.5 这一轮没有做的事
+
+* 没有改 XPCS0、没有给 XMAC0 挂 PHY —— 这两件是模型 B 的正题，但 §73.3 的
+  判据还没出来（run199 的「2.5G jack's lane: frames N」），先做可能白做。
+* 没有把 §70/§71/§73 里那些「模型 A/B 还没定」的措辞改成定论。
