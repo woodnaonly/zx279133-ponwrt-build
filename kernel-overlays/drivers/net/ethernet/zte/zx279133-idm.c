@@ -361,6 +361,28 @@ static u16 zx279133_idm_rx_lan_vport(u32 word1)
 	return 0;
 }
 
+/*
+ * Whether the descriptor names the 2.5G jack's lane as the source.
+ *
+ * The lane is the SoC's XMAC0 (the 9132's SPA memory id 5, the port the
+ * vendor calls spa_port_attr_xmac_0), and the IDM reports the source port in
+ * the descriptor's word 1, so a frame that arrived on it is the one with
+ * source 5 - the number the 9132's chip port 5 also has, which is why the
+ * two are the same number and not a coincidence.
+ *
+ * There is no DSA user port for this lane yet, and there cannot be one until
+ * the question of which MAC is behind it is settled (docs/92 §70.5).  What
+ * has to happen to these frames in the meantime is decided in the receive
+ * path: bridging them hands them to the tagger as if they had come in on a
+ * 1G jack, and the bridge then sends them out of XMAC0 - which is the very
+ * lane they came in on.  That loop is what the frame storm was (docs/92
+ * §72), so these frames are counted and dropped instead.
+ */
+static bool zx279133_idm_rx_is_jack(u32 word1)
+{
+	return ((word1 >> 16) & 0x3f) == ZX279133_9132_OUTERPHY_PPU;
+}
+
 /* Whether word 1 names the port of a frame the PPU parsed for this side. */
 static bool zx279133_idm_rx_parsed(u32 word1, bool lan_source)
 {
@@ -736,6 +758,7 @@ static int zx279133_idm_rx_process_queue(struct zx279133_eth *eth,
 		u16 refill_before = refill;
 		u16 len;
 		bool lan_source;
+		bool jack_source = false;
 		bool valid_dma;
 		bool xdp_ran = false;
 
@@ -801,6 +824,7 @@ static int zx279133_idm_rx_process_queue(struct zx279133_eth *eth,
 		 * A LAN port switched to WAN-type hands its frames for the CPU
 		 * to the WAN queues, whole, with its transport VID in word 1.
 		 */
+		jack_source = zx279133_idm_rx_is_jack(word1);
 		lan_source = queue < ZX279133_LAN_RX_QUEUE_COUNT ||
 			     zx279133_idm_rx_lan_vport(word1);
 
@@ -1149,6 +1173,25 @@ deliver_skb:
 			    !zx279133_idm_rx_has_ethertype(skb))
 				len += zx279133_idm_rx_restore_lan_l2(
 					skb, le32_to_cpu(READ_ONCE(desc->metadata[0])));
+			/*
+			 * A frame from the 2.5G jack's lane.  It has no DSA
+			 * user port yet, and it must not be bridged: the
+			 * bridge would hand it to the tagger as if it had
+			 * come in on a 1G jack, and the bridge would then
+			 * send it back out of XMAC0 - the very lane it came
+			 * in on.  That loop is the frame storm that killed
+			 * the board on run196 (docs/92 §72), so these frames
+			 * are counted - which is also the evidence that the
+			 * lane carries anything at all - and dropped.
+			 */
+			if (jack_source) {
+				atomic64_inc(&eth->rx_jack_frames);
+				atomic64_inc(&eth->rx_jack_dropped);
+				zx279133_stats_rx_dropped(eth, ndev);
+				dev_kfree_skb_any(skb);
+				goto release_desc;
+			}
+
 			if (lan_source && !lan_dsa_active) {
 				if (eth->lan_ndev)
 					zx279133_stats_rx_dropped(eth, eth->lan_ndev);

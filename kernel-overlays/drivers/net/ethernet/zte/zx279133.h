@@ -138,12 +138,17 @@ extern u16 zx279133_tx_port;
 #define ZX279133_9132_UNI_PPU_LAST	4
 #define ZX279133_9132_CONDUIT_PPU	15
 /*
- * PPU 5 is XMAC0: the SoC's own MAC on the 9132's CPU port, the lane every
- * frame between the CPU and the LAN jacks crosses.  It is not one of the
- * four UNI jacks and it is not the CPU trap port, so it is left alone by
- * zx279133_9132_port_init().
+ * PPU 5 is the 2.5G jack's lane: the vendor's own port for that jack, whose
+ * attribute table it names spa_port_attr_xmac_0 (docs/92 §70.3).  It is not
+ * one of the four UNI jacks and it is not the CPU trap port, so
+ * zx279133_9132_port_init() leaves it alone - zx279133_9132_ppu5_words()
+ * gives it the vendor's whole word set instead.
+ *
+ * The IDM reports the source port of a frame in the descriptor's word 1, so
+ * a frame that came in on this lane is the one with source 5 - and there is
+ * no DSA user port for it yet (docs/92 §72).
  */
-#define ZX279133_9132_XMAC0_PPU	5
+#define ZX279133_9132_OUTERPHY_PPU	5
 #define ZX279133_TX_RECLAIM_DELAY_MS	10
 #define ZX279133_DATAPATH_USER_WAN	BIT(0)
 #define ZX279133_DATAPATH_USER_LAN	BIT(1)
@@ -1287,6 +1292,14 @@ struct zx279133_eth {
 	u64 tx_sw_csum_packets;
 	atomic64_t rx_irq_count;
 	atomic64_t idm_local_irq_count;
+	/*
+	 * Frames that arrived on the 2.5G jack's lane (the IDM's source port
+	 * 5).  They are counted and dropped, not bridged: there is no DSA
+	 * user port for that lane yet, and bridging them sends them back out
+	 * of XMAC0 - which is the same lane they came in on (docs/92 §72).
+	 */
+	atomic64_t rx_jack_frames;
+	atomic64_t rx_jack_dropped;
 	struct zx279133_rx_stats rx_stats[2];
 	atomic64_t rx_refill_retry_work_runs;
 	u16 rx_refill_deficit;

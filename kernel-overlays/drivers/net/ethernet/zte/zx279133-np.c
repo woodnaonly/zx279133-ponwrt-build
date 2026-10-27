@@ -1083,6 +1083,17 @@ static int zx279133_9132_show(struct seq_file *s, void *unused)
 			 ZX279133_XMAC_STAT_TX_GOOD));
 
 	/*
+	 * The 2.5G jack's lane, counted on the way in and dropped there
+	 * (docs/92 §72).  A count that moves is the proof that the jack's
+	 * frames reach the SoC at all; a count of zero says the frame never
+	 * got that far, and the place to look then is the PHY and the
+	 * SerDes, not the switch.
+	 */
+	seq_printf(s, "\n2.5G jack's lane: frames %lld  dropped %lld\n",
+		   (long long)atomic64_read(&eth->rx_jack_frames),
+		   (long long)atomic64_read(&eth->rx_jack_dropped));
+
+	/*
 	 * The VLAN action table, which is the other half of the forwarding
 	 * story and is not in the SPA window this console started with: it
 	 * lives in the NPPT's ERAM, and it says which ports a VID belongs
@@ -2391,12 +2402,20 @@ static int zx279133_mf_port_ppuinit(struct zx279133_eth *eth)
 /*
  * The 9132's per-port attribute memories are the chip's own port numbers and
  * live in zx279133.h: ZX279133_9132_UNI_PPU_FIRST..LAST are the four UNI
- * jacks, ZX279133_9132_OUTERPHY_PPU is the external RTL8226 on jack 4.
+ * jacks, ZX279133_9132_OUTERPHY_PPU is the 2.5G jack's lane, the port the
+ * vendor calls spa_port_attr_xmac_0 and puts the external RTL8226 behind
+ * (docs/92 §70.3).
  */
-#define ZX279133_9132_OUTERPHY_PPU	5
 
 /*
  * PPU 5 is also the 9132 side of the DSA CPU port.
+ *
+ * One thing here is not settled yet, and this comment must not be read as
+ * settling it: whether PPU 5 is the 9132's fifth user port (the 2.5G jack,
+ * model A of docs/92 §70.5) or the SoC's XMAC0 (the lane the jack's PHY
+ * hangs off, model B, which the measurements of §71.6 favour) is not yet
+ * measured directly.  The mapping below is this driver's own DSA numbering,
+ * not a statement about the hardware.
  *
  * The port numbering here is the SPA memory id, and the bootloader prints the
  * authoritative list of them (spa_port_attr_op help, measured 2026-10-21):
@@ -2781,7 +2800,8 @@ static int zx279133_9132_mf_mirror(struct zx279133_eth *eth, u32 ppu)
 }
 
 /*
- * The four UNI jacks' flood groups, with the CPU port in them.
+ * The five jacks' flood groups (PPU 1..4 and the 2.5G jack's lane, PPU 5),
+ * with the CPU port in them.
  *
  * A group holds one destination port id, in bits 0..5, and the vendor's own
  * groups hold exactly one member: the WAN port (PPU 0, which on this board is
@@ -2793,7 +2813,7 @@ static int zx279133_9132_mf_mirror(struct zx279133_eth *eth, u32 ppu)
  * and does not care, because the vendor's CPU port is fed by the protocol
  * trap (ERAM table 0x18) rather than by the flood path.
  *
- * So the CPU port goes into the four jacks' groups.  The entry holds one
+ * So the CPU port goes into the five jacks' groups.  The entry holds one
  * destination port, so the group becomes the CPU port instead of the WAN
  * port: the frame is delivered instead of being dropped, and the board's
  * answer teaches the 9132 the entry by ordinary source-address learning.
@@ -2808,7 +2828,7 @@ static int zx279133_9132_flood_cpu_port(struct zx279133_eth *eth)
 	int ret;
 
 	for (p = ZX279133_9132_UNI_PPU_FIRST;
-	     p <= ZX279133_9132_UNI_PPU_LAST; p++) {
+	     p <= ZX279133_9132_OUTERPHY_PPU; p++) {
 		ret = zx279133_eram_table_set_bits(eth,
 						   ZX279133_FLOOD_ERAM_SDT_ID,
 						   p << 6, 32,
@@ -2915,51 +2935,71 @@ static int zx279133_9132_port_init(struct zx279133_eth *eth)
 }
 
 /*
- * PPU 5 is XMAC0: the SoC's own MAC on the 9132's CPU port, the lane every
- * frame between the CPU and the LAN jacks crosses.  It is neither one of the
- * four UNI jacks nor the CPU trap port, so zx279133_9132_port_init() leaves
- * it alone on purpose.
+ * PPU 5 is the 2.5G jack's lane.
  *
- * Its entry program is the board's own port-flow table's value for it -
- * 0x0000a6a5, the same word the four working UNI jacks run - and the table
- * that says so (zx279133_9132_port_flow[]) is written inside
- * zx279133_ppu_mcode_prepare(), which is early.  Two later steps write the
- * per-port words again (zx279133_spa_prepare() writes every port's a10/a1/a13,
- * zx279133_mf_port_ppuinit() writes a19), and on the board PPU 5 came out of
- * that with the entry program of another board (0x00008015, the SR1010's) and
- * with a13 = 0x00650650 and a19 = 0x00042000 - while the four UNI jacks, whose
- * words zx279133_9132_port_init() writes last, came out right.
+ * The vendor's own port for that jack is the SPA memory id 5, whose attribute
+ * table is named spa_port_attr_xmac_0 (docs/92 §70.3), and the vendor gives it
+ * exactly the same word set as the four UNI jacks: the same entry program
+ * 0x0000a6a5, the same a1/a2/a9/a10/a13/a19.  Only its two flood words
+ * differ, because they are the fifth flood group - 0x05400410 and 0x01400940
+ * against 0x04400410 / 0x00400840 and up - and zx279133_9132_vendor_flood[]
+ * already carries them (its comment says so: "PPU 1..4 are the four UNI
+ * jacks and PPU 5 is XMAC0").
  *
- * The consequence is not subtle: with the wrong entry program on the CPU
- * port, the 9132 never hands that port's frames to the IDM.  The IDM's "receive
- * cpu pkt cnt from DMA" (nppt+0x280180) stays at 0 and all sixteen receive
- * queue heads stay empty, no matter how much traffic the LAN sends.
+ * On this board PPU 5 comes out of the earlier steps with another board's
+ * values all over it, not just with the wrong entry program.  Measured
+ * 2026-10-28 04:49 on the running board:
  *
- * So the conduit's entry program is written here, after every other step,
- * and read back: the board has to show the word it was given.
+ *	PPU 5   a0 0x00008015  a10 0x01f4000c  a13 0x00650650
+ *	        a17 0x00000000  a18 0x00000000  a19 0x00042000
+ *	PPU 1   a0 0x0000a6a5  a10 0x0fa0000e  a13 0x00008008
+ *	        a17 0x04400410  a18 0x00400840  a19 0x96040001
+ *
+ * 0x00008015 is the SR1010's entry program, 0x01f4000c is the PON port's
+ * (PPU 0) a10, and a17/a18 are zero, so the port is in no flood group at all.
+ * The vendor's port has a flood group of its own; this one has none.
+ *
+ * The consequence is not subtle: with the wrong words on this port the 9132
+ * never hands its frames to the IDM.  The IDM's "receive cpu pkt cnt from DMA"
+ * (nppt+0x280180) stays at 0 and all sixteen receive queue heads stay empty,
+ * no matter how much traffic the LAN sends.
+ *
+ * So the whole set is written here, after every other step that touches a
+ * port's words (zx279133_spa_prepare() writes a1/a2/a9/a10/a13,
+ * zx279133_mf_port_ppuinit() writes a19), and the entry program is read back:
+ * the board has to show the word it was given.
  */
-static int zx279133_9132_xmac0_entry_program(struct zx279133_eth *eth)
+static int zx279133_9132_ppu5_words(struct zx279133_eth *eth)
 {
+	const u32 ppu = ZX279133_9132_OUTERPHY_PPU;
 	const u32 want = 0x0000a6a5;
 	u32 value;
 	int ret;
 
-	ret = zx279133_spa_indirect_write(eth, ZX279133_9132_XMAC0_PPU, 0, want);
+	/* The vendor's words for this port: the set the four UNI jacks get,
+	 * plus this port's own two flood words. */
+	ret = zx279133_9132_port_words_vendor(eth, ppu);
 	if (ret)
 		return ret;
 
-	ret = zx279133_spa_indirect_read(eth, ZX279133_9132_XMAC0_PPU, 0, &value);
+	/* And the copy of the attribute word in the table the switch engine
+	 * reads. */
+	ret = zx279133_9132_mf_mirror(eth, ppu);
+	if (ret)
+		return ret;
+
+	ret = zx279133_spa_indirect_read(eth, ppu, 0, &value);
 	if (ret)
 		return ret;
 
 	if (value != want)
 		dev_warn(eth->dev,
-			 "9132 PPU %u (XMAC0, the CPU conduit) entry program is %08x, not %08x\n",
-			 ZX279133_9132_XMAC0_PPU, value, want);
+			 "9132 PPU %u (the 2.5G jack's lane) entry program is %08x, not %08x\n",
+			 ppu, value, want);
 	else
 		dev_info(eth->dev,
-			 "9132 PPU %u (XMAC0, the CPU conduit) entry program %08x\n",
-			 ZX279133_9132_XMAC0_PPU, value);
+			 "9132 PPU %u (the 2.5G jack's lane) entry program %08x\n",
+			 ppu, value);
 
 	return 0;
 }
@@ -5384,20 +5424,19 @@ int zx279133_np_prepare(struct zx279133_eth *eth)
 		goto err_route_off;
 	/*
 	 * The 9132's own UNI ports (PPU 1..4) are the physical LAN jacks on
-	 * SK-D840N; see the 9132 block above and docs/15.  The external
-	 * RTL8226 (jack 4) is PPU 5 and is left alone here: it is the
-	 * SoC's own LAN-side port and the vendor 4.19 does not carry a byte
-	 * on it either (docs/07 supplement 94).
+	 * SK-D840N; see the 9132 block above and docs/15.  The 2.5G jack's
+	 * lane is PPU 5, and it gets its own word set right below.
 	 */
 	ret = zx279133_9132_port_init(eth);
 	if (ret)
 		goto err_route_off;
 	/*
-	 * ...except for its entry program, which is the one word that decides
-	 * whether the 9132 hands the CPU port's frames to the IDM at all.
+	 * ...except for the 2.5G jack's own lane, whose whole word set is
+	 * written last, because those are the words that decide whether the
+	 * 9132 hands that lane's frames to the IDM at all.
 	 * This has to come after everything else that writes a port's words.
 	 */
-	ret = zx279133_9132_xmac0_entry_program(eth);
+	ret = zx279133_9132_ppu5_words(eth);
 	if (ret)
 		goto err_route_off;
 	/*
