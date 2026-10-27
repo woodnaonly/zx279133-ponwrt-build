@@ -6288,3 +6288,229 @@ base-X 这份既不是 10G profile 也不是 PON image。
   路，而它读 RTL8226 扩展寄存器得到的值两次不一样（0xd、0x1e），不在它
   自己的表里 ⇒ `get speed mode failed`。所以 U-Boot 里的
   `xmac_test ... 1000BASE-X` 只能验证「寄存器写进去了」，验不了「帧通了」。
+
+## 77. 07:05：厂商速度表读错了一格，继承分支的判据是反的 —— 两个改动（a24faf9、c4a4fc1）
+
+这一轮没有等到板子（run207 在 0.3836 秒静默死，电源节拍又只有 20 分 30 秒一次），
+所以这一节记的是**从厂商 np_133.ko 的反汇编里挖出来的两个结论**，加上这一轮为了
+回到能上板的状态而做的回退。两个结论都推翻了自己上一轮写下的东西，所以先记作废。
+
+### 77.1 先把 run207 的死因回退掉（a24faf9）
+
+run207 上板 0.3836 秒静默死，没有 panic / oops / Call trace，最后一行是 rgmii 驱动
+打印计数器的中途。位置正好在 Uni SerDes 的 probe。
+
+`0bb0e85` 为了分清「那 49 个字是开时钟前就变了、还是被时钟使能改的」，在
+`clk_bulk_prepare_enable()` **之前**用 `readl()` 把 Uni SerDes 的 49 个寄存器读了一遍。
+这块寄存器挂在 UNI SerDes 的 CSR 时钟后面，时钟还关着就读它是一次总线 abort，
+不是读回 0。
+
+⇒ `a24faf9` 把这次读去掉，比对计数挪回开时钟之后（本来就有一次）。驱动其余行为不变。
+
+**这一笔是纯诊断，回退它没有代价；但它同时说明一件事**：上一轮那个「28/49 vs 0/49」
+的结论是**从参考文件取错时机**得来的，不是板子上真的被改过 —— 板子上一直就是
+base-X 那份 image（模式字 0x101），是驱动的参考文件装的是 SGMII 那份（模式字 0x01）。
+
+### 77.2 厂商的速度表读错了一格：base-X 是 **0x40**，不是 0x20
+
+上一轮（`c8d162f`）把 SR-MII 速度字从 `BIT(6)` 改成了 `BIT(5)`，依据是 §76.2 那张
+A/B 表里的一行：
+
+> | 0x1a7c0010 (SR-MII speed) | 0x00000020 | 0x00000020 | —— |
+
+**这一行是错的。** 厂商 `xpcs_set_sr_mii_ctrl_speed()`（np_133.ko **0x1b910**）的
+反汇编逐条如下（`staging/ctl/adisx.py` 能把 `bl` 的重定位解析成符号名）：
+
+```
+0001b910  adrp     x2, #0x1b000
+0001b914  lsl      w0, w0, #0x18        ; index * 0x1000000
+0001b918  cmp      w1, #5               ; 速度号 0..5
+0001b920  ldr      x4, [x2]             ; xmac0_pcs_base（重定位 ABS64）
+0001b924  add      x0, x0, #0x7c0, lsl #12   ; + 0x7c0000
+0001b928  ldr      w5, [x4, x0]         ; 读 base+0x7c0000
+0001b938  ldrb     w1, [x3, w1, uxtw]   ; ★ 速度号先查一张字节表
+0001b940  add      x1, x2, w1, sxtb #2  ; ★ 再经跳板落到各个 case
+...
+0001b974  mov      w2, #-0x2061        ; 掩码 0x2061
+0001b978  and      w2, w5, w2
+0001b97c  orr      w1, w1, w2
+0001b980  str      w1, [x4, x0]
+```
+
+**速度字就在 `base + 0x7c0000`**（对 XPCS0 就是 0x1a7c0000，也就是 mainline 叫
+「VEND2 BMCR」的那个字）—— **不是 0x1a7c0010**。
+
+而且速度号 → 取值**不是恒等**：字节表在 `.rodata+0x187c`，内容是
+`0a 00 02 04 06 08`，跳板在 0x1b948 起：
+
+| 速度号 | 字节 | 落到的 case | 值 |
+|---|---|---|---|
+| 0 | 0x0a | 0x1b970 | **0x0000** |
+| 1 | 0x00 | 0x1b948 | **0x2000** |
+| 2 | 0x02 | 0x1b950 | **0x0040** |
+| 3 | 0x04 | 0x1b958 | **0x0020** |
+| 4 | 0x06 | 0x1b960 | **0x2020** |
+| 5 | 0x08 | 0x1b968 | **0x2040** |
+
+（上一轮记的「0→0x2000、1→0x40、2→0x20、3→0x2020、4→0x2040、5→0」是**照着 case
+的源码顺序抄的**，把跳板这一层漏了。）
+
+调用方：`xmac_1gbase_x_conf()`（0x1a6ec）用 **speed=2、duplex=1** 调
+`xpcs_1000base_x_conf()`，这个 2 一路传到速度函数：
+
+```
+0001a72c  mov      w0, w19
+0001a730  mov      w2, #1              ; duplex = 1
+0001a734  mov      w1, #2              ; ★ speed = 2
+0001a738  bl       xpcs_1000base_x_conf
+```
+
+⇒ **base-X 的速度字是 0x40 = BIT(6)**，`c8d162f` 改成的 BIT(5) 是错的。
+
+**板子同意这个更正。** U-Boot 里把 XMAC0 设成 "work in 1000BASE-X mode" 之后读
+0x1a7c0000 得到 **0x0140**：duplex 位（BIT(8)）+ 0x40。而按厂商的语义从 SGMII 模式
+的 0x1140 出发：
+
+```
+(0x1140 & ~0x2061) | 0x40 = 0x0100 | 0x40 = 0x0140   ✔ 与实测逐位相同
+```
+
+（0x2061 掩码会把 bit12 和 bit0 一起清掉，所以 bit12 消失、bit5 保持 0。）
+
+**⇒ `c4a4fc1`：`BIT(5)` 改回 `BIT(6)`，掩码也从 `BIT(13)|BIT(6)|BIT(5)` 改成厂商自己的
+`0x2061`**（多清 bit12 与 bit0）。这一点不是小事：掩码窄一位的话，base-X 之后那个字
+会停在 0x1140 而不是该有的 0x0140。
+
+**⇒ §76.2 那张表的「0x1a7c0010 (SR-MII speed)」一行作废**：那个地址是 SR_MII 块里的
+另一个寄存器，它在两种模式下都是 0x20，恰好和速度号 2 的取值撞上了 —— 是个巧合。
+
+### 77.3 厂商 base-X 的完整写序列（逐条，含地址）
+
+共享 helper 在 `0x1bc0c`，被 `xpcs_1000base_x_conf()` 以
+`(index, speed=2, duplex=1, tx_config=0)` 调用；`xpcs_sgmii_mode_conf()` 用同样的
+helper，只是第四参数是 2（tx_config）。序列如下（`x6 = index << 24`，
+`base = xmac0_pcs_base` = 0x1a000000）：
+
+| # | 动作 | 地址 | 值 |
+|---|---|---|---|
+| 1 | 写 1 | base + 0xc001c | 0x00000001 |
+| 2 | 清 bit0 | base + 0xe0010 | |
+| 3 | 清 bit13 | base + 0x400000 | |
+| 4 | 清 bit13 | base + 0xc0000 | |
+| 5 | `xpcs_set_sr_mii_ctrl_speed(index, 2)` | base + 0x7c0000 | mask 0x2061，值 0x40 |
+| 6 | `xpcs_set_sr_mii_ctrl_duplex_mode(index, 1)` | base + 0x7c0000 | bit8 = 1 |
+| 7 | 置 bit11（soft reset） | base + 0xc0000 | |
+| 8 | 等 pseq idle（bits 4:2 == 4） | base + 0xe00440 | 最多 400 次 |
+| 9 | 清 bit11 | base + 0xc0000 | |
+| 10 | `xpcs_set_vr_mii_an_ctrl_pcs_mode(index, 0)` | base + 0x7e0004 | mask **0xfffffff9**，值 0 |
+
+第 10 步的掩码是 `0xfffffff9`：**清 bit0（AN 中断使能）并把 bits 2:1 置成 PCS mode**。
+base-X 传 0 ⇒ bits 2:1 = 0；SGMII 传 2 ⇒ bits 2:1 = 0b10。
+
+**厂商的 base-X 路径一个字节都没有写 VR_MII_DIG_CTRL1**（0x7e0000）。
+`xpcs_set_vr_mii_dig_ctrl1_mac_auto_sw()` 只出现在 AN 配置那几个函数里
+（`xpcs_auto_negotiation_conf_in_sgmii_mode` / `_in_1000base_x_mode` / `_in_usxgmii_mode`）。
+
+⇒ **base-X 下 DIG_CTRL1 = 0x2000 是它的复位默认值，不是谁写出来的**；AN_CTRL = 0x0000
+也是复位默认（外加第 10 步清 bit0）。§76.2 那张表里 base-X 那一列的两个值，
+**与厂商代码不矛盾，但成因不是「厂商写了它们」，而是「谁都没动它们」** —— 这个区别
+在读回值异常时很重要。
+
+mainline 现在的 base-X profile 与厂商序列的对照：
+
+| 厂商 | mainline | |
+|---|---|---|
+| 1 写 1 → 0xc001c | 无 | **缺**（这一位还不清楚是什么） |
+| 2 清 bit0 @ 0xe0010 | 无 | 缺（主线上一次读它都 abort） |
+| 3 清 bit13 @ 0x400000 | `PMAPMD BMCR` 清 SPEED_SEL | ✔ 同一个字 |
+| 4 清 bit13 @ 0xc0000 | `PCS BMCR` 清 SPEED_SEL | ✔ 同一个字 |
+| 5 速度 0x40 | 之前是 0x20，**已改回 0x40** | ✔ |
+| 6 duplex bit8 | `BMCR` 改 duplex 位 | ✔ |
+| 7–9 soft reset + 等 pseq | `PCS BMCR` 的 bit11 + 等 pseq | ✔ |
+| 10 PCS mode 0 | `AN_CTRL` 改 bits 2:1 + 整字写 0 | ✔（整字写把 bit0 也清了） |
+| （不写） | `DIG_CTRL1` 整字写 0x2000 | 等价 |
+
+mainline 还多做了几件 SGMII 味的动作（`xpcs_exit_sgmii_mode()` 那一组、
+`PCS reg 7 = 1`、`XAUI_CTRL bit0`），厂商 base-X 路径里没有；它们不写错字，先留着。
+
+### 77.4 继承分支的判据是反的（这一条比速度表更值钱）
+
+`zx279133-switch.c` 原来有一段：
+
+```c
+	status = zx279133_switch_nppt_read(priv, ZX279133_NPPT_XPCS0_STATUS);
+	if ((status & 0x3800) == 0x3800) {
+		dev_info(dev, "the bootloader left the PCS link up (0x%04x); inheriting it\n", status);
+		zx279133_switch_sopc_publish(priv);
+		zx279133_switch_xmac_configure(priv, true);
+		goto report;
+	}
+```
+
+**这个状态字不是这条 lane 的 link 指示。** 三条独立证据：
+
+1. **U-Boot 里它随启动方式变、与 PCS 的 work mode 无关**：冷启动永远是 0x380b；
+   跑过 ping 的那次是 0x2c03；§76 量过 0x19000080..0x190000bf 整个区在 base-X 与
+   SGMII 下一字未变。
+2. **日志里的 323 次开机分成两簇，方向正好相反**（docs/92 §38 的统计）：
+   311 次冷启动（0x380b）走的正是**继承**分支，而这些开机里 lane 从未通过过流量、
+   引导程序交下来的 XMAC 三个控制字全 0；唯一被证明通过的那 12 次（0x2c03）走的
+   恰恰是**重编**分支。**判据与有用的方向正好相反。**
+3. **根本没有东西可继承**：U-Boot 没有 XPCS 驱动（厂商自己的 DT 里
+   `xpcs@1a000000` 是 disabled），它的 net init 在这条 lane 上直接放弃
+   （`xmac doesn't support this pcs mode` → `ERROR: get speed mode failed`），
+   所以内核进来时 PCS 还在复位态 —— §76 那次快照里
+   VR_MII_AN_CTRL / VR_MII_DIG_CTRL1 / VEND2 BMCR **三个都读 0x0000**。
+
+⇒ **`c4a4fc1` 把这个分支删掉，每次都按厂商序列编程。**
+
+这一条还解释了 run207 日志里的一个谜团：那次 `lane pre-pcs` 与 `lane after`
+读到的三个寄存器全是 0x0000，而 §76.2 的表说 SGMII 模式下 mainline 读到的是
+0x0005 / 0x2200 / 0x1140（正好是 U-Boot 那一列）。当时以为「mainline 的 MDIO 写
+没有落地」。**现在看不是写不落地，是那段配置代码一次都没跑过**
+（0x380b ⇒ 走继承分支 ⇒ PCS 保持复位值）。读回全 0 与「继承了一个没配过的 PCS」
+完全自洽。
+
+### 77.5 这一轮的两个 commit
+
+| commit | 改什么 | CI |
+|---|---|---|
+| `a24faf9` | 撤掉开时钟前读 Uni SerDes 那 49 个字的诊断 | run209 |
+| `c4a4fc1` | lane 不再继承引导程序（每次按厂商序列编程）；SR-MII 速度值 0x20 → 0x40，掩码改用厂商的 0x2061 | run210 |
+
+### 77.6 run210 的判据（先写死，再看数）
+
+* **Q1** 板子能进 shell（run207 的 0.38 秒死已经回退）
+* **Q2** 日志里出现 `the lane is programmed here, not inherited`，**不是** `inheriting it`
+* **Q3** `lane after:` 读回 **AN_CTRL = 0x0000、DIG_CTRL1 = 0x2000、BMCR = 0x0140**
+  —— BMCR 是 0x0140 才算厂商那一列；0x0000 说明写没落地，0x0120 说明树里还是旧的错值
+* **Q4** Uni SerDes `image differs in 0/49 word(s)`
+* **Q5** `2.5G jack's lane: frames N` 在 PC 的 flood 之后上涨
+* **Q6** lane 的 XMAC0 统计也在动
+* **Q7** 板子还活着
+
+### 77.7 下一个坑：2.5G 口要变成 `lan1`，机制有两条路，都还没定
+
+owner 已经拍板：**2.5G 口的 netdev 叫 `lan1`，与 LAN2/3/4 一样进 `br-lan`**。
+但这个口今天**没有 DSA user port**：
+
+* 2.5G 口在 9132 上是 **PPU 5**（`spa_port_attr_xmac_0`），不是四个 UNI 口之一；
+* DSA 端口号与 PPU 端口号的对应是 **DSA N ↔ PPU N-3**（DSA 4..7 ↔ PPU 1..4），
+  所以 PPU 5 天然对应 DSA 8 —— 而 **DSA 8 现在是 CPU 口**；
+* 传输 VID 是 `55 + DSA 端口号`，四个 UNI 口用 59..62，**9132 的 VLAN 表里只有
+  vid 0 和 59..62**，没有第 5 个服务 VID；
+* IDM 收到 source=5 的帧时，`zx279133_idm_rx_lan_vport()` 返回 0，于是兜底成 62，
+  帧被当成 1G 口进来的，桥再把它发回 XMAC0 —— 就是 §72 那个环路，所以 `f7b1650`
+  把它们计数后丢弃（`2.5G jack's lane: frames N dropped M`）。
+
+⇒ 两条路：
+
+1. **给 PPU 5 加第 5 个 DSA 口**：CPU 口改成 DSA 9，2.5G 口用 DSA 8（VID 63），
+   并往 9132 的 VLAN 表里加一个 vid 63 的条目。**能不能加没有量过** —— 那张表在
+   NPPT 的 ERAM 里，驱动现在只读不写。
+2. **给 2.5G 口一个独立 netdev**（不走 tagger）：IDM 把 source=5 的帧直接交给一个
+   叫 `lan1` 的 netdev，发出去的时候把 IDM 描述符的 outport 写成 5。这个更像
+   `eth0`（XMAC1 + PON SerDes）那条路的做法，但 `eth0` 走的是 NPPT 的 CPU 口，
+   不是 tagger。
+
+**两条都等 Q5 的结果**：Q5 说明 lane 到底通不通，通了才有资格谈把它挂进 `br-lan`。
