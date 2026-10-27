@@ -190,47 +190,64 @@ static int zx279133_uni_serdes_power_on(struct phy *phy)
 		goto out_unlock;
 
 	if (priv->submode == PHY_INTERFACE_MODE_SGMII) {
-		/* Inherit: no reset pulse, no image write, no rate registers.
+		/*
+		 * This lane's image is the vendor's 1000BASE-X one: the one its
+		 * xmac_1gbase_x_conf() reaches through uni_serdes_init(xmac, 7),
+		 * which is the image measured in the board's own U-Boot
+		 * (e0001004 4fa840a3 013e860f 0210c073 ..., mode word 0x101) and
+		 * the one in zx279133_uni_1g_profile[].
 		 *
-		 * The bootloader configures this lane for base-X on its way in -
-		 * its net init prints "mode_eth_1gbase_x_cfg" - and the 49 words
-		 * it leaves behind are the ones in zx279133_uni_1g_profile[].
-		 * So the image this driver must not touch is already the right
-		 * one, and the count below has to come out as 0/49.  It used to
-		 * come out as 28/49, because the reference file in this driver
-		 * held the other image (the one U-Boot leaves behind when it has
-		 * not configured the lane), and 28 is exactly the difference
-		 * between the two.
+		 * The bootloader does not leave it behind.  In a normal boot
+		 * U-Boot never touches this lane at all - its banner does the PON
+		 * side and stops - and the Uni SerDes still holds its reset
+		 * default (mode word 0x01, image c0000004 50a840a7 012e064f
+		 * 1fd0c093 ...), read at the loader's prompt on 2026-10-28 07:12.
+		 * The "mode_eth_1gbase_x_cfg" and "uni serdes init succeed"
+		 * lines in the log come from the sessions where U-Boot's net init
+		 * ran, not from a normal boot.  So the image has to be written
+		 * here.
 		 *
-		 * Every mainline bring-up that does rewrite it has lost the lane:
-		 * writing zx279133_uni_10g_profile (which is the *PON* SerDes'
-		 * image, 21/49 against this one) linked the PHY but returned not
-		 * one frame (rx_packets 0, xmac_tx_good_frames 12); writing the
-		 * measured file after a reset pulse (run 51, 20:14) did not even
-		 * link the PHY: "Link detected: no", supported 10baseT only,
-		 * tx_packets 0, ARP FAILED, while U-Boot had carried 11 MB
-		 * minutes earlier in the same cycle.  The bring-up that can be
-		 * right is the one that leaves this block alone - so the only
-		 * thing done here is to make sure the enable bit is set, and
-		 * to report what the block says about itself.
+		 * The vendor's uni_serdes_init() writes it like this: reset the
+		 * datapath, write the 49 words, set the enable bit, then wait for
+		 * the PLL and the CDR.  Neither wait is fatal here.  The CDR only
+		 * locks once the far end of this lane - the RTL8226 on the 2.5G
+		 * jack - is up, and that is the switch driver's business, not
+		 * this driver's; failing the attach over a wait that has not
+		 * timed out yet would take the whole datapath down.
 		 */
+		ret = zx279133_uni_serdes_reset_pulse(priv);
+		if (ret)
+			goto err_disable_clocks;
+
+		zx279133_uni_serdes_write_profile(priv);
 		status = readl(priv->serdes + ZX279133_UNI_SERDES_MODE_CTRL);
 		how = status & ZX279133_UNI_SERDES_ENABLE ? "already" : "set";
-		if (!(status & ZX279133_UNI_SERDES_ENABLE))
-			writel(status | ZX279133_UNI_SERDES_ENABLE,
-			       priv->serdes + ZX279133_UNI_SERDES_MODE_CTRL);
-		/* Count, do not correct: whether the block came up in the image the working lane
-		 * was measured in is the single question this round can answer, and the answer has
-		 * to be in the log because nothing else on this board can read it back later.
+		writel(status | ZX279133_UNI_SERDES_ENABLE,
+		       priv->serdes + ZX279133_UNI_SERDES_MODE_CTRL);
+
+		readl_poll_timeout(priv->serdes + ZX279133_UNI_SERDES_PLL_STATUS,
+				    status, status & ZX279133_UNI_SERDES_PLL_LOCK,
+				    ZX279133_UNI_SERDES_POLL_US,
+				    ZX279133_UNI_SERDES_TIMEOUT_US);
+		readl_poll_timeout(priv->serdes + ZX279133_UNI_SERDES_RX_STATUS,
+				    status,
+				    status & ZX279133_UNI_SERDES_CDR_LOCK,
+				    ZX279133_UNI_SERDES_POLL_US,
+				    ZX279133_UNI_SERDES_TIMEOUT_US);
+		/*
+		 * Count the image that is in there now.  It has to be 0/49: the
+		 * words above were just written from the same file.  A count
+		 * that is not zero says the block did not take the writes, and
+		 * that is worth seeing in the log.
 		 */
 		for (i = 0; i < ZX279133_UNI_SERDES_PROFILE_WORDS; i++)
 			if (readl(priv->serdes + i * 4) != zx279133_uni_1g_profile[i])
 				mismatch++;
 
 		dev_info(priv->dev,
-			 "Uni SerDes 1G inherited: mode %#x %s, image differs in %u/%d word(s), status %#x/%#x\n",
-			 readl(priv->serdes + ZX279133_UNI_SERDES_MODE_CTRL), how, mismatch,
-			 ZX279133_UNI_SERDES_PROFILE_WORDS,
+			 "Uni SerDes 1G profile written: mode %#x %s, image differs in %u/%d word(s), status %#x/%#x\n",
+			 readl(priv->serdes + ZX279133_UNI_SERDES_MODE_CTRL), how,
+			 mismatch, ZX279133_UNI_SERDES_PROFILE_WORDS,
 			 readl(priv->serdes + ZX279133_UNI_SERDES_PLL_STATUS),
 			 readl(priv->serdes + ZX279133_UNI_SERDES_RX_STATUS));
 		priv->powered = true;
@@ -289,9 +306,8 @@ static int zx279133_uni_serdes_power_off(struct phy *phy)
 
 	mutex_lock(&priv->lock);
 	if (priv->submode == PHY_INTERFACE_MODE_SGMII) {
-		/* An ifdown must not tear down a lane the bootloader just carried 11 MB through:
-		 * clearing the enable bit and gating the clock here is how an inherited SerDes
-		 * gets lost between one command and the next.
+		/* An ifdown must not tear down this lane: clearing the enable bit and gating the
+		 * clock here is how a configured SerDes gets lost between one command and the next.
 		 */
 		mutex_unlock(&priv->lock);
 		return 0;
