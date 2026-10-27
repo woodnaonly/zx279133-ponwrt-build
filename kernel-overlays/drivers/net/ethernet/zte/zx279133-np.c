@@ -1375,6 +1375,56 @@ static ssize_t zx279133_9132_write(struct file *file, const char __user *ubuf,
 	}
 
 	/*
+	 * The XPCS of a MAC lane.  The lane that carries the LAN jack is the
+	 * one that matters for the receive path, and its PCS is a C45 device on
+	 * its own MDIO window - the "m45" verb above only reaches the outer
+	 * PHY's bus, so the PCS registers had no way to be read or written at
+	 * runtime.
+	 *
+	 *	"xpcs 1 0x1e 0x8001"		read one register of the LAN lane's PCS
+	 *	"xpcsw 1 0x1e 0x8001 0x0005"	write one and read it back
+	 *
+	 * The first argument picks the lane: 0 = the PCS of eth0's MAC (XMAC1
+	 * by default), 1 = the LAN lane's PCS (XMAC0's).
+	 */
+	if (!strcmp(tok, "xpcs") || !strcmp(tok, "xpcsw")) {
+		bool is_write = tok[4] == 'w';
+		struct mdio_device *mdiodev;
+		u32 which, devad, reg;
+		int ret2;
+
+		tok = zx279133_9132_next_token(&p);
+		if (!tok || kstrtou32(tok, 0, &which) || which > 1)
+			return -EINVAL;
+		tok = zx279133_9132_next_token(&p);
+		if (!tok || kstrtou32(tok, 0, &devad) || devad > 31)
+			return -EINVAL;
+		tok = zx279133_9132_next_token(&p);
+		if (!tok || kstrtou32(tok, 0, &reg) || reg > 0xffff)
+			return -EINVAL;
+
+		mdiodev = which ? eth->xpcs_lan_mdiodev : eth->xpcs_mdiodev;
+		if (!mdiodev)
+			return -ENODEV;
+
+		if (is_write) {
+			tok = zx279133_9132_next_token(&p);
+			if (!tok || kstrtou32(tok, 0, &val) || val > 0xffff)
+				return -EINVAL;
+			ret2 = mdiodev_c45_write(mdiodev, (int)devad, reg,
+						  (u16)val);
+			if (ret2)
+				return ret2;
+		}
+		ret2 = mdiodev_c45_read(mdiodev, (int)devad, reg);
+		if (ret2 < 0)
+			return ret2;
+		pr_info("xpcs lane %u devad %#02x reg %#04x = 0x%04x\n",
+			which, devad, reg, (u16)ret2);
+		return count;
+	}
+
+	/*
 	 * The VLAN action table, which is where the 9132 decides which
 	 * ports a VID belongs to and which of them see it untagged.  It is
 	 * in the NPPT's ERAM, not in the SPA window, so it gets its own

@@ -2194,5 +2194,311 @@ dtb 里含 `zte,lan-pcs-handle`（run 192 `c38b287` 那对 XPCS0 的配对**在�
    `idm_rx_debug`/`rxb` 与 `lan-cpu0` 是这一侧的见证。
 
 **这一轮不派 CI 包**：TX 方向的修法（默认 `xmac=0`、`tx_port=5`，XPCS0 配对已在树里）已经清楚，
-但**RX 还没通**，现在出一个包只能证明"半条线"，而一个包只能回答一个问题——等 RX 这一侧有答案
+但**RX 还没通**，现在出一个包只能证明“半条线”，而一个包只能回答一个问题——等 RX 这一侧有答案
 再一次性把默认值与 RX 修法一起进树。
+
+## 51. 17:25–17:56 那次开机：把断点钉死在 **PHY 与 XMAC0 的 RX 之间**
+
+### 51.0 这一轮的结论一句话
+
+**PC 发进来的帧连 XMAC0 的接收统计字都没碰到**（RX 计数器组在一次 6 帧突发的前后**逐字相同**），
+而同一时间 XMAC0 的**发送**统计字在涨 ⇒ **XMAC0 就是通往 PC 那条路上的 MAC**，
+断点既不在 PC 侧、也不在 9132 里、更不在 PHY 的寄存器上，**就在 SoC 这一侧的 lane 上**
+（Uni SerDes / XPCS0 / XMAC0 的 RX 那一半）。
+
+### 51.1 两次开机，两次复现同一件事
+
+| 轮次 | 绑定 | eth0 rx_packets | PC ping 回复 | PC rx_bytes | PC 的 ARP 表 | 板子 ping PC |
+|---|---|---|---|---|---|---|
+| 17:37 | `xmac=0, tx_port=5` | 0 → 0 | 0/6 | 25509610 → 25511550（**+1940**）| 有 `192.168.9.3 → d0-45-8d-84-09-00` | 4 发 0 收 |
+| 17:42 | 同上 + mem 5 flood 字 | 0 → 0 | 0/6 | 25539358 → 25541298（+1940）| 同上 | 4 发 0 收 |
+| 17:51 | 同上（第二次开机） | 0 → 0 | 0/6 | 25900375 → 25902667（+2292）| 同上 | 4 发 0 收 |
+
+PC 的 ARP 表里**有**板子的 MAC ⇒ 板子的 ARP **应答**（单播）确实到了 PC，
+所以 **TX 方向连单播都是通的**；而 PC 的 ping（单播给板子）**一条都回不来**。
+**单向，且是硬件级的单向。**
+
+### 51.2 新的决定性见证：**XMAC0 自己的 RX 计数器全程为 0**
+
+XMAC0 的统计块在 NPPT+0x142000（`reg 0x142000` 起一片 dump）。17:51:01（突发前）与
+17:52:33（6 帧 PC 突发 + 板子自己发 4 帧之后）两次 dump 的差：
+
+| 偏移 | 突发前 | 突发后 | 差 |
+|---|---|---|---|
+| `0x142000..0x14200c` | 0x20 | 0x20 | —（常量）|
+| `0x142010..0x14204c` | **全 0** | **全 0** | **0（一帧都没进）** |
+| `0x142050..0x14205c` | 0x00056e75 | 0x00059789 | +10516（字节数）|
+| `0x142070..0x14207c` | 0x000015b4 | 0x000015d4 | **+32 帧（=0x20）** |
+| `0x142090..0x14209c` | — | 0x23 | — |
+
+`0x142070` 是树里命名的 `ZX279133_XMAC_STAT_TX_FRAMES`（§44 的 5554→5559 就是它）。
+**它在那 30 秒里涨了 32 帧**：那是板子自己往 PC 发的帧。
+⇒ **XMAC0 确实在这条通往 PC 的路上**（这一点是量出来的，不是看注释看出来的），
+⇒ 而同一时刻**它那 16 个 RX 计数器一个字都没动** ⇒ **PC 发来的帧根本没进 XMAC0 的接收数据通路**。
+
+**这一条同时推翻了 `switch.c` 注释里的拓扑说法**：那段注释说
+“The Uni SerDes carries the lane to the 9132's CPU port”。**注释错了**——按本项目的规矩，
+注释不能压过流量测量。XMAC0 是插口那侧的 MAC。
+
+### 51.3 PHY（RTL8226）被排除：五个私寄存器与“能载流量的快照”逐字相同
+
+`m45 5 0x1e …`（devad 0x1e，PHY 5 = `14f02000.mdio:05`，`phy_id 0x001cc849`）：
+
+| 寄存器 | 本轮实测（17:56） | §12.2 的“能载流量”值 | 差 |
+|---|---|---|---|
+| `1e.7581`（serdes 复位）| 0x0000 | 0x0000 | 无 |
+| `1e.7588`（AN 配置）| 0x00ce | 0x00ce | 无 |
+| `1e.7589`（AN 状态）| 0x035a | 0x035a | 无 |
+| `1e.758b`（link A）| 0x0005 | 0x0005 | 无 |
+| `1e.758d`（link B）| 0x801e | 0x801e | 无 |
+
+**逐字相同。** PHY 的铜口侧是 up 的（PC 网卡自己报 “Up, 1 Gbps”），
+它的 **SoC 侧 SerDes 寄存器也是原厂“能载流量”的那一份**。
+⇒ **不是“PHY 没被初始化”**（`np.c:1300` 那段注释的猜想在本轮被数据否掉），
+**也不是 `1e.7589` 该写 `0x70d0/0x71d0` 而没写**（它本来就该是 `0x035a`）。
+
+### 51.4 lane 的链路字：主线下是 **down**，原厂是 **up**——而守门逻辑没生效
+
+`reg 0x90`（= `ZX279133_NPPT_XPCS0_STATUS`）本轮实测 **0x00002c03**。
+`switch.c` 自己的判据是 `(status & 0x3800) == 0x3800` ⇒ **down**；
+U-Boot 里量到的是 **0x380b ⇒ up**。
+
+`switch.c` 里本来有一道守门：
+> “If the PCS still says the link is up, the bootloader brought it up … so in that case the
+> bootloader’s configuration is adopted as it is.”
+
+**本轮这道门没生效**：开机日志里第一条 lane 快照就是
+`[1.600528] lane pre-serdes: XPCS0 status=0x2c03 link=down`，
+**在 `switch.c` 自己动 PCS 之前**就已经是 down 了。
+⇒ **断电到 1.6 s 之间有别的东西把这根 lane 弄 down 了**，守门逻辑看不到这种 down，
+于是驱动按“link 没起来”的分支把 PCS 按 1G SGMII 重写了一遍——**在一个本来就 down 的 lane 上再写一次**。
+
+本轮 lane 各字（开机日志，两次快照）：
+
+| | pre-serdes | after | 谁改的 |
+|---|---|---|---|
+| XPCS0 status | 0x2c03 | 0x2c03 | —（两边一样）|
+| XMAC0 tx | 0x60010000 | 0x60010001 | `switch.c` 置了 bit0（TX enable）|
+| XMAC0 rx | 0x3e8000c6 | 0x3e8000c7 | `switch.c` 置了 bit0（RX enable）|
+| XMAC0 frame | **0x80000001** | **0x80000000** | `switch.c` **清掉了 bit0** |
+| XMAC0 mode | 0x00000000 | 0x00000000 | `switch.c` 写 2（被 mode 覆盖？）|
+| XMAC0 duplex | 0x00000100 | 0x00000100 | — |
+| XMAC0 misc | 0x00002000 | 0x00002200 | `switch.c` 置 bit9 |
+| XPCS vend2 AN_CTRL | 0x0005 | 0x0015 | `switch.c` 置 bit4（SGMII_LINK_STS）|
+| XPCS vend2 DIG_CTRL1 | 0x2200 | 0x2200 | — |
+| XPCS vend2 BMCR | 0x1140 | 0x1140 | — |
+| XPCS pcs BMCR | 0x0440 | 0x0440 | — |
+
+**注意 `XMAC0 frame` 的 bit0 被清掉了**（原厂留下的是 `0x80000001`，`switch.c` 写的是
+`ZX279133_XMAC_VENDOR_FRAME_CFG = 0x80000000`）。这一位在 9132 的 Marvell 风格端口寄存器里
+落在“Port RX Control / Port Frame”一带，**是 RX 侧的开关还是别的，本轮没定位**。
+
+### 51.5 §50.5 第 4 步（flood 字）**FAIL**，这一支关掉
+
+mem 5 的 SPA 17/18 现在是 **0**，mem 1（一个能用的口）是 `0x04400410` / `0x00400840`。
+把 mem 1 那两个值原样写进 mem 5（读回确认：`9132 spa: mem 5 addr 17 = 0x04400410`、
+`addr 18 = 0x00400840`），再打一组 PC 帧 ⇒ **eth0 rx 仍然 0→0、PC 仍然 0/6**。
+⇒ **“mem 5 缺泛洪/转发向量”不是断点**，§48.4 第二分支与 §50.5 第 4 步**一并关掉**。
+
+顺带把两个口的基础寄存器比了一遍（`9132 spa: mem N addr K`）：
+
+| | mem 5 | mem 1 |
+|---|---|---|
+| addr 0 | 0x00008015 | 0x0000a6a5 |
+| addr 4 | 0 | 0 |
+| addr 5 | 0 | 0 |
+| addr 11 | 0 | 0 |
+| addr 17 | 0 →（本轮改成）0x04400410 | 0x04400410 |
+| addr 18 | 0 →（本轮改成）0x00400840 | 0x00400840 |
+| addr 19（属性字）| 0x00042000 | 0x96040001 |
+
+**属性字**（`0x42000` vs `0x96040001`）本轮仍然是 `0x00042000`（`lan_port_bringup()` 写的原厂值，
+§49.4 已定它不是门、也不该动）。**端口控制字 addr 0 两边都非零、形状相近**，没有一眼可见的缺口。
+
+### 51.6 lane 被按 **1G** 编程，而树里另一处把这根 lane 当 **USXGMII** 用
+
+`switch.c` 的 `priv->usxgmii` 只有在 Uni SerDes **拒收 SGMII** 时才置 true；
+本轮开机日志是
+`zx279133-uni-serdes 16100000.phy: Uni SerDes 1G inherited: mode 0x101 already, image differs in 28/49 word(s)`
+⇒ **SGMII 被收下了** ⇒ `usxgmii = false` ⇒ `zx279133_switch_xmac_program(priv, ZX279133_XMAC_SPEED_1G)`,
+**XMAC0 的速度字（bit31..29）= 3 = 1G**（`0x60010000` 的 0x6 正是 `011`）。
+
+而同一棵树的 `zx279133-rtl8372n.c`（`zx279133_lan_xpcs_configure()`）
+**把这同一个 XPCS0 / 同一根 Uni SerDes lane 按 USXGMII 10G 配**，
+`switch.c` 的 `zx279133_switch_xpcs_usxgmii()` 就是照抄它：
+`VEND2 AN_CTRL` 清 `BIT(3)|BIT(8)`、`PCS MDIO_CTRL2 = 0`、
+`PCS DIG_CTRL1` 置 `USXG_EN(BIT(9))|VSMMD1_EN(BIT(13))`、
+`PCS KR_CTRL(0x8007)` 清 `GENMASK(12,10)`、`DIG_CTRL1` 置 `VR_RST(BIT(15))` 后轮询清零、
+`VEND2 AN_CTRL` 置 `AN_INTR_EN`、`VEND2 BMCR = 0x3140`。
+**USXGMII 对应的 XMAC 速度字是 0**（`ZX279133_XMAC_SPEED_USXGMII = 0`）。
+
+另外，`docs/07` 里从 `plat_132.ko` 还原出来的**原厂 1G** 配置是
+`xpcs_1g_mode_conf(xmac, speed=3, duplex=1, pcs_mode=2)`——**speed=3 与主线一致**，
+所以速度字本身不能单独判为错；**但“原厂在另一个驱动里把这根 lane 当 USXGMII 用”这件事，
+是本轮读代码读出来的最大的一条新线索。**
+
+### 51.7 顺带查出来的两个工具坑
+
+1. **`trapall` 动词必须带 port 参数。** `np.c:1691` 要求 `port <= 7`，
+   只写 `echo trapall >$D` 会得到 `ash: write error: Invalid argument`（`-EINVAL`）。
+   它**不是 dump，是一个写动作**：把 port 的 128 个协议项全设成某个 action
+   （`action` 省略时是 2 = trap 给 CPU），而且**只写 group `port<<7` 一组**（不像 `proto_init`
+   那样同时写 0x00/0x10/0x20 三个 bank）。
+2. **`tools/bootflashram.sh` 的 `pkill -f 'tools/armu.sh'` 在 MSYS 上永远匹配不上**
+   （`ps -W` 只显示解释器 `/usr/bin/sh`，不显示脚本名）。
+   **后果**：预置的 `'u'` 流在整场窗口里一直活着，**每 0.25 s 往 `sercmd.txt` 写一次 `u`**，
+   于是**任何排在它后面的命令都被吃掉**——本轮 17:26 的 `TP=`/`TR=` 两个身份命令就是这样
+   消失的，17:26:36 之后控制台上一律是 `-ash: u: not found`。
+   **已改**：改成记下 `$!` 并在抓到 U-Boot 提示符后 `kill "$ARMPID"`（17:46:09 实测
+   “stream stopped”，之后控制台干净）。
+
+### 51.8 预登记：下一个窗口（18:05 那次开机）怎么走
+
+按“先分清两个开关、再动一个变量”的顺序，判据全部写死：
+
+0. **基线（正控制）**：`xmac=0`、`tx_port=5`、`ip addr add 192.168.9.3/24 dev eth0`
+   ⇒ PC 必须继续收到帧（`lan1direct.sh` 的 `PC rx_bytes` 增量必须 > 0）。
+   **不动就是仪器坏了，不是板子坏了。**
+1. **lane 链路字的守门**：在**任何写入之前**先读 `reg 0x90`，记下是不是 `0x2c03`。
+   再读 `reg 0x140000`（XMAC0 TX_CTRL，速度字在 bit31..29）与 `reg 0x140010`/`0x140020`。
+2. **RX 计数器的持续见证**：每次都把 `reg 0x142010`（RX 那 16 个字）与 `reg 0x142070`（TX 帧数）
+   各读一次。**RX 那 16 个字只要动了一个，RX 就通了**——这是本轮新立起来的、不会被
+   “上层没认领”污染的见证。
+3. **实验 A（单变量）：XPCS0 恢复原厂那五个字。**
+   `switch.c` 的 1G SGMII 档把 `VEND2 AN_CTRL` 从原厂的 `0x0005` 写成 `0x0015`。
+   **把 AN_CTRL 写回 `0x0005`，再读 `reg 0x90`**：链路字若回到 `0x38xx` ⇒ 就是这一位。
+   （XPCS0 没有 debugfs 通道——`m45` 动词只通到 `zx279133,outer-phy-bus`，
+   `switch.c` 也没有自己的 debugfs；**若这一条做不到，就要给 `switch.c` 加一个
+   `xpcs` 写动词再出 CI 包**。）
+4. **实验 B（单变量）：lane 按 USXGMII 跑。**
+   `regw 0x140000 0x20010001`（速度字 3 → 0，保留 bit16 与 bit0），
+   再按 §51.6 那串 USXGMII 配方改 XPCS0，**然后读 `reg 0x90` 与 RX 计数器**。
+   **判据**：链路字变 `0x38xx` 且 RX 计数器动 ⇒ 断点就是“lane 被按 1G 编程”。
+5. **实验 C（单变量）：`XMAC0 frame` 的 bit0。**
+   `regw 0x140020 0x80000001`（把 `switch.c` 清掉的那一位写回去），再打一组 PC 帧。
+   原厂留下的就是 `0x80000001`，而 `switch.c` 写的是 `0x80000000`。
+6. **实验 D（若 A/B/C 都 FAIL）：把 9132 的 port 5 用 `trapall 5 2` 明确 trap 给 CPU**，
+   并用 `trapall 1 2` 做正控制（mem 1 是能用的口）。
+
+**这一轮仍然不派 CI 包**：RX 的候选已经收窄到
+**“lane 的 PCS/速率档”** 与 **“XMAC0 的 RX 侧开关位”** 两处，
+两处都能先用运行时的寄存器写去试，**试不出来再改代码**——一个包只该回答一个问题。
+
+
+## 52. 断点终于被夹住了：帧到了 XMAC0，进不了 IDM（2026-10-27 21:33-22:27）
+
+### 52.1 帧确实到 XMAC0，而且是“好”的帧
+
+用 PC 发 2000 个 1000 字节的广播 UDP（2 MB）做量具，板子自己数自己的寄存器：
+
+| 计数（XMAC0 相对） | 发之前 | 发之后 | 差 |
+|---|---|---|---|
+| 0x2400 RX 总帧 | 0x1619 (5657) | 0x1e02 (7682) | **+2025** |
+| 0x2440 RX 好字节 | 0x8090ab | 0xa08442 | **+2 101 783** |
+| 0x2460 RX 好广播 | 0x0d (13) | 0x7f6 (2038) | **+2025** |
+| 0x24a0 CRC 错 | 0 | 0 | 0 |
+
+**PC 的字节数与板子数到的字节数逐字节对上。** 所以
+“帧没到 MAC”这一层是通的；**§51 之前量到的“XMAC0 计数器动了”是 TX 侧的字
+（0x142000-0x1423ff 是 TX 块，RX 块在 0x2400 起）**，
+“帧没到 IDM”这一层也没通——三处独立证据：
+
+1. 驱动的单帧捕获（`rxb`，“下一帧收到就打印”）在 2000 帧之后**一个字都没有**；
+2. **全部 16 个 IDM 队列**的头（`rxd <q> 2`，q=0..15）的 address/length/metadata 全是 0；
+3. `eth0` / `br-lan` / `lan-cpu0` 的 rx 包数全是 0。
+
+**所以断点在 XMAC0 的 MAC 核与 IDM 之间，是硬件/配置层面的。**
+
+### 52.2 新证据：SOPC 的 ready 位，XMAC0=0 而 XMAC1=1
+
+NPPT+0x342a0 那一块（SOPC）实测：
+
+```
+0x342a0 = 0    0x342a4 = 0   <- XMAC0 ready（只读状态，写 1 不生效）
+0x342a8 = 1                    <- XMAC1 ready
+0x342b0..0x342cc = 1           （0x342c0 = XMAC0 send-enable = 1，0x342c4 = XMAC1 = 1）
+0x342d0..0x342fc = 0
+```
+
+**eth0 默认在 XMAC1 上，是 eth 驱动把 XMAC1 这根 lane 点亮的（SOPC ready=1）；
+XMAC0 是 switch 驱动当“9132 的 CPU 口”用的，那根 lane 从来没 ready 过。**
+这与 52.1 完全吻合：XMAC0 收得到帧（MAC 核活着），但**帧交不到内部交换/IDM**。
+
+**把 SOPC 双工字 0x343f0 写成 0x30（两位都置上）没有任何变化**——排除。
+
+### 52.3 模块参数在运行时是可写的（之前的 EACCES 是路径被串坏了）
+
+```
+-rw-r--r-- 1 root root 4096 zx279133_eth0_xmac
+-rw-r--r-- 1 root root 4096 zx279133_tx_port
+echo 0 > .../zx279133_eth0_xmac   -> W1=0
+echo 5 > .../zx279133_tx_port      -> W2=0
+```
+
+而且 `zx279133_idm_rx_parsed()`（idm.c:372）是**每帧现读** `zx279133_tx_port` 的，
+所以 tx_port=5 立刻生效。**tx_port=5 生效后帧仍然进不了 IDM**⇒ 不是端口过滤。
+
+### 52.4 内核命令行既不是 DTB 的，也不是 env 的
+
+U-Boot 提示符上实测：
+
+```
+bootcmd=mtd read kernel 0x88000000; mtd read dtb 0x88800000; bootm 0x88000000 - 0x88800000
+bootargs=console=ttyAMA0,115200n8 root=/dev/mtdblock5 rootfstype=jffs2 printk.time=1 U-Boot 2.0.0 20250417161359 0x200000 0x0 0x83 0x83 UpModeInfo=0x00000040 regioncode=0x0
+```
+
+**flash env 里的 bootargs 是原厂那一串，内核拿到的是另一串**
+（DTB 的 /chosen/bootargs 去掉两个 module 参数之后的样子）。
+两次 RAM 启动（21:31 env 里有旋钮、21:52 DTB 被打了补丁并用 `fdt print /chosen`
+验证过旋钮在树上）**内核命令行里都没有旋钮**，而两个参数停在默认值，
+并且**没有** “Unknown kernel command line parameter” 的告警。
+
+**结论：这一版内核上，走命令行的路走不通；参数只能在运行时写。**
+
+### 52.5 这一轮派 CI 包：加 `xpcs` 调试动词
+
+§51.8 的实验 A（把原厂 `VEND2 AN_CTRL = 0x0005` 写回去）**卡在工具上**：
+`m45` 动词只通到 `zx279133,outer-phy-bus`（np.c 里硬编码），**XPCS0 的寄存器根本够不着**。
+但 switch 驱动自己**有** `priv->xpcs_mdiodev`（`zx279133_switch_xpcs_read/write`），
+`zx279133-np.c` 里也有 `eth->xpcs_lan_mdiodev`（XMAC0 那根 lane 的 PCS）。
+
+**所以这一版加一个动词**（`zx279133-np.c`，新写的 `xpcs`/`xpcsw`）：
+
+```
+xpcs  <lane> <devad> <reg>            读一个 PCS 寄存器
+xpcsw <lane> <devad> <reg> <val>      写一个再读回来
+lane: 0 = eth0 那根 lane 的 PCS（默认 XMAC1），1 = LAN lane 的 PCS（XMAC0 的）
+```
+
+**一个包只回答一个问题：把原厂那两个 lane 配置原样写回去，RX 会不会通。**
+
+### 52.6 预登记：拿到这个包之后怎么走（判据全部写死）
+
+0. **基线（正控制）**：`xpcs 1 0x1e 0x8001`（LAN lane 的 VEND2 AN_CTRL）
+   与 `xpcs 1 0x1e 0x10`（PCS DIG_CTRL2）先**读出来抄一份**；
+   `reg 0x90` 记下当前值（**0x2c03**）；XMAC0 的 RX 计数器（0x2400）读一次。
+1. **实验 A（单变量）**：`xpcsw 1 0x1e 0x8001 0x0005`（原厂 AN_CTRL），
+   再读 `reg 0x90`。**判据：链路字回到 0x38xx ⇒ 就是这一位**；随后打一组 PC 帧，
+   **RX 计数器（0x2400）动了 ⇒ RX 通了**。
+2. **实验 B（单变量）**：按 §51.6 的 USXGMII 配方改 lane——
+   `xpcsw 1 0x1e 0x8000 <DIG_CTRL1: USXG_EN(BIT9)|VSMMD1_EN(BIT13)>`、
+   `xpcsw 1 0x1e 0x8007 <KR_CTRL 清 GENMASK(12,10)>`、
+   `xpcsw 1 0x1e 0x8000 <DIG_CTRL1 置 VR_RST(BIT15)，轮询到清零>`、
+   `xpcsw 1 0x1e 0x8001 <AN_CTRL 置 AN_INTR_EN>`、`xpcsw 1 0x1e 0x1f 0x3140`（BMCR），
+   同时 `regw 0x140000 0x20010001`（XMAC0 速度字 3→0 = USXGMII）。
+   **判据同上：链路字 0x38xx + RX 计数器动。**
+3. **实验 C（若 A/B 都 FAIL）**：`xpcsw` 把 XPCS0 的 **PCS mode** 改成工厂值，
+   并且查 `spc` 表里 XMAC0 的端口属性（`r 5 <n>` 与 `r 6 <n>` 对比）。
+4. **正控制（每轮都要做）**：PC 必须继续收到帧（`PC rx_bytes` 增量 > 0）；
+   **不动就是仪器坏了，不是板子坏了**。
+
+### 52.7 这一轮顺手修掉的工具坑
+
+1. **`grep 'nppt +0x343f0'` 找不到东西**：偏移是**补零到八位**打印的
+   （`nppt +0x0343f0`）。§51 之前对 0x342a4/0x342a8/0x342c0/0x342c4 的“读不到”
+   就是这个原因——**它们其实读得到**，先前判成“读不到”是一次假阴性。
+2. **`eg 0x27 <n> 32` 会被拒**（`ash: write error: Invalid argument`），
+   而 `eg 0x19 0 32` 可以（读出 0x07000000，即 reason 0 → queue 7，队列号在 bit26:24）。
+   **outport 表（0x27）暂时读不了**，这是一个待补的工具缺口。
+3. **`u` 流会吃掉排在它后面的任何命令**（§51.7 已记），所以每个窗口一开始
+   就要先把 `u` 流停掉再发命令；抓提示符那一下除外。
