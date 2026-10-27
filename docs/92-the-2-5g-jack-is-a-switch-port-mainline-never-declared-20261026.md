@@ -1648,3 +1648,27 @@ zx279133_tx_port`、`root=/dev/mtdblock5`。新脚本 `tools/bootflashram.sh`。
 
 **仪表**：这个 rootfs 里 np debugfs 的 `reg` 动词没有回话（`reg 0x140000` 无 `nppt +0x…` 行），
 `od`、`ping -W` 也不在；下一次要在 kit 里做同样的两处读数。
+
+**更正（同日 12:35–12:36，同一次开机，§43 的判决要按这一条重读）**：`zx279133_tx_port` 的默认值是
+**4**（`netdev.c:32`），而 `ndev == hw_ndev` 时 TX 描述符的口就是它（`:382-385`）。SPA 表里 4 =
+**SMAC3**，不是 XMAC0。也就是说 §41 与 §43 两轮「把 MAC 窗口搬到 XMAC0」的测量里，**eth0 的帧从头到
+尾都没进过 XMAC0**——它们被 IDM 送去了口 4。
+
+同一开机里写 `echo 5 > …/parameters/zx279133_tx_port`（回读 W=5）后：
+
+| 动作 | `xmac_tx_frames` | 读法 |
+|---|---|---|
+| tx_port=4，3 帧 ping | 5554 → 5554（+0） | 帧没进 XMAC0 |
+| tx_port=5，3 帧 ping | 5554 → 5559（**+5**） | 帧第一次进 XMAC0 |
+
+**但进了 MAC 还不等于上了线**：tx_port=5 之后做 20×500 B 的突发（PC 应收到 ≈11.6 KB），PC 的
+InOctets 只从 554 649 831 走到 554 650 169（**+338 / ~10 s**），就是背景噪声的速率（~34 B/s）；
+先前那次「+676」也是同样长的窗口里的同一种噪声，不是 ping。**所以：XMAC0 收下了帧，但这块 MAC
+的 lane 仍然没有把帧送到 LAN1 的 PC。** 缺口只剩两处，且必须分开量：
+
+1. **XMAC0 的 lane 是不是面板 LAN1**（还是像 §36 担心的那样是 9132 的 CPU lane）；
+2. **RTL8226 的 SoC 侧有没有被配置**（PC 网卡有 carrier 只证明 PHY 的线侧活着；SoC↔PHY 那段
+   SerDes 在原厂是 `rlt8226b.ko` 配的，mainline 的通用 realtek PHY 驱动从没碰过）。
+
+下一轮的做法：`xmac=0` + `tx_port=5` 从开机就带上，板→PC 用大包突发，并在**同一次**测量里读
+`xmac_tx_frames` 确认帧确实进了 MAC（这次 20×500 那组没有留下这条确认，不能当作已测）。
