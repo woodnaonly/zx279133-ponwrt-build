@@ -205,13 +205,34 @@
 #define ZX279133_XPCS_PCS_MODE_SGMII		2
 #define ZX279133_XPCS_LOW_POWER		BIT(11)
 #define ZX279133_XPCS_SPEED_SEL		BIT(13)
-#define ZX279133_XPCS_SR_MII_SPEED_MASK (BIT(13) | BIT(6) | BIT(5))
+#define ZX279133_XPCS_SR_MII_SPEED_MASK (BIT(13) | BIT(12) | BIT(6) | BIT(5) | BIT(0))
 /*
  * The SR-MII speed word, as the vendor's xpcs_set_sr_mii_ctrl_speed()
- * spells it out: a speed number becomes one of 0x2000, 0x40, 0x20, 0x2020,
- * 0x2040 or 0, for speeds 0..5.  The 1000BASE-X path passes 2.
+ * (np_133.ko 0x1b910) spells it out.  That function reads a byte out of a
+ * table and jumps through a second table, so the speed number and the value
+ * it turns into are not in the order the cases appear in the source:
+ *
+ *	speed 0 -> 0x0000	 speed 3 -> 0x0020
+ *	speed 1 -> 0x2000	 speed 4 -> 0x2020
+ *	speed 2 -> 0x0040	 speed 5 -> 0x2040
+ *
+ * The byte table is np_133.ko's .rodata+0x187c (0a 00 02 04 06 08) and the
+ * cases are at 0x1b948 (0x2000), 0x1b950 (0x40), 0x1b958 (0x20), 0x1b960
+ * (0x2020), 0x1b968 (0x2040) and 0x1b970 (0).
+ *
+ * The 1000BASE-X path passes speed 2: xmac_1gbase_x_conf() (0x1a6ec) calls
+ * xpcs_1000base_x_conf() with speed 2 and duplex 1, and that reaches the
+ * speed function unchanged.  So the value for this lane is 0x40 = BIT(6),
+ * and the board agrees: with XMAC0 set to "work in 1000BASE-X mode" the
+ * SR_MII_CTRL word at 0x1a7c0000 reads 0x0140, which is exactly the duplex
+ * bit (BIT(8)) plus 0x40.
+ *
+ * The mask is the vendor's own, 0x2061.  It clears bit 12 and bit 0 as
+ * well, and that matters: the word the SGMII mode leaves behind is 0x1140,
+ * and a modify with the narrower mask would leave bit 12 set and produce
+ * 0x1140 instead of the 0x0140 the base-X state has to be.
  */
-#define ZX279133_XPCS_SR_MII_SPEED_1000BASE_X	BIT(5)
+#define ZX279133_XPCS_SR_MII_SPEED_1000BASE_X	BIT(6)
 #define ZX279133_XPCS_DUPLEX		BIT(8)
 #define ZX279133_XPCS_PSEQ_MASK		GENMASK(4, 2)
 #define ZX279133_XPCS_PSEQ_IDLE		0x4
@@ -2122,14 +2143,32 @@ static int zx279133_switch_probe(struct platform_device *pdev)
 	 */
 	zx279133_switch_lane_snapshot(priv, "pre-pcs");
 	status = zx279133_switch_nppt_read(priv, ZX279133_NPPT_XPCS0_STATUS);
-	if ((status & 0x3800) == 0x3800) {
-		dev_info(dev,
-			 "the bootloader left the PCS link up (0x%04x); inheriting it\n",
-			 status);
-		zx279133_switch_sopc_publish(priv);
-		zx279133_switch_xmac_configure(priv, true);
-		goto report;
-	}
+	/*
+	 * The lane is programmed here, every time.  It used to be inherited
+	 * instead whenever this status word said the link was up, and that was
+	 * exactly backwards.
+	 *
+	 * The word is not a link indicator for this lane.  In the board's own
+	 * U-Boot it reads 0x380b on every cold boot and 0x2c03 after a U-Boot
+	 * session that had run a ping, and it does not change with the PCS's
+	 * work mode at all (docs/92 §76: the whole 0x19000080..0x190000bf area
+	 * reads the same 0x280b / 0x380b / 0x069b / 0x069b in base-X and in
+	 * SGMII).  Of the 323 mainline boots in the log, the 311 cold ones read
+	 * 0x380b and took the inherit branch - and in those the lane never
+	 * carried a frame, with the XMAC the bootloader handed over reading all
+	 * zeros.  The 12 that read 0x2c03 took the reprogram branch, and those
+	 * are the boots that carried.
+	 *
+	 * There is nothing to inherit either.  The bootloader has no XPCS
+	 * driver - the vendor's own device tree has xpcs@1a000000 disabled -
+	 * and its net init gives up on this lane ("xmac doesn't support this
+	 * pcs mode"), so the PCS is at its reset value when the kernel gets
+	 * here: the snapshot above reads 0x0000 for VR_MII_AN_CTRL,
+	 * VR_MII_DIG_CTRL1 and the VEND2 BMCR, all three of them.
+	 */
+	dev_info(dev,
+		 "the NPPT PCS status word is 0x%04x; the lane is programmed here, not inherited\n",
+		 status);
 
 	ret = priv->usxgmii ? zx279133_switch_xpcs_usxgmii(priv) :
 			      zx279133_switch_xpcs_1000base_x(priv);
