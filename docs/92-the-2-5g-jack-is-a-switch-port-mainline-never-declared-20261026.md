@@ -4274,3 +4274,426 @@ run196 出包后要核对的就是这三件事：
 厂商的 `np_133.ko` 对这四条线都有处理函数（`idm_int_mask_configure_init` 写的正是
 `IDM+0x44..0x50` 那四个路由字），而主线把三条线丢在门外。
 **下一轮要数的是：GIC 那边有没有第三条线在以同样的速率空转。**
+
+
+## 66. The bench PC is in the 2.5G jack, and the 2.5G jack's MAC is not in this tree
+
+### 66.0 What this section corrects, and what it adds
+
+§61 recorded the bench PC as being in `lan2`, and every round since then was
+built on that. Two things are now wrong with that, and the second one is the
+big news:
+
+* the cable has not been in `lan2` since 2026-10-26 16:54 - it is in the
+  **2.5G jack**, and
+* the 2.5G jack's MAC is **the SoC's own RGMII MAC at 0x15900000**
+  (`zte,zx279133-rgmii`), a block this tree has no driver for at all. So
+  the port the owner cares most about is not a bug in the driver that
+  exists; it is a driver that has to be written.
+
+Everything the rounds after §61 measured was therefore measured on the wrong
+path, and the frames that were being counted were never the PC's.
+
+### 66.1 When the cable moved, and why §61 never measured it
+
+§61's "the PC is in lan2" was never a measurement. The trial image's own
+fallback says so:
+
+```
+# The port the test PC is in.  Its MAC is the only address the bridge has
+# learned, and the bridge's forwarding database says which port learned it.
+# When it cannot be read, the measured value is used: the PC is in the
+# PHY 0x0b port, which is DSA port 5, which is lan2.
+```
+
+The bridge's forwarding database could not be read, so the hard-coded
+fallback was used - and the "measured value" in it was true on the day it
+was written and false afterwards.
+
+The log says when it stopped being true. The PHY read is printed on every
+boot, and `link 1` appears 176 times in the whole log. The last of them is
+at line 2184346; the log has 583 kernel banners in all, and that boot is
+banner #482, i.e. **100 power cycles (100 x 20:30 = 34 h 10 min) before the
+2026-10-28 03:04:37 boot**. So:
+
+```
+2026-10-26 ~16:54   the last boot in which PHY 0x0b read link 1
+                    (BMCR 1140->1140, 1000/full negotiated)
+2026-10-26 ~17:15   the PC's cable left the 0x0b jack
+2026-10-28 01:30    E8b reads XMAC1's statistic block: all zero
+2026-10-28 03:04    the boot win68 ran on: PHY 0a..0d all read link 0
+```
+
+Two things follow from that, and the second one is the reason this section
+exists:
+
+* the cable has been in the 2.5G jack for a day and a half, and
+* **E8b's "XMAC1 is all zeros" was measured with the PC in the 2.5G jack**,
+  not with it in a 1G jack. Whatever XMAC1 is, it was not carrying the
+  bench PC's traffic then.
+
+### 66.2 The four internal PHYs have no link, and have not for days
+
+Every boot since the run-100 round reads the 9132's four internal UNI PHYs
+the same way:
+
+```
+[    0.525846] zx279133-eth 19000000.ethernet: 9132 UNI PHY 0a: id 84b9:5032, BMCR 1040->1040, link 0
+[    0.527190] zx279133-eth 19000000.ethernet: 9132 UNI PHY 0b: id 84b9:5032, BMCR 1040->1040, link 0
+[    0.528531] zx279133-eth 19000000.ethernet: 9132 UNI PHY 0c: id 84b9:5032, BMCR 1040->1040, link 0
+[    0.529870] zx279133-eth 19000000.ethernet: 9132 UNI PHY 0d: id 84b9:5032, BMCR 1040->1040, link 0
+[    1.540039] zx279133-eth 19000000.ethernet: 9132 UNI PHY 0a: link after settle 0
+[    1.540127] zx279133-eth 19000000.ethernet: 9132 UNI PHY 0b: link after settle 0
+[    1.540209] zx279133-eth 19000000.ethernet: 9132 UNI PHY 0c: link after settle 0
+[    1.540289] zx279133-eth 19000000.ethernet: 9132 UNI PHY 0d: link after settle 0
+```
+
+The BMCR tells the story by itself: `0x1140` is auto-negotiation complete at
+1000/full, `0x1040` is auto-negotiation enabled and *nothing negotiated yet*.
+The run-100 round - the one §61 quotes - read:
+
+```
+9132 UNI PHY 0b: id 84b9:5032, BMCR 1140->1140, link 1
+9132 UNI PHY 0b: link after settle 1
+```
+
+with 0x0a, 0x0c and 0x0d at `1040 / link 0`. That is a cable in the 0x0b
+jack, and it is the reading §61 was built on.
+
+The board agrees with the PHY read, on the same boots:
+
+```
+[   20.259836] trial: link: lan1 oper=lowerlayerdown carrier=0 ...
+[   20.285430] trial: link: lan2 oper=lowerlayerdown carrier=0 ...
+[   20.311314] trial: link: lan3 oper=lowerlayerdown carrier=0 ...
+[   20.336676] trial: link: lan4 oper=lowerlayerdown carrier=0 ...
+[   19.234619] br-lan: port 1(lan1) entered disabled state
+[   19.247578] br-lan: port 2(lan2) entered disabled state
+[   19.261007] br-lan: port 3(lan3) entered disabled state
+[   19.280413] br-lan: port 4(lan4) entered disabled state
+```
+
+All four DSA ports are in the bridge's *disabled* state, and `br-lan` itself
+is `linkdown`:
+
+```
+[   20.367473] trial: link: route: 192.168.9.0/24 dev br-lan proto kernel scope link src 192.168.9.1 linkdown
+```
+
+The bench PC is this machine, and this machine has exactly one wired NIC:
+
+```
+Name                    : 以太网
+InterfaceDescription   : Realtek PCIe GbE Family Controller
+Status                  : Up
+LinkSpeed               : 1 Gbps
+IPAddress               : 192.168.9.25
+```
+
+It is up, at 1 Gbps, and it cannot reach the board:
+
+```
+PS> ping -n 3 -S 192.168.9.25 192.168.9.1
+Reply from 192.168.9.25: Destination host unreachable.
+PS> arp -a | Select-String 192.168.9
+192.168.9.255  ff-ff-ff-ff-ff-ff  static
+```
+
+No ARP entry for 192.168.9.1, and the PC's received-byte counter has been
+frozen at 7121025 since 03:05. So the cable is in a port that none of the
+four internal PHYs serves - and there is exactly one other copper port on
+this board: the 2.5G one.
+
+### 66.3 XMAC1 is the PON side, and the LAN side is XMAC0
+
+The board's own device tree says which is which:
+
+```
+	/*
+	 * The NPPT's own MAC is XMAC1 and its lane is the PON SerDes with XPCS1.
+	 * That is what zx279133.dtsi says, and it is what the vendor bootloader
+	 * does: "pon serdes init succeed", and separately "mode_eth_1gbase_x_cfg"
+	 * + "uni serdes init succeed" + "xmac 0 speed set 2 in sgmii" on the
+	 * *other* lane, the one that reaches jack 4's RTL8226.
+	 */
+```
+
+and
+
+```
+	 *   - the Uni SerDes and XPCS0 are the 9132's CPU port lane (docs/16):
+	 *     the vendor prints "xmac0_pcs_base is 0x140000" and "xmac0 is used"
+	 *     before it declares its MII devices, and the first of those is "sw",
+	 *     which is the 9132's CPU port.
+```
+
+The statistics agree, and they agree with the two lanes' roles:
+
+| block | address | 2026-10-28 01:30 | reading |
+|---|---|---|---|
+| XMAC0 tx frames | 0x142070 | 0x00002065 (8293) | the LAN lane is busy |
+| XMAC0 tx good | 0x142230 | 0x00002068 | |
+| XMAC0 0x2400 | 0x142400 | 0x0000306f (12399) | |
+| XMAC1 tx frames | 0x182070 | 0x00000000 | the PON side never carried a byte |
+| XMAC1 0x2400 | 0x182400 | 0x00000000 | |
+
+So §59's conclusion 1 stays dead for a second reason: XMAC1 is not "the
+2.5G jack's MAC" - it is the optical side, and an optical side with no fibre
+in it is supposed to read zero. `zx279133_eth0_xmac = 1` is right, and
+`eth0` is the WAN side of an ONU, which is also why the trial image puts the
+masquerade on it.
+
+### 66.4 The 2.5G jack's MAC is the SoC's RGMII MAC, and this tree has none
+
+This is the part that matters for the owner.
+
+The vendor's own device tree has a fifth MAC block that mainline's dtsi does
+not have at all:
+
+```
+		rgmii@15900000 {
+			compatible = "zte,zx279133-rgmii";
+			reg = <0x00 0x15900000 0x00 0x100000>;
+			status = "disabled";
+		};
+```
+
+and docs/16 §2.4/§2.5 read the vendor's own runtime to see what it is for:
+
+```
+`/proc/pon/outer_phy` says `xmac0: phy_RTL8226` - the vendor's xmac0 hangs
+off that separate RGMII MAC, which is jack 4.  mainline has neither the node
+nor its driver, so **jack 4 cannot possibly work under mainline**.
+```
+
+```
+sw    d0:45:8d:84:08:fc     the 9132's CPU port
+pon   00:d0:d0:61:62:00     the PON side
+idm0  d0:45:8d:84:08:fe
+idm1  d0:45:8d:84:08:fd
+eth0  d0:45:8d:84:08:ff     = RGMII MAC + RTL8226 = jack 4
+eth1  d0:45:8d:84:09:00     in br-lan, carries all the PC's traffic = a 9132 UNI port
+eth2  d0:45:8d:84:09:01     rx=0
+eth3  d0:45:8d:84:09:02     down
+```
+
+So in the vendor's system:
+
+* the 2.5G jack's PHY is the **RTL8226** (MDIO 14f02000:05 - the board's DTS
+  keeps it in `&mdio1` as "the record of what is at address 5"), and the MAC
+  on the SoC side of it is the **RGMII MAC at 0x15900000**;
+* the 9132's four internal 1G PHYs (0x0a..0x0d) are the four UNI ports,
+  which the vendor serves through the NPPT's four SOPC MAC channels
+  (`smac_init` runs four times, mac = 0..3);
+* the vendor's 9132 port table agrees on the numbering - docs/16 §2.1:
+
+  | 厂商 switch port | 含义 | enable | link |
+  |---|---|---|---|
+  | sw0 | UNI 口 1 | 1 | 0 |
+  | sw1 | UNI 口 2 | 1 | **1** | (on 2026-10-21 the PC was in this one) |
+  | sw2 | UNI 口 3 | 1 | 0 |
+  | sw3 | UNI 口 4 | 1 | 0 |
+  | sw4 | outerphy | 1 | 0 | `outerphy_mode=5, outerphy_name=phy_RTL8226` |
+  | sw5 / sw6 | 非 smac（xmac0/1_to_extend） | - | 1, speed 6 | |
+
+  and the vendor's board file says the same thing about the outer PHY:
+
+  ```
+  outerphy_desc_mode = <0x00 0x05 0x00>;
+  outerphy_desc_name = "\0phy_RTL8226\0";
+  ```
+
+**So the chassis's 2.5G LAN jack is the RGMII MAC's port, and the tree in
+this repository has no driver for it.** What the tree does have:
+
+| what | where | what it serves |
+|---|---|---|
+| `zx279133-mac.c` | XMAC1 (0x180000) + XPCS1 + PON SerDes | the optical side (`eth0`) |
+| `zx279133-lan-conduit.c` | XMAC0 + XPCS0 + Uni SerDes | the 9132's CPU port (`lan-cpu0`) |
+| `zx279133-rtl8372n.c` / `zx279133-switch.c` | the same lane | the 9132's four UNI ports (`lan1`..`lan4`) |
+| `phy-zx279133-uni-serdes.c` | the Uni SerDes | the 9132's CPU port lane |
+| `phy-zx279133-pon-serdes.c` | the PON SerDes | the optical side |
+| **nothing** | **0x15900000** | **the 2.5G jack** |
+
+That is why the board can never answer the PC: the PC's frames come in on a
+MAC that no driver in this tree owns, and they are not in any of the IDM
+queues either - the IDM is the NPPT's DMA, and the RGMII MAC has its own.
+
+### 66.5 What the 1080 descriptors in the IDM queues actually were
+
+The frames win68 counted are **not** the PC's. They are the board's own.
+
+The chain:
+
+1. the driver deliberately points the 9132's flood groups at the CPU port
+   (`zx279133_9132_flood_cpu_port()`: "the CPU port goes into the four jacks'
+   groups ... the frame is delivered instead of being dropped"), because
+   the vendor's flood groups hold the WAN port and would drop a unicast
+   frame addressed to the board itself;
+2. so every broadcast the board itself sends - its own ARP for 192.168.9.x,
+   its own IPv6 multicast, the switch's flooded BPDUs - comes back to the
+   CPU through the 9132's CPU port;
+3. with XMAC0's (the conduit's) entry program wrong, that never happened:
+   the IDM's "receive cpu pkt cnt from DMA" (`nppt+0x280180`) stayed at 0
+   and all sixteen queue heads stayed empty, **whatever the LAN sent** -
+   and no LAN had anything to send, because the PC was in the 2.5G jack;
+4. E11 wrote the right entry program into SPA mem 5 and the counter went to
+   0x408, and win68 read 1080 descriptors out of the queues - the board's
+   own loop, filling the queues that then never drained.
+
+That is also why the storm exists at all, and why it needs the interrupt
+mask to survive: the board's own broadcasts fill the queues, a queue that is
+full asserts its interrupt source, a level-triggered line re-enters the
+handler forever, the NET_RX softirq is starved, the NAPI never polls, the
+queues never drain. §65's deadlock, with the board as its own traffic
+source. The vendor does not have this hole because its CPU port is fed by
+the protocol trap rather than by the flood path.
+
+And the frames are then thrown away a second time, in the DSA path.
+`zx279133_idm_rx_process_queue()` and `deliver_skb()` have **only two
+branches that consume a descriptor, build an skb and report nothing at all
+on eth0**:
+
+```c
+	if (lan_source && !lan_dsa_active) {
+		if (eth->lan_ndev)
+			zx279133_stats_rx_dropped(eth, eth->lan_ndev);
+		dev_kfree_skb_any(skb);
+		goto release_desc;
+	}
+```
+
+```c
+		if (!tagged || !tagged->dev) {
+			zx279133_stats_rx_dropped(eth, eth->lan_ndev);
+			dev_kfree_skb_any(tagged ? tagged : skb);
+			goto release_desc;
+		}
+```
+
+Both count their drop on `eth->lan_ndev` - the conduit - and never on eth0.
+Every other branch in that function increments at least one of
+`rx_invalid_dma`, `rx_page_lookup_misses`, `rx_jumbo_drops`,
+`rx_descriptor_flag_drops`, `rx_errors` or `rx_length_errors`, and all six
+are zero:
+
+```
+     rx_packets: 0
+     rx_bytes: 0
+     rx_dropped: 0
+     rx_invalid_dma: 0
+     rx_page_lookup_misses: 0
+     rx_jumbo_drops: 0
+     rx_descriptor_flag_drops: 0
+     rx_desc_not_ready: 146
+```
+
+And the port table that decides where a frame goes does not know the 9132's
+port 4 (the outerphy, `sw4` in the vendor's numbering, PPU 5 in the
+driver's):
+
+```c
+static u16 zx279133_idm_rx_lan_vport(u32 word1)
+{
+	u16 port = (word1 >> 16) & 0x3f;
+
+	if (port >= ZX279133_LAN_TRANSPORT_VID_MIN &&      /* 59 */
+	    port <= ZX279133_LAN_TRANSPORT_VID_MAX)        /* 62 */
+		return port;
+	if (port >= ZX279133_9132_UNI_PPU_FIRST &&         /* 1  */
+	    port <= ZX279133_9132_UNI_PPU_LAST)           /* 4  */
+		return ZX279133_LAN_TRANSPORT_VID_MIN +
+		       (port - ZX279133_9132_UNI_PPU_FIRST);
+
+	return 0;
+}
+```
+
+Port 5 answers 0, and `deliver_skb()` then falls back:
+
+```c
+			u16 transport_vid = zx279133_idm_rx_lan_vport(word1);
+			...
+			if (!transport_vid)
+				transport_vid = ZX279133_LAN_VID;   /* 62 */
+```
+
+VID 62 is DSA port 7, the port this driver calls `lan4`.
+
+### 66.6 The prediction win69 has to satisfy
+
+win69 boots run194 (so the entry program can be written by hand, as E11 did),
+breaks the interrupt deadlock the E15 way, floods from this PC again, and
+reads - **before and after the flood** - the IDM's DMA counter, XMAC0's and
+XMAC1's counters, the counters of every netdev that could have taken the
+frames, and the source port the PPU reports in the descriptors' word 1.
+
+The prediction, written down before the measurement:
+
+* **`nppt+0x280180` does not move during the flood.** The PC's frames are
+  not in the IDM, because the MAC that would have received them is the
+  RGMII MAC at 0x15900000 and nothing in this tree drives it;
+* **XMAC0's counters move** (the 9132's CPU port lane is busy with the
+  board's own loop) and **XMAC1's do not** (the PON side has no fibre);
+* the frames still land on **`lan4`** (DSA port 7, the VID 62 fallback), so
+  `lan4`'s `rx_packets` rises and `br-lan`'s does not;
+* the descriptors' word 1 carries a 9132 port number, and the count is
+  nowhere near the 2000 frames the flood sent.
+
+If the IDM's counter *does* move by the flood's size, the PC's frames are
+in the IDM after all, and the RGMII MAC is not what the 2.5G jack hangs
+off; the word 1 value would then say which port they came in on.
+
+### 66.7 What the fix has to be
+
+Three separate pieces, in the order the owner cares about them:
+
+1. **The 2.5G jack (LAN1) needs a driver for the SoC's RGMII MAC at
+   0x15900000.** Not a fix - a driver: `zte,zx279133-rgmii`, with the
+   RTL8226 as its PHY on MDIO 14f02000:05, its own DMA rings, and its
+   frames delivered to the stack (or to the IDM, if the hardware does it
+   that way). This is the owner's priority and it is the whole of it.
+   Until that exists, LAN1 cannot pass a byte in either direction, and no
+   amount of IDM, DSA or interrupt work will change that.
+2. **The board's own broadcasts must stop coming back to the CPU.** The
+   flood-to-the-CPU-port trick is what the vendor does *not* do (it traps
+   protocols instead), and it is what fills the queues that start the
+   storm. Either the flood groups go back to the vendor's WAN port and the
+   protocol trap takes over, or the frames the board sends to itself are
+   filtered before they are queued.
+3. **The 9132's port 4 (the outerphy) needs its own place in the port
+   tables**, if the 2.5G jack is ever to be served by the switch: a DSA
+   port of its own with the RTL8226's PHY (which is on MDIO controller #1,
+   not on the controller #0 the switch's own user bus translates to), a
+   transport VID, and per-port words from `zx279133_9132_port_init()`,
+   which currently skips it on purpose.
+
+The interrupt mask fix (ab1b122) belongs with piece 2, and it is not
+optional: with the conduit's entry program right (56e86d2) and nothing else
+changed, **run 195 hung the board 3.42 s into the boot** - the storm starts
+before userspace is up and the console never comes back:
+
+```
+[    3.421888] zx279133-switch 19000000.ethernet:switch: XMAC0 datapath enabled; ...
+=== >>> 03:25:56 sent: echo WIN69-$RANDOM ===
+<nothing after this>
+```
+
+The two fixes are one change: the conduit works (56e86d2) and the storm it
+causes is survivable (ab1b122).
+
+### 66.8 What is still open
+
+* Which of the 9132's four internal PHYs is on the chassis's LAN2, LAN3 and
+  LAN4, and which one is not on the chassis at all. There are five copper
+  ports on the silicon - four internal 1G PHYs plus the RTL8226 - and four
+  LAN jacks on the panel.
+* Whether the RGMII MAC's frames are meant to reach the stack directly or
+  to be handed to the NPPT's IDM like everything else. The vendor's own
+  device tree gives the block its own clock ("pon_rgmii_clk_mux") and the
+  vendor's `idm0`/`idm1` netdevs exist next to it, which suggests the
+  RGMII MAC has a path into the IDM.
+* Whether the PON side (XMAC1, eth0) belongs in the bridge. The trial image
+  puts the masquerade on eth0, which is the optical side - right for an
+  ONU's WAN, but it means the trial image's LAN and WAN are on the same
+  box in a way the chassis does not have.
