@@ -5,9 +5,12 @@
  * What this is for
  * ----------------
  *
- * The 2.5G jack on this board is served by a MAC that this tree does not
- * drive.  The SoC has three MACs: XMAC0 (0x140000, the lane to the 9132's
- * CPU port), XMAC1 (0x180000, the PON side, which this tree's eth0 is), and
+ * The 2.5G jack is NOT behind this block.  That took a while to establish,
+ * and it is worth writing down where the evidence is, because the block looks
+ * like the obvious answer and it is not.
+ *
+ * The SoC has three MACs: XMAC0 (0x140000, the lane to the 9132's CPU
+ * port), XMAC1 (0x180000, the PON side, which this tree's eth0 is), and
  * the RGMII MAC (0x15900000), which the vendor's device tree declares as
  *
  *	rgmii@15900000 {
@@ -17,26 +20,67 @@
  *
  * and which the vendor's np_133.ko binds.  The tree this CI builds against
  * (cnjn/linux-mainline-zte-zxslc-sr1010 at 96e5a241) has neither that node
- * nor a driver for it, so nothing in mainline can move a byte through the
- * 2.5G jack.
+ * nor a driver for it.
  *
- * That this block is the one behind the jack is not a guess: the board's
- * U-Boot is the vendor's, and at 2026-10-28 03:45:57 it downloaded
- * 12162040 bytes from the test PC through that jack - "tftpboot 0x89000000
- * sk-d840n-initramfs-run194.itb", "Bytes transferred = 12162040 (b993f8 hex)"
- * - and the test PC has exactly one NIC, which is plugged into the 2.5G
- * jack.  U-Boot has no driver for the 9132, so the MAC that moved those
- * bytes can only be this one.
+ * The evidence, all of it from this unit:
+ *
+ *  1. The board's U-Boot moves traffic through the 2.5G jack - at
+ *     2026-10-28 03:45:57 it downloaded 12162040 bytes from the test PC
+ *     through it ("tftpboot ... Bytes transferred = 12162040 (b993f8 hex)"),
+ *     and the test PC has exactly one NIC, which is plugged into the 2.5G
+ *     jack.  So the jack works, and it works in U-Boot.
+ *
+ *  2. U-Boot's own log says which MAC that is.  At 2026-10-28 04:09:10,
+ *     "ping 192.168.9.25" from the U-Boot prompt answered "host 192.168.9.25
+ *     is alive", and the network bring-up it printed just before that is the
+ *     whole topology:
+ *
+ *	smac_init ... mac = 0x0 .. mac = 0x3
+ *	--->phy identifier is [0xc849]		(the RTL8226)
+ *	5 serdes option is 0
+ *	xmac0 is used.
+ *	[outerphy_phy_init]Warning: No outerphy on this port<5>
+ *	uni serdes init succeed
+ *	xmac 0 speed set 2 in sgmii(xmac speed 3)
+ *	phy_id:0x5;  port:0x4;
+ *	PHY_RLT8226_MDIO_READ_EXTENDED(0x2) in RTL_8226
+ *	mac 4 phy status changed: 1000M full-duplex
+ *
+ *     XMAC0 goes into SGMII at 1G over the Uni SerDes - that is the 9132's
+ *     CPU port - and the RTL8226 comes up on the 9132's port 4.  The 2.5G
+ *     jack is therefore a copper port of the 9132 with an external PHY, and
+ *     the SoC reaches it the same way it reaches the other three jacks: over
+ *     the 9132's CPU port.  U-Boot's two MDIO buses say the same thing -
+ *     "zx_mdio" carries the 9132's four internal PHYs at 0x0a..0x0d, and
+ *     "zx_mdio_extern" carries the RTL8226 at 0x05.
+ *
+ *  3. This block is dead on this unit.  From the same U-Boot prompt:
+ *
+ *	=> md 0x15900000 0x10
+ *	15900000: 00000000 00000000 00000000 00000000    ................
+ *	...
+ *	=> md 0x15900700 0x10
+ *	15900700: 00000000 00000000 00000000 00000000    ................
+ *
+ *     All zeros, including the 41 counters smac_get_stat() reads.  The
+ *     vendor's own Linux never brought this block up either: its boot log
+ *     prints "rgmii_base is 0xffffff800a100000" when it maps the window,
+ *     but "enter rgmii_init" never appears, and the vendor's own 2.5G port
+ *     (its eth0) never receives a byte.
+ *
+ * So: the 2.5G jack needs a DSA port on the 9132, with the RTL8226 as that
+ * port's PHY.  It does not need a MAC driver for this block.  What the block
+ * is for on other boards is not known.
  *
  * What this driver does
  * ---------------------
  *
- * Nothing to the hardware: it maps the window and makes it readable.  It
- * does not configure the block, does not claim an interrupt, and does not
- * create a netdev.  Writing the driver that does those is the next piece of
- * work, and it needs the register map first.
+ * Nothing to the hardware: it maps the window and makes it readable, so the
+ * zeros above are reproducible instead of a one-off observation from a
+ * U-Boot prompt.  It does not configure the block, does not claim an
+ * interrupt, and does not create a netdev.
  *
- * The register map, so far, is what the vendor's own code says:
+ * The register map, for the record, is what the vendor's own code says:
  *
  *   - the block is 0x400 words wide (np_133.ko's np_rgmii_reg_print() reads
  *     indices 0..0x3ff and writes them to /tmp/np/rgmii/rgmii_reg_value);
@@ -47,12 +91,6 @@
  *     block, and it reads 41 counters: word indices 0x1c5..0x1d1,
  *     0x1d9..0x1dc, 0x1e0..0x1e2, 0x1e3..0x1e5, 0x1e7..0x1ec, 0x1ed..0x1f1,
  *     0x1f4, 0x1f5, 0x1f7, 0x2c0, 0x2cc and 0x2cd.
- *
- * The names of those counters are not known.  What is known is that they are
- * the block's only traffic counters, so they are the probe that says whether
- * the block is alive at all: if they move while the 2.5G jack carries
- * traffic, this is the MAC behind that jack; if they stay at zero while the
- * jack is carrying traffic, it is not.
  *
  * The console
  * -----------
@@ -306,7 +344,7 @@ static int zx279133_rgmii_probe(struct platform_device *pdev)
 		return ret;
 
 	dev_info(&pdev->dev,
-		 "the RGMII MAC's register block is mapped at 0x%08x; this driver only reads it - the 2.5G jack still has no MAC behind it in mainline\n",
+		 "the RGMII MAC's register block is mapped at 0x%08x; it reads all zero on this unit - the 2.5G jack is a port of the 9132 with the RTL8226 on it, not this block\n",
 		 ZX279133_RGMII_BASE);
 
 	/*

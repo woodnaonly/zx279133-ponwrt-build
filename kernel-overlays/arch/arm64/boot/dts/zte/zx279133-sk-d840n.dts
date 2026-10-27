@@ -265,12 +265,25 @@
 	/*
 	 * The SoC's RGMII MAC.
 	 *
-	 * This is the MAC behind the 2.5G jack.  The board's U-Boot is the
-	 * vendor's and it does have a driver for it: at 2026-10-28 03:45:57
-	 * it downloaded 12162040 bytes from the test PC through that jack,
-	 * and the test PC has exactly one NIC, which is plugged into the 2.5G
-	 * jack.  U-Boot has no driver for the 9132, so the MAC that moved
-	 * those bytes can only be this one.
+	 * This block is DEAD on this unit.  From the board's U-Boot prompt:
+	 *
+	 *	=> md 0x15900000 0x10
+	 *	15900000: 00000000 00000000 00000000 00000000    ................
+	 *	=> md 0x15900700 0x10
+	 *	15900700: 00000000 00000000 00000000 00000000    ................
+	 *
+	 * all zeros, including the 41 counters the vendor's smac_get_stat()
+	 * reads.  The vendor's own Linux maps the window ("rgmii_base is
+	 * 0xffffff800a100000") but never brings it up ("enter rgmii_init"
+	 * never appears in its boot log).
+	 *
+	 * The 2.5G jack is NOT behind this block.  It is a copper port of the
+	 * 9132 with the RTL8226 as its external PHY: U-Boot's network
+	 * bring-up prints "xmac 0 speed set 2 in sgmii(xmac speed 3)" (the
+	 * 9132's CPU port, over the Uni SerDes) and then "mac 4 phy status
+	 * changed: 1000M full-duplex" for the RTL8226 on port 4, and U-Boot
+	 * then answers a ping from the test PC, which is plugged into that
+	 * jack.
 	 *
 	 * The vendor's own device tree declares the same node the same way
 	 * (decompiled/sk-d840n-community-4.19.dts):
@@ -285,8 +298,9 @@
 	 * the root's address space (the root has #address-cells = <2>, like
 	 * the soc bus in zx279133.dtsi, so the reg is the same two-cell form).
 	 *
-	 * The driver that binds it (zx279133-rgmii.c) only reads the block.
-	 * Nothing drives the jack yet.
+	 * The driver that binds it (zx279133-rgmii.c) only reads the block, so
+	 * that the zeros above stay reproducible instead of being a one-off
+	 * observation from a U-Boot prompt.
 	 */
 	rgmii@15900000 {
 		compatible = "zte,zx279133-rgmii";

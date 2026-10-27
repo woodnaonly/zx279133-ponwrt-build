@@ -5007,3 +5007,186 @@ br-lan; do printf ...`）**在板子上没有产生任何输出**，连 `W69BEGI
    这两个读数定下 2.5G 口到底是「9132 的 port 4」还是「SoC 自己的 RGMII MAC」。
 4. **PC 的帧到底进不进 SoC**：线挪到 LAN2 之后再做一遍 §68 那套
    「flood 前后 IDM 0x280180 / XMAC0 / XMAC1 对比」。那时数字才有意义。
+
+
+## 69. U-Boot 的窗口把 2.5G 口的架构定死了（2026-10-28 04:06–04:10）
+
+§67 列了两条互斥的假设：2.5G 口是 **SoC 自己的 RGMII MAC（0x15900000）**，
+还是 **9132 的一个铜口 + 外置 RTL8226**。这一节用板子自己的 U-Boot 提示符把
+它们分开，结论是**后者**。
+
+### 69.1 U-Boot 的两条 MDIO 总线
+
+U-Boot 的 `mii dev`：
+
+```
+=> mii dev
+MII devices: 'zx_mdio' 'zx_mdio_extern'
+Current device: 'zx_mdio'
+```
+
+`zx_mdio` 是 9132 自己那条总线，`zx_mdio_extern` 是外置 PHY 那条：
+
+```
+=> mii info                       （zx_mdio）
+PHY 0x0A: OUI = 0x212E54, Model = 0x03, Rev = 0x02,  10baseT, HDX
+PHY 0x0B: OUI = 0x212E54, Model = 0x03, Rev = 0x02,  10baseT, HDX
+PHY 0x0C: OUI = 0x212E54, Model = 0x03, Rev = 0x02,  10baseT, HDX
+PHY 0x0D: OUI = 0x212E54, Model = 0x03, Rev = 0x02,  10baseT, HDX
+
+=> mii dev zx_mdio_extern
+=> mii info                       （zx_mdio_extern）
+PHY 0x00: OUI = 0x0732, Model = 0x04, Rev = 0x09, 100baseT, FDX
+PHY 0x05: OUI = 0x0732, Model = 0x04, Rev = 0x09, 100baseT, FDX
+```
+
+* `zx_mdio` 上是 **0x0a..0x0d 四个 PHY**——就是 9132 的四个 UNI 口的内部 PHY，
+  跟 mainline 树里 `zx279133-switch.c` 用的地址一致。四个都读 10baseT/HDX，
+  即**四个 1G 口上都没有网线**（台架 PC 不在那儿）。
+* `zx_mdio_extern` 上是 **0x05 = Realtek 0x0732/0x0409 = RTL8226**——就是我们
+  在 mainline 里量到的 `14f02000.mdio:05`（厂商 DT 里的 `mdio_8226_id` 是另一
+  套编号，别混）。
+
+**两条 MDIO 总线分开的这件事本身就说明 RTL8226 不在 9132 的总线后面**——它是
+挂在 SoC 这一侧的。
+
+### 69.2 U-Boot 一次网络初始化把整条链写出来了
+
+U-Boot 是懒初始化的：第一次用网络时才初始化并打印。`ping 192.168.9.25` 的
+输出里包含全部：
+
+```
+=> ping 192.168.9.25
+...
+enter smac_init
+smac_init: smac_pkt_filter = 0x80000001, mac = 0x0
+...
+smac_init: smac_pkt_filter = 0x80000001, mac = 0x3
+enter outerphy info init!
+get board_info_id by fdt,the phy_id is 0x5
+--->phy identifier is [0xc849]
+5 serdes option is 0
+xmac0 is used.
+enter outerphy info init!
+get board_info_id by fdt,the phy_id is 0x5
+can't find this index!
+[outerphy_phy_init]Warning: No outerphy on this port<5>
+idm_ddr_base is 0x00000000b0000000
+enter gpon pon pll cfg
+mode_xgpon_nsyn_cfg_133
+com_pll_lock_ready
+rx los =0 rx data in
+cdr_lock_ready
+pon serdes init succeed
+np init ok
+mac 0 link down
+mac 1 link down
+mac 2 link down
+mac 3 link down
+phy_id:0x5;  port:0x4;
+PHY_RLT8226_MDIO_READ_EXTENDED(0x2) in RTL_8226
+test:cur 0 phy sereds mode : 0x6, last mode0 : 0xc, last mode1 : 0xc
+mode_eth_1gbase_x_cfg
+com_pll_lock_ready
+rx los =0 rx data in
+cdr_lock_ready
+uni serdes init succeed
+xmac 0 speed set 2 in sgmii(xmac speed 3)
+mac 4 phy status changed: 1000M full-duplex
+host 192.168.9.25 is alive
+```
+
+逐行读：
+
+1. `smac_init ... mac = 0x0..0x3`——SoC 侧 4 个 SOPC MAC 通道，对应 9132 的
+   4 个 UNI 口（§67.4）。
+2. `--->phy identifier is [0xc849]`——RTL8226 的 Clause 45 ID；`xmac0 is used`
+   说明厂商把这颗 PHY 归到 xmac0 这条路上；`No outerphy on this port<5>` 说明
+   端口 5/6（两个扩展 SerDes 口）上**没有**外置 PHY。
+3. `uni serdes init succeed` + **`xmac 0 speed set 2 in sgmii(xmac speed 3)`**
+   ——**XMAC0 走 SGMII、1G、Uni SerDes**，这就是 9132 的 CPU 口。和 mainline
+   树里 `zx279133-switch.c` 的做法完全一致，也和活板量到的「帧从 XMAC0 进来」
+   一致。
+4. `phy_id:0x5; port:0x4;` + `PHY_RLT8226_MDIO_READ_EXTENDED(0x2)` +
+   `mode_eth_1gbase_x_cfg`——**RTL8226 在 9132 的 port 4**，被配成 1G base-X。
+5. `mac 4 phy status changed: 1000M full-duplex`——port 4 的 PHY 起来了，
+   1G 全双工（台架 PC 只有 1G 网卡，所以协商到 1G）。
+6. `host 192.168.9.25 is alive`——**U-Boot 从 2.5G 口 ping 通了台架 PC**。
+
+⇒ **2.5G 口 = 9132 的 port 4，外置 PHY 是 RTL8226。SoC 侧是 XMAC0 / Uni
+SerDes 的 CPU 口，跟另外三个 1G 口一模一样。** 这也解释了厂商为什么把 2.5G 口
+当成「9132 的一个口」而不是「一个独立的 MAC」。
+
+### 69.3 0x15900000 是死的
+
+同一个 U-Boot 提示符上：
+
+```
+=> md 0x15900000 0x10
+15900000: 00000000 00000000 00000000 00000000    ................
+15900010: 00000000 00000000 00000000 00000000    ................
+15900020: 00000000 00000000 00000000 00000000    ................
+15900030: 00000000 00000000 00000000 00000000    ................
+
+=> md 0x15900700 0x10
+15900700: 00000000 00000000 00000000 00000000    ................
+15900710: 00000000 00000000 00000000 00000000    ................
+15900720: 00000000 00000000 00000000 00000000    ................
+15900730: 00000000 00000000 00000000 00000000    ................
+```
+
+**全零**，包括 `smac_get_stat()` 读的那 41 个统计计数器（字索引 0x1c5 起，
+字节 0x714 起）。厂商自己的 Linux 也是一样：启动日志里
+`rgmii_base is 0xffffff800a100000`（映射了窗口），但**从头到尾没有出现过
+`enter rgmii_init`**——它把这块映射了却从没初始化过；厂商系统里它的 2.5G 口
+（eth0）也从来收不到字节。
+
+⇒ **这块 RGMII MAC 在这块板上根本没被使用。** §67.1/§67.2 挖出来的寄存器映射
+没错，但它描述的是一块这块板子上没接线的硬件。
+
+（顺带：`md 0x14000070` 会让 U-Boot 触发 `Synchronous Abort`（esr 0x96000010）
+并复位——XMAC0 的窗口在 U-Boot 里不是按 0x140000 映射的，别去读它。）
+
+### 69.4 于是 §66–§67 的结论要改哪一条
+
+| §66/§67 的说法 | 现在 |
+|---|---|
+| 「2.5G 口的 MAC 是 SoC 的 RGMII MAC（0x15900000）」 | **作废**。2.5G 口是 9132 的 port 4。0x15900000 是死块。 |
+| 「mainline 树里没有 0x15900000 的驱动，所以 jack 4 不通」 | 前提错了。**真正缺的是 9132 的第 5 个 DSA 口**，不是 MAC 驱动。 |
+| 「docs/16 §2.4：厂商 eth0 = RGMII MAC + RTL8226 = jack 4」 | **也要作废**。厂商的 eth0 是 9132 的 UNI 口虚拟 MAC 之一；厂商 Linux 里 2.5G 口根本没通。 |
+| 「假设 A / 假设 B」 | **假设 A 成立**（§67.6 的 A 条）。 |
+| §67.1/§67.2 的 RGMII 寄存器映射 | 事实没错，但描述的是一块死硬件；留档用。 |
+
+### 69.5 修 2.5G 口要做的四件事（比原来小一个量级）
+
+1. **给 9132 的 port 4 注册一个 DSA 用户口**（现在只有 PPU 1..4 → DSA 4..7，
+   CPU 口是 8；多出来这个口要占一个 DSA 端口号）。
+2. **把 RTL8226 接成这个口的 PHY**。它在 **MDIO controller #1**（0x14f02000）
+   的 **0x05**，而 9132 自己的 user bus 翻译到 controller **#0**——两条总线不是
+   一回事，所以这个 PHY 不能走 9132 的 mdio_read/mdio_write，得单独接。树里
+   的板级 DTS 已经有 `zte,outer-phy-bus=<&mdio1>`，方向是对的。RTL8226 是
+   Clause 45 器件，SerDes 侧厂商用 `Rtl8226_serdes_autoNego_set()` /
+   `Rtl8226_serdes_link_get()`（devad 0x1e，0x7588/0x7589/0x758b/0x758d），
+   mainline 树里没有它的 PHY 驱动，要写一个小的。
+3. **给这个口一个传输 VID**。tagger 的规则是 `VID = 55 + DSA_port`，所以端口号
+   一旦定下来，VID 跟着走；9132 的 PPU/端口属性表（`zx279133-np.c` 里写的那
+   几张）也要把这一行补上——**port↔DSA↔PHY↔VID 四张表必须是同一张**。
+4. **端口属性**：这个口是 LAN 口还是 WAN 口。厂商的 `outerphy_desc_mode =
+   <0x00 0x05 0x00>`（5 = RGMII）和 `port_attr_def_src_is_extend_port_flag_set(5, 1)`
+   说明厂商把它当成 9132 的一个「扩展口」来描述，这正是我们要学的。
+
+**这比「从零写一个 MAC 驱动」小一个量级。**
+
+### 69.6 给 owner 的那个物理动作，现在有了新的理由
+
+**把台架 PC 的网线从 LAN1（2.5G）挪到 LAN2（1G）。**
+
+理由不是「2.5G 口坏了」，而是：**mainline 里只有 1G 口有 DSA 口**。线插在
+LAN1 上的时候，PC 的帧进不了 SoC，什么都量不到；线插在 LAN2 上的时候，
+9132 → DSA → 协议栈这条路第一次真的能被端到端量到——顺便 driver 会用
+carrier 告诉我们面板的 LAN2 对应哪个 DSA 口，解决了「面板标签 ↔ 内部 PHY
+0x0a..0x0d」那个悬案。
+
+LAN1 本身要等 §69.5 的四件事做完才有得测，而且那四件事里第 2 条（RTL8226 的
+PHY 驱动）和第 3 条（VID 与端口属性表）都要改驱动，每改一次就是一轮 80 分钟
+的 CI。
