@@ -1951,3 +1951,61 @@ baseline ping → 依次 `xmac_test xmac_work_mode_set 0 <m>`（m = 2, 6, 3, 4�
 - **模式 6（SGMII）也通** ⇒ SGMII 本身没问题，缺口回到 mainline 独有的东西（NP/PPU 表、IDM 分类），
   下一个实验回到 §44 末尾那条（U-Boot `idm_rx_debug` 逐帧对照）。
 - **模式 3/4 通而 2/6 不通** ⇒ PHY 侧是 2.5G 模式，DTS 要改成 2500base-x（驱动已有这条路径）。
+
+## 48. 14:26–14:40：47.1 的模式扫描**撤掉**（它会把 SerDes 弄坏），改查 mainline 从不写的那张表：MF 镜像 0x7d 里的 mem 5
+
+### 48.1 一次差点犯的错，记在最前面
+
+47.1 预登记之后我把 `tools/ubxmacmode.sh` 写好并 arm 到了 14:40 窗口（每个模式后 ping）。arm 完才回头翻
+docs/07 找 xmac_test 的用法，**补八十七（2026-10-19）当场否掉了这个设计**：
+
+> `xmac_test xmac_work_mode_set 0 2` 不是"把状态修好交给 mainline"，它是**把 Uni SerDes 弄坏**
+> （`0x161000e4=0x1345`，bit0=RX LOS=1，bit1=CDR lock=0）……下一版脚本不能调 `xmac_test`。
+
+脚本立刻停掉（进程也按 PID 清干净了：`sh tools/ubxmacmode.sh` 324313 / `sh tools/armu.sh` 324319，
+`ps -ef` 复核为空），文件删除。**教训**：这个项目的工具脚本里凡是"让 U-Boot 改 lane"的动作，先查
+docs/07 补八十五到八十七，再 arm；读数字的动作（`md`、`mii 45read`、`spa_port_attr_op`）才是安全的。
+
+### 48.2 一条被澄清的旧判断：mainline **确实**在"U-Boot 刚跑过网络"的 lane 上量过
+
+`Uni SerDes 1G inherited` 这一行在日志里有两种，按 U-Boot 上一次启动有没有跑网络会话分开：
+
+| 形 | 何时出现 | 含义 |
+|---|---|---|
+| `mode 0x1 …, image differs in 0/49 word(s), status 0x55000400/0x100019fc` | U-Boot 没跑网络 | SerDes 还是 BL2 的冷状态 |
+| `mode 0x101 …, image differs in 28/49 word(s), status 0xc880bb83/0x1000706` | U-Boot 跑过 tftp/ping | **U-Boot 的网络 bring-up 改写了 28/49 个字**，`+0xd0` bit0=1 |
+
+`0xc880bb83` 正是补八十五里"只有 bring-up 动作才能产生"的那个值。**§43/§44 那两次 RAM boot 的日志里
+（`serial.log` 2200634、2212188 行）就是 0xc880bb83 这一形**——也就是说"mainline 从来没在 bring-up 过的
+lane 上测过"这个说法不成立：12:18 与 12:58 两轮都是在 U-Boot tftp 刚用过的 lane 上测的，结论（双向 0）
+仍然成立。这条把"SerDes 没 bring-up"从嫌疑名单里彻底划掉。
+
+### 48.3 新的具体嫌疑：mainline 给 9132 写的属性表**跳过 PPU 5**
+
+读 `zx279133_9132_port_init()`（np.c:2796）：它对 `UNI_PPU 1..4` 每口做三件事——
+`port_words_vendor()`（SPA 字）、回读 `ZX279133_PPU_ATTR_REG`、以及 `zx279133_9132_mf_mirror()`
+（**交换引擎真正读的那份属性表**，ERAM SDT 0x7d，`{0x7d,1,0x3,0x40}` ⇒ 基块 3，每 mem 一块）；
+然后对 CPU trap PPU 15 做同样三件事。**PPU 5（LAN1 的 XMAC0 口）不在任何一个循环里**——它的 SPA 字在
+`port_words_read`/`phy_enable` 里被别的路径碰过（attr 19 = 0x00042000），但**0x7d 的镜像条目从来没有
+被 mainline 写过**。
+
+这解释了为什么 §45/§46 把 SPA 字恢复成 bootloader 基线没有任何效果：SE 读的是 0x7d 的镜像，不是 SPA
+内存；而 SE 正是决定"从 port 5 进来的帧去哪"的那一层。
+
+### 48.4 预登记：14:40 窗口（RAM 起 run 193 普通 DTB，switch 驱动在场）
+
+`tools/bootflashram.sh` 已 arm。进 Linux 后先认身份（`uname -r` + 参数表里有 `zx279133_eth0_xmac`），
+然后**只读**四块：
+
+	er 4 1      # 0x7d + mem 1   —— LAN2 的口，工作正常
+	er 8 1      # 0x7d + mem 5   —— LAN1 的 XMAC0 口，嫌疑
+	er 9 1      # 0x7d + mem 6   —— XMAC1
+	er 18 1     # 0x7d + mem 15  —— CPU trap
+
+判据：
+
+- **mem 5 的 word0 是 0 / 与 mem 1 不同** ⇒ mainline 漏写的就是这张表；下一步 `fa 5 <值>`（把 mem 1 的
+  0x96040001 或 mem 5 自己的属性字写进去）再跑 `txp 5` + PC 突发看双向。**能通就在 `9132_port_init`
+  的循环里加一个 PPU 5，一行的事，进下一个 CI 包。**
+- **mem 5 与 mem 1 同值** ⇒ 0x7d 也清白，剩下的只能是 SE 里 per-port 的其它表（隔离矩阵 0x1b、
+  PVID 0x25、outport map 0x27）或 IDM 的 per-port 队列绑定，下一轮按同一方法逐张表比对。
