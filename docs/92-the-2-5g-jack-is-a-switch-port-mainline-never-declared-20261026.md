@@ -3115,3 +3115,138 @@ queue 0..15  desc 0: address 00000000 length 00000000 metadata 00000000 00000000
 - XMAC0 的 ready 字读到过 1。
 ⇒ **下一个上电窗口会从 flash 重新起来，这些都不保留**；但如果有人在同一个 Linux 里接着做，
 **不要**假设 DSA 那几个口还在正常工作。
+## 58. 00:00–00:13：ERAM 三张 qid 表在板上是**厂商原值** ——「表没写」这条理论被证伪（2026-10-28 00:00–00:13）
+
+### 58.1 00:00:02 那次「复位」不是 panic，是一次上电；插座节拍实测 20 分 30 秒
+
+00:00:02 我往板子上发了一条探测命令（`echo 'cqid 0x193 0x193' > …`），命令**还没打完**板子就重进了 ROM 引导
+（`SPI NAND / start read bootloader / non secure boot / Jump / enter bootloader...`），随后是 U-Boot 2021.01 的
+banner。第一反应是「`cqid` 写崩了内核」，但三件事否掉了这个解释：
+
+1. 复位前 3 MB 的日志里 **没有任何** panic / Oops / `Call trace` / Machine check 标记；干净复位才没有这些；
+2. 复位时**我的命令还在被打字**（后面的字符还在串口回显里），也就是复位发生在命令执行之前 ⇒ 是异步的；
+3. `cqid` 的那条写路径（`zx279133_eram_window_patch()`）在 `zx279133_9132_cpu_path_init()`
+   （`zx279133-np.c:3634`）里**每次开机都会跑一遍**，厂商的同一组值也是这么写进去的，它不可能只在我手动调它时炸。
+
+把串口日志里每一次 U-Boot banner 的宿主时间戳全部拉出来（`staging/ctl/_scan3.py`），插座节拍是
+
+    17:41:01  18:01:31  18:22:01  18:42:31  19:03:01  …  23:14:06  23:34:36  23:55:06  00:20:34  00:41:04 …
+
+间隔 **20 分 30 秒**（中间只有 22:33:06 → 23:14:06 一次例外）。⇒ 00:00:05 那次是**多出来**的一次复位，不是插座节拍；
+**下一个上电窗口在 00:20:34**（banner 时刻），插座通电约在 00:20:29。
+
+⇒ 这条同时纠正了一个一直靠推算的说法：节拍不是「20 分钟」，是 **20 分 30 秒**。
+
+### 58.2 flash 镜像上没有 `zx279133_eth0_xmac` ⇒ E1b 在 flash 内核上**跑不了**
+
+00:01:32（flash 内核）：
+
+    cat: can't open '/sys/module/zx279133/parameters/zx279133_eth0_xmac': No such file or directory
+
+接口列表也没有上一场的 `labhost0`。整轮 E1b 在 flash 内核上的结果是
+
+| 读数 | 值 |
+|---|---|
+| `0x142400` / `0x142440` / `0x142460` | 全程 **0x00000000** |
+| eth0 `rx_packets` / `rx_bytes` | **0** / **0** |
+
+⇒ **flash 镜像不能用来做 LAN1 的任何实验**：把 eth0 的 MAC 底挪到 XMAC0 这个旋钮只在 RAM 引导的 trial 内核里
+（run192 起才有，run194 还多了 `xpcs`/`xpcsw` 动词）。下一轮**必须**从 U-Boot tftp 引导 run194
+（`staging/ctl/win60.sh`：抓 banner → `bdinfo` 证明是 U-Boot → `tftpboot` → `bootm` → 自动跑 E1b + E2）。
+
+### 58.3 Q1 的正确读法（读法本身是这一轮的新东西）
+
+1. **ERAM 表的 base 不是常量。** `zx279133_core_sdt_info` 从 block 12288 起顺序分配
+   （`zx279133-np.c:429-448`），base 是前面所有表的深度之和，**随表序移动**；`zx279133.h` 里那三个写死的
+   base（17106 / 21266 / 23026）本来就不对，那次写全部落进了别人的块里。
+2. 所以先 `cat /sys/kernel/debug/zx279133-9132` —— 它的 `show` 会打 **"ERAM tables (id, base block, bits per entry)"**，
+   这才是今天的表地图。
+3. **`eg` 读不到 cpu base qid。** `zx279133_eram_table_get_bits()`（np.c:525）的算法是
+   `bit_off = bit_len * index`、`word_idx = (bit_off >> 5) & 3`、`bit_pos = bit_off & 0x1f`，
+   也就是**只能从条目的第一个 bit 起读 width 位**。表 0x22 的条目是 128 bit，qid 在 word 3 的 bits 17..25，
+   落在 `eg` 的射程之外 ⇒ 只能用 `er <block> <n>` 读原始四字（`er` 走的是 `zx279133_smmu0_read()`，地址 = block<<7）。
+
+### 58.4 板上的读数与逐位判读
+
+    eram block 19592 = 00000000 00000000 00000000 03272000     ERAM 0x22 entry 0
+    eram block 24071 = 00010000 00030002 00050004 00070006     ERAM 0x27 entries 0..7
+    eram block 24072 = 00090008 000b000a 000d000c 64cf000e     ERAM 0x27 entries 8..15
+    eram block 24073 = 68cf68cf 68cf68cf 68cf68cf 68cf68cf     ERAM 0x27 entries 16..23
+    eram block 24074 = 00190018 001b001a 001d001c 001f001e     ERAM 0x27 entries 24..31
+    eram block 24075 = 00210020 00230022 00250024 00270026     ERAM 0x27 entries 32..39
+    eram block 24076 = 00290028 002b002a 002d002c 002f002e     ERAM 0x27 entries 40..47
+    eram block 24077 = 6c710030 6d736cf2 00350034 00370036     ERAM 0x27 entries 48..55
+    eram block 24078 = 00390038 003b003a 003d003c 003f003e     ERAM 0x27 entries 56..63
+    eram block 19752 = 07000000 07000000 06000000 04000000     ERAM 0x19 entries 0..3
+    eram block 19753 = 04000000 04000000 04000000 04000000     ERAM 0x19 entries 4..7
+
+    soc reg 0x19020004 (nppt +0x020004) = 0x0000007e           RED 控制字
+    soc reg 0x19020038 (nppt +0x020038) = 0x00000001           RED 非法 qid 丢弃位
+
+| 读数 | 判读 |
+|---|---|
+| 0x22 entry 0 word 3 = `0x03272000` | `(0x03272000 >> 17) & 0x1ff = **0x193**`；bit16(ipv6_crc32)=1、bit13(mul_ip)=1 ⇒ **与厂商逐位相同** |
+| 0x27 entry 15 = `0x64cf` | real port = `0x64cf & 0x3f` = **15**，qid = `(0x64cf >> 6) & 0x1ff` = **0x193** ⇒ 与厂商逐位相同 |
+| 0x27 entries 16..23 = `0x68cf` | real port = **15**，qid = **0x1a3 (419)** ⇒ 与厂商相同（厂商那一句「per-port delta 这里取零，就是基值」） |
+| 0x27 entries 48..55 | entry 49/50/51 = `0x6c71`/`0x6cf2`/`0x6d73` ⇒ real port 49/50/51、qid **0x1b1/0x1b3/0x1b5** ⇒ 与厂商相同；其余是恒等映射 |
+| 0x27 其余 54 项 | 恒等映射（real port = outport，qid = 0）⇒ 与厂商相同 |
+| 0x19 entries 0..7 = 7,7,6,4,4,4,4,4 | **就是厂商那份数组**（`zx279133_9132_reason_qid[]` 的头八项），且写入用的是**厂商的排布**（`zx279133_9132_reason_map_init()`：block = reason\*32 + cpu/4、word = cpu%4、value = qid(+8 if reason≠0)，等价于 index = cpu_qid + (reason<<7)）⇒ **与厂商逐项相同** |
+| RED `0x20004` = `0x7e` | bit7（all_active_mode）**是 0**；厂商写 `0x9e`（bit7 = 1）。**这是厂商设了而我们没设的那一个 bit** |
+| RED `0x20038` = `0x01` | bit0 = **非法 qid 丢弃位，默认就是开的**（厂商也没写它，两边一致）。RED 的合法队列范围是 **0..0x190（401 个）**，而 CPU 自己的队列号是 **0x193(403) / 0x1a3(419) / 0x1b1(433) / 0x1b3(435) / 0x1b5(437)** —— **厂商自己那几个 CPU 队列号全都越界** ⇒ 这是 MAC 与 IDM 之间唯一一个**能扔掉帧而不动任何计数器**的地方 |
+
+### 58.5 结论：「三张 ERAM 表没被写」这条被证伪
+
+`re-conduit-qid.md` §0 判定的 most likely root cause 是 **A + B + C：三张 ERAM qid 表从来没被写过**。
+**这条整条是死的**：三张表在板上就是厂商的原值 —— 0x22 的 word3 逐位相同、0x27 的**全部 64 项**逐项相同、
+0x19 用的是厂商的排布（`index = cpu_qid + (reason<<7)`）**和**厂商那份数组本身
+⇒ **mainline 的 ERAM 写路径是通的**，「没有 cpu base qid 锚点 / 没有 reason→qid 表 / 没有 outport→qid 表」
+这个叙事不成立。
+
+剩下的只有三条：
+
+| # | 候选 | 现在知道的状态 |
+|---|---|---|
+| **D** | RED `0x20004` bit7（all_active_mode） | 厂商 0x9e / 我们 0x7e，**板上确认不同**；这是 `re-conduit-qid.md` 自己认的「最便宜的单寄存器判别器」 |
+| **E** | RED `0x20038` bit0（非法 qid 丢弃） | **默认开着**，而 CPU 自己那几个队列号（0x193 / 0x1a3 / 0x1b1 / 0x1b3 / 0x1b5）**全都越界** ⇒ 一个 bit 就能试 |
+| **G** | qid → IDM RX 环这一步 | **不在本树，也不在库里 17 个厂商模块**（`sg_idm_queue_cpuid_map_table` 是 `np_133.ko` 的未定义符号，17 个 .ko 都查过）⇒ 离线到此为止，只能靠 16 条队列头去测 |
+
+### 58.5.1 一条要自己纠正的推断：表 0x19 **没有**索引错位
+
+我在读到 `zx279133_9132_reason_qid[]` 之前，先按 `rmap` 动词的写法（`index = reason`）推断「本树与厂商的
+索引排布错位、厂商的『reason 0 → queue 7』应该住在 entry 7 而板上是 4」。**这个推断是错的**：
+`zx279133_9132_reason_map_init()`（np.c:3533）用的正是厂商那套排布 ——
+`block = reason * 32 + cpu / 4`、`word = cpu % 4`、值 = `qid (+8 if reason != 0)`，
+等价于 `index = cpu_qid + (reason << 7)`；而那份数组 `zx279133_9132_reason_qid[128]`
+就是厂商的表。板上的 7,7,6,4 / 4,4,4,4 正是它的头八项 ⇒ **表 0x19 与厂商逐项相同。**
+
+**真正有 bug 的是 `rmap` 这个调试动词本身**：它按 `index = reason` 写，所以 `rmap 8 0`
+（它自己的注释写的是「reason 8 goes to CPU queue 0」）实际写的是 **reason 0 的第 8 个 cpu_qid**，
+对 reason ≠ 0 一律写错地方。这是一个**驱动里的动词 bug**，不是表的内容差 —— 两者必须分开，
+否则会把「表错了」的结论安到错的头上。
+
+### 58.6 下一轮：`tools/e2qid.sh` 已按上面改写
+
+- 新增实验 **E**（先清 `0x20038` bit0）、**D**（`0x20004` bit7）、**E+D**（两个 bit 同时改）、
+  **H**（`cqid 0x3 0x3`，把 CPU 自己的队列号换成一个**合法**的 3，因为 0x193 / 0x1a3 / 0x1b1 全都越界），
+  每一步之后都重跑一遍基线测量（flood + 16 条队列头 + 各计数）。
+- 仪表加 **IDM+0x180**（`reg 0x280180`）—— 厂商自己的文档把它叫做「receive cpu pkt cnt from DMA」，
+  `re-conduit-qid.md` §0 用它作为「IDM 一个包都没看见」的正读数。
+- Q1 步骤改成：先 `cat $D` 取表地图，再按**板上的 base** 发 `er`（脚本不再假定 base 是常量）；
+  0x27 读 4 个块（64 项全读），0x19 读 2 个块。
+- **原计划的实验 F（reason map 的索引排布）删掉**：§58.5.1 已证明表 0x19 的排布与内容都是厂商的。
+- 判据 Q1..Q4 不变；每个测量之间仍然自带正对照（XMAC0 的 RX 计数必须随 flood 涨）与静默对照。
+
+### 58.7 工具坑（新记一条）
+
+- **多行命令会把 busybox ash 留在续行模式**（提示符变成 `>`），后面的命令全被吞，而且**回显里看不出来**：
+  00:09:14 之前那批 `eg`/`reg` 里只有第一条回了，第二条开始全没了 —— 看起来像「只有 0x22 那一项可读」，
+  其实是 shell 已经歪了。
+- **救法：往 `staging/ctl/sercmd.txt` 写一个 0x03 字节**（Ctrl-C），shell 立刻回到 `root@ImmortalWrt:~#`。
+- 结论：**能往板子上发的命令尽量写成一行**（用 `;` 连接），多行必须自己盯着 `>` 提示符。
+
+### 58.8 本轮没做的事（记下来）
+
+- **没有改任何驱动代码**：这一轮拿到的是**读数**与**排布**层面的新事实，不足以支撑一次代码修改；
+  按惯例代码改动等下一轮 E2 的 D/E/F 三个实验出数之后再写。
+- **没有 push**：`docs/**` 与 `tools/**` 都在 CI 触发路径里，push 一次就白占一次 80 分钟的构建机。
+  本地提交留着，等真有代码要发时一起推。
