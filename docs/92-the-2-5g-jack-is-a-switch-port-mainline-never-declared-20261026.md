@@ -3632,3 +3632,223 @@ prepush: 14 files, 0 problems
 - **没有 push**：`docs/**` 与 `tools/**` 都在 CI 触发路径里，push 一次白占 80 分钟构建机。
   本轮的门禁已经修好，push 的门禁不再是问题，但也没有值得单独占一次构建机的东西。
 - **没有碰 G5**（PON 状态机）：按计划第 7 节保持冻结。
+
+### 61. 断点第一次往前挪了一格：XMAC0 的入口程序是别的板的
+
+#### 61.1 先把一个没人问过的问题问完：PC 插在哪个口上
+
+E1b、E2、E3、E4、E5、E6 全部有一个共同的前提：**「2.5G 口的流量进 XMAC0」**。
+§59 的结论 1 就写在这句上（「2.5G 口的流量只进 XMAC0，XMAC1 全程为 0 ⇒
+驱动的默认值 `zx279133_eth0_xmac = 1` 对这个 SKU 是错的」）。
+
+⚠️ **这个前提本身从来没有被验证过。本轮去查它，结论是：它多半是错的。**
+
+证据一，**板子自己说的**。trial 镜像的 `S26nat` 脚本在桥起来之后会找出 PC 在哪个口，
+它的兜底值写得很清楚（`trial-files/etc/rc.d/S26nat`）：
+
+```sh
+# The port the test PC is in.  Its MAC is the only address the bridge has
+# learned, and the bridge's forwarding database says which port learned it.
+# When it cannot be read, the measured value is used: the PC is in the
+# PHY 0x0b port, which is DSA port 5, which is lan2.
+```
+
+而这一轮 trial 内核的 dmesg 里确实有：
+
+```
+[   16.684512] trial: nat: br-lan is up; the test PC is in lan2
+[   66.732049] trial: nat evidence
+[   66.732074] pc port: lan2
+```
+
+证据二，**PHY 层面的链路状态**（`docs/25-the-jacks-phy-and-the-trees-contract-20261021.md`）：
+
+```
+9132 UNI PHY 0a: id 84b9:5032, BMCR 1040->1040, link 0
+9132 UNI PHY 0b: id 84b9:5032, BMCR 1040->1040, link 1
+9132 UNI PHY 0c: id 84b9:5032, BMCR 1040->1040, link 0
+9132 UNI PHY 0d: id 84b9:5032, BMCR 1040->1040, link 0
+```
+
+四个**内部** UNI PHY（全是 RTL8211F，1G）里只有 0x0b 有链路，而 0x0b 就是 PC 所在的那个。
+`docs/59-three-rounds-and-what-the-chip-says-20261023.md` §3.2 把这件事钉死了：
+
+> PHY 0x0b is the second PHY, PPU 2 is the second chip port. Both roads arrive at
+> **chip port 2**, so `ZX279133_LAN_TX_PORT` is 2.
+
+⇒ **PC 插的是 chip port 2（一个 1G 内部 PHY 的 UNI 口，对应面板上的 lan2），
+不是 2.5G 的 LAN1。所有 flood 实验测的都是一个「能用」的口，
+LAN1 的流量一次都没有被测过。**
+
+#### 61.2 于是 §59 的结论 1 要改写
+
+E4/E6 测到的事实是：flood 期间 **XMAC0 的 0x142400 涨了 2000 帧**、0x142440 涨了约 2 091 456 字节，
+而 XMAC1 全程为 0。
+
+| 解释 | 含义 |
+|---|---|
+| (a) XMAC0 是 **CPU 侧**的 MAC，PC（chip port 2）的帧经 9132 转发到 CPU 侧后进 XMAC0 | 与 `docs/59`、`zx279133-switch.c`（`zx279133_switch_xmac_program()` 把 XMAC0 当 LAN window 编程）、`zx279133-np.c` 的 debugfs（「XMAC0, the SoC's MAC on the 9132's **CPU port**」）一致 |
+| (b) XMAC0 是 **2.5G 口**的 MAC | 与 PC 在 chip port 2 冲突——PC 的包不该进 XMAC0 |
+
+⇒ **解释 (a) 才是自洽的那个**，§59 的结论 1 作废，驱动默认值 1（XMAC1）也许本来就对。
+
+#### 61.3 0x2400 段的语义（E8b 钉的）
+
+E8 的第一次读数因为地址拼接错误（把「块基址」和「块内偏移」当字符串接起来了，
+`0x` + `140000` + `002070`）而全部读空。E8b 把地址写全重读：
+
+```
+0x142070 = 0x00002065      XMAC0   （驱动自己叫它 "tx frames"）
+0x142230 = 0x00002068      XMAC0   （驱动自己叫它 "tx good"）
+0x142400 = 0x0000306f      XMAC0
+0x142440 = 0x00ffe2d3      XMAC0
+0x182070 = 0x00000000      XMAC1   ← 全零
+0x182230 = 0x00000000      XMAC1
+0x182400 = 0x00000000      XMAC1
+0x182440 = 0x00000000      XMAC1
+```
+
+**XMAC1 块整块为零**：eth0 现在用的那个 MAC 窗口，从来没有收过也没有发过一个字节。
+
+控制字（`zx279133-switch.c` 的定义给出偏移）：
+
+| 偏移 | 名称 | XMAC0 | XMAC1 | 谁写的 |
+|---|---|---|---|---|
+| 0x0000 | TX_CTRL | 0x60010001 | 0x60010001 | 速率码 6 = **2.5G**，bit0 = TX 开 |
+| 0x0010 | RX_CTRL | 0x3e8000c7 | 0x3e800287 | XMAC0 = 厂商的 0x3e8000c6 + 使能；XMAC1 = `zx279133-mac.c` 的 0x3e800086\|IPC + 使能 |
+| 0x0020 | FRAME_CFG | 0x80000000 | 0x80000001 | 厂商值 / 树里 RTL8372N 的值 |
+| 0x0280 | MODE_CFG | 0x00000000 | 0x00000000 | 厂商写 2（自清零的命令寄存器） |
+| 0x0500 | DUPLEX | 0x00000100 | 0x00000100 | 全双工 |
+| 0x3400 | MISC_CFG | 0x00002200 | 0x00002200 | IPC(bit9) 置位 |
+
+⇒ **XMAC0 是被 switch 驱动按厂商配方编程的那个（RX_CTRL 0x3e8000c6 + 使能、FRAME_CFG 0x80000000），
+XMAC1 是被 `zx279133-mac.c` 编程的那个（RX_CTRL 0x3e800086|IPC、FRAME_CFG 0x80000001）。**
+两条路都在用同一个 MAC 家族的两个窗口，而它们对 RX_CTRL 的写法不一样——这本身是个隐患。
+
+#### 61.4 E7 / E10：XMAC0 这个口的属性，和四个能用的口不一样
+
+E7 读到 ERAM 0x7d（每 SPA memory id 一项、128 bit）。E10 直接读 SPA 本体
+（`w`/`r <mem> <addr>` 动词），证明镜像是忠实的：
+
+| mem_id | 端口 | a0（入口程序） | a10 | a13 | a19（属性字） |
+|---|---|---|---|---|---|
+| 0 | PON0 | 0x00000463 | 0x01f4000c | 0x00008008 | 0x00060000 |
+| 1..4 | 四个 UNI 口 | **0x0000a6a5** | 0x0fa0000e | 0x00008008 | 0x96040001 |
+| **5** | **XMAC0** | **0x00008015** | 0x01f4000c | **0x00650650** | **0x00042000** |
+| 6 | XMAC1 | 0x00000463 | 0x01f4000c | 0x00008008 | 0x148e0000 |
+| 10 | XMAC_B | 0x00c0800b | 0x01f4000c | 0x00008008 | 0x00042000 |
+| 15 | CPU trap | 0x0000a767 | 0x0fa0000e | 0x00008008 | 0x00000000 |
+
+而驱动自己的源码（`zx279133-np.c`，`zx279133_9132_port_flow[]` 上面那段注释）
+把这件事写得很清楚：
+
+```
+ *	port	SR1010		this board
+ *	0	0x00000463	0x0000a6a5
+ *	1..4	0x00008015	0x0000a6a5
+ *	5	0x00008015	0x0000a6a5	(XMAC0: the CPU's conduit)
+ *	6, 7	0x00008015	0x0000a6a5
+ ...
+ * The port that matters most is 5: XMAC0 is the conduit the CPU talks to the
+ * 9132 through, and it was running an entry program that belongs to another
+ * board.
+```
+
+⇒ **XMAC0（PPU 5）跑的是 SR1010 的入口程序 0x00008015，而这块板自己的表给它是 0x0000a6a5——
+和四个「能用」的 UNI 口一模一样。** 驱动早就知道这件事，也早就在源码里写了那张表，
+可板子上读到的就是 0x8015。
+
+#### 61.5 E11：写一个字，导管活了
+
+E11 用驱动自带的 `w <mem> <addr> <val>` 动词，把这张表里 PPU 5 的值写进 SPA：
+
+```
+9132 spa: mem 5 addr 0 = 0x00008015     （写之前）
+w 5 0 0x0000a6a5
+9132 spa: mem 5 addr 0 = 0x0000a6a5     （读回来，写进去了）
+```
+
+然后同一轮里，**板上第一次有东西动了**：
+
+| 计数器 | 写之前 | 写之后 | 说明 |
+|---|---|---|---|
+| `nppt+0x280180` | 0x00000004 | **0x0000040c** | 「receive cpu pkt cnt from DMA」，**从 E5、E6、E8 到现在一直是 0** |
+| `nppt+0x142400` | 0x00003083 | 0x00003857 | XMAC0 收帧（+2036） |
+| `nppt+0x142440` | 0x00ffe9aa | 0x011fd76a | XMAC0 收字节（+2 091 456） |
+| eth0 `rx_packets` | 0 | 0 | eth0 在 XMAC1 上，看不到 LAN 的帧（正常） |
+
+16 条 IDM 收队列的队头，**从「全部为空」变成三条有真实描述符**：
+
+```
+  queue 2  rx queue 2 desc 0: address 84536100 length 0785005e metadata 00000000 ced5bb7d 00000000
+  queue 4  rx queue 4 desc 0: address 83b32100 length 078500d1 metadata 00000000 e00000fb 00000000
+  queue 6  rx queue 6 desc 0: address 83eb6100 length 0785003c metadata 00000000 00000000 00000000
+```
+
+⇒ **帧从 LAN 侧到 CPU 这一段，堵点就是 XMAC0 这个口的入口程序。**
+它跑着别的板的入口程序，9132 就不会把 CPU 口上的帧交给 IDM。
+
+⚠️ 但断点**没有走完**：帧进了 IDM 的收队列，`eth0` 的 `rx_packets` 仍是 0，
+PC 也 ping 不到 192.168.9.1。下一段是「IDM 队列 → 驱动 → eth0/网桥」，
+见 §61.7。
+
+#### 61.6 为什么驱动自己的表没生效（顺序问题）
+
+驱动里那张表是在 `zx279133_ppu_mcode_prepare()` 的最后写的（`zx279133-np.c:4985`）：
+
+```c
+	ret = zx279133_9132_port_flow_apply(eth);
+```
+
+而整条初始化序列是（`zx279133-np.c:5304` 起）：
+
+```
+zx279133_se_sdt_create()
+zx279133_se_stat_runtime_prepare()
+zx279133_ppu_mcode_prepare()      ← 这里面写那张表（含 PPU 5）
+zx279133_np_ppu_init_tail()       ← 装 runtime image / SMMU0 捕获
+zx279133_spa_prepare()            ← 这里面写每口的 a10 / a1 / a13
+zx279133_mf_port_ppuinit()        ← 这里面给 mem 1..5 的 a19 置 BIT(18)
+zx279133_lan_port_bringup()
+zx279133_9132_port_init()         ← 这里面写四个 UNI 口 + PPU 15
+```
+
+两个要害：
+
+1. **`zx279133_9132_port_init()` 只写四个 UNI 口（1..4）和 PPU 15，压根不碰 PPU 5**，
+   源码里就是这么说的：
+
+   ```c
+    * RTL8226 (jack 4) is PPU 5 and is left alone here: it is the
+    * SoC's own LAN-side port and the vendor 4.19 does not carry a byte
+    * on it either (docs/07 supplement 94).
+   ```
+
+   于是 PPU 5 的 a0 只剩 `port_flow_apply()` 那一次机会。
+
+2. **那一次机会排在 `zx279133_spa_prepare()` 和 `zx279133_mf_port_ppuinit()` 前面**。
+   而 `zx279133_spa_prepare()` 会重写每个口的 a10 / a1 / a13，
+   `zx279133_mf_port_ppuinit()` 会给 mem 1..5 的 a19 置 BIT(18)——
+   板上 PPU 5 的 a13 = 0x00650650（不是 0x8008）、a19 = 0x00042000（BIT(18) 没置），
+   **正是「这两次写入把 PPU 5 挡在外面」的形状**；
+   而四个 UNI 口的 a19 = 0x96040001（BIT(18) 置了），
+   因为 `zx279133_9132_port_init()` 排在最后，它们又被写了一遍。
+
+⇒ **修法：在 `zx279133_9132_port_init()` 之后把那张表再写一遍（并读回自检）。**
+本轮先在运行期用 `w 5 0 0x0000a6a5` 验证了这个字就是那把钥匙，
+下一轮用驱动补丁把它固化到开机流程里。
+
+#### 61.7 遗留的问题（下一轮）
+
+1. **断点还剩一段**：帧进了 IDM 的收队列，`eth0` 的 `rx_packets` 还是 0，
+   PC 也 ping 不到板子。下一轮要问的是「IDM 的收队列归谁所有」：
+   `rxb`（驱动自己的收缓冲 dump）、`brctl show`、`ip -br addr`。
+2. **LAN1 到现在仍然是零数据**。owner 纠正过：面板是 SC 光口（XG-PON 线路）
+   \+ 4 个 LAN（LAN1 2.5G，LAN2/3/4 1G）\+ 2 个 USB，没有第 5 个物理口；
+   9132 的「5」「6」是内部 PPU 端口号。本节的一切都发生在 chip port 2（lan2）上，
+   **LAN1 的物理路径、它的 PHY、它的 MAC 归属，到今天为止一个字节都没测过**。
+   ⇒ **owner 需要做的唯一一件物理事：把 PC 的网线从 lan2 换插到 LAN1 上。**
+   换插之后，本节这套测量全部重跑一遍，那才是 LAN1 的第一份数据。
+3. §61.2 的解释 (a) 若成立，则 §59 的结论 1 作废，驱动的默认值
+   `zx279133_eth0_xmac = 1`（XMAC1）也许本来就对——本轮**没有**改驱动默认值。
+4. G5（PON 状态机）仍然冻结，本节全部是实验室路由器的结论。

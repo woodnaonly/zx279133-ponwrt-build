@@ -137,6 +137,13 @@ extern u16 zx279133_tx_port;
 #define ZX279133_9132_UNI_PPU_FIRST	1
 #define ZX279133_9132_UNI_PPU_LAST	4
 #define ZX279133_9132_CONDUIT_PPU	15
+/*
+ * PPU 5 is XMAC0: the SoC's own MAC on the 9132's CPU port, the lane every
+ * frame between the CPU and the LAN jacks crosses.  It is not one of the
+ * four UNI jacks and it is not the CPU trap port, so it is left alone by
+ * zx279133_9132_port_init().
+ */
+#define ZX279133_9132_XMAC0_PPU	5
 #define ZX279133_TX_RECLAIM_DELAY_MS	10
 #define ZX279133_DATAPATH_USER_WAN	BIT(0)
 #define ZX279133_DATAPATH_USER_LAN	BIT(1)

@@ -2915,6 +2915,56 @@ static int zx279133_9132_port_init(struct zx279133_eth *eth)
 }
 
 /*
+ * PPU 5 is XMAC0: the SoC's own MAC on the 9132's CPU port, the lane every
+ * frame between the CPU and the LAN jacks crosses.  It is neither one of the
+ * four UNI jacks nor the CPU trap port, so zx279133_9132_port_init() leaves
+ * it alone on purpose.
+ *
+ * Its entry program is the board's own port-flow table's value for it -
+ * 0x0000a6a5, the same word the four working UNI jacks run - and the table
+ * that says so (zx279133_9132_port_flow[]) is written inside
+ * zx279133_ppu_mcode_prepare(), which is early.  Two later steps write the
+ * per-port words again (zx279133_spa_prepare() writes every port's a10/a1/a13,
+ * zx279133_mf_port_ppuinit() writes a19), and on the board PPU 5 came out of
+ * that with the entry program of another board (0x00008015, the SR1010's) and
+ * with a13 = 0x00650650 and a19 = 0x00042000 - while the four UNI jacks, whose
+ * words zx279133_9132_port_init() writes last, came out right.
+ *
+ * The consequence is not subtle: with the wrong entry program on the CPU
+ * port, the 9132 never hands that port's frames to the IDM.  The IDM's "receive
+ * cpu pkt cnt from DMA" (nppt+0x280180) stays at 0 and all sixteen receive
+ * queue heads stay empty, no matter how much traffic the LAN sends.
+ *
+ * So the conduit's entry program is written here, after every other step,
+ * and read back: the board has to show the word it was given.
+ */
+static int zx279133_9132_xmac0_entry_program(struct zx279133_eth *eth)
+{
+	const u32 want = 0x0000a6a5;
+	u32 value;
+	int ret;
+
+	ret = zx279133_spa_indirect_write(eth, ZX279133_9132_XMAC0_PPU, 0, want);
+	if (ret)
+		return ret;
+
+	ret = zx279133_spa_indirect_read(eth, ZX279133_9132_XMAC0_PPU, 0, &value);
+	if (ret)
+		return ret;
+
+	if (value != want)
+		dev_warn(eth->dev,
+			 "9132 PPU %u (XMAC0, the CPU conduit) entry program is %08x, not %08x\n",
+			 ZX279133_9132_XMAC0_PPU, value, want);
+	else
+		dev_info(eth->dev,
+			 "9132 PPU %u (XMAC0, the CPU conduit) entry program %08x\n",
+			 ZX279133_9132_XMAC0_PPU, value);
+
+	return 0;
+}
+
+/*
  * The 9132's four UNI ports have their own internal PHYs, and a port whose
  * PHY is still powered down has no link at all - so this write decides
  * whether a 9132 port can ever come up.  It is also the vendor's own port
@@ -5340,6 +5390,14 @@ int zx279133_np_prepare(struct zx279133_eth *eth)
 	 * on it either (docs/07 supplement 94).
 	 */
 	ret = zx279133_9132_port_init(eth);
+	if (ret)
+		goto err_route_off;
+	/*
+	 * ...except for its entry program, which is the one word that decides
+	 * whether the 9132 hands the CPU port's frames to the IDM at all.
+	 * This has to come after everything else that writes a port's words.
+	 */
+	ret = zx279133_9132_xmac0_entry_program(eth);
 	if (ret)
 		goto err_route_off;
 	/*
