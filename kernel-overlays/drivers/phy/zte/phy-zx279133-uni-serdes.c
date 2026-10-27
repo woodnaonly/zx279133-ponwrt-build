@@ -158,7 +158,7 @@ static int zx279133_uni_serdes_reset_pulse(struct zx279133_uni_serdes *priv)
 static int zx279133_uni_serdes_power_on(struct phy *phy)
 {
 	struct zx279133_uni_serdes *priv = phy_get_drvdata(phy);
-	unsigned int i, mismatch = 0;
+	unsigned int i, mismatch = 0, mismatch_before_clk = 0;
 	const char *how;
 	u32 status;
 	int ret;
@@ -167,6 +167,25 @@ static int zx279133_uni_serdes_power_on(struct phy *phy)
 	if (priv->powered) {
 		ret = 0;
 		goto out_unlock;
+	}
+
+	/*
+	 * Count the image before the clocks are touched, and count it again
+	 * afterwards.  U-Boot leaves these 49 words byte-identical to
+	 * zx279133_uni_1g_profile[] (measured 2026-10-28 05:33 in the
+	 * board's own U-Boot, right after its net init), so the 28 words the
+	 * log below reports as different were changed by something on this
+	 * side of the handover.  This driver does not write the block in the
+	 * SGMII case, which leaves the clock enable here and any earlier
+	 * driver as the candidates; two counts say which of the two it was.
+	 */
+	if (priv->submode == PHY_INTERFACE_MODE_SGMII) {
+		for (i = 0; i < ZX279133_UNI_SERDES_PROFILE_WORDS; i++)
+			if (readl(priv->serdes + i * 4) != zx279133_uni_1g_profile[i])
+				mismatch_before_clk++;
+		dev_info(priv->dev,
+			 "Uni SerDes 1G before the clocks: image differs in %u/%d word(s)\n",
+			 mismatch_before_clk, ZX279133_UNI_SERDES_PROFILE_WORDS);
 	}
 
 	ret = clk_bulk_prepare_enable(ARRAY_SIZE(priv->clocks), priv->clocks);
@@ -205,9 +224,9 @@ static int zx279133_uni_serdes_power_on(struct phy *phy)
 				mismatch++;
 
 		dev_info(priv->dev,
-			 "Uni SerDes 1G inherited: mode %#x %s, image differs in %u/%d word(s), status %#x/%#x\n",
+			 "Uni SerDes 1G inherited: mode %#x %s, image differs in %u/%d word(s) (%u before the clocks), status %#x/%#x\n",
 			 readl(priv->serdes + ZX279133_UNI_SERDES_MODE_CTRL), how, mismatch,
-			 ZX279133_UNI_SERDES_PROFILE_WORDS,
+			 ZX279133_UNI_SERDES_PROFILE_WORDS, mismatch_before_clk,
 			 readl(priv->serdes + ZX279133_UNI_SERDES_PLL_STATUS),
 			 readl(priv->serdes + ZX279133_UNI_SERDES_RX_STATUS));
 		priv->powered = true;
