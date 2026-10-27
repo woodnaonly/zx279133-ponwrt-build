@@ -1610,3 +1610,41 @@ watchdog 也会自己兜。所以不用你去按任何东西，等下一次断�
 `mac.c:64`）之前就引用了它，是 C 的 use-before-declaration 硬错误。check-run 上那 30 条注解
 只有并行段最后几行、没有编译器原文（工件要登录），所以这次是**读代码**定位的，不是读日志。
 修复 = 把整个参数块挪到 helper 之前；测量改到 run 193。
+
+## 43. 12:18–12:33：MAC+PCS 成对搬到 XMAC0，**双向仍为 0**（两个正控制都动）——候选 2 划掉
+
+**怎么起来的**：initramfs job 到 12:03 还在 Compile（flash job 11:44 已成功），kit 不存在，于是用
+**flash job 的 kernel** 从 RAM 起：驱动是内建的（rootfs 的 `/lib/modules` 里没有 zx279133.ko，
+`/sys/module/zx279133` 在），所以 flash-uImage 里就有本包。解压核对过：
+`LAN XPCS MDIO device is unavailable` 字符串在核里（comp=1 gzip，展开 20 637 704 B）。
+U-Boot 三参 `bootm 0x89000000 - 0x88000000`（内核 + 主线 DTB，**没有第三参就会拿 U-Boot 自己的
+vendor FDT**），rootfs 还是 mtdblock5 那套。认镜像：`TP=rx_hash rx_hash_ipv6 zx279133_eth0_xmac
+zx279133_tx_port`、`root=/dev/mtdblock5`。新脚本 `tools/bootflashram.sh`。
+
+**PCS 配对确实生效**（不是静默一半）：
+- 开机后的 `/proc/device-tree/soc/ethernet@19000000/` 里**有** `zte,lan-pcs-handle`（同目录 `pcs-handle` 也在）；
+- 若 MDIO 设备找不到，probe 会 `-EPROBE_DEFER` 而 eth0 根本不会出现；eth0 正常出现；
+- `xmacswitch 0` 回读 `SW=0`，flap 后 `CTR=1-up`；dmesg 无 LAN XPCS 错误行。
+
+**读数（同一连续开机，U≈40–500 s）**：
+
+| 方向 | 发出的证据（正控制） | 到达的证据 | 结果 |
+|---|---|---|---|
+| PC→板 20 帧（`lan1arrive.sh`，192.168.9.25→192.168.9.3） | PC `OutOctets` **306 323 160 → 306 323 942（+782）** | `lan-cpu0 rx` +0、`eth0 rx` +0 | **0** |
+| 板→PC 3 帧（`ping -c 3 -I eth0 192.168.9.25`） | 板 `eth0 tx_packets` **180 → 187（+7）** | PC `InOctets` 两次读数**完全相同**（554 642 733） | **0** |
+
+两个正控制各自独立地动过（PC 的发送计数、板子 eth0 的 tx 计数），所以这不是「尺子不动」。
+
+**判决**：§41 候选 2（PCS/phy-mode——「XPCS0 从没按 XMAC0 编过」）**划掉**。MAC 与 PCS 成对搬过去
+也不改变任何一位，说明缺口不在「谁给这块 MAC 配 PCS」。按 §42 预登记，剩下的按 §33(三) 走，
+并且多出两个必须分开量的问题：
+
+1. **这块 lane 到底是不是面板 LAN1**：帧可能出了 SoC 却走在 9132 的 CPU lane 上。判据是把线挪到
+   **LAN2/3/4**：若 xmac=0 时四个口的流量里出现 eth0 发出的帧（或四个口退化），lane 就归 9132；
+   这要 owner 挪线。
+2. **RTL8226 的 SoC 侧有没有配**：PC 侧的 ping 是「请求超时」而不是「传输失败」，说明 PC 网卡有
+   carrier、RTL8226 的线侧活着；但 SoC↔RTL8226 这段 SerDes 是原厂 `rlt8226b.ko` 配的，mainline
+   只用了通用 realtek PHY 驱动，从没碰过它。这一条与 PCS 无关，是 PHY 的 SoC 侧。
+
+**仪表**：这个 rootfs 里 np debugfs 的 `reg` 动词没有回话（`reg 0x140000` 无 `nppt +0x…` 行），
+`od`、`ping -W` 也不在；下一次要在 kit 里做同样的两处读数。
