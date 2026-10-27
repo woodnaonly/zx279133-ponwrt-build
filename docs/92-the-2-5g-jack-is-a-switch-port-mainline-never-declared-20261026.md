@@ -5190,3 +5190,482 @@ carrier 告诉我们面板的 LAN2 对应哪个 DSA 口，解决了「面板标�
 LAN1 本身要等 §69.5 的四件事做完才有得测，而且那四件事里第 2 条（RTL8226 的
 PHY 驱动）和第 3 条（VID 与端口属性表）都要改驱动，每改一次就是一轮 80 分钟
 的 CI。
+
+
+## 70. 厂商代码把 2.5G 口的架构链条补齐了（2026-10-28 04:30–05:00）
+
+§69 用 U-Boot 的窗口定死了「2.5G 口是 9132 的 port 4 + 外置 RTL8226」，但那条链上
+还有三处是推的：2.5G 口的帧在 SoC 侧从哪个 MAC 进来、它的描述符 source 为什么是 5、
+以及 9132 侧到底哪个口要配成什么。这一节把厂商自己的代码读出来，把这三处填上，
+并且把 §69 里一条已经作废的说法挑出来。
+
+**全部离线，工具：`staging/ctl/redx_dis.py`（重定位感知的 AArch64 反汇编）、
+`staging/ctl/elfsym.py`（符号表），输入是 `staging/vendor-full/kmodule/np_133.ko`。**
+
+### 70.1 结论先行
+
+1. **厂商有三张端口号表**，此前一直混着两张用：
+
+   | 名字 | 含义 | 换算 |
+   |---|---|---|
+   | **sw port** | 厂商 CLI/配置面看到的端口号 | `sw = chip - 1`（`sw_port_change_to_chip_port`） |
+   | **chip port / SPA mem id** | 9132 芯片自己的端口号，也是 SPA 内存 id | `chip = sw + 1` |
+   | **端口属性表项 index** | `spa_port_attr_tbl_*` 的第二参数 | **等于 chip port**（不是 sw port） |
+
+2. **extend port 5 = chip port 5 = SPA mem 5 = XMAC0 那一路**，
+   **extend port 6 = chip port 6 = XMAC1（PON 那一路）**。
+
+3. **2.5G 口的 PHY 是 sw port 4 / chip port 5 这条路上的 PHY，MDIO 地址 0x05**。
+   厂商 DT 的 `uni-phy = <0x0a 0x0b 0x0c 0x0d 0x05 0x1c 0x02>` 就是这张表：
+   前四项是四个内部 GEPHY，**第五项 0x05 就是 2.5G 口的 RTL8226**，
+   第六、七项（0x1c、0x02）是 XMAC1 和 RGMII 那两条路。
+
+   **这条「路」在 SoC 那一端是什么，还有两种读法，本节不下结论**（见 §70.5）：
+   要么它是 9132 的第五个用户口（帧在 9132 里交换，**不经过 XMAC0**），
+   要么它是 SoC 的 XMAC0 的 PHY（帧直接进 XMAC0 MAC）。
+   两种读法都能解释描述符 source = 5，**必须靠实测分开**。
+
+4. **56e86d2 修的那个「PPU 5 的入口程序」就是 2.5G 口这条路的入口程序。**
+   厂商给 chip port 5 写的 words 与它给四个 UNI 口写的**逐字相同**（见 §70.4），
+   入口程序同样是 `0x0000a6a5`。此前 §68 那次「把 memory 5 重写成工作口的完整 words
+   之后 20 帧一个不进」的实验，恰好是**把 XMAC0 这一侧的路弄坏**了——它不是
+   「2.5G 口的路走不通」的证据。
+
+5. **run196 有可能让这个口第一次真的通**：56e86d2 把入口程序恢复成厂商的
+   `0xa6a5`，ab1b122 把 IDM 的中断风暴掐掉。判据写在 §70.6，先写死再看数。
+
+### 70.2 三张表的出处
+
+**`sw_port_change_to_chip_port`（np_133.ko 0x1148ac，140 字节）**：
+
+```
+001148b0  cmp   w0, #7
+001148b4  mov   x29, sp
+001148b8  str   x19, [sp, #0x10]
+001148bc  b.eq  #0x1148f0        ; sw port 7 -> 一个特殊值
+001148c0  add   w19, w0, #1       ; sw port < 7 -> chip port = sw port + 1
+001148c4  b.lo  #0x114928
+001148c8  cmp   w0, #0x10
+001148cc  b.lo  #0x114fc         ; 0x10..0x1f -> 原样
+001148d0  cmp   w0, #0x1f
+001148d4  mov   w19, w0
+001148d8  b.ls  #0x114928
+001148dc  cmp   w0, #0x3b
+001148e0  b.ne  #0x114fc
+001148e4  adrp  x0, ... g_hol_2p5g_virt_port
+001148e8  ldr   w19, [x0]
+```
+
+⇒ **sw port 0..6 → chip port 1..7**，其中 sw 7 是另一个特殊口（`g_hol_2p5g_virt_port`）。
+
+**`port_attr_def_init`（np_133.ko 0xbcf34，288 字节）**：
+
+```
+00116...  w19 = 0
+00116...  spa_port_attr_tbl_set(0, port, ...) x4   ; 表项 0x44/0x45/0x46/0x47
+00116...  w19 += 1 ; cmp w19, #0x40 ; b.ne loop
+```
+
+⇒ 属性表建了 **64 个表项**，index 就是 chip port。
+
+**`np_user_table_init`（np_133.ko 0x117930，268 字节）**：
+
+```
+0011793c  bl   #0xbcf34      ; port_attr_def_init()
+00117940  mov  w19, w0
+00117944  adrp x0, ... xmac0_to_extend
+00117948  ldr  w0, [x0]
+0011794c  cmp  w0, #1
+00117950  ccmp w19, #0, #0, eq      ; (xmac0_to_extend == 1) || (init 成功)
+00117954  b.ne #0x117968
+00117958  mov  w1, #1
+0011795c  mov  w0, #5                ; <<<< chip port 5
+00117960  bl   #0xbc3cc              ; port_attr_def_src_is_extend_port_flag_set(5, 1)
+00117968  adrp x0, ... xmac1_to_extend
+0011796c  ldr  w1, [x0]
+00117970  cmp  w1, #1
+00117974  b.ne #0x117988
+0011797c  mov  w0, #6                ; <<<< chip port 6
+00117980  bl   #0xbc3cc              ; port_attr_def_src_is_extend_port_flag_set(6, 1)
+```
+
+**两个要害：**
+
+* **`port_attr_def_src_is_extend_port_flag_set(port, val)` 的 port 是 chip port**
+  （它的实现 `0xbc3cc` 直接把它当作 `spa_port_attr_tbl_get(0x47, port)` 的第二个参数）。
+  所以 **extend port 5 = chip port 5**，**extend port 6 = chip port 6**。
+* **`xmac0_to_extend` 分支的判据是 `xmac0_to_extend == 1` **或** `port_attr_def_init()` 成功。**
+  厂商 Linux 上 `port_attr_def_init()` 是成功的，**所以 chip port 5 恒被标成 extend port**，
+  与 `xmac0_to_extend` 这个运行期变量无关。
+
+**extend port 标志本身落在属性表项 0x47 的 bit 3**（`0xbc3cc`：`ldrb w1,[x29,#0x46]` +
+`bfi w1, w23, #3, #1`），同时镜像进 ERAM 的表 0x7d。
+
+### 70.3 三张表合起来看
+
+| sw port | chip port / SPA mem | 厂商属性表名 | 角色 | PHY（MDIO 地址） | 面板上的口 |
+|---|---|---|---|---|---|
+| 0 | 1 | `spa_port_attr_smac_0` | 内部 UNI 1 | 0x0a | 三个 1G 口之一 |
+| 1 | 2 | `spa_port_attr_smac_1` | 内部 UNI 2 | 0x0b | 三个 1G 口之一 |
+| 2 | 3 | `spa_port_attr_smac_2` | 内部 UNI 3 | 0x0c | 三个 1G 口之一 |
+| 3 | 4 | `spa_port_attr_smac_3` | 内部 UNI 4 | 0x0d | 面板上不存在的那个 UNI 口 |
+| **4** | **5** | **`spa_port_attr_xmac_0`** | **extend port（XMAC0 这一路）** | **0x05 = RTL8226** | **LAN1（2.5G）** |
+| 5 | 6 | `spa_port_attr_xmac_1` | extend port（XMAC1 = PON） | 0x1c | 光口 |
+| 6 | 7 | `spa_port_attr_rgmii` | RGMII（本板未接） | 0x02 | — |
+| — | 15 | `spa_port_attr_trap(cpu)` | CPU 陷阱口（协议陷阱，非物理口） | — | — |
+
+「四个 UNI 口里哪个是面板上的哪个 1G 口」仍然是悬案（docs/90 §5：面板 LAN2 → PPU 2、
+面板 LAN4 → PPU 4，面板 LAN3 与面板上不存在的 UNI 口各占 PPU 1/3），
+**只有把线插到面板上才能定**，这仍然是 §69.6 要 owner 做的那个动作的原因。
+
+### 70.4 厂商给 chip port 5 写的 words，与四个 UNI 口逐字相同
+
+`staging/ctl/our-nppt-writes.txt` 里那张厂商/我们的逐字比对表（厂商值出自
+`staging/ctl/vendor-spa-attr.json`）：
+
+```
+PPU  厂商key                 word0    word1    word2    word10   word13   word17   word18   word19
+1    spa_port_attr_smac_0   0x0000a6a5 0x0000088f 0x00000000 0x0fa0000e 0x00008008 0x04400410 0x00400840 0x96040001
+2    spa_port_attr_smac_1   0x0000a6a5 0x0000088f 0x00000000 0x0fa0000e 0x00008008 0x04800410 0x00800880 0x96040001
+3    spa_port_attr_smac_2   0x0000a6a5 0x0000088f 0x00000000 0x0fa0000e 0x00008008 0x04c00410 0x00c008c0 0x96040001
+4    spa_port_attr_smac_3   0x0000a6a5 0x0000088f 0x00000000 0x0fa0000e 0x00008008 0x05000410 0x01000900 0x96040001
+5    spa_port_attr_xmac_0   0x0000a6a5 0x0000088f 0x00000000 0x0fa0000e 0x00008008 0x05400410 0x01400940 0x96040001
+```
+
+* **word0（入口程序）五个口全是 `0x0000a6a5`**；
+* word1 / word2 / word10 / word13 / word19 也逐字相同（`0x88f`、0、`0x0fa0000e`、
+  `0x8008`、`0x96040001`）；
+* **word17 / word18 是泛洪组索引**，按口递进：PPU 1..5 = `0x044/0x048/0x04c/0x050/0x054`
+  与 `0x004/0x008/0x00c/0x010/0x014`——**PPU 5 是第 5 个泛洪组**，说明厂商把
+  chip port 5 当成一个**第五个用户口**在用，不是把它当成「CPU 导管」。
+
+⇒ **56e86d2 把 PPU 5 的入口程序写成 `0x0000a6a5` 并读回自检，写的就是厂商的值。**
+  这一步之前，PPU 5 的入口程序是别的板子的 `0x00008015`（SR1010 的）。
+
+### 70.5 §69 里要作废的一条，和两个还活着的模型
+
+**作废**：§69.4 那句「真正缺的是 9132 的第 5 个 DSA 口」——**它把一件还没定的事
+当成了定论**。厂商的代码把「2.5G 口是 chip port 5 这条路」钉死了，但**这条路的
+SoC 那一端是什么，厂商的代码里同时有两种读法**：
+
+| | **模型 A：9132 的第五个用户口** | **模型 B：SoC 的 XMAC0 的 PHY** |
+|---|---|---|
+| 帧路 | PC → RTL8226 → **9132 chip port 5** → 9132 交换 → trap → IDM | PC → RTL8226 → **XMAC0 MAC（0x140000）** → IDM |
+| 帧经过 XMAC0 吗 | **不经过** | **经过** |
+| source = 5 的含义 | 9132 的 ingress port = chip port 5 | XMAC0 的 SPA mem id = 5 |
+| XMAC0 的统计（0x142400） | **不动** | **动** |
+| 9132 的 chip port 5 的计数 | **动** | 不动 |
+| 支持证据 | 厂商给 chip port 5 写的 words 与四个 UNI 口**逐字相同**（§70.4），包括**泛洪组 0x054/0x014**——它被当成一个用户口在用 | 厂商 DT 的 `mdio_8226_id = <0x01>` 把 RTL8226 放在 **SoC 的 MDIO controller #1**，而 9132 的四个内部 PHY 走 **controller #0**；U-Boot 的两条总线也分开（`zx_mdio` = 0x0a..0x0d，`zx_mdio_extern` = 0x05）——RTL8226 **不在 9132 后面** |
+| 反对证据 | 上面那条 MDIO 归属 | 上面那条「逐字相同 + 第五个泛洪组」 |
+
+**两个模型都要做的、且与选哪条无关的三件事**：
+
+1. **传输 VID**：描述符 source = 5 现在被 `zx279133_idm_rx_lan_vport()`
+   （`zx279133-idm.c:349`）判成「不认识」，返回 0，然后在
+   `zx279133-idm.c:1164` 兜底成 `ZX279133_LAN_VID`（62）⇒ 落进 **lan4**。
+   要给 source = 5 一条自己的 transport VID。
+2. **一个 DSA 用户口**：那个 VID 要对应一个 netdev，owner 已拍板叫 **lan1**
+   （面板对齐：lan1 = 2.5G，lan2/3/4 = 面板三个 1G 口），并且**跟 lan2/3/4
+   一样进 br-lan**。
+3. **TX 方向的 outport**：U-Boot 从 2.5G 口 ping 通 PC 时，TX 描述符里的 outport 是
+   **4**（zx279133.h:44 记着 `current idm tx outport is 4`），而 mainline 现在写的是
+   `ZX279133_LAN_TX_PORT = 2`（PPU 2）。outport 与 source 是两套编号，这一条要靠
+   §70.6 的实验定，不能照抄。
+
+**两个模型各自还要做的**：
+
+* **模型 A**：9132 侧的 chip port 5 需要被 DSA 当成一个用户口注册（**这一半 §69.5
+  说对了**），并且需要一条能碰到 RTL8226 的 MDIO 路——但 RTL8226 的 MDIO 在 SoC 的
+  controller #1 上，**9132 够不着**，所以厂商是让 SoC 去管这颗 PHY，9132 只管转发。
+* **模型 B**：**XMAC0 需要真的挂一个 PHY**（2.5G 口的 RTL8226，MDIO #1 的 0x05），
+  而 mainline 的 XMAC0 现在是固定链路。**PHY 驱动不用新写**：
+  `zx279133-np.c:1305` 已经记明 RTL8226（0x001cc849）被树里的 realtek 驱动认领
+  （自报 "RTL8221B-VB-CG 2.5Gbps PHY (C22)"），厂商自己也有一整个 `rlt8226b.ko`
+  （`Rtl8226_phy_reset`、`Rtl8226_autoNegoAbility_set`、`Rtl8226_force_speed_set` …）。
+  真正缺的是 **SerDes 侧**：厂商把 RTL8226 配成 1G base-X（devad 0x1e 的
+  0x7588/0x7589/0x758b/0x758d），mainline 没有这一段。
+
+**所以这一节不推翻 §69.5，只把它拆成两半**：第 1、3 条（VID、DSA 用户口）在两个
+模型下都要做；第 2 条（PHY）取决于模型；§69.5 的「9132 的 port 4 缺一个 DSA 口」
+只在模型 A 下成立，而 §70.6 的实验就是来选它的。
+
+### 70.6 run196 的判据（先写死，再看数）
+
+run196 = 56e86d2（入口程序）+ ab1b122（中断屏蔽字）两个修合一。**PC 仍然插在
+LAN1（2.5G）**，因为这一轮要测的就是这个口。
+
+| 观察量 | 读法 | 判读 |
+|---|---|---|
+| 风暴 | `dmesg` 里有没有 `rcu_sched self-detected stall` / `softirq=…/…` | 有 ⇒ ab1b122 没生效，回去看屏蔽字 |
+| **source** | debugfs `zx279133-9132` 的 `rxd <q> <n>`，看描述符 word1 的 bits 16..21 | **5 ⇒ 2.5G 口的帧进了 IDM**（这是第一道门） |
+| **XMAC0 统计** | NPPT `0x142070`（tx frames）、`0x142400`/`0x142440`（rx） | 动 ⇒ 帧从 XMAC0 进来；不动 ⇒ 帧走的是 trap，XMAC0 不在这条路上 |
+| IDM 收包计数 | NPPT `0x280180`（receive cpu pkt cnt from DMA） | 涨 ⇒ 帧真的排空了 |
+| lan4 的 rx | `/sys/class/net/lan4/statistics/rx_packets` | 涨 ⇒ source=5 正在落 lan4（兜底路径，符合预期）；不涨 ⇒ 帧被丢在别处 |
+| lan1/2/3 | 同上 | 三个都不涨 ⇒ 还没有对应的 DSA 口，符合预期（这一轮不做那个） |
+| RTL8226 | `/sys/bus/mdio_bus/devices/14f02000.mdio:05/carrier` | 板子这一侧没配它 ⇒ 预期是 0；**PC 侧 link 是 1G，说明只有 PHY 自己在跑** |
+
+**先写死一句总判据**：**这一轮要证明的是「2.5G 口的帧能进 IDM，source = 5」，
+不是「2.5G 口的帧能到协议栈」。** 后者需要新的 VID、新的 DSA 口和 PHY 的 SerDes
+配置，是下一轮的事。
+
+### 70.7 这一轮没做的事
+
+* 没有改任何驱动代码（CI #196/#197/#198 还在跑，改了会让它们作废）。
+* 没有写 RTL8226 的 SerDes 配置——那是拿到 §70.6 的结果之后才写的东西。
+* 没有动 DSA 端口号和 VID 表——§70.6 的 source = 5 是前提，没看到 source = 5
+  之前改 VID 表是改一个还不知道存在的端口。
+
+
+## 71. 实测：PPU 5 整组 words 都错、XMAC0 的统计为零、VLAN 表少一项（2026-10-28 04:44–05:07）
+
+§70 是从厂商代码里读出来的结论。这一节是同一块板子上的实测，两边对上了三处、
+对不上一处，对不上的那一处正是下一轮要做的。
+
+### 71.1 U-Boot 窗口（04:44–04:47）：它又 ping 通了一次
+
+板子自己在 04:26:37 上电、relay 打断了 autoboot，所以它停在 `=>` 提示符上，
+不是 Linux。**第一次 U-Boot 网络初始化**（04:45:21）的输出和 §69.2 的那次一致：
+`xmac0 is used` → `phy_id:0x5; port:0x4;` → `mode_eth_1gbase_x_cfg` →
+`uni serdes init succeed` → `xmac 0 speed set 2 in sgmii(xmac speed 3)` →
+**`mac 4 phy status changed: 1000M full-duplex`** → `host 192.168.9.25 is alive`。
+
+**这一行是新的证据**：厂商的 mac index 4 就是 XMAC0（`nppt_smac_init` 的
+`outerphy_phy_init(4)` 打印 `xmac0 is used`，同一个参数 4），而它的 PHY 状态在
+1G 全双工上变了 —— **XMAC0 的 PHY 就是那颗 RTL8226**（phy_id 0x5）。
+同一批输出里的 `xmac 0 speed set 2 in sgmii` 是**另一个**东西（chip port 0，
+即 9132 的 CPU 口），厂商的命名在这里把两个东西都叫「xmac」，别混。
+
+**U-Boot 里的 IDM 发送描述符**（04:46:28，`md 0xb0008000 0x20`）：
+
+```
+b0008000: b0328000 0f800054 00440000 00000000
+b0008020: b0328000 0f800054 00440000 00000000
+```
+
+word 2 = `0x00440000` = bit 22（端口有效）+ **outport 4**。
+⇒ **U-Boot 把帧发到 outport 4**，而 mainline 写的是 `ZX279133_LAN_TX_PORT = 2`（PPU 2）。
+outport 与 source 是两套编号，§70.6 的实验就是来定它的。
+
+**U-Boot 里读不到 IDM 的接收描述符**：`md 0xb0028000 0x20` 让板子
+`Synchronous Abort` 并复位（2026-10-26 那次读到的 RX 描述符在 0xb0028000，
+这一次同一个地址不映射了 —— U-Boot 的 IDM 描述符区只映射了发送那一半）。
+**教训**：在 U-Boot 里读未映射地址会丢掉一个上电窗口。
+
+### 71.2 旧内核上的 SPA 表：PPU 5 整组都是别的板子的值
+
+`cat /sys/kernel/debug/zx279133-9132`（04:49:33）打出的 SPA 表（mem id 0-based）：
+
+```
+mem    a0     a1     a2     a9     a10    a13    a17    a18    a19
+  1   0000a6a5 0000088f 00000000 00000000 0fa0000e 00008008 04400410 00400840 96040001
+  2   0000a6a5 0000088f 00000000 00000000 0fa0000e 00008008 04800410 00800880 96040001
+  3   0000a6a5 0000088f 00000000 00000000 0fa0000e 00008008 04c00410 00c008c0 96040001
+  4   0000a6a5 0000088f 00000000 00000000 0fa0000e 00008008 05000410 01000900 96040001
+  5   00008015 0000088f 00000000 00000000 01f4000c 00650650 00000000 00000000 00042000
+  6   00000463 0000088f 00000000 00000000 01f4000c 00008008 0e014400 000001f1 148e0000
+ 15   0000a767 0000088f 00000000 00000000 0fa0000e 00008008 07c00000 03c00bc0 00000000
+```
+
+**PPU 5 与四个工作口的逐字差异**：
+
+| word | PPU 1..4（工作） | **PPU 5（现状）** | 厂商 `xmac_0` 应有的值 |
+|---|---|---|---|
+| a0 入口程序 | `0x0000a6a5` | **`0x00008015`** | `0x0000a6a5` |
+| a10 | `0x0fa0000e` | **`0x01f4000c`** | `0x0fa0000e` |
+| a13 | `0x00008008` | **`0x00650650`** | `0x00008008` |
+| a17 泛洪词 | `0x044/48/4c/50004010` | **`0x00000000`** | `0x05400410` |
+| a18 | `0x004/008/00c/01000840` | **`0x00000000`** | `0x01400940` |
+| a19 属性字 | `0x96040001` | **`0x00042000`** | `0x96040001` |
+
+**⇒ 56e86d2 只修了 a0（入口程序）一个 word，而 PPU 5 剩下的五个 word 也全是
+别的板子的值**：`0x01f4000c` 是 PPU 0（PON 口）的 a10，`0x00650650` 和
+`0x00042000` 是 SR1010 那套，`a17`/`a18` 是 0 —— **这个口根本不在任何泛洪组里**。
+§68 那次「把 memory 5 重写成工作口的完整 words 之后 20 帧一个不进」的实验，
+复制的还是 PPU 1 的 a17/a18（第一个泛洪组），而不是这个口自己的第五组。
+
+**⇒ 驱动改动（已写好，待 push）**：PPU 5 的**整组** words 按厂商 `xmac_0` 写入
+（`zx279133_9132_vendor_words[]` + `zx279133_9132_vendor_flood[4]`，后者本来就在
+表里，只是从没被写过），加上它的 MF 镜像和第五个泛洪组。
+
+### 71.3 9132 的 VLAN 表只有四项 transport VID
+
+同一个 debugfs 输出：
+
+```
+9132 VLAN table (vid, four words)
+   0 ffc00000 0000ffff ffffffff 00003003
+  59 ffc00000 0000ffff ffffffff 00003003
+  60 ffc00000 0000ffff ffffffff 00003003
+  61 ffc00000 0000ffff ffffffff 00003003
+  62 ffc00000 0000ffff ffffffff 00003003
+```
+
+**vid 0 是无标记，vid 59..62 是四个 UNI 口的 transport VID**
+（`VID = 55 + DSA_port`，DSA 4..7 ↔ PPU 1..4）。
+**2.5G 口的 source = 5 没有对应的 VID** ⇒ 它进 IDM 之后
+`zx279133_idm_rx_lan_vport()`（`zx279133-idm.c:349`）返回 0，
+`zx279133-idm.c:1164` 兜底成 62 ⇒ 落进 **lan4**。
+**要给这个口一个自己的 transport VID（63）和一个 DSA 用户口（owner 拍板叫 lan1），
+这是 §70.5 的第 1、2 条。**
+
+### 71.4 XMAC0 在 mainline 里被配成了 1G SGMII
+
+`echo 'reg 0x140000' > /sys/kernel/debug/zx279133-9132`（04:52:49）：
+
+```
+soc reg 0x19140000 (nppt +0x140000) = 0x60010001     <- TX_CTRL
+soc reg 0x19140010 (nppt +0x140010) = 0x3e8000c7     <- RX_CTRL
+soc reg 0x19140020 (nppt +0x140020) = 0x80000000     <- FRAME_CFG
+soc reg 0x19140280 (nppt +0x140280) = 0x00000000     <- MODE_CFG
+soc reg 0x19142070 (nppt +0x142070) = 0x00000000     <- TX_FRAMES
+```
+
+TX_CTRL = `0x60010001`：speed 字段（bits 31..29）= `0b011` = **3 = 1G SGMII**
+（`ZX279133_XMAC_SPEED_1G`），bit 0 = ENABLE。
+
+**⇒ mainline 的 XMAC0 是 1G SGMII，没有 PHY。**
+而厂商在这块板子上把 RTL8226 配成 **1G base-X** 挂在 XMAC0 上
+（`mode_eth_1gbase_x_cfg`），并且它的 PHY 在 **MDIO controller #1 的 0x05**。
+**⇒ 如果模型 B 成立（§70.5），XMAC0 还缺一整个 PHY 和一段 base-X SerDes 配置，
+这是 2.5G 口的真正工作量所在。**
+
+### 71.5 XMAC0 的统计是零，板子也没回过包
+
+`ip -s link show lan-cpu0`（04:59:26）：
+
+```
+lan-cpu0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1504
+    RX:  bytes packets errors dropped  missed mcast
+             0       0      0       0      0       0
+    TX:  bytes packets errors dropped carrier collsns
+          1642      15      0       0       0       0
+```
+
+**RX = 0**：从 04:47 起板子跑起来到现在，PC 在 2.5G 口上发了 4000 个广播
+（flood2.ps1），**XMAC0 一个字节都没收到**。
+（这次实验的 `ping` 那一段因为 `Test-Connection` 的参数名在这个 PowerShell 版本上
+不存在而没发出去，已改成调 `ping.exe`；广播是发出去过的。）
+
+**⇒ 旧内核里 XMAC0 没有收到 2.5G 口的帧。**
+这不能分辨模型 A/B（模型 A 下帧根本不经 XMAC0；模型 B 下 mainline 没配
+RTL8226 的 PHY，帧也进不来），**但它把「旧内核下 2.5G 口不通」这件事测实了**。
+
+### 71.6 三条实测与 §70 的对照
+
+| §70 的结论 | 实测 | 结果 |
+|---|---|---|
+| 2.5G 口的 PHY 是 RTL8226，ID 0xc849，MDIO #1 的 0x05 | U-Boot `mac 4 phy status changed: 1000M full-duplex`（mac 4 = XMAC0） | **对上，且指向模型 B** |
+| 厂商给 chip port 5 的 words 与四个 UNI 口逐字相同 | PPU 5 实测整组都是别的板子的值 | **对上**（所以要写整组，不只写 a0） |
+| 厂商的 `xmac0_to_extend` 在活板上是 0（extend flag 在 PPU 6 上，a19 = 0x148e0000） | 实测 PPU 6 的 a19 = `0x148e0000`（bit 19 = extend flag） | **对上**：2.5G 口**不是** 9132 的 extend port，它不进 9132 |
+| 模型 A（2.5G 口是 9132 的第五个用户口） | PPU 6 带 extend flag、PPU 5 不带；厂商把 XMAC0 的 PHY 挂在 RTL8226 上 | **偏向模型 B** |
+| 模型 B（2.5G 口的 PHY 是 SoC 的 XMAC0 的 PHY） | 同上 | **偏向模型 B**，但**还没有直接证据** |
+
+**⇒ 模型 B 现在是领先的那个**，而它把工作量彻底改了形状：
+
+* **不是**「给 9132 加第 5 个 DSA 口」（§69.5 的第 1 条作废）；
+* **而是**「给 SoC 的 XMAC0 挂上 RTL8226（MDIO #1 的 0x05）+ base-X SerDes，
+  然后让描述符 source = 5 有自己的 transport VID 和 DSA 用户口」。
+  PHY 驱动不用新写（树里的 realtek 驱动已经认领 0x001cc849，厂商自己还有
+  一整个 `rlt8226b.ko`），要新写的是 SerDes 那一段和 VID/DSA 那一条。
+
+**但模型 B 还没有直接证据**，而 §71.5 说明「XMAC0 的统计」这条判据在**旧内核**
+上给不出答案（因为没配 PHY）。**run196 上板后（它带着 56e86d2 的 a0 和 ab1b122 的
+中断屏蔽），若 PPU 5 的整组 words 仍不全对，跑 199（整组写入）才有意义。**
+**⇒ 顺序是：先跑 run196 看风暴和 source，再决定要不要跑 199。**
+
+
+## 72. run196 仍然挂死，而风暴的机制不是中断风暴（2026-10-28 05:02–05:22）
+
+§71 记录了三个实测（U-Boot 第二次 ping 通、PPU 5 整组 words 都错、9132 的 VLAN
+表少一项）。这一节是 run196 上板的结果，以及它在死之前逼出来的那条新结论。
+
+### 72.1 run196 的死法
+
+窗口是这样拿到的：板子跑着 flash 里的旧内核，`reboot` 在这个镜像里不生效
+（watchdog 被 DTS 禁了），`reboot -f` 生效，板子重启，relay 抢到 U-Boot banner
+并用空格打断了 autoboot，于是停在 `=>` 上；tftpboot 把 run196 的包拉下来
+（12 161 808 字节），`bootm` 起来。
+
+**内核走到 1.69 秒就没有任何输出了。** 最后一行是：
+
+```
+[    1.688359] zx279133-switch 19000000.ethernet:switch: SOPC send-enable published for 2 MAC(s).
+```
+
+之后串口**完全静默**：没有 panic、没有 Oops、没有 `rcu_sched self-detected stall`、
+没有 softirq 打印、连 printk 都挤不出来。串口链路是活的（relay 还在按周期写
+「sent:」行，serial.log 的时间戳一直在动），**板子不动了**。
+
+三次 `echo WIN73-$RANDOM` 探测（05:08:27 / 05:08:53 / 05:09:19）都没有回应。
+
+**⇒ run196（56e86d2 + ab1b122）连同 run195 一样挂死，而且比 run195 更早**
+（run195 死在 3.42 秒，这一次死在 1.69 秒）。**⇒ 两个修复合起来仍然不够。**
+
+### 72.2 风暴的机制：桥的环路，不是中断风暴
+
+§68 的 win69 把死法记成「IDM 中断风暴」，内核自己也打出了
+`rcu_sched self-detected stall on CPU` + `pc : handle_softirqs`。
+**这次连那句都打不出来** —— 死得更彻底，症状却指向同一个东西。
+
+**把接收路径读一遍，环路是看得见的：**
+
+1. 2.5G 口的帧从 XMAC0 进来，描述符的 source 是 **5**
+   （`zx279133.h:99-101` 早就记着这个数，§68 也量到过）。
+2. `zx279133_idm_rx_lan_vport()`（`zx279133-idm.c:349`）只认 transport VID
+   59..62 和 PPU 1..4，**不认 5**，于是返回 0。
+3. `zx279133-idm.c:1164` 把 0 兜底成 `ZX279133_LAN_VID`（62）——
+   **那是 1G 口 LAN4 的 transport VID**。
+4. tagger 于是把这个帧当成 LAN4 的帧交给桥，桥把它从 br-lan 发出去；
+   **而 br-lan 的第 5 个口是 `lan-cpu0`，就是 XMAC0 自己**
+   （启动日志：`br-lan: port 5(lan-cpu0) entered blocking state`）。
+5. XMAC0 把帧发回 2.5G 口，帧再进来，回到第 2 步。
+
+**⇒ 帧一通就成环，每一圈都产生一批新的接收中断 ⇒ 风暴。**
+
+**⇒ 这解释了 §68 的判读为什么是「中断风暴」**：风暴是桥的环路造成的，
+而环路的第一级就是中断。**ab1b122 只放开 0..15 挡不住它 —— 被挡的从来不是
+那些源。** 也解释了 run195 为什么死在 3.42 秒、run196 死在 1.69 秒
+（中断掩码一改，时序就变了，死得早一点而已）。
+
+### 72.3 这也解释了 §66/§68 的一句错话
+
+§66/§68 说「风暴里的帧不是 PC 的」—— **在环路模型下它们恰恰就是 PC 的**：
+PC 在 2.5G 口发一帧，桥把它绕回来，每绕一圈就是一份新的副本。
+§68 那次之所以看不出「帧在增长」，是因为板子先死了，没来得及数。
+
+### 72.4 改了些什么（run199，f7b1650）
+
+**三件事，都在「不依赖模型还没定案」的范围里：**
+
+1. **PPU 5 的整组 words 按厂商 `xmac_0` 写入**（不是只写入口程序）：
+   `zx279133_9132_xmac0_entry_program()` 改名并改写成
+   `zx279133_9132_ppu5_words()`，写 `zx279133_9132_vendor_words[]` +
+   `zx279133_9132_vendor_flood[4]`（0x05400410 / 0x01400940，这两个值
+   驱动里本来就有，只是从没被写进这个口），加上 MF 镜像，最后读回入口程序自检。
+2. **PPU 5 进泛洪组**：`zx279133_9132_flood_cpu_port()` 的循环上界从 PPU 4
+   放到 PPU 5，CPU 口进这个口的第五个泛洪组。
+3. **止住环路**：接收路径里 source 5 的帧单独识别
+   （`zx279133_idm_rx_is_jack()`），**计数后丢弃，不进桥**。
+   计数打在 `/sys/kernel/debug/zx279133-9132` 的
+   「2.5G jack's lane: frames N  dropped M」一行上。
+
+**第 3 条是这一轮的关键**：它既止住了风暴，又**第一次给出了一个不用等
+「帧能不能进协议栈」的判据**——
+
+| 计数 | 读法 |
+|---|---|
+| **frames 在涨** | 2.5G 口的帧**真的进了 SoC**（§70.6 的 Q3 答是）。接下来才是给它一个 DSA 用户口和 transport VID。 |
+| **frames 是零** | 帧连 IDM 都没到。要去查的是 **PHY 和 SerDes**：mainline 的 XMAC0 现在是 1G SGMII、没有 PHY（§71.4），而厂商把这颗 RTL8226 配成 1G base-X 挂在 XMAC0 上（§71.1 的 `mac 4 phy status changed`）。 |
+
+**⇒ 下一轮要做的，由这个计数决定**：计数在涨就做 DSA 用户口 + VID；
+计数是零就做 XMAC0 的 PHY 与 base-X SerDes。
+
+### 72.5 这一轮没有做的事
+
+* 没有改 DSA 的端口号和 VID 表 —— 在知道帧进不进来之前改那张表，是改一个
+  还不知道存在的端口。
+* 没有动 XMAC0 的 SerDes 配置 —— 那是模型 B 成立时的活（工作量不小：
+  给 XMAC0 挂上 MDIO #1 的 0x05 那颗 RTL8226，再配 base-X），但模型还没定案，
+  先做那一半可能白做。**§71.6 把两条模型的证据列清楚了。**
+* 没有做 §70.5 第 3 条（TX 的 outport）—— U-Boot 用的是 4，mainline 写的是 2，
+  这要靠帧真的能回来时才知道。
