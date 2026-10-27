@@ -14,6 +14,27 @@
 #include "zx279133.h"
 
 /*
+ * Which XMAC window the NPPT netdev's MAC block is.
+ *
+ * 1 = XMAC1 is what this driver has always driven, and it is the window that
+ * read all zero in the boot that carried traffic through the panel LAN1 jack
+ * (docs/92 14). 0 = XMAC0 is the window that did count there, and the one the
+ * vendor's own port-attribute table pairs with the outerphy RTL8226
+ * (xmac0_to_extend -> port_attr_def_src_is_extend_port_flag_set(5, 1)).
+ *
+ * It is a switch and not a replacement because nothing has ever been built
+ * with eth0 on XMAC0: the RAM kit is the measurement, and zx279133-switch.c
+ * programs this same window for its own LAN path, so the four working jacks
+ * have to be re-walked before either value can be called right.
+ *
+ *	zx279133.eth0_xmac=0	in the kernel command line
+ *	echo 0 > /sys/module/zx279133/parameters/zx279133_eth0_xmac	before ifup
+ */
+static u8 zx279133_eth0_xmac = 1;
+module_param(zx279133_eth0_xmac, byte, 0644);
+MODULE_PARM_DESC(zx279133_eth0_xmac, "eth0's MAC window: 1 = XMAC1 (as always), 0 = XMAC0 (the window that counts when the 2.5G jack carries traffic)");
+
+/*
  * Which PCS serves eth0, given the MAC window zx279133_eth0_xmac selected.
  *
  * The two have to move together.  docs/92 41 switched only the MAC and got
@@ -46,27 +67,6 @@ zx279133_mac_select_pcs(struct phylink_config *config,
 	}
 	return xpcs_to_phylink_pcs(eth->xpcs);
 }
-
-/*
- * Which XMAC window the NPPT netdev's MAC block is.
- *
- * 1 = XMAC1 is what this driver has always driven, and it is the window that
- * read all zero in the boot that carried traffic through the panel LAN1 jack
- * (docs/92 14). 0 = XMAC0 is the window that did count there, and the one the
- * vendor's own port-attribute table pairs with the outerphy RTL8226
- * (xmac0_to_extend -> port_attr_def_src_is_extend_port_flag_set(5, 1)).
- *
- * It is a switch and not a replacement because nothing has ever been built
- * with eth0 on XMAC0: the RAM kit is the measurement, and zx279133-switch.c
- * programs this same window for its own LAN path, so the four working jacks
- * have to be re-walked before either value can be called right.
- *
- *	zx279133.eth0_xmac=0	in the kernel command line
- *	echo 0 > /sys/module/zx279133/parameters/zx279133_eth0_xmac	before ifup
- */
-static u8 zx279133_eth0_xmac = 1;
-module_param(zx279133_eth0_xmac, byte, 0644);
-MODULE_PARM_DESC(zx279133_eth0_xmac, "eth0's MAC window: 1 = XMAC1 (as always), 0 = XMAC0 (the window that counts when the 2.5G jack carries traffic)");
 
 u32 zx279133_xmac_base(void)
 {
