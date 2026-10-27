@@ -1594,8 +1594,13 @@ watchdog 也会自己兜。所以不用你去按任何东西，等下一次断�
    （§21 末尾数到过 +194）；板→PC 那组里 `eth0` 的 tx 计数必须先动。
 2. `echo 0 > …/zx279133_eth0_xmac` + `ip link set eth0 down/up` 后读 `0x19140000/0x19140010`，
    确认 XMAC0 被我们的 init 写过（与 §39 通流开机的 `60010000/3e8000c6` 对照）。
-3. PC→板 20 帧：**PASS = `eth0` 的 rx_packets 增加**；**FAIL = 两个方向都为 0 且两个正控制都动**。
-   FAIL 则 §41 候选 2 划掉，剩下的按 §33(三) netdev/转发走。
+3. PC→板 20 帧：**PASS = 到达计数增加**，两个口都读、任一增加即算：`lan-cpu0` 的
+   rx_packets/rx_bytes（口幅 5/6 在 `idm.c:1159` 走 DSA conduit，标签用默认 `LAN_VID 62`），
+   **或** `eth0` 的 rx_packets（queue ≥ 8 且口幅为 5 时 `lan_source=false`，`idm.c:804`
+   直接把它交给 eth0）。**FAIL = 两者增量都为 0 且两个正控制都动**。
+   （预登记更正，写于开机读数**之前**：上一行原文只写了 `eth0 rx`，而 `tools/lan1arrive.sh`
+   的实测注释说明口幅 5/6 的帧可能被当成 LAN 流量落到 conduit——哪一种取决于大队列号，
+   所以判据改成「两处任一增加」。）FAIL 则 §41 候选 2 划掉，剩下的按 §33(三) netdev/转发走。
 4. **回归**：默认 `xmac=1` 下 `tools/g4verify.sh` 16 pass / 0 fail；线在 LAN2/3/4 的 jack-walk
    （要 owner 挪线）。`xmac=0` 时 `switch.c` 也在编 XMAC0，四个口若回归那是**这个模式的代价**，
    回归门只在 `xmac=1` 下判。
