@@ -1,60 +1,60 @@
-=== 22:54:59 beat 24 log=4504 frozen=0 wrote=yes ===
---- signals: quiet=0s writes=1800s newproc=900s hard=5400s cmp=-cnewer proc=0s ---
+=== 23:01:03 beat 27 log=7406 frozen=0 wrote=yes ===
+--- signals: quiet=0s writes=1800s newproc=900s hard=5400s cmp=-cnewer proc=3s ---
 --- the last 30 lines of the build's own log ---
- make[3] -C toolchain/musl compile
- make[3] -C toolchain/gcc/final compile
- make[2] target/compile
- make[3] -C target/linux compile
- make[2] buildinfo
- make[2] package/compile
- make[3] diffconfig buildversion feedsversion
- make[3] -C package/utils/lua host-compile
- make[3] -C package/libs/ncurses host-compile
- make[3] -C package/system/fwtool host-compile
- make[3] -C package/libs/libjson-c host-compile
- make[4] scripts/config/conf
- make[3] -C package/system/usign host-compile
- make[3] -C feeds/luci/modules/luci-base host-compile
- make[3] -C feeds/luci/contrib/package/csstidy host-compile
- make[3] -C package/system/apk host-compile
- make[3] -C package/libs/libubox host-compile
- make[3] -C package/system/ucert host-compile
- make[3] -C package/libs/toolchain compile
- make[3] -C package/kernel/gpio-button-hotplug compile
- make[3] -C package/libs/libjson-c compile
- make[3] -C package/libs/libnl-tiny compile
- make[3] -C package/utils/lua compile
- make[3] -C package/libs/libmd compile
- make[3] -C package/libs/zlib compile
- make[3] -C package/firmware/linux-firmware compile
- make[3] -C package/system/fwtool compile
- make[3] -C package/libs/libsepol compile
- make[3] -C package/libs/pcre2 compile
- make[3] -C package/libs/musl-fts compile
+ make[3] -C package/utils/util-linux compile
+ make[3] -C package/utils/busybox compile
+ make[3] -C package/network/utils/iwinfo compile
+ make[3] -C feeds/packages/net/cgi-io compile
+ make[3] -C package/libs/libbpf compile
+ make[3] -C package/network/services/dnsmasq compile
+ make[3] -C package/utils/ucode compile
+ make[3] -C package/libs/udebug compile
+ make[3] -C feeds/luci/contrib/package/lucihttp compile
+ make[3] -C package/system/rpcd compile
+ make[3] -C feeds/luci/contrib/package/ucode-mod-html compile
+ make[3] -C package/libs/uclient compile
+ make[3] -C package/network/services/uhttpd compile
+ make[3] -C package/network/utils/iproute2 compile
+ make[3] -C package/network/config/netifd compile
+ make[3] -C package/system/ubox compile
+ make[3] -C feeds/luci/libs/rpcd-mod-luci compile
+ make[3] -C package/system/urandom-seed compile
+ make[3] -C package/system/fstools compile
+ make[3] -C feeds/luci/modules/luci-base compile
+ make[3] -C package/system/procd compile
+ make[3] -C feeds/luci/modules/luci-mod-network compile
+ make[3] -C feeds/luci/modules/luci-mod-status compile
+ make[3] -C feeds/luci/modules/luci-mod-system compile
+ make[3] -C feeds/luci/themes/luci-theme-bootstrap compile
+ make[3] -C package/base-files compile
+ make[3] -C feeds/luci/modules/luci-mod-admin-full compile
+ make[3] -C feeds/packages/libs/libfido2 compile
+ make[3] -C package/system/apk compile
+ make[3] -C feeds/packages/net/openssh compile
 --- the build's own processes ---
-   3687 Ss   /usr/bin/python3 /usr/bin/networkd-dispatcher --run-startup-triggers
-   3687 Ss   /usr/bin/python3 -u /usr/sbin/waagent -daemon
-   3686 Sl   /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
-   2801 S    timeout --kill-after=60s 280m bash -c echo $$ > ../compile-make.pid; exec make -j"$(nproc)"
-   2801 S    tee ../compile-parallel.log
-   2801 S    make -j4
-   2792 S    /bin/sh -c _limit=`ulimit -n`; [ "$_limit" = "unlimited" -o "$_limit" -ge 1024 ] || ulimit -n 1024; umask 022; cmd() { >/dev/null 2>&1 make -s "$@" < /dev/null || { echo "make $*: build failed. Please re-run make with -j1 V=s or V=sc for a higher verbosity level to see what's going on"; false; } } 8>&1 9>&2; cmd -r world 
-   2792 S    make -s -r world
-     49 S    make --no-print-directory package/compile
-     47 S    bash -c /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/time.pl "time: package/libs/ncurses/host-compile" make  -r -C package/libs/ncurses BUILD_SUBDIR="package/libs/ncurses" BUILD_VARIANT="" ALL_VARIANTS="" host-compile  || ?(?{ printf "%s\n" "    ERROR: package/libs/ncurses [host] failed to build." >&8 || printf "%s\n" "    ERROR: package/libs/ncurses [host] failed to build."; } 2>/dev/null;   exit 1;)
-     47 S    perl /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/time.pl time: package/libs/ncurses/host-compile make -r -C package/libs/ncurses BUILD_SUBDIR=package/libs/ncurses BUILD_VARIANT= ALL_VARIANTS= host-compile
-     47 S    make -r -C package/libs/ncurses BUILD_SUBDIR=package/libs/ncurses BUILD_VARIANT= ALL_VARIANTS= host-compile
-     30 S    make -C /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/build_dir/hostpkg/ncurses-6.4 libs
-     14 S    bash -c /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/time.pl "time: package/libs/libsepol/compile" make  -r -C package/libs/libsepol BUILD_SUBDIR="package/libs/libsepol" BUILD_VARIANT="" ALL_VARIANTS="" compile  || ?(?{ printf "%s\n" "    ERROR: package/libs/libsepol failed to build." >&8 || printf "%s\n" "    ERROR: package/libs/libsepol failed to build."; } 2>/dev/null;   exit 1;) 
+   4051 Ss   /usr/bin/python3 /usr/bin/networkd-dispatcher --run-startup-triggers
+   4051 Ss   /usr/bin/python3 -u /usr/sbin/waagent -daemon
+   4050 Sl   /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
+   3165 S    timeout --kill-after=60s 280m bash -c echo $$ > ../compile-make.pid; exec make -j"$(nproc)"
+   3165 S    tee ../compile-parallel.log
+   3165 S    make -j4
+   3156 S    /bin/sh -c _limit=`ulimit -n`; [ "$_limit" = "unlimited" -o "$_limit" -ge 1024 ] || ulimit -n 1024; umask 022; cmd() { >/dev/null 2>&1 make -s "$@" < /dev/null || { echo "make $*: build failed. Please re-run make with -j1 V=s or V=sc for a higher verbosity level to see what's going on"; false; } } 8>&1 9>&2; cmd -r world 
+   3156 S    make -s -r world
+    413 S    make --no-print-directory package/compile
+      9 S    bash -c /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/time.pl "time: package/feeds/packages/openssh/without-pam/compile" make  -r -C package/feeds/packages/openssh BUILD_SUBDIR="package/feeds/packages/openssh" BUILD_VARIANT="without-pam" ALL_VARIANTS=" " compile  || ?(?{ printf "%s\n" "    ERROR: package/feeds/packages/openssh failed to build (build variant: without-pam)." >&8 || printf "%s\n" "    ERROR: package/feeds/packages/openssh failed to build (build variant: without-pam)."; } 2>/dev/null;   exit 1;) 
+      9 S    perl /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/time.pl time: package/feeds/packages/openssh/without-pam/compile make -r -C package/feeds/packages/openssh BUILD_SUBDIR=package/feeds/packages/openssh BUILD_VARIANT=without-pam ALL_VARIANTS=  compile
+      9 S    make -r -C package/feeds/packages/openssh BUILD_SUBDIR=package/feeds/packages/openssh BUILD_VARIANT=without-pam ALL_VARIANTS=  compile
+      3 S    bash -c (cd /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/build_dir/target-aarch64_cortex-a53_musl/openssh-without-pam/openssh-10.3p1/./; if [ -x ./configure ]; then find /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/build_dir/target-aarch64_cortex-a53_musl/openssh-without-pam/openssh-10.3p1/ -name config.guess | xargs -r chmod u+w; find /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/build_dir/target-aarch64_cortex-a53_musl/openssh-without-pam/openssh-10.3p1/ -name config.guess | xargs -r -n1 cp --remove-destination /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/config.guess; find /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/build_dir/target-aarch64_cortex-a53_musl/openssh-without-pam/openssh-10.3p1/ -name config.sub | xargs -r chmod u+w; find /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/build_dir/target-aarch64_cortex-a53_musl/openssh-without-pam/openssh-10.3p1/ -name config.sub | xargs -r -n1 cp --remove-destination /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/config.sub; AR="aarch64-openwrt-linux-musl-gcc-ar" AS="aarch64-openwrt-linux-musl-gcc -c -Os -pipe -mcpu=cortex-a53 -fno-caller-saves -fno-plt -fhonour-copts -fmacro-prefix-map=/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/build_dir/target-aarch64_cortex-a53_musl/openssh-without-pam/openssh-10.3p1=openssh-10.3p1 -Wl,-z,max-page-size=4096 -Wformat -Werror=format-security -fstack-protector -D_FORTIFY_SOURCE=1 -Wl,-z,now -Wl,-z,relro -Wl,-z,pack-relative-relocs" LD="aarch64-openwrt-linux-musl-ld.bfd" NM="aarch64-openwrt-linux-musl-gcc-nm" CC="aarch64-openwrt-linux-musl-gcc" GCC="aarch64-openwrt-linux-musl-gcc" CXX="aarch64-openwrt-linux-musl-g++" RANLIB="aarch64-openwrt-linux-musl-gcc-ranlib" STRIP=aarch64-openwrt-linux-musl-strip OBJCOPY=aarch64-openwrt-linux-musl-objcopy OBJDUMP=aarch64-openwrt-linux-musl-objdump SIZE=aarch64-openwrt-linux-musl-size CFLAGS="-Os -pipe -mcpu=cortex-a53 -fno-caller-saves -fno-plt -fhonour-copts -fmacro-prefix-map=/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/build_dir/target-aarch64_cortex-a53_musl/openssh-without-pam/openssh-10.3p1=openssh-10.3p1 -Wl,-z,max-page-size=4096 -Wformat -Werror=format-security -fstack-protector -D_FORTIFY_SOURCE=1 -Wl,-z,now -Wl,-z,relro -Wl,-z,pack-relative-relocs " CXXFLAGS="-Os -pipe -mcpu=cortex-a53 -fno-caller-saves -fno-plt -fhonour-copts -fmacro-prefix-map=/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/build_dir/target-aarch64_cortex-a53_musl/openssh-without-pam/openssh-10.3p1=openssh-10.3p1 -Wl,-z,max-page-size=4096 -Wformat -Werror=format-security -fstack-protector -D_FORTIFY_SOURCE=1 -Wl,-z,now -Wl,-z,relro -Wl,-z,pack-relative-relocs " CPPFLAGS="-I/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/toolchain-aarch64_cortex-a53_gcc-14.3.0_musl/usr/include -I/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/toolchain-aarch64_cortex-a53_gcc-14.3.0_musl/include -I/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/toolchain-aarch64_cortex-a53_gcc-14.3.0_musl/include/fortify " LDFLAGS="-L/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/toolchain-aarch64_cortex-a53_gcc-14.3.0_musl/usr/lib -L/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/toolchain-aarch64_cortex-a53_gcc-14.3.0_musl/lib -fuse-ld=bfd -zmax-page-size=4096 -znow -zrelro -zpack-relative-relocs "  LD="aarch64-openwrt-linux-musl-gcc" PATH_PASSWD_PROG="/bin/passwd"  ./configure --target=aarch64-openwrt-linux --host=aarch64-openwrt-linux --build=x86_64-pc-linux-gnu --disable-dependency-tracking --program-prefix="" --program-suffix="" --prefix=/usr --exec-prefix=/usr --bindir=/usr/bin --sbindir=/usr/sbin --libexecdir=/usr/lib --sysconfdir=/etc --datadir=/usr/share --localstatedir=/var --mandir=/usr/man --infodir=/usr/info --disable-nls  --sysconfdir=/etc/ssh --with-privsep-user=sshd --with-privsep-path=/var/empty --disable-strip --disable-etc-default-login --disable-lastlog --disable-utmp --disable-utmpx --disable-wtmp --disable-wtmpx --without-bsd-auth --without-kerberos5 --with-stackprotect --without-ssl-engine --without-security-key-builtin --with-cflags-after=-fzero-call-used-regs=skip --without-pam ; fi; )
+      3 S    bash -c (cd /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/build_dir/target-aarch64_cortex-a53_musl/openssh-without-pam/openssh-10.3p1/./; if [ -x ./configure ]; then find /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/build_dir/target-aarch64_cortex-a53_musl/openssh-without-pam/openssh-10.3p1/ -name config.guess | xargs -r chmod u+w; find /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/build_dir/target-aarch64_cortex-a53_musl/openssh-without-pam/openssh-10.3p1/ -name config.guess | xargs -r -n1 cp --remove-destination /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/config.guess; find /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/build_dir/target-aarch64_cortex-a53_musl/openssh-without-pam/openssh-10.3p1/ -name config.sub | xargs -r chmod u+w; find /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/build_dir/target-aarch64_cortex-a53_musl/openssh-without-pam/openssh-10.3p1/ -name config.sub | xargs -r -n1 cp --remove-destination /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/config.sub; AR="aarch64-openwrt-linux-musl-gcc-ar" AS="aarch64-openwrt-linux-musl-gcc -c -Os -pipe -mcpu=cortex-a53 -fno-caller-saves -fno-plt -fhonour-copts -fmacro-prefix-map=/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/build_dir/target-aarch64_cortex-a53_musl/openssh-without-pam/openssh-10.3p1=openssh-10.3p1 -Wl,-z,max-page-size=4096 -Wformat -Werror=format-security -fstack-protector -D_FORTIFY_SOURCE=1 -Wl,-z,now -Wl,-z,relro -Wl,-z,pack-relative-relocs" LD="aarch64-openwrt-linux-musl-ld.bfd" NM="aarch64-openwrt-linux-musl-gcc-nm" CC="aarch64-openwrt-linux-musl-gcc" GCC="aarch64-openwrt-linux-musl-gcc" CXX="aarch64-openwrt-linux-musl-g++" RANLIB="aarch64-openwrt-linux-musl-gcc-ranlib" STRIP=aarch64-openwrt-linux-musl-strip OBJCOPY=aarch64-openwrt-linux-musl-objcopy OBJDUMP=aarch64-openwrt-linux-musl-objdump SIZE=aarch64-openwrt-linux-musl-size CFLAGS="-Os -pipe -mcpu=cortex-a53 -fno-caller-saves -fno-plt -fhonour-copts -fmacro-prefix-map=/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/build_dir/target-aarch64_cortex-a53_musl/openssh-without-pam/openssh-10.3p1=openssh-10.3p1 -Wl,-z,max-page-size=4096 -Wformat -Werror=format-security -fstack-protector -D_FORTIFY_SOURCE=1 -Wl,-z,now -Wl,-z,relro -Wl,-z,pack-relative-relocs " CXXFLAGS="-Os -pipe -mcpu=cortex-a53 -fno-caller-saves -fno-plt -fhonour-copts -fmacro-prefix-map=/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/build_dir/target-aarch64_cortex-a53_musl/openssh-without-pam/openssh-10.3p1=openssh-10.3p1 -Wl,-z,max-page-size=4096 -Wformat -Werror=format-security -fstack-protector -D_FORTIFY_SOURCE=1 -Wl,-z,now -Wl,-z,relro -Wl,-z,pack-relative-relocs " CPPFLAGS="-I/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/toolchain-aarch64_cortex-a53_gcc-14.3.0_musl/usr/include -I/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/toolchain-aarch64_cortex-a53_gcc-14.3.0_musl/include -I/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/toolchain-aarch64_cortex-a53_gcc-14.3.0_musl/include/fortify " LDFLAGS="-L/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/toolchain-aarch64_cortex-a53_gcc-14.3.0_musl/usr/lib -L/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/toolchain-aarch64_cortex-a53_gcc-14.3.0_musl/lib -fuse-ld=bfd -zmax-page-size=4096 -znow -zrelro -zpack-relative-relocs "  LD="aarch64-openwrt-linux-musl-gcc" PATH_PASSWD_PROG="/bin/passwd"  ./configure --target=aarch64-openwrt-linux --host=aarch64-openwrt-linux --build=x86_64-pc-linux-gnu --disable-dependency-tracking --program-prefix="" --program-suffix="" --prefix=/usr --exec-prefix=/usr --bindir=/usr/bin --sbindir=/usr/sbin --libexecdir=/usr/lib --sysconfdir=/etc --datadir=/usr/share --localstatedir=/var --mandir=/usr/man --infodir=/usr/info --disable-nls  --sysconfdir=/etc/ssh --with-privsep-user=sshd --with-privsep-path=/var/empty --disable-strip --disable-etc-default-login --disable-lastlog --disable-utmp --disable-utmpx --disable-wtmp --disable-wtmpx --without-bsd-auth --without-kerberos5 --with-stackprotect --without-ssl-engine --without-security-key-builtin --with-cflags-after=-fzero-call-used-regs=skip --without-pam ; fi; )
 --- the oldest processes that are not kernel threads ---
-   3696 Ss   /sbin/init
-   3695 S<s  /lib/systemd/systemd-journald
-   3695 SLsl /sbin/multipathd -d -s
-   3695 Ss   /lib/systemd/systemd-udevd
-   3694 Ss   /usr/lib/linux-tools/6.8.0-1070-azure/hv_kvp_daemon -n
-   3693 Ss   /usr/sbin/haveged --Foreground --verbose=1
-   3692 Ss   /lib/systemd/systemd-networkd
-   3692 Ss   /lib/systemd/systemd-resolved
+   4060 Ss   /sbin/init
+   4059 S<s  /lib/systemd/systemd-journald
+   4059 SLsl /sbin/multipathd -d -s
+   4059 Ss   /lib/systemd/systemd-udevd
+   4058 Ss   /usr/lib/linux-tools/6.8.0-1070-azure/hv_kvp_daemon -n
+   4057 Ss   /usr/sbin/haveged --Foreground --verbose=1
+   4056 Ss   /lib/systemd/systemd-networkd
+   4056 Ss   /lib/systemd/systemd-resolved
 --- what is running under the build ---
 --- the directories the build touched lately ---
 target-aarch64_cortex-a53_musl
@@ -63,5 +63,5 @@ toolchain-aarch64_cortex-a53_gcc-14.3.0_musl
 host
 --- how big the root filesystem is getting ---
 --- memory and load ---
-Mem:           15988        1109         303          52       14575       14479
- 06:54:59 up  1:01,  0 users,  load average: 7.28, 6.04, 5.63
+Mem:           15988         871         422          52       14694       14717
+ 07:01:03 up  1:07,  0 users,  load average: 5.49, 6.46, 6.01
