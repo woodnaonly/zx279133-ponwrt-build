@@ -1904,3 +1904,50 @@ r 0x000084 = 0x00000001
 再写一次 `0x80000001`（幂等，不报错也不变），`r 0x342a4` 仍是 `0`，3 次板→PC ping 与 5 次 PC→板 ping
 仍然 0 收，`rx frame` 无打印。
 **⇒ `frame` bit0 不是 ready 的门，也不是这条 lane 的缺口；本项排除。**
+
+## 47. 14:21：通流 U-Boot 里的 SOPC 字拿到了——**ready 字不是门**（46.5 第二种分支），新的唯一不等项指向 PCS 工作模式
+
+`tools/ubattr.sh` 14:21:11 接住 U-Boot，**先 `ping 192.168.9.25` → `host 192.168.9.25 is alive`**
+（第 8 次证明这条线在原厂引导程序下双向通），之后才读字（`staging/ctl/ubattr-state.txt`）：
+
+| 地址 | 通流 U-Boot（本机 14:21，ping 已证） | mainline / 无 switch 启动 | 读法 |
+|---|---|---|---|
+| `nppt+0x342a4` XMAC0 SOPC ready | **`0x00000000`** | `0x00000000` | **同值——ready 不是门** |
+| `nppt+0x342a8` XMAC1 SOPC ready | `0x00000000` | `0x00000001`（无 switch 启动读到的） | XMAC1 的 1 是驱动写的，与通流无关 |
+| `nppt+0x342c0` XMAC0 SOPC send | `0x00000001` | `0x00000001` | 同值 |
+| `nppt+0x342c4` XMAC1 SOPC send | `0x00000001` | `0x00000001` | 同值 |
+| `nppt+0x000084` | `0x00000001` | `0x00000001` | 同（§39 已记） |
+| `nppt+0x000090` | `0x00002c03` | `0x00002c03` | 同（§38/39 已记，且再次证明它不是通流判据） |
+| `0x19140000` XMAC0 TX_CTRL | `0x60010000` | `0x60010001`（mainline 写的） | **读数是 ping 之后的**：U-Boot 的 net loop 结束会 `eth_halt()`，bit0=0 是停机态，不能当作"通流时的值" |
+| `0x19140010` XMAC0 RX_CTRL | `0x3e8000c6` | `0x3e8000c6` | 同 |
+
+**判决（46.5 的第二种分支）**：通流开机里 XMAC0 的 ready 字**也是 0**，而 send 字是 1——与 mainline/无 switch
+启动一模一样。驱动注释里"A MAC whose send-enable is never published does not move a frame"说的是
+send 字（两处都写着 1），ready 字不是门。**46.4 那条线索划掉。**
+
+**同时要更正 §21/§39 的一条读法**：`0x60010000` vs `0x60010001` 这个"bit0 差"一直被视为通流与非通流的
+差别，但本轮的读数是在 `ping` 返回**之后**取的，而 U-Boot 的 net loop 在 ping 结束时 `eth_halt()`——
+bit0=0 是**停机后的值**。也就是说这一位从来没有在"正在通流"的时刻被读到过；把它当判据是不合格的。
+要拿通流时刻的 MAC 字，只能在 U-Boot 的网络会话**进行中**读，这在本板的阻塞式 ping 下做不到
+（可试的替代：`tftpboot` 大文件时从另一条通道读，或读 `idm_tx_debug` 打印的描述符——后者给出的是
+outport，不是 MAC 字）。
+
+### 47.1 至此，两边"已知寄存器"的差集只剩一项：**PCS 工作模式**
+
+逐项列出来（每项都有本项目的实测行）：SerDes 镜像（继承，0/49 字差）、RTL8226 SerDes 侧五个
+C45 字（`0/0000=0000, 0/0001=0000, 1e/7581=0000, 1e/7588=00CE` …，与 §12.2 记的同一组）、XPCS
+状态镜（`+0x84/+0x90`）、SOPC ready/send、XMAC0 的 RX_CTRL 与 frame/mode/duplex/misc——**全部与通流
+开机同值**。而 mainline 把这根 lane 驱动成 **SGMII**（DTS 的 fixed-link 没写 phy-mode，phylink 打印
+`configuring for fixed/sgmii link mode`），原厂自己的 bring-up 命令却是 `xmac_test xmac_work_mode_set 0 2`
+= **1000BASE_X**（docs/07 的 xmac_test 表，模式 2）。
+
+**预登记：`tools/ubxmacmode.sh` 已 arm 到 ~14:40 那个断电窗口**，顺序：接 U-Boot → `bdinfo` 认证 →
+baseline ping → 依次 `xmac_test xmac_work_mode_set 0 <m>`（m = 2, 6, 3, 4，即 1000BASE_X / SGMII_AUTO_ON /
+2PT5BASE_X / HSGMII）→ 每模式后 `ping 192.168.9.25` → 恢复模式 2 → `run bootcmd`。**每个模式后的一次
+`is alive` 就是该模式的判决**：
+
+- **只有模式 2 通** ⇒ mainline 的 SGMII 驱动方式与 PHY 不匹配，缺口是"driver 里没有 1000BASE-X 这条
+  初始化路径"（grep：mac.c 只接受 SGMII 与 2500BASEX）。修法在驱动/DTS，需要一次 CI 构建。
+- **模式 6（SGMII）也通** ⇒ SGMII 本身没问题，缺口回到 mainline 独有的东西（NP/PPU 表、IDM 分类），
+  下一个实验回到 §44 末尾那条（U-Boot `idm_rx_debug` 逐帧对照）。
+- **模式 3/4 通而 2/6 不通** ⇒ PHY 侧是 2.5G 模式，DTS 要改成 2500base-x（驱动已有这条路径）。
