@@ -28,7 +28,7 @@
  * carries them, and it is a child of the NPPT controller, talking to it
  * through the typed service in zx279133-lan.h.
  *
- * The XPCS programming below is the tree's own 1G SGMII profile, taken
+ * The XPCS programming below is the tree's own 1G profile, taken
  * from zx279133_xmac_sgmii_init() and the zx279133_xpcs_* helpers in
  * drivers/net/ethernet/zte/zx279133-mac.c - the same vendor sequence the
  * NPPT's own MAC runs - pointed at XPCS0 instead of XPCS1 and at XMAC0
@@ -184,6 +184,25 @@
 #define ZX279133_XPCS_AN_INTR_EN	BIT(0)
 #define ZX279133_XPCS_SGMII_LINK_STS	BIT(4)
 #define ZX279133_XPCS_PCS_MODE_MASK	GENMASK(2, 1)
+/*
+ * The PCS mode field of VR_MII_AN_CTRL (bits 2:1).
+ *
+ * The vendor's two 1G profiles differ in exactly one value here.  Both
+ * xpcs_sgmii_mode_conf() and xpcs_1000base_x_conf() in np_133.ko have the
+ * same shape - prepare_for_switch_mode(), one shared helper, then the work
+ * mode is stored - and the helper is called with the PCS mode as its fourth
+ * argument: 2 for SGMII (np_133.ko 0x1c8c8) and 0 for 1000BASE-X
+ * (np_133.ko 0x1c65c).  Disassembled 2026-10-28 with staging/ctl/adis.py.
+ *
+ * This lane has to be 1000BASE-X and not SGMII: the device on the far end
+ * of it is a 1000BASE-X device.  The RTL8226 on the 2.5G jack answers
+ * Clause 45 with PCS BMCR 0x3000 (speed 1000BASE-X, AN enabled) and PMD
+ * status 0x0002 ("1000BASE-X capable"), both read out of the board's own
+ * U-Boot on 2026-10-28 05:28 with its PCS status at 0x0069 - link up,
+ * block lock and block sync all set.
+ */
+#define ZX279133_XPCS_PCS_MODE_1000BASE_X	0
+#define ZX279133_XPCS_PCS_MODE_SGMII		2
 #define ZX279133_XPCS_LOW_POWER		BIT(11)
 #define ZX279133_XPCS_SPEED_SEL		BIT(13)
 #define ZX279133_XPCS_SR_MII_SPEED_MASK (BIT(13) | BIT(6) | BIT(5))
@@ -381,11 +400,13 @@ static int zx279133_switch_xpcs_init(struct zx279133_switch *priv)
 }
 
 /*
- * The vendor's AN-disabled 1G path: PCS mode 2 + SGMII_LINK_STS, no
+ * The vendor's AN-disabled 1G path: PCS mode + SGMII_LINK_STS, no
  * MAC_AUTO_SW.  Re-applied after the XMAC has been programmed.
+ *
+ * The PCS mode is 1000BASE-X here: see ZX279133_XPCS_PCS_MODE_1000BASE_X.
  */
-static int zx279133_switch_xpcs_apply_sgmii_vend2(struct zx279133_switch *priv,
-						   int duplex)
+static int zx279133_switch_xpcs_apply_1000base_x_vend2(struct zx279133_switch *priv,
+						       int duplex)
 {
 	u32 bmcr = BMCR_ANENABLE | BMCR_SPEED1000;
 	int ret;
@@ -397,7 +418,8 @@ static int zx279133_switch_xpcs_apply_sgmii_vend2(struct zx279133_switch *priv,
 					  ZX279133_XPCS_VR_MII_AN_CTRL,
 					  ZX279133_XPCS_SGMII_LINK_STS |
 					  ZX279133_XPCS_AN_INTR_EN |
-					  FIELD_PREP(ZX279133_XPCS_PCS_MODE_MASK, 2));
+					  FIELD_PREP(ZX279133_XPCS_PCS_MODE_MASK,
+						     ZX279133_XPCS_PCS_MODE_1000BASE_X));
 	if (ret)
 		return ret;
 
@@ -411,10 +433,17 @@ static int zx279133_switch_xpcs_apply_sgmii_vend2(struct zx279133_switch *priv,
 }
 
 /*
- * The 1G SGMII profile, from zx279133_xpcs_sgmii_quirk() in
- * drivers/net/ethernet/zte/zx279133-mac.c.
+ * The 1G profile, from zx279133_xpcs_sgmii_quirk() in
+ * drivers/net/ethernet/zte/zx279133-mac.c, with one value changed.
+ *
+ * That quirk programs this PCS as SGMII, i.e. PCS mode 2.  This lane's far
+ * end is a 1000BASE-X device, so the PCS mode is 0 here - the one value the
+ * vendor's own xpcs_sgmii_mode_conf() and xpcs_1000base_x_conf() differ in
+ * (see ZX279133_XPCS_PCS_MODE_1000BASE_X).  Everything else is left exactly
+ * as the quirk had it, so a lane that comes up says which of the two was
+ * wrong, and a lane that does not says the mode was not the only thing.
  */
-static int zx279133_switch_xpcs_sgmii(struct zx279133_switch *priv)
+static int zx279133_switch_xpcs_1000base_x(struct zx279133_switch *priv)
 {
 	int val;
 	int ret;
@@ -511,18 +540,20 @@ static int zx279133_switch_xpcs_sgmii(struct zx279133_switch *priv)
 	ret = zx279133_switch_xpcs_modify(priv, MDIO_MMD_VEND2,
 					   ZX279133_XPCS_VR_MII_AN_CTRL,
 					   ZX279133_XPCS_PCS_MODE_MASK,
-					   FIELD_PREP(ZX279133_XPCS_PCS_MODE_MASK, 2));
+					   FIELD_PREP(ZX279133_XPCS_PCS_MODE_MASK,
+						     ZX279133_XPCS_PCS_MODE_1000BASE_X));
 	if (ret)
 		return ret;
 
 	/*
 	 * xmac_init_by_work_mode(3) calls xmac_sgmii_conf(..., auto=0):
-	 * PCS mode 2 + SGMII_LINK_STS, no MAC_AUTO_SW.
+	 * PCS mode + SGMII_LINK_STS, no MAC_AUTO_SW.
 	 */
 	ret = zx279133_switch_xpcs_write(priv, MDIO_MMD_VEND2,
 					  ZX279133_XPCS_VR_MII_AN_CTRL,
 					  ZX279133_XPCS_SGMII_LINK_STS |
-					  FIELD_PREP(ZX279133_XPCS_PCS_MODE_MASK, 2));
+					  FIELD_PREP(ZX279133_XPCS_PCS_MODE_MASK,
+						     ZX279133_XPCS_PCS_MODE_1000BASE_X));
 	if (ret)
 		return ret;
 	ret = zx279133_switch_xpcs_write(priv, MDIO_MMD_VEND2,
@@ -530,8 +561,23 @@ static int zx279133_switch_xpcs_sgmii(struct zx279133_switch *priv)
 	if (ret)
 		return ret;
 
-	return zx279133_switch_xpcs_write(priv, MDIO_MMD_VEND2, MII_BMCR,
+	ret = zx279133_switch_xpcs_write(priv, MDIO_MMD_VEND2, MII_BMCR,
 					 BMCR_SPEED1000 | BMCR_FULLDPLX);
+	if (ret)
+		return ret;
+
+	/*
+	 * Read the mode back, so the next round can tell "the mode was set
+	 * and the lane still did not come up" from "the mode never took".
+	 */
+	val = zx279133_switch_xpcs_read(priv, MDIO_MMD_VEND2,
+					ZX279133_XPCS_VR_MII_AN_CTRL);
+	if (val < 0)
+		return val;
+	dev_info(priv->dev, "XPCS0 configured as 1000BASE-X: AN_CTRL = 0x%04x, mode = %u\n",
+		 val, FIELD_GET(ZX279133_XPCS_PCS_MODE_MASK, val));
+
+	return 0;
 }
 
 /*
@@ -2016,7 +2062,7 @@ static int zx279133_switch_probe(struct platform_device *pdev)
 	 *
 	 * If the PCS still says the link is up, the bootloader brought it up
 	 * and this driver has not broken it yet - and reprogramming it is
-	 * exactly what breaks it: the 1G SGMII profile below takes the PCS
+	 * exactly what breaks it: the 1G profile below takes the PCS
 	 * from the bootloader's 0x380b to 0x280b, one bit of link status
 	 * short, and a lane that was carrying traffic stops carrying it.
 	 * So in that case the bootloader's configuration is adopted as it
@@ -2066,7 +2112,7 @@ static int zx279133_switch_probe(struct platform_device *pdev)
 	}
 
 	ret = priv->usxgmii ? zx279133_switch_xpcs_usxgmii(priv) :
-			      zx279133_switch_xpcs_sgmii(priv);
+			      zx279133_switch_xpcs_1000base_x(priv);
 	if (ret) {
 		/*
 		 * Do not give up here.  The read-back below is the evidence
@@ -2076,7 +2122,7 @@ static int zx279133_switch_probe(struct platform_device *pdev)
 		 * status word can be read at all.
 		 */
 		dev_err(dev, "failed to configure XPCS0 for %s mode: %d\n",
-			priv->usxgmii ? "USXGMII" : "SGMII", ret);
+			priv->usxgmii ? "USXGMII" : "1000BASE-X", ret);
 		goto report;
 	}
 
@@ -2090,7 +2136,8 @@ static int zx279133_switch_probe(struct platform_device *pdev)
 
 	if (!priv->usxgmii) {
 		/* Re-apply after the XMAC/SOPC work; the C45 AN bits are lost. */
-		ret = zx279133_switch_xpcs_apply_sgmii_vend2(priv, DUPLEX_FULL);
+		ret = zx279133_switch_xpcs_apply_1000base_x_vend2(priv,
+								 DUPLEX_FULL);
 		if (ret)
 			dev_err(dev,
 				"failed to re-apply the XPCS0 AN state: %d\n",
