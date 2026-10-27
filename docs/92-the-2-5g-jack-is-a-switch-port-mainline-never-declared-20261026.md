@@ -4697,3 +4697,313 @@ causes is survivable (ab1b122).
   puts the masquerade on eth0, which is the optical side - right for an
   ONU's WAN, but it means the trial image's LAN and WAN are on the same
   box in a way the chassis does not have.
+
+
+## 67. 2.5G 口的两条互斥假设，以及厂商寄存器映射（2026-10-28 03:20–03:50）
+
+§66 说 2.5G 口的 MAC 是 SoC 的 RGMII MAC（0x15900000），mainline 树里没有它的
+节点也没有它的驱动。本节把这句话拆成**两条互斥的假设**，给出判定方法，并把厂商
+`np_133.ko` 里的 RGMII 寄存器映射挖出来。
+
+### 67.1 厂商的寄存器空间总表（从 `np_133.ko` 反汇编得到）
+
+厂商用一套「space」编号把 SoC 的各块寄存器统一起来。`fpga_read_reg(index, space)`
+与 `fpga_write_reg(index, value, space)` 按 space 跳到不同的基地址：
+
+| space | 名字 | 访问函数 | 基地址 |
+|---|---|---|---|
+| 0 | pon | `fpga_pon_read_reg` | PON 控制器 |
+| 1 | pps | `fpga_pps_read_reg` | PPS |
+| 2 | nppt | `fpga_nppt_read_reg` | NPPT = 0x19000000 |
+| **3** | **rgmii** | **`fpga_rgmii_read_reg`** | **iomap(0x15900000)** |
+| 4 | gmac | `fpga_gmac_read_reg` | — |
+| 5 | xgmac | `fpga_xgmac_read_reg` | — |
+| 6 | emac | `fpga_emac_read_reg` | — |
+| 7 | xmac_pcs | `fpga_xmac_pcs_read_reg` | XPCS |
+| 8 | pcu | `fpga_pcu_read_reg` | PCU = 0x10e30000 |
+
+`fpga_rgmii_read_reg(idx)` 就是 `*(u32 *)(rgmii_base + idx * 4)`，其中
+`rgmii_base` 是厂商 probe 里对 `zte,zx279133-rgmii` 节点做的 `of_iomap()`，
+即 **0x15900000**。这个 space 一共 **0x400 个字（16KB）**——厂商的
+`np_rgmii_reg_print()` 正是把 0..0x3ff 全读一遍，存到
+`/tmp/np/rgmii/rgmii_reg_value`。
+
+厂商 DT 里对应的节点（`ci-build-repo/decompiled/sk-d840n-community-4.19.dts`）：
+
+```
+rgmii@15900000 {
+        compatible = "zte,zx279133-rgmii";
+        reg = <0x00 0x15900000 0x00 0x100000>;
+        status = "disabled";
+};
+```
+
+### 67.2 RGMII 空间里已经认出来的寄存器
+
+`smac_get_stat()` 是全 `np_133.ko` 里**唯一**读这块空间的地方（除了那个 dump
+函数）。它读的统计寄存器字索引（字节偏移 = 索引 × 4）：
+
+```
+0x1c5..0x1d1   -> 0x714..0x744    每 4 字节一个计数器
+0x1d9..0x1dc   -> 0x764..0x770
+0x1e0..0x1e2   -> 0x780..0x788
+0x1e3..0x1e5   -> 0x78c..0x794
+0x1e7..0x1ec   -> 0x79c..0x7b0
+0x1ed..0x1f1   -> 0x7b4..0x7c4
+0x1f4,0x1f5    -> 0x7d0,0x7d4
+0x1f7          -> 0x7dc
+0x2c0          -> 0xb00            全局计数
+0x2cc, 0x2cd   -> 0xb30, 0xb34
+```
+
+这 41 个计数器分成 5 组，形状像「每个 MAC 通道一组」。
+**这是判断这块活不活的最好探针**：如果 0x15900000 的块根本没人配置，这些计数器
+恒为零；如果 U-Boot 已经按厂商的方式配好了它们，Linux 一起来就能读到在走的数。
+
+RGMII 接口模式的设置在 **NPPT** 里，不在 0x15900000 里：
+
+```
+nppt_smac_set_rgmii_mode():
+        NPPT+0x24  &= ~0x03800000 ; |= 0x00800000
+        pon_soc_pon_rgmii_clk_set(0)
+        greg_rgmii_intf_mode_set(1)
+
+greg_rgmii_intf_mode_set(mode):
+        NPPT+0x30  &= ~0x00060000
+        if (mode & 0xff) == 0 : NPPT+0x30 |= 0x00060000
+```
+
+所以「RGMII 模式」= NPPT 的两个寄存器位 + 一根时钟。
+
+### 67.3 反过来看：9132 自己的端口表说另一件事
+
+厂商系统自己的逐端口 dump（`staging/ctl/vswstate.log`）把 9132 的端口 0..9 全
+打了一遍，逐字摘录：
+
+| sw port | link | speed | 说明 |
+|---|---|---|---|
+| 0 | 0 | 0 | UNI 口 0（PHY 0x0a） |
+| **1** | **1** | **2 (=1G)** | UNI 口 1（PHY 0x0b）——**当时 PC 在这一口** |
+| 2 | 0 | 0 | UNI 口 2（PHY 0x0c） |
+| 3 | 0 | 0 | UNI 口 3（PHY 0x0d） |
+| **4** | 0 | 0 | **`outerphy_mode=5,outerphy_name=phy_RTL8226`** |
+| **5** | **1** | **6 (=2.5G)** | 扩展口（xmac0 侧） |
+| **6** | **1** | **6 (=2.5G)** | 扩展口（xmac1 侧） |
+| 7,8,9 | — | — | `sw_port(7/8/9) is not unvalid smac` |
+
+**端口 4 就是那颗 RTL8226**，而且它挂在 9132 上（不是挂在 SoC 上）：厂商自己的
+端口表里，外置 PHY 的位置就是 9132 的 port 4。
+
+厂商的板级描述也对得上（厂商 DT 的 `bdinfo@0`）：
+
+```
+outerphy_desc_mode = <0x00 0x05 0x00>;      // 5 = RGMII
+outerphy_desc_name = "\0phy_RTL8226\0";
+```
+
+vendor DT 里还有 `zxic,pon-plat { mdio_8226_id = <0x01>; }`——RTL8226 在厂商
+自己的 MDIO 编号里是 0x01。
+
+### 67.4 于是有两条互斥的假设
+
+* **假设 A（9132 口）**：2.5G 口是 **9132 的 port 4**，RGMII 口外挂 RTL8226
+  作 PHY。SoC 侧不需要新 MAC 驱动；缺的是「9132 的第 5 个铜口 + 它自己的
+  PHY + 一张 port↔DSA↔PHY↔VID 的表」。§66 里说的「0x15900000 是 2.5G 口的
+  MAC」在假设 A 下是**错的**。
+* **假设 B（SoC RGMII MAC）**：2.5G 口是 **SoC 的 RGMII MAC（0x15900000）**，
+  RTL8226 作它的 PHY。mainline 需要**从零写一个 MAC 驱动**（寄存器表、DMA 环、
+  中断、netdev），工作量按 §67.5 的清单算是「大件」。
+
+§66（以及 docs/16 §2.4）偏向假设 B，理由是厂商 `/proc/pon/outer_phy` 打印过
+`xmac0: phy_RTL8226`，而且厂商 DT 里有 `rgmii@15900000` 节点。但厂商自己的
+端口表（67.3）指向假设 A。两边的证据都指向「外置 RTL8226 + RGMII」这一件事，
+**分歧只在 RGMII 那一头接的是 9132 的 port 4 还是 SoC 的 0x15900000**。
+
+厂商启动日志（`staging/ctl/.lastboot.txt`，厂商系统开机实录）里那段最关键：
+
+```
+enter smac_init
+smac_init: smac_pkt_filter = 0x80000001, mac = 0x0
+...
+smac_init: smac_pkt_filter = 0x80000001, mac = 0x3
+enter outerphy info init!
+get board_info_id by fdt,the phy_id is 0x5
+--->phy identifier is [0xc849]          // 0xc849 = RTL8226
+5 serdes option is 0
+xmac0 is used.
+enter outerphy info init!
+...
+[outerphy_phy_init]Warning: No outerphy on this port<6>
+enter outerphy info init!
+...
+[outerphy_phy_init]Warning: No outerphy on this port<5>
+```
+
+即：厂商把 RTL8226 认出来后，打印的是 **「xmac0 is used」**。而端口 5、6
+都明确报「No outerphy on this port」——**RTL8226 不是挂在端口 5/6 上的**。
+
+`xmac0` 在厂商的命名里是 **0x140000 那块 XMAC**，它可以工作在不同模式下
+（厂商里有 `xmac_init_by_work_mode()`、`xmac_hsgmii_to_extend_init()`、
+`xmac_config_speed_duplex()`）。「xmac0 is used」既可以读成「XMAC0 这块硬件
+被拿来驱动这个外置 PHY」，也可以读成「这个外置 PHY 走的是 xmac 类通路」。
+
+**但注意厂商的 `smac_init` 跑了 mac = 0..3 四次**：SoC 有 **4 个 SOPC MAC 通道**。
+厂商文档里说这 4 个对应 9132 的四个 UNI 口（`sw_port_change_to_smac_index(p) = p`）。
+如果 4 个 UNI 口用掉 4 个 MAC，那么 XMAC0 就空出来给外置 RGMII PHY 用——这与
+假设 B 一致；但那样 9132 的 CPU 口就没有 MAC 可用了，而厂商又说
+`g_mii_dev_name[0] = sw`（9132 整个走一个 MII 设备）。
+
+### 67.5 判定方法（两个都便宜）
+
+1. **读 9132 的 port 4 的链路状态。** 假设 A 下，线插在 2.5G 口时 9132 的 port 4
+   会报 link up；假设 B 下 port 4 永远 down。mainline 现在的 DSA 只覆盖 PPU 1..4，
+   读不到 port 5（PPU 5）——需要给 `zx279133-switch.c` 加一个读 PPU 5 端口状态
+   的 debugfs 动词（一次 CI）。
+2. **读 RTL8226 的链路状态。** 它在 MDIO **#1**（0x14f02000）的 0x05，Clause 45，
+   `m45 5 0x1e 0x758d` 是 SerDes 链路状态。两种假设下它都应该是 up（PHY 自己会
+   自协商），所以这一条只能确认「线和 PHY 是好的」，不能单独区分 A/B。
+3. **读 0x15900000 的统计计数器（0x714 起）。** 假设 B 下这块在跑；假设 A 下
+   它根本没被配置过（计数器恒零）。需要在 driver 里加一个映射 RGMII 窗口的
+   debugfs 动词（一次 CI）。
+
+### 67.6 两条假设各自要干的活
+
+**假设 A**（9132 多一个铜口）：
+
+* 给 `zx279133-switch.c` 加 PPU 5 / DSA port 的映射；
+* 把 RTL8226 作为**这个口的 PHY**接进来——它挂在 MDIO controller **#1**
+  （0x14f02000），而 9132 自己的 user bus 翻译到 controller **#0**，两条总线
+  不是一回事，所以 PHY 得单独接；
+* 给它做 Clause 45 的 SerDes 侧配置（厂商用 `Rtl8226_serdes_autoNego_set()` /
+  `Rtl8226_serdes_link_get()`，devad 0x1e，寄存器 0x7588/0x7589/0x758b/0x758d）；
+* port↔DSA↔PHY↔VID 四张表要用同一张，不能各写各的。
+
+**假设 B**（SoC 自己的 MAC）：
+
+* dtsi 加 `rgmii@15900000` 节点；
+* 写 `zte,zx279133-rgmii` 的 platform driver：起块、配 DMA 环、配中断、把帧
+  交给一个 netdev；
+* 把 RTL8226 接成它的 PHY（同一条 MDIO #1、同一套 Clause 45 SerDes 配置）；
+* netdev 挂进 `br-lan`，和 `lan-cpu0` 并排——trial 镜像今天把 192.168.9.1 放在
+  `lan-cpu0` 上，PC 的帧到时候就从这里进来。
+
+### 67.7 本轮为逆向新修的工具
+
+`staging/ctl/redx_dis.py` 之前在这台 PC 上跑不起来（`pyelftools` 的 `Elf64` 没有
+`sec_name`/`data` 的元组返回）。本轮修好了，并加了两个新工具：
+
+* `staging/ctl/redx_dis.py`：`--str <正则>` 列出「哪些函数引用了哪个字符串」，
+  `--callers <符号>` 列出调用者，`bl` 的目标改成从重定位表取符号名（原来会把
+  外部符号显示成 `bl #0`）。
+* `staging/ctl/regtrace.py`：把一个函数里所有 `fpga_<space>_read_reg` /
+  `fpga_<space>_write_reg` / `fpga_read_reg` / `fpga_write_reg` 的调用连同
+  **寄存器索引和写进去的值**打出来——67.1、67.2 的表就是这么来的。
+* `staging/ctl/ko_probe.py`：查 .ko 的 data 符号、重定位、段、字符串。
+* `staging/ctl/regspace.py`：列出「哪些函数碰过哪个 space」。
+* `staging/ctl/kodefs.py`：跨目录查一个符号在哪个 .ko 里是定义、在哪些里是引用。
+* `staging/ctl/dtsnodes.py`：列出 DTS 里所有带 `reg` 的节点。
+
+### 67.8 这一节的结论
+
+* **0x15900000 这块硬件存在，厂商驱动就在工作区里，寄存器映射也开始有了**
+  （67.1、67.2）。反汇编这条路是通的，不再是黑箱。
+* **但「2.5G 口 = 0x15900000」这个判断本身还没有被证实。** 厂商自己的端口表说
+  RTL8226 在 9132 的 port 4（假设 A），厂商的 outerphy 日志说「xmac0 is used」
+  （指向假设 B）。两条假设要干的活差一个量级：假设 A 是给已有 DSA 交换机加一个
+  口，假设 B 是从零写一个 MAC 驱动。
+* **判定只需要一次 CI**（67.5 的第 1 条和第 3 条各加一个 debugfs 动词），
+  成本远低于「按错的假设写一个 MAC 驱动」。
+* **而在这之前，owner 把 PC 的网线从 LAN1 挪到 LAN2 是最划算的一步**：它既能
+  把 1G 全链路（9132 → DSA → 协议栈）先跑通，又能让 2.5G 口空出来做上面那两个
+  判定测量——现在线插在 2.5G 口上，两条假设下的该口都是死的，量什么都是零。
+
+
+## 68. win69 实测：只写入口程序就会把板子锁死（2026-10-28 03:45–03:48）
+
+§66 留了一个测量窗口：把 run194 的镜像拿到板子上，**手工**把 9132 的入口程序
+写进 SPA mem 5（`w 5 0 0x0000a6a5`），再按 E15 的配方把 IDM 的中断屏蔽字改成
+厂商的 0x07ff0000，然后做一次 flood，比较前后的计数器。判据写在 §66.6。
+
+窗口的实际结果（`staging/ctl/win69.log` + `staging/ctl/serial.log`）：
+
+```
+03:45:36  U-Boot banner seen after 484 polls
+03:45:57  download: Bytes transferred = 12162040 (b993f8 hex)     # run194
+03:46:00  kernel banner seen
+03:46:54  shell up after 3 probe(s)
+03:46:55  1: the entry program run194 does not write, by hand
+          [   56.463786] 9132 spa: mem 5 addr 0 = 0x0000a6a5       # 写成功
+03:46:58  1b: break the deadlock - mask everything, then the vendor's value
+          [   60.005504] soc reg 0x19280040 (nppt +0x280040) = 0x07ffffff
+03:47:10  echo 'reg 0x280040' > $D
+03:47:14  2: before the flood      ← 命令发出去了，**板子没有回话**
+03:47:19  （ethtool 命令，同上）
+03:47:23  echo 'reg 0x280180' > $D  ← 仍然没有回话
+03:48:05  [  126.169942] rcu: INFO: rcu_sched self-detected stall on CPU.
+          [  126.17..]   0-...!: (6000 ticks this GP) idle=0f3c/1/0x4000000000000000
+                        softirq=2764/2764 fqs=0.
+          [  126.274590] CPU: 0 UID: 0 PID: 2548 Comm: ash Not tainted 6.18.38+
+          [  126.281550] Hardware name: Skyworth SK-D840N (DT).
+          [  126.293203] pc : handle_softirqs+0x98/0x22c.
+          [  126.297387] lr : __do_softirq+0x10/0x18.
+          [  126.286246] pstate: 40400005 (nZcv daif +PAN -UAO -TCO -DIT -SSBS
+                        BTYPE=--).
+```
+
+### 68.1 三条结论
+
+**一、锁死的机制被内核自己说出来了。** `pc = handle_softirqs`，
+`pstate` 里 **`daif` 置位（中断关闭）**，RCU 报 `softirq=2764/2764`——全部
+时间都耗在软中断里，而且**永远回不来**。这就是 §65 说的死锁：电平触发的 IDM
+中断源常驻 → CPU 一直在处理同一次中断 → 软中断处理函数一直不返回 → 协议栈
+拿不到 CPU。内核没死，**只是被饿死了**。
+
+**二、这证明 §65 的因果链，而且证明两个修复必须成对。** 本次用的是
+**run194**（没有入口程序修复，也没有中断屏蔽字修复），入口程序是手工写的。
+也就是说：**只要帧能流动 + IDM 的 16 个源被放开 → 板子立刻锁死**。
+run195（只修入口程序）在 3.42 秒挂死，是同一个现象的另一个入口。
+⇒ `56e86d2`（入口程序）单独上板必然挂死；只有 `56e86d2` + `ab1b122`
+（只放开驱动自己处理的 16 个源）合在一起，帧能流动而不会锁死。**run196 才是
+那个能用的包。**
+
+**三、风暴里的帧不是 PC 的。** 本次线插在 **2.5G 口**上，而这个口在 mainline
+里**没有任何驱动**——PC 的帧物理上不可能进入 SoC。可风暴照样来了。
+⇒ §66 的结论被独立验证：**IDM 队列里那些帧是板子自己发的广播**（flood 组把
+板子自己的广播又送回 CPU），不是 PC 的。这同时说明：**即使 run196 把风暴按住，
+只要线还在 2.5G 口上，PC 的流量依然一个字节都进不来**——因为那个口的 MAC
+没人驱动。
+
+### 68.2 测量手段上的一个坑（记下来免得再踩）
+
+win69 里 `run()` 发的那条命令（`for n in lan1 lan2 lan3 lan4 lan-cpu0 eth0
+br-lan; do printf ...`）**在板子上没有产生任何输出**，连 `W69BEGIN` 都没打出来。
+板子把整条命令原样回显了，但没执行出结果——原因是串口输入溢出：
+
+```
+[   27.429053] ttyAMA ttyAMA0: 1 input overrun(s).
+```
+
+一条 250 字符的长命令一次灌进去，tty 的输入 FIFO 装不下，丢字符 → 命令被截断
+→ 没有输出。**教训：给板子发命令要短，一次发一行；长循环要拆成多次短命令。**
+（这也可能就是「命令回显了但没结果」的另一个原因：`printf` 的格式串被吃掉一半
+时，ash 会报语法错，但错误信息同样被吞了。）
+
+另外，`run()` 里用 `sed -n '/W69BEGIN/,/W69END/p'` 抓输出，在板子不回话时
+只会静默失败——以后这类窗口要加超时和「没回话就记一条」的分支。
+
+### 68.3 下一个窗口该测什么
+
+按优先级：
+
+1. **run196 上板**（两修合一）：风暴应当消失，`ethtool -S eth0` 的
+   `rx_napi_[01]_polls` 应当在涨，队列能排空。判据：板子不再出 RCU stall，
+   shell 一直能回话。
+2. **owner 把网线从 LAN1（2.5G）挪到 LAN2（1G）**：这是让 1G 全链路第一次
+   真正端到端可测的唯一办法。挪过去之后 driver 会用 carrier 亮起来告诉我们
+   面板的 LAN2 对应哪个 DSA 口，顺带解决「面板标签 ↔ 内部 PHY 0x0a..0x0d」
+   那个悬案（§66.2）。
+3. **§67.5 的两个判定测量**（一次 CI 就能加）：给 driver 加两个 debugfs 动词——
+   一个读 9132 的 PPU 5 端口状态，一个映射 0x15900000 读那 41 个统计计数器。
+   这两个读数定下 2.5G 口到底是「9132 的 port 4」还是「SoC 自己的 RGMII MAC」。
+4. **PC 的帧到底进不进 SoC**：线挪到 LAN2 之后再做一遍 §68 那套
+   「flood 前后 IDM 0x280180 / XMAC0 / XMAC1 对比」。那时数字才有意义。
