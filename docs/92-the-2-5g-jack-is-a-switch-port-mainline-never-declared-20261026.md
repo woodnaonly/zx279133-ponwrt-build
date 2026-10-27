@@ -1766,3 +1766,40 @@ PL011 FIFO 截断（用变量把命令压短）；PC 的字节计数在这块双
 - **FAIL** ⇒ 这条假设划掉；LAN1 的阻塞留在 MAC 之后（PPU/队列），而且 §11/§29 那两轮已经把
   mem 5 的 SPA 形状试遍了，剩下的读法是拿 §30 的 `idm_rx_debug` 尺子在**通着的 U-Boot** 里逐帧读
   一次、再把同样的环状态在 mainline 里比对。
+
+### 45.4 13:40 窗口第一次判定：**作废，板子在 `ip link set eth0 down` 上挂死**
+
+run 193 的 flash 内核配 `flash-dtb-noswitch.bin` 在 13:40:26 起来了（`TB=77.07`，`uname` 6.18.38+，
+base `1b50aaf`）。两个控制组都成立：
+
+- `/proc/device-tree/soc/ethernet@19000000/switch/compatible` = `zte,zx279133-switcx`（补丁生效）；
+- DSA 驱动没有绑定：`ls /sys/class/net` = `br-lan eth0 lan-cpu0 lo`，没有 lan1..lan4，dmesg 里
+  没有 switch 的 probe 行；NP 侧照常跑完（`9132 PPU 5 enable word 00008015` 那条读回在）。
+
+然后 13:42:22 的 `ip link set eth0 down` 打出 `[114.951784] … eth0: Link is Down`，**之后板子整个
+控制台沉默**：13:42:24 起每一条发送都只有中继自己的 `=== >>> … sent:` 行、没有回显，13:43:39 单发
+一条 `echo PING-$((6*7))` 也无应答。也就是说挂死发生在 `ndo_stop` 里，而不是之前的参数写。
+
+**这一轮没有判决**：§45.3 的三条判据一条数都没取到，不能算 PASS 也不能算 FAIL。挂死本身是新症状，
+且指向一个真实的耦合：`zx279133_stop()` 在没有 DSA（LAN）用户时走 `last_user == true` 的整段
+共享数据通路拆除（`shared_idm_release` 等），而 DSA 驱动在时这条分支从来不在这条路上走。
+
+### 45.5 预登记 45.4-2：不 down/up，直接让参数改道（同一份 DTB）
+
+判据仍是 §45.3 那三条，只改准备动作，理由是代码本身：`zx279133_xmac_base()` 是**每次访问现读**的
+（mac.c:71，调用点 :102/:496/:530 都是 `eth->base + zx279133_xmac_base()`），所以把
+`zx279133_eth0_xmac` 写成 0 之后，驱动后续每一笔寄存器访问都改指 XMAC0，**不需要 down/up**。
+这还顺带把被测状态变干净了：eth0 从开机起就是 netifd 用 xmac=1 拉起来的，phylink 只碰过 XMAC1；
+参数改道后 XMAC0 的 MAC/PCS 仍是 U-Boot 留下的那份（即载过 11 MB 的那份），本轮测的正是这份状态。
+
+步骤：同一内核与 DTB → `echo 0 >$P/zx279133_eth0_xmac`、`echo 5 >$P/zx279133_tx_port`（eth0 不动）、
+`ip addr add 192.168.9.3/24 dev eth0` → `tools/lan1direct.sh` 的同一套激励与见证
+（脚本已加 `NOFLAP=1`）。
+
+两种结果的读法：
+
+- **PASS** ⇒ H 成立：这条 lane 的阻塞点就是 mainline 里有别的驱动在动 XMAC0（DSA 驱动的
+  XMAC0/XPCS0/uni_serdes 那一套），而不是 MAC/PHY/PPU 本身。下一个补丁处理 lane 归属。
+- **FAIL** ⇒ H 划掉，而且这次的否证范围比第一次宽：lane 处于 U-Boot 的载流状态、也没有第二个驱动
+  抢它，帧仍不过 ⇒ 阻塞在 mainline 自写的东西上（NP/PPU 表或 IDM 的分类），下一步回到 §44 末尾
+  那条「拿 U-Boot 的 idm_rx_debug 环逐帧对照」。
