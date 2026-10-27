@@ -66,38 +66,46 @@ static_assert(ARRAY_SIZE(zx279133_uni_10g_profile) ==
 	      ZX279133_UNI_SERDES_PROFILE_WORDS);
 
 /*
- * The 1000BASE-X / SGMII image for this lane, read out of the board rather than transcribed.
+ * The image this lane actually lives in, read out of the board rather than
+ * transcribed.
  *
- * Provenance: staging/ctl/serial.log 19:01:32, `md 0x16100000 0x31` - 49 words, taken in the same
- * power cycle in which U-Boot moved Bytes transferred = 11465012 through panel jack 4 at 1G
- * (`5 serdes option is 0` / `xmac0 is used` / `mac 1 phy status changed: 1000M full-duplex`). The
- * identical file read back at 18:57:5x, before that transfer, so it is the state the working lane
- * actually lives in, not something the download itself produced.
+ * Provenance: 2026-10-28 05:52, the board's own U-Boot, `md 0x16100000 0x31`
+ * - 49 words - taken right after `xmac_test xmac_work_mode_set 0 2`, which
+ * printed "mode_eth_1gbase_x_cfg" and "work in 1000BASE-X mode. ret = 0".
  *
- * This replaces a version recovered from np_133.ko's uni_mode_eth_1gbase_x_cfg() store list. That
- * array agrees with the board on only 21 of these 49 words, and its leading words
- * (0xe0000004 0x4fa840a3 0x013e860f 0x0210c073) are the *PON* SerDes image: the same four words
- * are what the board holds at 0x16000000 (pon_serdes), where the working XG-PON lane is configured
- * and scores 31/49 against that array. In other words the extracted "UNI 1G" profile was the wrong
- * block's file, and power_on() was overwriting a lane that worked with an image taken from the
- * lane that carries the PON. Nothing about `phy-mode = "sgmii"` could fix that.
+ * This file used to hold the other image: the 49 words U-Boot leaves behind
+ * when it has *not* configured this lane for base-X.  The two differ in
+ * exactly 28 of the 49 words, and 28 is the number this driver has been
+ * reporting since it started looking ("Uni SerDes 1G inherited: ... image
+ * differs in 28/49 word(s)").  The word at 0x16100054 - the mode register -
+ * reads 0x101 here and 0x01 in the other image, and the log has been saying
+ * "mode 0x101 already" all along: the board was holding the base-X image the
+ * whole time and the reference file in this driver was the wrong one.
  *
- * `userdes init_change 0 0` (U-Boot's own mode command, MODE_SGMII per its help) was run at the end
- * of the same round and produced a third file that matches neither array (14/49 against both), so
- * it is not the bring-up this board uses and is deliberately not the source here.
+ * What the two images mean: the base-X one has the mode word at 0x101 and
+ * the 1.25G lane state in the registers around it; the other one (0x01, and
+ * the words this file used to carry) is what the same bootloader leaves
+ * behind when the lane is left in SGMII.  U-Boot's net init prints
+ * "mode_eth_1gbase_x_cfg" on the way in, so the bootloader configures this
+ * lane for base-X before Linux ever sees it.
+ *
+ * np_133.ko's uni_mode_eth_10gbase_r_cfg() list (zx279133_uni_10g_profile
+ * below) matches this image on 33 of the 49 words, and the older 1G list
+ * matches it on 21 - the same 21 the comment above used to quote against
+ * the wrong file.
  */
 static const u32 zx279133_uni_1g_profile[] = {
-	0xc0000004, 0x50a840a7, 0x012e064f, 0x1fd0c093,
-	0x00000044, 0x00000000, 0x00f00000, 0x00230120,
-	0x00000000, 0x00020000, 0x0c633930, 0x00000007,
-	0x00000020, 0x00000000, 0x00000000, 0x00000000,
-	0x05a85400, 0x00000000, 0x8f000b6a, 0x60002200,
-	0x00000003, 0x00000001, 0x00000080, 0x00000000,
-	0x200554a8, 0x3df48091, 0x01000000, 0xc0003700,
-	0xa9004000, 0x10108000, 0x000000da, 0x800000c8,
+	0xe0001004, 0x4fa840a3, 0x013e860f, 0x0210c073,
+	0x00000048, 0x00000000, 0x00ff8000, 0x00238620,
+	0x80000000, 0x00050000, 0x0c633830, 0x00000007,
+	0x00000020, 0x00002000, 0x00000000, 0x00ff0000,
+	0xc5a85100, 0x00000000, 0x01045b2a, 0x66002200,
+	0x34000003, 0x00000101, 0x00000080, 0x00000000,
+	0x200554a8, 0x00648091, 0x01000000, 0x00003700,
+	0xa9004000, 0x10640002, 0x000000da, 0xf20000c8,
 	0x10371037, 0x01000200, 0x00020001, 0x10000000,
-	0x00004000, 0x0000e000, 0x000000ff, 0x33333300,
-	0x33333333, 0x00333333, 0x20000818, 0x0000201c,
+	0x0000001c, 0x8000c000, 0x000000ff, 0x55555500,
+	0x55555555, 0x00555555, 0x30000818, 0x40002000,
 	0x0000000c, 0x01000000, 0x00000080, 0x00010000,
 	0x00000000,
 };
@@ -195,20 +203,27 @@ static int zx279133_uni_serdes_power_on(struct phy *phy)
 	if (priv->submode == PHY_INTERFACE_MODE_SGMII) {
 		/* Inherit: no reset pulse, no image write, no rate registers.
 		 *
-		 * Measured twice, once per power cycle. Under U-Boot, the lane that moved
-		 * 11,465,012 bytes through jack 4 read back the same 49 words at 0x16100000
-		 * immediately before and immediately after that transfer - so the state that
-		 * carries traffic is this block's power-on state, which U-Boot does not rewrite.
-		 * Every mainline bring-up that does rewrite it has lost the lane: writing
-		 * zx279133_uni_10g_profile (which is the *PON* SerDes' image, 21/49 against the
-		 * board's own file) linked the PHY but returned not one frame (rx_packets 0,
-		 * xmac_tx_good_frames 12); writing the measured file after a reset pulse (run 51,
-		 * 20:14) did not even link the PHY: "Link detected: no", supported 10baseT only,
-		 * tx_packets 0, ARP FAILED, while U-Boot had carried 11 MB minutes earlier in the
-		 * same cycle. The bring-up that can be right is the one that leaves this block
-		 * alone - so the only thing done here is to make sure the enable bit is set, and
-		 * to report what the block says about itself. If a cold boot with nothing before
-		 * it needs more than that, these two values are what the next round will read.
+		 * The bootloader configures this lane for base-X on its way in -
+		 * its net init prints "mode_eth_1gbase_x_cfg" - and the 49 words
+		 * it leaves behind are the ones in zx279133_uni_1g_profile[].
+		 * So the image this driver must not touch is already the right
+		 * one, and the count below has to come out as 0/49.  It used to
+		 * come out as 28/49, because the reference file in this driver
+		 * held the other image (the one U-Boot leaves behind when it has
+		 * not configured the lane), and 28 is exactly the difference
+		 * between the two.
+		 *
+		 * Every mainline bring-up that does rewrite it has lost the lane:
+		 * writing zx279133_uni_10g_profile (which is the *PON* SerDes'
+		 * image, 21/49 against this one) linked the PHY but returned not
+		 * one frame (rx_packets 0, xmac_tx_good_frames 12); writing the
+		 * measured file after a reset pulse (run 51, 20:14) did not even
+		 * link the PHY: "Link detected: no", supported 10baseT only,
+		 * tx_packets 0, ARP FAILED, while U-Boot had carried 11 MB
+		 * minutes earlier in the same cycle.  The bring-up that can be
+		 * right is the one that leaves this block alone - so the only
+		 * thing done here is to make sure the enable bit is set, and
+		 * to report what the block says about itself.
 		 */
 		status = readl(priv->serdes + ZX279133_UNI_SERDES_MODE_CTRL);
 		how = status & ZX279133_UNI_SERDES_ENABLE ? "already" : "set";
