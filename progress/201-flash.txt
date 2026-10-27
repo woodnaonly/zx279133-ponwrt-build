@@ -1,29 +1,65 @@
-=== 21:28:49 beat 1 log=0 frozen=0 wrote=unknown ===
+=== 21:30:51 beat 2 log=2309 frozen=0 wrote=unknown ===
 --- signals: quiet=0s writes=1800s newproc=900s hard=5400s cmp=-cnewer proc=unknowns ---
 --- the last 30 lines of the build's own log ---
+ make[3] -C tools/libdeflate compile
+ make[3] -C tools/flock compile
+ make[3] -C tools/zstd compile
+ make[3] -C tools/sed compile
+ make[3] -C tools/patch compile
+ make[3] -C tools/tar compile
+ make[3] -C tools/m4 compile
+ make[3] -C tools/autoconf-archive compile
+ make[3] -C tools/ninja compile
+ make[3] -C tools/xz compile
+ make[3] -C tools/gnulib compile
+ make[3] -C tools/expat compile
+ make[3] -C tools/zlib compile
+ make[3] -C tools/cpio compile
+ make[3] -C tools/lzma compile
+ make[3] -C tools/make-ext4fs compile
+ make[3] -C tools/mtools compile
+ make[3] -C tools/patch-image compile
+ make[3] -C tools/squashfs4 compile
+ make[3] -C tools/sstrip compile
+ make[3] -C tools/zip compile
+ make[3] -C tools/autoconf compile
+ make[3] -C tools/meson compile
+ make[3] -C tools/pkgconf compile
+ make[3] -C tools/lz4 compile
+ make[3] -C tools/missing-macros compile
+ make[3] -C tools/automake compile
+ make[3] -C tools/libressl compile
+ make[3] -C tools/libtool compile
+ make[3] -C tools/dosfstools compile
 --- the build's own processes ---
-    446 Ss   /usr/bin/python3 /usr/bin/networkd-dispatcher --run-startup-triggers
-    446 Ss   /usr/bin/python3 -u /usr/sbin/waagent -daemon
-    445 Sl   /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
-      0 S    timeout --kill-after=60s 280m bash -c echo $$ > ../compile-make.pid; exec make -j"$(nproc)"
-      0 S    tee ../compile-parallel.log
-      0 S    make -j4
-      0 S    /bin/sh -c OPENWRT_BUILD= QUIET=0 make V=s -r -s prereq
-      0 S    make V=s -r -s prereq
+    567 Ss   /usr/bin/python3 /usr/bin/networkd-dispatcher --run-startup-triggers
+    567 Ss   /usr/bin/python3 -u /usr/sbin/waagent -daemon
+    566 Sl   /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
+    121 S    timeout --kill-after=60s 280m bash -c echo $$ > ../compile-make.pid; exec make -j"$(nproc)"
+    121 S    tee ../compile-parallel.log
+    121 S    make -j4
+    116 S    /bin/sh -c _limit=`ulimit -n`; [ "$_limit" = "unlimited" -o "$_limit" -ge 1024 ] || ulimit -n 1024; umask 022; cmd() { >/dev/null 2>&1 make -s "$@" < /dev/null || { echo "make $*: build failed. Please re-run make with -j1 V=s or V=sc for a higher verbosity level to see what's going on"; false; } } 8>&1 9>&2; cmd -r world 
+    116 S    make -s -r world
+    115 S    make --no-print-directory tools/compile
+     30 S    bash -c /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/time.pl "time: tools/libressl/compile" make  -r -C tools/libressl BUILD_SUBDIR="tools/libressl" BUILD_VARIANT="" ALL_VARIANTS="" compile  || ?(?{ printf "%s\n" "    ERROR: tools/libressl failed to build." >&8 || printf "%s\n" "    ERROR: tools/libressl failed to build."; } 2>/dev/null;   exit 1;) 
+     30 S    perl /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/time.pl time: tools/libressl/compile make -r -C tools/libressl BUILD_SUBDIR=tools/libressl BUILD_VARIANT= ALL_VARIANTS= compile
+     30 S    make -r -C tools/libressl BUILD_SUBDIR=tools/libressl BUILD_VARIANT= ALL_VARIANTS= compile
+     26 S    bash -c /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/time.pl "time: tools/libtool/compile" make  -r -C tools/libtool BUILD_SUBDIR="tools/libtool" BUILD_VARIANT="" ALL_VARIANTS="" compile  || ?(?{ printf "%s\n" "    ERROR: tools/libtool failed to build." >&8 || printf "%s\n" "    ERROR: tools/libtool failed to build."; } 2>/dev/null;   exit 1;) 
+     26 S    perl /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/time.pl time: tools/libtool/compile make -r -C tools/libtool BUILD_SUBDIR=tools/libtool BUILD_VARIANT= ALL_VARIANTS= compile
 --- the oldest processes that are not kernel threads ---
-    453 Ss   /sbin/init
-    452 S<s  /lib/systemd/systemd-journald
-    451 SLsl /sbin/multipathd -d -s
-    451 Ss   /lib/systemd/systemd-udevd
-    451 Ss   /usr/lib/linux-tools/6.8.0-1070-azure/hv_kvp_daemon -n
-    451 Ss   /usr/sbin/haveged --Foreground --verbose=1
-    450 Ss   /lib/systemd/systemd-networkd
-    450 Ss   /lib/systemd/systemd-resolved
+    574 Ss   /sbin/init
+    573 S<s  /lib/systemd/systemd-journald
+    572 SLsl /sbin/multipathd -d -s
+    572 Ss   /lib/systemd/systemd-udevd
+    572 Ss   /usr/lib/linux-tools/6.8.0-1070-azure/hv_kvp_daemon -n
+    572 Ss   /usr/sbin/haveged --Foreground --verbose=1
+    571 Ss   /lib/systemd/systemd-networkd
+    571 Ss   /lib/systemd/systemd-resolved
 --- what is running under the build ---
 --- the directories the build touched lately ---
 host
 target-aarch64_cortex-a53_musl
 --- how big the root filesystem is getting ---
 --- memory and load ---
-Mem:           15988         660        4139          49       11188       14931
- 05:28:49 up 7 min,  0 users,  load average: 2.91, 1.16, 0.47
+Mem:           15988         804        3256          49       11927       14788
+ 05:30:51 up 9 min,  0 users,  load average: 4.14, 2.12, 0.90
