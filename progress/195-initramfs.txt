@@ -1,18 +1,6 @@
-=== 17:59:52 beat 3 log=2443 frozen=0 wrote=yes ===
---- signals: quiet=0s writes=1800s newproc=900s hard=5400s cmp=-cnewer proc=2s ---
+=== 18:05:57 beat 6 log=2847 frozen=0 wrote=yes ===
+--- signals: quiet=0s writes=1800s newproc=900s hard=5400s cmp=-cnewer proc=0s ---
 --- the last 30 lines of the build's own log ---
- make[3] -C tools/patch compile
- make[3] -C tools/tar compile
- make[3] -C tools/m4 compile
- make[3] -C tools/autoconf-archive compile
- make[3] -C tools/ninja compile
- make[3] -C tools/xz compile
- make[3] -C tools/gnulib compile
- make[3] -C tools/expat compile
- make[3] -C tools/zlib compile
- make[3] -C tools/cpio compile
- make[3] -C tools/lzma compile
- make[3] -C tools/make-ext4fs compile
  make[3] -C tools/mtools compile
  make[3] -C tools/patch-image compile
  make[3] -C tools/squashfs4 compile
@@ -31,37 +19,47 @@
  make[3] -C tools/flex compile
  make[3] -C tools/fakeroot compile
  make[3] -C tools/gengetopt compile
+ make[3] -C tools/mklibs compile
+ make[3] -C tools/patchelf compile
+ make[3] -C tools/gmp compile
+ make[3] -C tools/bison compile
+ make[3] -C tools/bc compile
+ make[3] -C tools/util-linux compile
+ make[3] -C tools/elfutils compile
+ make[3] -C tools/findutils compile
+ make[3] -C tools/mkimage compile
+ make[3] -C tools/mtd-utils compile
+ make[3] -C tools/mpfr compile
+ make[3] -C tools/e2fsprogs compile
 --- the build's own processes ---
-    987 Ss   /usr/bin/python3 /usr/bin/networkd-dispatcher --run-startup-triggers
-    987 Ss   /usr/bin/python3 -u /usr/sbin/waagent -daemon
-    986 Sl   /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
-    247 S    timeout --kill-after=60s 280m bash -c echo $$ > ../compile-make.pid; exec make -j"$(nproc)"
-    247 S    tee ../compile-parallel.log
-    247 S    make -j4
-    238 S    /bin/sh -c _limit=`ulimit -n`; [ "$_limit" = "unlimited" -o "$_limit" -ge 1024 ] || ulimit -n 1024; umask 022; cmd() { >/dev/null 2>&1 make -s "$@" < /dev/null || { echo "make $*: build failed. Please re-run make with -j1 V=s or V=sc for a higher verbosity level to see what's going on"; false; } } 8>&1 9>&2; cmd -r world 
-    238 S    make -s -r world
-    236 S    make --no-print-directory tools/compile
-     60 S    bash -c /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/time.pl "time: tools/cmake/compile" make  -r -C tools/cmake BUILD_SUBDIR="tools/cmake" BUILD_VARIANT="" ALL_VARIANTS="" compile  || ?(?{ printf "%s\n" "    ERROR: tools/cmake failed to build." >&8 || printf "%s\n" "    ERROR: tools/cmake failed to build."; } 2>/dev/null;   exit 1;) 
-     60 S    perl /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/time.pl time: tools/cmake/compile make -r -C tools/cmake BUILD_SUBDIR=tools/cmake BUILD_VARIANT= ALL_VARIANTS= compile
-     60 S    make -r -C tools/cmake BUILD_SUBDIR=tools/cmake BUILD_VARIANT= ALL_VARIANTS= compile
-     59 S    bash -c (cd /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/build_dir/host/cmake-4.2.0/; if [ -x configure ]; then cp -fpR /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/config.{guess,sub} /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/build_dir/host/cmake-4.2.0// && CC="/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/host/bin/gcc" CFLAGS="-O2 -I/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/host/include" CXX="/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/host/bin/g++" CPPFLAGS="-I/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/host/include" CXXFLAGS="-O2 -I/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/host/include" LDFLAGS="-L/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/host/lib" CONFIG_SHELL="/usr/bin/env bash" CC="/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/host/bin/gcc" CXX="/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/host/bin/g++" MAKEFLAGS="--jobserver-auth=3,4 " CXXFLAGS="-O2 -I/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/host/include" MAKE="/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/host/bin/ninja"  bash ./configure --no-debugger --parallel="--jobserver-auth=3,4" --prefix="/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/host" --system-expat --system-liblzma --system-zlib --system-zstd --generator=Ninja ; fi )
-     59 S    bash -c (cd /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/build_dir/host/cmake-4.2.0/; if [ -x configure ]; then cp -fpR /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/config.{guess,sub} /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/build_dir/host/cmake-4.2.0// && CC="/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/host/bin/gcc" CFLAGS="-O2 -I/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/host/include" CXX="/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/host/bin/g++" CPPFLAGS="-I/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/host/include" CXXFLAGS="-O2 -I/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/host/include" LDFLAGS="-L/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/host/lib" CONFIG_SHELL="/usr/bin/env bash" CC="/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/host/bin/gcc" CXX="/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/host/bin/g++" MAKEFLAGS="--jobserver-auth=3,4 " CXXFLAGS="-O2 -I/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/host/include" MAKE="/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/host/bin/ninja"  bash ./configure --no-debugger --parallel="--jobserver-auth=3,4" --prefix="/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/host" --system-expat --system-liblzma --system-zlib --system-zstd --generator=Ninja ; fi )
+   1352 Ss   /usr/bin/python3 /usr/bin/networkd-dispatcher --run-startup-triggers
+   1352 Ss   /usr/bin/python3 -u /usr/sbin/waagent -daemon
+   1351 Sl   /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
+    612 S    timeout --kill-after=60s 280m bash -c echo $$ > ../compile-make.pid; exec make -j"$(nproc)"
+    612 S    tee ../compile-parallel.log
+    612 S    make -j4
+    603 S    /bin/sh -c _limit=`ulimit -n`; [ "$_limit" = "unlimited" -o "$_limit" -ge 1024 ] || ulimit -n 1024; umask 022; cmd() { >/dev/null 2>&1 make -s "$@" < /dev/null || { echo "make $*: build failed. Please re-run make with -j1 V=s or V=sc for a higher verbosity level to see what's going on"; false; } } 8>&1 9>&2; cmd -r world 
+    603 S    make -s -r world
+    601 S    make --no-print-directory tools/compile
+    425 S    bash -c /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/time.pl "time: tools/cmake/compile" make  -r -C tools/cmake BUILD_SUBDIR="tools/cmake" BUILD_VARIANT="" ALL_VARIANTS="" compile  || ?(?{ printf "%s\n" "    ERROR: tools/cmake failed to build." >&8 || printf "%s\n" "    ERROR: tools/cmake failed to build."; } 2>/dev/null;   exit 1;) 
+    425 S    perl /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/time.pl time: tools/cmake/compile make -r -C tools/cmake BUILD_SUBDIR=tools/cmake BUILD_VARIANT= ALL_VARIANTS= compile
+    425 S    make -r -C tools/cmake BUILD_SUBDIR=tools/cmake BUILD_VARIANT= ALL_VARIANTS= compile
+    182 S    bash -c /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/time.pl "time: tools/elfutils/compile" make  -r -C tools/elfutils BUILD_SUBDIR="tools/elfutils" BUILD_VARIANT="" ALL_VARIANTS="" compile  || ?(?{ printf "%s\n" "    ERROR: tools/elfutils failed to build." >&8 || printf "%s\n" "    ERROR: tools/elfutils failed to build."; } 2>/dev/null;   exit 1;) 
+    182 S    perl /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/time.pl time: tools/elfutils/compile make -r -C tools/elfutils BUILD_SUBDIR=tools/elfutils BUILD_VARIANT= ALL_VARIANTS= compile
 --- the oldest processes that are not kernel threads ---
-    995 Ss   /sbin/init
-    993 S<s  /lib/systemd/systemd-journald
-    993 SLsl /sbin/multipathd -d -s
-    993 Ss   /lib/systemd/systemd-udevd
-    993 Ss   /usr/lib/linux-tools/6.8.0-1064-azure/hv_kvp_daemon -n
-    992 Ss   /usr/sbin/haveged --Foreground --verbose=1
-    991 Ss   /lib/systemd/systemd-networkd
-    991 Ss   /lib/systemd/systemd-resolved
+   1360 Ss   /sbin/init
+   1358 S<s  /lib/systemd/systemd-journald
+   1358 SLsl /sbin/multipathd -d -s
+   1358 Ss   /lib/systemd/systemd-udevd
+   1358 Ss   /usr/lib/linux-tools/6.8.0-1064-azure/hv_kvp_daemon -n
+   1357 Ss   /usr/sbin/haveged --Foreground --verbose=1
+   1356 Ss   /lib/systemd/systemd-networkd
+   1356 Ss   /lib/systemd/systemd-resolved
 --- what is running under the build ---
-      3 S    bash -c (cd /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/build_dir/host/fakeroot-1.37.1.2/; if [ -x configure ]; then cp -fpR /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/config.{guess,sub} /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/build_dir/host/fakeroot-1.37.1.2// && CC="/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/host/bin/gcc" CFLAGS="-O2 -I/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/host/include" CXX="/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/host/bin/g++" CPPFLAGS="-I/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/host/include" CXXFLAGS="-O2 -I/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/host/include" LDFLAGS="-L/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/host/lib" CONFIG_SHELL="/usr/bin/env bash" ac_cv_header_sys_capability_h=no ac_cv_func_capset=no CPP="/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/host/bin/gcc -E"  bash ./configure --target=x86_64-pc-linux-gnu --host=x86_64-pc-linux-gnu --build=x86_64-pc-linux-gnu --disable-dependency-tracking --program-prefix="" --program-suffix="" --prefix=/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/host --exec-prefix=/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/host --sysconfdir=/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/host/etc --localstatedir=/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/host/var --sbindir=/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/host/bin --with-ipc=tcp ; fi )
-      3 S    bash -c (cd /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/build_dir/host/fakeroot-1.37.1.2/; if [ -x configure ]; then cp -fpR /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/config.{guess,sub} /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/build_dir/host/fakeroot-1.37.1.2// && CC="/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/host/bin/gcc" CFLAGS="-O2 -I/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/host/include" CXX="/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/host/bin/g++" CPPFLAGS="-I/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/host/include" CXXFLAGS="-O2 -I/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/host/include" LDFLAGS="-L/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/host/lib" CONFIG_SHELL="/usr/bin/env bash" ac_cv_header_sys_capability_h=no ac_cv_func_capset=no CPP="/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/host/bin/gcc -E"  bash ./configure --target=x86_64-pc-linux-gnu --host=x86_64-pc-linux-gnu --build=x86_64-pc-linux-gnu --disable-dependency-tracking --program-prefix="" --program-suffix="" --prefix=/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/host --exec-prefix=/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/host --sysconfdir=/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/host/etc --localstatedir=/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/host/var --sbindir=/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/host/bin --with-ipc=tcp ; fi )
 --- the directories the build touched lately ---
 host
 target-aarch64_cortex-a53_musl
 --- how big the root filesystem is getting ---
 --- memory and load ---
-Mem:           15987        2056        1885          51       12045       13532
- 01:59:52 up 16 min,  0 users,  load average: 8.37, 4.06, 1.82
+Mem:           15987        2866         169          52       12951       12722
+ 02:05:57 up 22 min,  0 users,  load average: 10.80, 8.31, 4.49
