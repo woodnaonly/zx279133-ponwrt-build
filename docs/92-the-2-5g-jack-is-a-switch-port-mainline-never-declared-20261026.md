@@ -1803,3 +1803,95 @@ base `1b50aaf`）。两个控制组都成立：
 - **FAIL** ⇒ H 划掉，而且这次的否证范围比第一次宽：lane 处于 U-Boot 的载流状态、也没有第二个驱动
   抢它，帧仍不过 ⇒ 阻塞在 mainline 自写的东西上（NP/PPU 表或 IDM 的分类），下一步回到 §44 末尾
   那条「拿 U-Boot 的 idm_rx_debug 环逐帧对照」。
+
+## 46. 14:07–14:12：45.5 的判据落地——**没有 switch 驱动、XMAC0 也被手工使能，帧到 MAC 就断**；SOPC mac 0 的 ready 字浮出水面
+
+**45.5 的读法先按预登记的第三种情形更正**：这轮不是"帧没进 XMAC0"，而是**进了、也被计了数、
+但不出线**。所以它不是 H 的干净否证，而是把"XMAC0 到底缺什么"问得更准了一格。
+
+### 46.1 45.5 那轮的原样结果（14:02–14:03，`staging/ctl/lan1direct-*.txt`）
+
+同一份 `flash-dtb-noswitch.bin` 起 run 193 内核，`XMAC=0 NOFLAP=1 sh tools/lan1direct.sh`：
+
+```
+board eth0 rx_packets   0 -> 0        PC ping replies  0/6
+board eth0 tx_packets   29            PC arp entry     none
+board ping to PC        4 sent, 0 received
+```
+
+`dmesg` 里 `rx frame` 一条没有（`rxb` 已 arm）。也就是说：MAC 窗口里没有帧、IDM 环里也没有帧，
+两个方向都停在同一处。
+
+### 46.2 手工使能 XMAC0 之后：**`xmac_tx_frames` 第一次在没有 switch 驱动的启动里开始计数**
+
+45.5 只让参数改道，XMAC0 的 `TX_CTRL` 还是 U-Boot 留下的 `0x60010000`（bit0=0）。补上两笔
+（debugfs 的 `regw`，nppt 相对）：
+
+```
+echo regw 0x140000 0x60010001 >$D     -> r 0x140000 = 0x60010001
+echo regw 0x140010 0x3e800287 >$D     -> r 0x140010 = 0x3e800287
+```
+
+之后：
+
+| 时刻 | 动作 | `xmac_tx_frames` / `xmac_tx_good_frames` | `nppt_xmac_err` |
+|---|---|---|---|
+| 14:07:48 | 写入两字之前 | 5554 / — | 0 |
+| 14:08:10 | 3 次 `ping -Ieth0` 之后 | **5567** | 0 |
+| 14:08:40 | 停 30 s | 5567 | 0 |
+| 14:08:53 | 再 3 次 ping | **5570** | 0 |
+
+**帧与 ping 1:1 进 MAC**（含 ARP 与重传），错误计数为 0。这是这条 lane 在 Linux 下第一次被
+证明"帧到了 MAC"。而 PC 侧同轮 6 包发出去、收 0、无 ARP；板上 `rx_packets` 仍 0、`rxb` 无打印。
+**⇒ 故障点已经收窄到 XMAC0 的 MAC 发送口与 SOPC/线之间，不在 netdev、不在 IDM 环、不在 IDM 的
+`out_port` 分类上**——那三处今天都动过而且都是活的。
+
+### 46.3 一条更正：`nppt+0x90 = 0x2c03` **不是**"死链"，它就是通流开机的读数
+
+§38/§39 已经量过：**ping 证明通流的那次 U-Boot**（02:44）`nppt+0x84 = 1`、`nppt+0x90 = 0x2c03`，
+和 mainline 的读数同态；`0x380b` 是另一种启动状态（switch 驱动看到它时会走"继承"分支）。
+因此本人在 45.5 之前的"0x2c03=死链"印象是错的，记在这里免得下次又拿它当判据。
+本轮这个无 switch 的启动里读到 `+0x84 = 1`、`+0x90 = 0x2c03`、`+0x94 = 0x280b`，即**链路/PCS 状态
+和通流开机一致**——所以 46.2 的"到 MAC 不出线"不是 lane 状态字能解释的。
+
+### 46.4 新线索：switch 驱动自己在 12:58 那次通流尝试里就报了 **`SOPC mac 0 never became ready`**
+
+把 §44 那次启动的 dmesg 原行挖出来（`staging/ctl/serial.log` 2202057–2202105 行）：
+
+```
+[    1.600532] ... lane pre-serdes: XPCS0 status=0x380b link=up XMAC link=0x0000
+[    1.600561] ... lane pre-serdes: SOPC mac 0 ready=0x00000000 send=0x00000001
+[    1.612047] ... SOPC mac 0 never became ready (0x00000000); not publishing it
+[    1.623121] ... SOPC mac 1 never became ready (0x00000000); not publishing it
+[    1.651563] ... lane after: XMAC0 tx=0x60010001 rx=0x3e8000c7 frame=0x80000000 ...
+[    1.651578] ... lane after: SOPC mac 0 ready=0x00000000 send=0x00000001
+```
+
+而驱动自己在那段代码上写着判词（switch.c:975-987 的注释与 1009 行）：
+
+> A MAC whose send-enable is never published does not move a frame, whatever else is correct.
+
+现场（14:11，无 switch 的这一个启动，debugfs `reg`）：
+
+```
+r 0x342a4 = 0x00000000     <- SOPC ready mac 0
+r 0x342a8 = 0x00000001     <- SOPC ready mac 1
+r 0x342c0 = 0x00000001     <- SOPC send  mac 0
+r 0x342c4 = 0x00000001     <- SOPC send  mac 1
+r 0x000084 = 0x00000001
+```
+
+**两个启动、两种驱动在场状态，mac 0 的 ready 字都是 0**；mac 1 是 1。LAN1 的 MAC 恰好是 XMAC0。
+这条比"lane/PCS 状态"更贴 46.2 的断点：帧进了 MAC、MAC 配好了、send 字也写着 1，但 ready 从没起来。
+
+### 46.5 预登记：下一次 U-Boot 窗口（14:20 断电后的开机）读同一组字，判据先写死
+
+`tools/ubattr.sh` 已在本轮之后 arm（`UB_MD` 含 `0x190342a4 0x190342a8 0x190342c0 0x190342c4
+0x19034294`，另带 `0x84/0x90/0x19140000/0x19140010`），顺序照旧：**先 `ping 192.168.9.25` 证明
+通流，再读**，最后 `run bootcmd` 交还。线仍在 LAN1。
+
+- **若通流开机里 `0x342a4` 的 bit0 = 1** ⇒ ready 字是真正的门：mainline/U-Boot 交接后没有人再把它
+  拉起来（或只有 U-Boot 的网络会话会拉），下一步找"谁写 ready"，用 debugfs 在 Linux 里补这一笔再测。
+- **若通流开机里 `0x342a4` 也是 0** ⇒ ready 字不是门（驱动那句注释对这块板不成立），下一个嫌疑是
+  XMAC0 与 SOPC 的通道绑定（`nppt+0x034100 = 0x00030013` 这一类字），以及 46.2 之后 MAC 发出但
+  SOPC 不接的那些帧到底进了哪个队列——用 §30 的 `idm_tx_debug` 在同一轮里对照。
