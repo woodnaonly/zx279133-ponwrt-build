@@ -3389,3 +3389,246 @@ B = 参数改回 XMAC1（驱动的默认）。
 - **没有改驱动代码**：七个实验全落空，说明改动点不在那七个开关上；
   按「一个包只回答一个问题」的规矩，先把 E4 的读数与 SPA 口属性的读数拿到再写代码。
 - **没有 push**：`docs/**` 与 `tools/**` 都在 CI 触发路径里，push 一次白占 80 分钟构建机。
+
+### 60. 这一轮：把「参数怎么送进内核」和「MAC 归属是不是那把钥匙」一起问完
+
+这一轮从 00:52 做到 01:16，两个问题都有了答案，而且是两个否定式的答案。
+
+- **E5（开机就带参数）没成立，但不是因为方法错，是因为这个内核的命令行根本不来自 DTB，也不来自 env。**
+  CI 把 `CONFIG_CMDLINE` 钉死了一串，内核命令行是编进内核的常量，DTB 和 env 两条路都被它盖住。
+- **E6（运行期改参数 + 链路 bounce）也没成立，于是「eth0 的 MAC 窗口该是 XMAC0」这条线整条被证伪。**
+  参数改成 0、链路 bounce、switch 驱动在与不在，四种组合下结果完全一样：帧进 XMAC0，一个字节也不进 fabric。
+
+#### 60.1 第一个要推翻的前提：内核的命令行不来自 U-Boot 的环境，也不来自 DTB
+
+win61 原本打算在 U-Boot 提示符下 `setenv bootargs "… zx279133.eth0_xmac=0"`，然后 `bootm`。
+这条路在**离线**阶段先被否掉了一半，在**上板**之后被彻底否掉。
+
+**离线（拿证据）**：
+
+1. **run194 的 FIT 没有 bootargs 属性。**
+   `python tools/fitdump.py staging/trial/sk-d840n-initramfs-run194.itb` 打出来的
+   `/configurations/config-1` 只有三个属性：`description`、`kernel = 'kernel-1'`、`fdt = 'fdt-1'`。
+2. **内核实际拿到的命令行里没有环境的任何东西。** 环境里的 bootargs 是
+   `console=ttyAMA0,115200n8 root=/dev/mtdblock5 rootfstype=jffs2 printk.time=1 U-Boot 2.0.0 20250417161359 0x200000 0x0 0x83 0x83 UpModeInfo=0x00000040 regioncode=0x0`
+   —— 里面的 `printk.time=1`、U-Boot 版本串、regioncode，一个都没有进内核。
+3. **这块 U-Boot 的源码就是这么做的。** `uboot-an758x/boot/fdt_support.c:331` 的 `fdt_chosen()`
+   用 `board_fdt_chosen_bootargs()`（弱符号默认 `env_get("bootargs")`）**覆盖** FDT 的 `/chosen/bootargs`。
+
+**上板（拿结论）**：E5 把补丁打进 FIT 的内嵌 FDT，内核打印的命令行**一个字都没变**，
+还是 `console=ttyAMA0,115200n8 root=/dev/mtdblock5 rootfstype=jffs2 ro rootwait clk_ignore_unused pd_ignore_unused`。
+而 `dmesg` 里**没有** `Unknown kernel command line parameters` ⇒ 内核连抱怨都没有，
+因为它根本没看到我们加的那个参数。
+
+⇒ **真正的原因是 CI 把 `CONFIG_CMDLINE` 钉死了**：
+
+```
+.github/workflows/build-sk-d840n.yml:1116
+  grep -qx 'CONFIG_CMDLINE="console=ttyAMA0,115200n8 root=/dev/mtdblock5 rootfstype=jffs2 ro rootwait clk_ignore_unused pd_ignore_unused"' "$KC" || {
+    echo "CONFIG_CMDLINE is not the pinned cmdline" >&2
+    ... exit 1; }
+```
+
+arm64 上 `CONFIG_CMDLINE` 无条件覆盖 FDT 的 `/chosen/bootargs`，
+**整个命令行都被替换掉，包括里面的模块参数**。
+⇒ 对这个内核来说：`setenv bootargs` 是空操作，DTB 的 bootargs 也是空操作，
+**能给模块传参的只剩两条路：改 CI pin 的那串 `CONFIG_CMDLINE`，或者改驱动的默认值。**
+
+⚠️ **这里有一个必须说清楚的混淆**，否则下一个人还会走同一条弯路：
+`tools/bootflashram.sh` 的注释记着「the kernel printed exactly the DTB's /chosen/bootargs
+(80 characters) plus this U-Boot's own " clk_ignore_unused pd_ignore_unused", and nothing else
+— so this U-Boot builds the kernel's command line from the DTB, not from the env」。
+那一次是**厂商 4.19 内核**（flash 引导），它没有我们 CI 的 `CONFIG_CMDLINE`，
+那 38 个字节确实是 U-Boot 加的。而 run194 是**我们自己编的 6.18.38**，
+同样的 38 个字节来自 `CONFIG_CMDLINE`。两条路径、两个内核、同一串字面量 ——
+看起来一样，机制完全不同。
+
+#### 60.2 第二个要推翻的前提：参数名不是 `zx279133.eth0_xmac`
+
+内核命令行里的模块参数是 `<模块名>.<参数名>`，两部分都要精确：
+
+- 参数名来自 `module_param(zx279133_eth0_xmac, byte, 0644)`（`zx279133-mac.c:34`）⇒ **`zx279133_eth0_xmac`**；
+  sysfs 路径 `/sys/module/zx279133/parameters/zx279133_eth0_xmac` 与之一致（板上实测，
+  该目录里共有四个参数：`rx_hash`、`zx279133_eth0_xmac`、`rx_hash_ipv6`、`zx279133_tx_port`）。
+- 模块名来自 sysfs 路径 ⇒ **`zx279133`**。
+
+所以正确的写法是 `zx279133.zx279133_eth0_xmac=0`。
+`zx279133-mac.c` 原注释写的 `zx279133.eth0_xmac=0` **这个名字不存在**；
+`tools/bootflashram.sh` 试过的裸名 `zx279133_eth0_xmac=0` 也有实测结论：
+「the two parameters stayed at their defaults」—— 裸名同样不生效。
+（`zx279133-mac.c` 的注释已按此更正。）
+
+#### 60.3 于是有了 `tools/itbbootargs.py`：本机离线给 .itb 打补丁
+
+本机没有 dtc / mkimage / dumpimage，改 DTB 只能靠 CI（80 分钟一轮）。但**改一个字符串**不需要它们：
+
+- 和 `tools/dtbdisable.py` 同一个思路：**等长替换**。新命令行比旧的短，尾部用 NUL 补齐，
+  于是 FDT 里每个属性的 offset/length、每个节点的 size 全都不变，一个字节都不用搬。
+- 位置：`.itb` 里 `/images/fdt-1` 的 `data` 属性（内联在 FIT 的结构块里）→ 里面
+  `/chosen` 的 `bootargs` 属性值。工具自己走 FDT 结构解析定位，不靠固定偏移。
+- **FIT 的哈希必须一起改**，否则 U-Boot 会拒绝启动（"Bad Data Hash"），
+  而那看起来像启动失败、不像一次补丁。`/images/fdt-1/hash-1` 是 crc32、`hash-2` 是 sha1，
+  两个值都按 U-Boot 的算法重算并写回（4 字节和 20 字节，同样是原位写）。
+- 写完再从**文件**读回来校验：bootargs 读回来是想要的字符串、文件大小没变、只有该变的字节变了。
+
+```
+$ python tools/itbbootargs.py staging/trial/sk-d840n-initramfs-run194.itb \
+      staging/trial/win62.itb \
+      "console=ttyAMA0,115200n8 rootwait zx279133.zx279133_eth0_xmac=0"
+old bootargs (73 B): console=ttyAMA0,115200n8 root=/dev/mtdblock5 rootfstype=jffs2 ro rootwait
+new bootargs (63 B): console=ttyAMA0,115200n8 rootwait zx279133.zx279133_eth0_xmac=0
+patched 74 bytes at 12158504, 2 hash node(s) recomputed
+written staging/trial/win62.itb: 12162040 bytes, 68 bytes differ from the source (bootargs + hashes)
+```
+
+（73 字节的旧值里，`root=/dev/mtdblock5 rootfstype=jffs2 ro` 让位给新参数 ——
+initramfs 内核不需要挂 rootfs，DTB 里那三项是给 flash 引导用的。）
+
+独立复核（重算哈希、与存储值比对）：
+
+```
+/images/kernel-1: 12147547 bytes
+   /hash-1 (crc32): OK  stored=fee34118 computed=fee34118
+   /hash-2 (sha1): OK  stored=11015914… computed=11015914…
+/images/fdt-1: 13095 bytes
+   /hash-1 (crc32): OK  stored=34d80b56 computed=34d80b56
+   /hash-2 (sha1): OK  stored=a88092c8… computed=a88092c8…
+/chosen/bootargs = 'console=ttyAMA0,115200n8 rootwait zx279133.zx279133_eth0_xmac=0'
+VERDICT: the FIT's hashes are consistent
+```
+
+⇒ 工具本身是对的，**但对这个内核没用**（见 60.1）。它留着（对没有 `CONFIG_CMDLINE` 的内核有用），
+但 LAN1 的问题不在这儿。
+
+#### 60.4 E5：补丁进了包，参数仍然是 1
+
+`staging/ctl/win62.sh` 的时间线：
+
+| 时刻 | 发生了什么 |
+|---|---|
+| 00:52:41 | 开始找 U-Boot 提示符（板子当时还跑着 flash 镜像，4 次 `bdinfo` 探测都是 `-ash: bdinfo: not found`） |
+| 00:52:55 | 转入等下一个 banner（插座节拍的下一次上电在 01:01:36） |
+| 01:01:36 | 抓到 U-Boot banner（232 次轮询） |
+| 01:01:42 | `bdinfo` 证明提示符是 U-Boot 的 |
+| 01:01:44 | `win62.itb` 12 162 040 字节，sha256 `bcd7c2e3c3d3ff53…`（与原包的 `30c9c461…` 不同 ⇒ 补丁确实在包里） |
+| 01:01:58 | tftp 下载完成（`Bytes transferred = 12162040`，b993f8） |
+| 01:02:01 | 内核 banner 出现 |
+| 01:02:55 | shell 起来 |
+| 01:03:10 | 内核命令行打印出来：**还是旧的那一串** |
+| 01:03:11 | 模块参数读数 **1** ⇒ 失败，脚本退出，没往下测 |
+
+⇒ **E5 没有测成**，但它测出了 60.1 那条结论。
+
+#### 60.5 E6：MAC 归属这条线被证伪
+
+E5 传不进参数，就只剩运行期这条路。`tools/e6relink.sh` 的顺序是刻意的：
+
+1. `echo 0 > /sys/module/zx279133/parameters/zx279133_eth0_xmac`（把窗口挪到 XMAC0）
+2. `ip link set eth0 down` / `ip link set eth0 up`（**switch 驱动还在时** bounce —— §45.4 禁止的是
+   switch 被摘掉之后 bounce，那时会挂死板子；这时不属那种情形）
+3. 测一次（switch 驱动还在）
+4. `rmmod zx279133-switch`
+5. 再测一次
+
+链路 bounce 成功（`Link is Down` → `Link is Up - 1Gbps/Full`，板子没挂死）。
+
+**数据（`staging/ctl/e6relink.txt`）**：
+
+| 状态 | 静默对照 | flood 期间 |
+|---|---|---|
+| 第 3 步（参数=0、bounce 过、switch 在） | `xmac0=0x000020ac/0x00c0021c xmac1=0/0 idmdma=0` | `xmac0=0x0000287d/0x00dfee3c xmac1=0/0 idmdma=0 eth0_rx=0 eth0_bytes=0` |
+| 第 5 步（rmmod switch 之后） | `xmac0=0x000028ab/0x00dffdd6 xmac1=0/0 idmdma=0` | `xmac0=0x0000307b/0x00ffe9b6 xmac1=0/0 idmdma=0 eth0_rx=0 eth0_bytes=0` |
+
+**正对照是成立的**：flood 发 2000 个 1000 字节的 UDP 广播（`staging/ctl/flood.ps1`，
+日志 `flood-e5.log` = `FLOOD DONE`），XMAC0 的字节计数涨了 2 097 280
+= 2000 × 1048.6（1000 字节 + 以太网开销）⇒ **2000 个包全部进了 XMAC0**。
+（PC 侧的字节计数不涨是对的：flood 是单向广播，PC 自己发的包不在自己的接收计数里；
+PC 那个计数器是「板子 → PC」的正对照，tftp 下载时它才动。）
+
+**判据 Q2 一次也没过**：`IDM+0x180`（receive cpu pkt cnt from DMA）恒为 0，
+eth0 的 `rx_packets` / `rx_bytes` 恒为 0，16 条 IDM 收队列头一条也没动。
+
+⇒ **四种组合（参数 0/1、switch 在/不在、bounce 过/没 bounce）结果完全一样**：
+帧进 XMAC0，然后就没了。
+
+⇒ **`zx279133_eth0_xmac` 这条线到此为止**。E4 的结论（「2.5G 口的流量只进 XMAC0，
+所以驱动默认值 1 对这个 SKU 是错的」）作为**硬件事实**仍然成立（XMAC1 的计数全程为 0），
+但它**不是**帧进不了 fabric 的原因，所以「把默认值改成 0」并不能修好 LAN1。
+
+顺带量到的两件事：
+
+- **XMAC0 的 SOPC ready 字（`0x342a4`）在 `rmmod zx279133-switch` 之后读回 0**
+  （链路字 `0x90` 仍是 `0x00002c03`）。这与 §57.6 记的「ready 只在 down/up 之后才起」方向相反，
+  但那次读数是在 switch 驱动被摘掉之后取的 —— 摘掉 switch 就等于撤掉了 XMAC0 的初始化。
+  ⇒ 要谈 ready，必须在**状态**里说清楚是哪个状态，本轮这两个读数不能混着比。
+- E6 结束后板子上还是 trial 内核、参数已经是 0、switch 已经摘掉；
+  下一次上电（01:01:36 那次）之前的 20 分钟里它一直这么跑着。
+
+#### 60.6 这一轮顺手修好的东西：push 门禁在本机终于能跑
+
+`tools/prepush.py` 之前在本机跑不了（Blocker 里的第 2 条），原因有两个，都已修：
+
+1. **`FileNotFoundError`：`board_config_check()` 用 `subprocess.run(["sh", t])` 跑排演脚本，
+   而 Windows 的 PATH 上没有 `sh`。** 现在先 `find_sh()`（PATH 上的 `sh`，否则 Git for Windows 的
+   `usr/bin/sh.exe` 与 `bin/sh.exe`），找不到就报「NOT checked」，不假装通过。
+2. **路径算错：排演脚本用 `dirname "$0"` 推导自己所在目录，而 `$0` 是 Windows 路径，
+   `dirname` 只按 `/` 切分**，于是脚本以为自己住在仓库根的上一级，
+   报 `/c/UGit/openwrt/SK-D840N/overlays/…/02_network missing` —— 看着像缺夹具，
+   其实是自己算错了家。现在传给 shell 的是 POSIX 路径（`to_posix()`），
+   并且 shell 的 PATH 里补上了它旁边的 coreutils。
+
+现在门禁在本机跑通了：
+
+```
+$ python ci-build-repo/tools/prepush.py C:/UGit/openwrt/SK-D840N/ci-build-repo
+test-macrocheck: the gate is right about macros, about enum members, and about a name that is not defined at all
+prepush: test-jffs2names.py: the test passes
+prepush: test-getrel.py: test-getrel: 0 problems
+prepush: the board's network default: all 9 checks passed
+macrocheck: 0 problems, 5 warning(s)
+prepush: the release publishes 12 files, and its manifest names 5 of them
+prepush: the image's executable bits are checked (0 problems)
+prepush: 14 files, 0 problems
+```
+
+⇒ **下一次真要 push 的时候，门禁这一关不再是拦路虎。**
+
+#### 60.7 这一轮顺手发现的两件事
+
+1. **插座节拍这一轮没有按时断电。** 00:41:06 那次上电之后板子一直跑到 00:54，
+   按 20 分 30 秒的节拍下一次应当在 01:01:36 —— 确实准时（01:01:36 抓到 banner），
+   但**在此之前**的一整个窗口里板子根本没断过电，
+   用 `staging/ctl/serreset`（relay 自带的 DTR/RTS 复位，文件里可以写 hold 毫秒数）
+   主动复位**没有生效**：4 秒 hold 之后 PC 侧链路始终是 Up 1Gbps，板子既不复位也不出声。
+   这与 `tools/hardreset.ps1` 头注释记的是同一件事（短 toggle 不行，要整个端口重开），
+   只不过 4 秒也不够。
+2. **`staging/ctl/serreset` 支持在文件里写 hold 毫秒数**（`tools/serrelay.ps1`：
+   文件内容是纯数字就按它来，默认 900 ms），这是个此前没被记录下来的机制。
+   它的好处是复位时 relay **不放开 COM3**，所以复位全程串口都在记录，
+   不会像 `hardreset.ps1` 那样在拉高与重启 relay 之间漏掉 U-Boot banner。
+
+#### 60.8 这一轮真正确定下来的东西
+
+1. **内核命令行是这个 CI 钉死的 `CONFIG_CMDLINE`**，不是 env、不是 DTB。
+   ⇒ 给模块传参只有两条路：改 CI pin 的那串，或者改驱动默认值。
+2. **模块参数的真名是 `zx279133.zx279133_eth0_xmac`**（此前注释里的
+   `zx279133.eth0_xmac` 是一个不存在的名字，裸名同样不生效）。
+3. **「eth0 的 MAC 窗口该是 XMAC0」不是修好 LAN1 的钥匙**（E6 的四组组合全部一样）。
+   E4 的硬件事实依然成立（2.5G 口的流量只进 XMAC0），但它解释不了帧为什么停在 XMAC0。
+4. **断点真的收窄到 9132 里面**：帧进了 XMAC0 的 MAC，之后既没变成 9132 的一帧进 fabric，
+   也没进 IDM。按 `staging/ctl/re-cpu-port-mac.md`，9132 的 CPU 侧**不是任何 MAC 块**，
+   而是 trap 端口（SPA memory id 15），帧要靠 **ERAM 表 0x18**（每个端口的协议动作 = trap 规则）
+   被 trap 过去；同一份报告还指出，**每个端口的属性字**镜像在 **ERAM 表 0x7d**
+   （64 项 × 128 bit，按 SPA memory id 索引，第一字就是端口属性字），
+   那正是 SPA 多转发引擎「要不要接受这个端口的帧」所查的东西。
+   ⇒ 下一个窗口（`staging/ctl/win63.sh` → `tools/e7trap.sh`）要读的就是这两张表，
+   重点是 **端口 5（XMAC0）** 与端口 1..4（四个能用的 UNI 口）、端口 15（CPU trap）的差别。
+5. **push 门禁在本机跑通了**（`prepush: 14 files, 0 problems`）。
+
+#### 60.9 这一轮没有做的事
+
+- **没有改驱动代码**（除了一处注释订正）：E6 把 `zx279133_eth0_xmac` 这条线证伪了，
+  在读到 0x18 / 0x7d 两张表之前不改默认值 —— 改了也修不好 LAN1。
+- **没有 push**：`docs/**` 与 `tools/**` 都在 CI 触发路径里，push 一次白占 80 分钟构建机。
+  本轮的门禁已经修好，push 的门禁不再是问题，但也没有值得单独占一次构建机的东西。
+- **没有碰 G5**（PON 状态机）：按计划第 7 节保持冻结。

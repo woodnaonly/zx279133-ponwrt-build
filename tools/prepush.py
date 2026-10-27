@@ -135,6 +135,43 @@ def repo_tests():
     return bad
 
 
+def to_posix(path):
+    """The same path as the shell sees it.
+
+    The rehearsal script works out where it is from its own path ("dirname
+    $0"), and dirname splits on "/" only - so a Windows path comes back
+    unsplit and the script concludes it lives one directory too high.  The
+    bench's shell is an MSYS one, so "C:\\a\\b" is "/c/a/b" there.
+    """
+    p = os.path.abspath(path)
+    if os.name == "nt" and len(p) > 2 and p[1] == ":":
+        return "/" + p[0].lower() + p[2:].replace("\\", "/")
+    return p.replace("\\", "/")
+
+
+def find_sh():
+    """A shell to run the image's own shell script with.
+
+    Windows has no "sh" on PATH by default, and asking for one by name is
+    how this gate died on this bench: it was run with a plain "python
+    tools/prepush.py <repo>", the child process could not be created at all,
+    and the gate reported a FileNotFoundError instead of a verdict.  The Git
+    for Windows shell is the only shell this bench has, so it is looked for
+    where it lives - but a gate that cannot run says so, it does not pretend
+    the check passed.
+    """
+    p = shutil.which("sh")
+    if p:
+        return p
+    for cand in (r"C:\Program Files\Git\usr\bin\sh.exe",
+                 r"C:\Program Files\Git\bin\sh.exe",
+                 r"C:\Program Files (x86)\Git\usr\bin\sh.exe",
+                 r"C:\Program Files (x86)\Git\bin\sh.exe"):
+        if os.path.exists(cand):
+            return cand
+    return None
+
+
 def board_config_check():
     """Run the image's first-boot network default against its own sandbox.
 
@@ -160,8 +197,17 @@ def board_config_check():
     if not os.path.exists(img):
         print("prepush: the board's network default NOT checked (no %s)" % img)
         return 0
-    r = subprocess.run(["sh", t], capture_output=True, text=True,
-                       encoding="utf-8", errors="replace")
+    sh = find_sh()
+    if sh is None:
+        print("prepush: the board's network default NOT checked (no shell on "
+              "this machine - the Git for Windows shell was not found)")
+        return 0
+    # The shell's own tools (dirname, rm, sed) live next to it, and a shell
+    # started by full path does not get them on PATH by itself.
+    env = dict(os.environ)
+    env["PATH"] = os.path.dirname(sh) + os.pathsep + env.get("PATH", "")
+    r = subprocess.run([sh, to_posix(t)], capture_output=True, text=True,
+                       encoding="utf-8", errors="replace", cwd=REPO, env=env)
     lines = [ln for ln in (r.stdout or "").strip().splitlines() if ln.strip()]
     if r.returncode != 0:
         print("prepush: the shipped network default does not match what it claims")

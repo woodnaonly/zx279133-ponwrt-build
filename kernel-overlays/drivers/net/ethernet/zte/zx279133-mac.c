@@ -27,8 +27,16 @@
  * programs this same window for its own LAN path, so the four working jacks
  * have to be re-walked before either value can be called right.
  *
- *	zx279133.eth0_xmac=0	in the kernel command line
+ * The kernel command line form is <module>.<parameter>, and the parameter's
+ * name is the one module_param() was given - so it is:
+ *
+ *	zx279133.zx279133_eth0_xmac=0	in the kernel command line
  *	echo 0 > /sys/module/zx279133/parameters/zx279133_eth0_xmac	before ifup
+ *
+ * (the shorter "zx279133.eth0_xmac=0" that used to be written here names no
+ * parameter that exists, and the bare "zx279133_eth0_xmac=0" that
+ * tools/bootflashram.sh put on the command line was measured to leave the
+ * parameter at its default - see docs/92 60.)
  */
 static u8 zx279133_eth0_xmac = 1;
 module_param(zx279133_eth0_xmac, byte, 0644);
