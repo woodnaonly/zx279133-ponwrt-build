@@ -1487,3 +1487,40 @@ mainline U=27/75/179/216/468/677 s 里出现的是两种之一：
 **仪表记一笔**：这次 `UB_ATTRS="3 19"`（只读两项）+ Phase 1.5 的六个状态字，整个 U-Boot 会话
 **44 秒**就读完并 `run bootcmd` 交还（02:44:09 → 02:44:53），断电周期 20 分钟里这属于便宜测量；
 下次可以同一窗口里再塞 `idm_rx_debug 1`（§30 的那把尺），把"到没到 CPU"也在通流开机一侧留一份原始行。
+
+## 40. 08:44–08:51：跑 191 的正确入口是 `trial`，我把 jump 装成了 `ctl`——两条路各自装什么，写死在这
+
+线已经挪到 **LAN2**（基线复现成功：PC `ping 192.168.9.1` 3/3，`br-lan up`），于是按 §39 去起 191 的
+RAM kit。顺序做对了一半、错了一半，错的这条正是下一个会话最该避免的：
+
+**做对的**：`sh tools/gettrial.sh` 取到 `sk-d840n_initramfs_191_40382942515` 的 kit
+（`sk-d840n-initramfs.itb` sha256 `c87702771fd7a21d…`，`trial-Image.gz`/`trial-dtb.bin` 校验 OK，
+文件时间 04:16），`sh tools/pushtrial.sh` 把 kit 送上板并 `kexec --load`，
+`/sys/kernel/kexec_loaded = 1`。
+
+**做错的**：接着我去跑 `tools/pushctl.sh` + `ctl-kexec.sh`。这两支是**另一条实验路**——
+`pushctl.sh` 装的是 `/tmp/ctl/` 里的 **ctl 镜像（"vendor 4.19 + live dtb"，`ctl-initramfs.cpio.gz`）**，
+而且它第 25 行**先执行 `kexec --unload`** 再把 ctl 镜像 `--load` 上去，所以我刚装好的 191 trial kit
+**被它顶掉了**。我随后 arm 的是 `CTLTAG=K2 … /tmp/ctl/ctl-exec.sh`，于是 08:50:0x 串口上那句
+
+	[ 1042.642811] kexec_core: Starting new kernel
+
+跳过去的是 **4.19 控制面**，不是 mainline 191——这解释了我为什么之后一个字符都没收到
+（`concmd` 只有中继回显、没有回复）。**判断"跳没跳成"不靠 `wait4net`：这轮它先把「基线里没记录 host key」
+读成了「key 与刷进去那套不同」，报了 `this is the RAM system`，而串口证明刷进去那套还活着。
+按老规矩，认镜像只认串口的 `uname -r` + `/proc/cmdline` + `/sys/module/zx279133/parameters`
+（191 的 kit 必须出现 `zx279133_eth0_xmac`；run 185 只有 `rx_hash rx_hash_ipv6`）。**
+
+**下一次跑 191 的正确五步**（一步都不能换成 ctl 那支）：
+
+1. `sh tools/gettrial.sh` → `sh tools/pushtrial.sh`（它打印 `kexec_loaded=` 就是装载证据；**之后不要再碰 pushctl**）
+2. `ssh root@192.168.9.1 "DELAY=240 setsid sh /tmp/trial/arm-exec.sh & echo armed"` ← **`/tmp/trial/arm-exec.sh`**
+3. 等 jump 落地，串口认镜像：`sh tools/concmd.sh 'echo P=$(ls /sys/module/zx279133/parameters | tr "\n" " ")'`
+   ⇒ 必须看到 `zx279133_eth0_xmac`
+4. `sh tools/xmacswitch.sh 1` 复现今天行为；在 LAN2 上跑 PC↔`192.168.9.1` 与 `tools/g4verify.sh`
+   （**回归门**：`eth0` 换窗口不许动 SMAC 那条路）
+5. `sh tools/xmacswitch.sh 0` 之后，**线要挪回 LAN1** 才测得到那根 2.5G 线 —— 这一步要 owner 挪线。
+
+现在板子停在哪：ctl jump 已发出、4.19 控制面没在串口上应答；**没有任何 flash 写入**，
+`S15trial` 那条 300 s 自复位不适用于此镜像，但智能开关的 20 min 断电会把它带回 run 185，
+watchdog 也会自己兜。所以不用你去按任何东西，等下一次断电就回到已知状态。
