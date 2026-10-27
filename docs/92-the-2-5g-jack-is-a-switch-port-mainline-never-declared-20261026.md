@@ -3852,3 +3852,150 @@ zx279133_9132_port_init()         ← 这里面写四个 UNI 口 + PPU 15
 3. §61.2 的解释 (a) 若成立，则 §59 的结论 1 作废，驱动的默认值
    `zx279133_eth0_xmac = 1`（XMAC1）也许本来就对——本轮**没有**改驱动默认值。
 4. G5（PON 状态机）仍然冻结，本节全部是实验室路由器的结论。
+
+### 62. 第二个断点：IDM 的中断源 16..26 被放开，120 万次/秒的风暴把软中断饿死
+
+#### 62.1 §61 之后剩下的是什么
+
+§61 的两处修好之后，板上第一次有东西动了：
+
+| 计数器 | §61 之前 | §61 之后 |
+|---|---|---|
+| `nppt+0x280180`（receive cpu pkt cnt from DMA） | **0**（E5、E6、E8、E10 都是 0） | 0x0000040c / 0x000003e8 |
+| 16 条 IDM 收队列的队头 | **全部为空** | 队列 2、4、6 有真实描述符 |
+
+⇒ 帧从 LAN 侧进到了 IDM 的收队列。
+
+**但没有再往前。** `eth0` 的 `rx_packets` 仍然是 0，PC 仍然 ping 不到 192.168.9.1，
+`rxb` 打印了「the next frame received will be printed」之后什么也没打印。
+
+#### 62.2 驱动的接收路径长什么样
+
+`zx279133-idm.c` 里：
+
+```c
+static const u8 zx279133_idm_rx_poll_order[ZX279133_IDM_CPU_RX_QUEUES] = {
+	7, 15, 6, 14, 5, 13, 4, 12, 3, 11, 2, 10, 1, 9, 0, 8,
+};
+```
+
+16 条队列都在轮询表里，队列 2、4、6 也在 —— **只要轮询跑起来，就一定会碰到它们。**
+
+两个 NAPI 各扫一半（`zx279133.h`）：
+
+```c
+#define ZX279133_IDM_LOCAL_MASK		(GENMASK(11, 8) | GENMASK(7, 4))
+#define ZX279133_IDM_DIRECT_RX_MASK	(GENMASK(15, 0) & ~ZX279133_IDM_LOCAL_MASK)
+```
+
+- group 0（primary NAPI，`eth->napi`）扫队列 4..11，靠 `zx279133-idm-local` 中断唤醒；
+- group 1（LAN NAPI，`eth->lan_napi`）扫队列 0..3、12..15，靠直收中断唤醒。
+
+#### 62.3 `/proc/interrupts` 说了什么
+
+```
+ 22:   77105742          0    GICv3  33 Level     19000000.ethernet
+ 25:          0          0    GICv3  36 Level     zx279133-idm-local
+```
+
+**ethernet 这条线已经触发了 7710 万次，而 local 那条一次都没有。**
+再过一分钟，它变成了 1.48 亿。**这是电平触发中断的典型风暴。**
+
+驱动自己的计数器（`ethtool -S eth0`）把这件事钉死：
+
+```
+     rx_irq_count: 148799670        ← 直收中断处理函数跑了 1.48 亿次
+     idm_local_irq_count: 0
+     rx_napi_polls: 0               ← NAPI 一次都没轮询过
+     rx_napi_work: 0
+     rx_hw_queue_0_descs: 0
+     ...                            ← 16 条队列一个都没被读过
+```
+
+⇒ **中断在疯狂触发，NAPI 一次都没跑。**
+
+#### 62.4 原因：驱动放开了八个没人应答的中断源
+
+`zx279133.h` 里原来那条注释写着一句错误的结论：
+
+```
+ * NAPI must unmask every source the routing words can deliver, not just the low 16 bits. ...
+ * the vendor's routing word for that very line (0x071ffbfb) delivers sources 16,17,18,19,20,24,25,26 there.
+ * So bits 0..15 were never the whole set.
+#define ZX279133_IDM_NAPI_MASK		GENMASK(26, 0)
+```
+
+E14 把板上的两个寄存器读了出来：
+
+```
+IDM+0x40（中断屏蔽，一个源一位，置 1 = 屏蔽） = 0x0000f00f
+IDM+0x44（路由字）                             = 0x071ffbfb
+```
+
+`0x071ffbfb` 正是厂商自己的路由字，它把
+**0,1,3,4,5,6,7,8,9,11,12,13,14,15** 和 **16,17,18,19,20,24,25,26** 送到同一条线上。
+
+驱动只处理前 16 个源（`LOCAL_MASK | DIRECT_RX_MASK` = 0x0000FFFF）。
+`zx279133_shared_rx_start()` 却用 `NAPI_MASK = GENMASK(26, 0)` 把 0..26 全放开
+—— **那八个源没有人应答**。
+
+一个置位了没人应答的源，会让电平触发的中断线一直挂着：
+
+1. 处理函数重入（每秒 120 万次）；
+2. 处理函数里把 `DIRECT_RX_MASK` 屏蔽掉，但 16..26 没被屏蔽；
+3. 轮询函数（唯一会把屏蔽位放开的地方）**从来不跑**；
+4. 于是中断永远挂着，CPU 永远出不了处理函数，
+   **NET_RX 软中断也就永远轮不到** —— NAPI 一次都没跑；
+5. 队列里已经到位的帧，一个也没被读走。
+
+**这解释了一切：为什么帧到了 IDM 却没人要，为什么 `rx_napi_polls` 是 0，
+为什么队列描述符计数全是 0。**
+
+#### 62.5 E15：写厂商的屏蔽字，风暴当场停住
+
+厂商自己的屏蔽字是 **0x07ff0000** —— 16..26 屏蔽、0..15 放开，
+正好是驱动处理的那两组源的全集。写进去：
+
+```
+写之前：
+  rx_irq_count: 266742353      每秒 120 万次，一直涨
+  rx_napi_0_polls: 0   rx_napi_1_polls: 0
+  rx_hw_queue_0..15_descs: 全 0
+
+写之后（同一轮里）：
+  中断计数立刻停住（相隔 9 秒的两次读数完全一样：330719628）
+  rx_napi_0_polls: 18   rx_napi_1_polls: 2   rx_napi_work: 1134
+  rx_hw_queue_2_descs: 38
+  rx_hw_queue_4_descs: 96
+  rx_hw_queue_6_descs: 1000
+```
+
+**38 + 96 + 1000 = 1134 = `rx_napi_work`。** 队列里那 1134 个描述符被读走了。
+
+#### 62.6 驱动已改（`ab1b122`）
+
+```c
+#define ZX279133_IDM_NAPI_MASK		GENMASK(15, 0)
+#define ZX279133_IDM_UNHANDLED_MASK	GENMASK(26, 16)
+```
+
+`zx279133_shared_rx_start()` 里先屏蔽没人应答的那八个源，再放开自己处理的那 16 个。
+
+#### 62.7 断点还剩最后一小段
+
+1134 个描述符被读走了，但 `eth0` 的 `rx_packets` 仍然是 0 ——
+**描述符被读走了，帧却没进协议栈。** 下一个要问的是
+「`zx279133_idm_rx_process_queue()` 里这 1134 个帧被哪一条分支吃掉了」，
+驱动的计数器里有现成的答案：
+
+```
+rx_desc_not_ready / rx_invalid_dma / rx_page_lookup_misses /
+rx_jumbo_drops / rx_descriptor_flag_drops / rx_page_alloc_failures /
+rx_copy_fallbacks / rx_skb_alloc_failures / rx_dropped
+```
+
+win65 会在同时打上两处运行期修复的情况下重测这一段。
+
+⚠️ 本轮**没有**把任何东西 push 之前的东西留在工作区：两处驱动修复都已提交并 push
+（`56e86d2` 入口程序、`ab1b122` 中断屏蔽字），CI 正在排队跑 run195 / run196。
+G5（PON 状态机）仍然冻结。
