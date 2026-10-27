@@ -77,4 +77,20 @@ config ZTE_ZX279133_SWITCH
 	  RTL8372N uses, because the transport VIDs are the same ones this
 	  board's 9132 ports already carry as their PVID.
 
+config ZTE_ZX279133_RGMII
+	tristate "ZTE ZX279133 RGMII MAC register block"
+	depends on OF && HAS_IOMEM
+	default y
+	help
+	  Map the SoC's RGMII MAC register block at 0x15900000 and make it
+	  readable from the console.  That block is the MAC behind this board's
+	  2.5G jack - the board's U-Boot moves traffic through that jack with
+	  it, and this tree has no driver for it - so the counters in the
+	  block are the probe that says whether the jack's MAC exists on this
+	  unit and whether it is running.
+
+	  This driver only reads the block.  It configures nothing, claims no
+	  interrupt and creates no netdev: the driver that does those needs
+	  the register map first.
+
 endif

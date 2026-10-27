@@ -15,3 +15,4 @@ zx279133-y := zx279133-main.o zx279133-tm.o zx279133-np.o zx279133-idm.o \
 obj-$(CONFIG_ZTE_ZX279133_LAN_CONDUIT) += zx279133-lan-conduit.o
 obj-$(CONFIG_ZTE_ZX279133_RTL8372N) += zx279133-rtl8372n.o
 obj-$(CONFIG_ZTE_ZX279133_SWITCH) += zx279133-switch.o
+obj-$(CONFIG_ZTE_ZX279133_RGMII) += zx279133-rgmii.o

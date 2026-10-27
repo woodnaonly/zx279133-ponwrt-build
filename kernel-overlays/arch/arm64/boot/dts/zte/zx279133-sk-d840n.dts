@@ -261,6 +261,38 @@
 			thermal-sensors = <&pvt>;
 		};
 	};
+
+	/*
+	 * The SoC's RGMII MAC.
+	 *
+	 * This is the MAC behind the 2.5G jack.  The board's U-Boot is the
+	 * vendor's and it does have a driver for it: at 2026-10-28 03:45:57
+	 * it downloaded 12162040 bytes from the test PC through that jack,
+	 * and the test PC has exactly one NIC, which is plugged into the 2.5G
+	 * jack.  U-Boot has no driver for the 9132, so the MAC that moved
+	 * those bytes can only be this one.
+	 *
+	 * The vendor's own device tree declares the same node the same way
+	 * (decompiled/sk-d840n-community-4.19.dts):
+	 *
+	 *	rgmii@15900000 {
+	 *		compatible = "zte,zx279133-rgmii";
+	 *		reg = <0x00 0x15900000 0x00 0x100000>;
+	 *	};
+	 *
+	 * The tree this CI builds against (cnjn/linux-mainline-zte-zxslc-sr1010
+	 * at 96e5a241) has no such node, so it is declared here instead, in
+	 * the root's address space (the root has #address-cells = <2>, like
+	 * the soc bus in zx279133.dtsi, so the reg is the same two-cell form).
+	 *
+	 * The driver that binds it (zx279133-rgmii.c) only reads the block.
+	 * Nothing drives the jack yet.
+	 */
+	rgmii@15900000 {
+		compatible = "zte,zx279133-rgmii";
+		reg = <0x00 0x15900000 0x00 0x100000>;
+		status = "okay";
+	};
 };
 
 &uart0 {

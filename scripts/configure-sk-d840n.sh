@@ -71,6 +71,14 @@ pin_y REALTEK_PHY
 # module_init in one module, which does not link.
 pin_y ZTE_ZX279133_SWITCH
 
+# The RGMII MAC's register block (0x15900000).  It is the MAC behind this
+# board's 2.5G jack - the board's U-Boot moves traffic through that jack with
+# it - and this tree has no driver for it, so this pins the read-only probe
+# that makes the block visible from the console.  It has to be built in: the
+# board device tree names the node, and a module would have to be loaded
+# before the node could bind, which nothing in the RAM image does.
+pin_y ZTE_ZX279133_RGMII
+
 # The panel beacon needs the LED class devices to exist *in the RAM image*, and =m means
 # they only appear if something loads kmod-leds-gpio first - which is exactly the
 # userspace that the beacon is there to prove. So these two are pinned built-in: without
