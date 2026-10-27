@@ -78,6 +78,16 @@ static void zx279133_shared_rx_start(struct zx279133_eth *eth)
 	enable_irq(eth->irqs[4]);
 	eth->idm_local_irq_enabled = true;
 	spin_lock_irq(&eth->irq_lock);
+	/*
+	 * The sources this driver has a handler for, and only those: the
+	 * routing word also delivers sources 16..26 to the same interrupt
+	 * line, and nothing in this driver acknowledges them.  An acknowledged
+	 * source that nobody handles keeps the level-triggered line asserted
+	 * and the handler re-enters forever, which starves the NET_RX softirq
+	 * and stops both NAPIs from ever polling a descriptor.  See the note
+	 * on ZX279133_IDM_UNHANDLED_MASK.
+	 */
+	zx279133_idm_set_masked(eth, ZX279133_IDM_UNHANDLED_MASK, true);
 	zx279133_idm_set_masked(eth, ZX279133_IDM_NAPI_MASK, false);
 	spin_unlock_irq(&eth->irq_lock);
 }

@@ -757,13 +757,33 @@ extern u16 zx279133_tx_port;
 #define ZX279133_IDM_DIRECT_RX_MASK	(GENMASK(15, 0) & \
 					 ~ZX279133_IDM_LOCAL_MASK)
 /*
- * NAPI must unmask every source the routing words can deliver, not just the low 16 bits. Measured on
- * the run-75 kit with eth0 up: idm+0x40 reads 0x07ff0000 after zx279133_idm_open()'s unmask, i.e.
- * sources 16..26 stay masked for the whole life of the interface, and the "rx" IRQ (GICv3 SPI 1,
- * /proc/interrupts line 22) counts 0 - while the vendor's routing word for that very line
- * (0x071ffbfb) delivers sources 16,17,18,19,20,24,25,26 there. So bits 0..15 were never the whole set.
+ * Only the sources this driver has a handler for may be unmasked.
+ *
+ * The IDM's interrupt mask register (IDM+0x40) has one bit per source, and a
+ * set bit means "masked".  The routing word (IDM+0x44) decides which source
+ * reaches which interrupt line, and the vendor's own value for it is
+ * 0x071ffbfb: it delivers sources 0,1,3,4,5,6,7,8,9,11,12,13,14,15 and also
+ * 16,17,18,19,20,24,25,26 to the same line.
+ *
+ * The driver handles the two sets above - sources 0..15 - and nothing else.
+ * Sources 16..26 must therefore stay masked, which is what the vendor does:
+ * the vendor's own mask is 0x07ff0000, i.e. sources 16..26 masked and
+ * sources 0..15 live, exactly the union of the two sets the driver owns.
+ *
+ * Unmasking them is not a small mistake.  A source that is asserted and
+ * masked by nobody stays asserted, the line is level triggered, and the
+ * handler re-enters forever: measured on the run-194 kit, the "rx" interrupt
+ * (19000000.ethernet, /proc/interrupts line 22) fired 266 742 353 times in
+ * half an hour while the driver's own rx_irq_count matched it to the last
+ * one.  The CPU never got out of the handler, so the NET_RX softirq never
+ * ran, so both NAPIs never polled a single descriptor
+ * (rx_napi_0_polls = 0, rx_napi_1_polls = 0) - and the frames that were
+ * sitting in the receive queues were never read.  Writing the vendor's
+ * 0x07ff0000 stopped the storm at once: the interrupt count froze, the NAPIs
+ * started polling, and the receive queues were drained.
  */
-#define ZX279133_IDM_NAPI_MASK		GENMASK(26, 0)
+#define ZX279133_IDM_NAPI_MASK		GENMASK(15, 0)
+#define ZX279133_IDM_UNHANDLED_MASK	GENMASK(26, 16)
 #define ZX279133_IDM_RX_QUEUE		0
 #define ZX279133_IDM_RX_QUEUES		24
 #define ZX279133_IDM_CPU_RX_QUEUES	16
