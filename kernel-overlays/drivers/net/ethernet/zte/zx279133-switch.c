@@ -406,36 +406,32 @@ static int zx279133_switch_xpcs_init(struct zx279133_switch *priv)
 }
 
 /*
- * The vendor's AN-disabled 1G path: PCS mode + SGMII_LINK_STS, no
- * MAC_AUTO_SW.  Re-applied after the XMAC has been programmed.
+ * The vendor's AN-disabled 1G path.  Re-applied after the XMAC has been
+ * programmed.
  *
- * The PCS mode is 1000BASE-X here: see ZX279133_XPCS_PCS_MODE_1000BASE_X.
+ * In 1000BASE-X the block reads 0x0000 and 0x2000 on this board
+ * (U-Boot, 2026-10-28): no AN interrupt enable, no SGMII link status,
+ * PCS mode 0 and no MAC auto-switch.  In SGMII the same two registers
+ * read 0x0005 and 0x2200.
  */
-static int zx279133_switch_xpcs_apply_1000base_x_vend2(struct zx279133_switch *priv,
-						       int duplex)
+static int zx279133_switch_xpcs_apply_1000base_x_vend2(struct zx279133_switch *priv)
 {
-	u32 bmcr = BMCR_ANENABLE | BMCR_SPEED1000;
 	int ret;
 
-	if (duplex != DUPLEX_HALF)
-		bmcr |= BMCR_FULLDPLX;
-
 	ret = zx279133_switch_xpcs_write(priv, MDIO_MMD_VEND2,
-					  ZX279133_XPCS_VR_MII_AN_CTRL,
-					  ZX279133_XPCS_SGMII_LINK_STS |
-					  ZX279133_XPCS_AN_INTR_EN |
-					  FIELD_PREP(ZX279133_XPCS_PCS_MODE_MASK,
-						     ZX279133_XPCS_PCS_MODE_1000BASE_X));
+					  ZX279133_XPCS_VR_MII_AN_CTRL, 0);
 	if (ret)
 		return ret;
 
 	ret = zx279133_switch_xpcs_write(priv, MDIO_MMD_VEND2,
-					  ZX279133_XPCS_VR_MII_DIG_CTRL1,
-					  0x2000 | ZX279133_XPCS_MAC_AUTO_SW);
+					  ZX279133_XPCS_VR_MII_DIG_CTRL1, 0x2000);
 	if (ret)
 		return ret;
 
-	return zx279133_switch_xpcs_write(priv, MDIO_MMD_VEND2, MII_BMCR, bmcr);
+	/* The duplex bit only; see the note in the profile above. */
+	return zx279133_switch_xpcs_modify(priv, MDIO_MMD_VEND2, MII_BMCR,
+					   ZX279133_XPCS_DUPLEX,
+					   ZX279133_XPCS_DUPLEX);
 }
 
 /*
@@ -562,14 +558,16 @@ static int zx279133_switch_xpcs_1000base_x(struct zx279133_switch *priv)
 		return ret;
 
 	/*
-	 * xmac_init_by_work_mode(3) calls xmac_sgmii_conf(..., auto=0):
-	 * PCS mode + SGMII_LINK_STS, no MAC_AUTO_SW.
+	 * The vendor's 1000BASE-X state on this block, read out of the
+	 * board's own U-Boot on 2026-10-28 with XMAC0 set to "work in
+	 * 1000BASE-X mode":  VR_MII_AN_CTRL = 0x0000 and VR_MII_DIG_CTRL1 =
+	 * 0x2000.  In SGMII mode the same two registers read 0x0005 and
+	 * 0x2200 - so the difference from SGMII is not the PCS mode field
+	 * alone: the SGMII link status bit and the MAC auto-switch bit
+	 * belong to SGMII and have to go as well.
 	 */
 	ret = zx279133_switch_xpcs_write(priv, MDIO_MMD_VEND2,
-					  ZX279133_XPCS_VR_MII_AN_CTRL,
-					  ZX279133_XPCS_SGMII_LINK_STS |
-					  FIELD_PREP(ZX279133_XPCS_PCS_MODE_MASK,
-						     ZX279133_XPCS_PCS_MODE_1000BASE_X));
+					  ZX279133_XPCS_VR_MII_AN_CTRL, 0);
 	if (ret)
 		return ret;
 	ret = zx279133_switch_xpcs_write(priv, MDIO_MMD_VEND2,
@@ -577,8 +575,14 @@ static int zx279133_switch_xpcs_1000base_x(struct zx279133_switch *priv)
 	if (ret)
 		return ret;
 
-	ret = zx279133_switch_xpcs_write(priv, MDIO_MMD_VEND2, MII_BMCR,
-					 BMCR_SPEED1000 | BMCR_FULLDPLX);
+	/*
+	 * Only the duplex bit.  This word is written whole elsewhere, and
+	 * a whole-word write here would clear the SR-MII speed bits this
+	 * profile has just programmed.
+	 */
+	ret = zx279133_switch_xpcs_modify(priv, MDIO_MMD_VEND2, MII_BMCR,
+					   ZX279133_XPCS_DUPLEX,
+					   ZX279133_XPCS_DUPLEX);
 	if (ret)
 		return ret;
 
@@ -2152,8 +2156,7 @@ static int zx279133_switch_probe(struct platform_device *pdev)
 
 	if (!priv->usxgmii) {
 		/* Re-apply after the XMAC/SOPC work; the C45 AN bits are lost. */
-		ret = zx279133_switch_xpcs_apply_1000base_x_vend2(priv,
-								 DUPLEX_FULL);
+		ret = zx279133_switch_xpcs_apply_1000base_x_vend2(priv);
 		if (ret)
 			dev_err(dev,
 				"failed to re-apply the XPCS0 AN state: %d\n",
