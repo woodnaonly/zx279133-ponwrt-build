@@ -1604,3 +1604,9 @@ watchdog 也会自己兜。所以不用你去按任何东西，等下一次断�
 4. **回归**：默认 `xmac=1` 下 `tools/g4verify.sh` 16 pass / 0 fail；线在 LAN2/3/4 的 jack-walk
    （要 owner 挪线）。`xmac=0` 时 `switch.c` 也在编 XMAC0，四个口若回归那是**这个模式的代价**，
    回归门只在 `xmac=1` 下判。
+
+**出包记录**：run 192（`40431845401`，HEAD `0e13f40`）两个 job 的 `Compile failure` 都红了。
+原因不在别处：`zx279133_xpcs_dev()` 和 `select_pcs` 在 `zx279133_eth0_xmac` 的**定义**（原
+`mac.c:64`）之前就引用了它，是 C 的 use-before-declaration 硬错误。check-run 上那 30 条注解
+只有并行段最后几行、没有编译器原文（工件要登录），所以这次是**读代码**定位的，不是读日志。
+修复 = 把整个参数块挪到 helper 之前；测量改到 run 193。
