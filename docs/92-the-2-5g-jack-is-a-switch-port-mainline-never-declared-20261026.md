@@ -2502,3 +2502,66 @@ lane: 0 = eth0 那根 lane 的 PCS（默认 XMAC1），1 = LAN lane 的 PCS（XM
    **outport 表（0x27）暂时读不了**，这是一个待补的工具缺口。
 3. **`u` 流会吃掉排在它后面的任何命令**（§51.7 已记），所以每个窗口一开始
    就要先把 `u` 流停掉再发命令；抓提示符那一下除外。
+
+## 53. 手工复位 XMAC0：ready 位起来了，但 lane 也死了（2026-10-27 22:54-23:08）
+
+### 53.1 断点再收窄：帧进不了 IDM，是因为 XMAC0 那根 lane 的 **reset 顺序**
+
+厂商的 XMAC1（eth 驱动那条）与 XMAC0（switch 驱动那条）的 bring-up 顺序是反的：
+
+| | 顺序 |
+|---|---|
+| **XMAC1（eth 驱动，`zx279133_xmac_sgmii_init()`）** | 关 MAC → SOPC send=0 → **复位（bit11，1.718 ms）** → PCS quirk → bypass → **写 MAC 寄存器** → 双工 → 4.295 ms → send=1 → 使能 → `xpcs_apply_sgmii_vend2()` |
+| **XMAC0（switch 驱动，`zx279133_switch_xmac_configure()`）** | **先写 PCS（`zx279133_switch_xpcs_sgmii()`）** → bypass → **复位（bit10）** → 写 MAC 寄存器 → 双工 → 4.295 ms → `sopc_publish()` → 使能 → `xpcs_apply_sgmii_vend2()` |
+
+**唯一的差别就是复位的位置**：XMAC1 先复位再编 PCS，XMAC0 先编 PCS 再复位。
+树里自己写着一模一样的话（`switch.c:709-719`，讲 SMAC 的那四块）：
+**“MAC 在自己的复位还没跑完时又被编程了一遍，它的 clear-over-ready 字就永远起不来。”**
+
+### 53.2 手工复现：ready 位确实能起来，但 lane 同时被打死
+
+在板上按厂商的脉冲手工复位 XMAC0
+（`regw 0x2c0004 0xfffff3ff` → 50 ms → `regw 0x2c0004 0xffffffff`）：
+
+```
+[337.88] soc reg 0x192c0004 (nppt +0x2c0004) = 0xfffff3ff     <- 复位
+[339.78] soc reg 0x192c0004 (nppt +0x2c0004) = 0xffffffff     <- 释放
+[341.83] soc reg 0x190342a4 (nppt +0x0342a4) = 0x00000001     <- ready 位起来了！
+[342.91] soc reg 0x19000090 (nppt +0x000090) = 0x00002c03
+```
+
+**但随后 lane 就死了**：复位前 PC 的 2000 帧还在 XMAC0 的 0x2400 上逐字节加，
+复位之后 0x2400 **冻在 0x1644 不动了**（PC 仍在发），ready 位也从 1 落回 0。
+
+**⇒ XMAC0 的复位会把 XPCS0（以及外侧 PHY）的配置一起抹掉。**
+驱动之所以还能工作，是因为它在复位**之后**又补了一遍
+`xpcs_apply_sgmii_vend2()`（`switch.c:2093`）；我手工复位时没有这一补，
+所以 lane 就废了。
+
+**⇒ 这就把断点钉死在“XMAC0 这根 lane 的复位/ready 握手”上**：
+出厂的顺序是 **先复位、再点 PCS、再写 MAC**，主线是 **先点 PCS、再复位**。
+
+### 53.3 下一轮（拿到带 `xpcs` 动词的包之后）怎么走
+
+0. **基线**：重启后 `reg 0x90`（应为 0x2c03）、`reg 0x342a4`（应为 0）、
+   `reg 0x142400`（RX 帧数）各抄一份；`xpcs 1 0x1e 0x8001` 抄下
+   LAN lane 的 VEND2 AN_CTRL 现值。
+1. **实验 D（单变量，把厂商顺序搬过来）**：
+   - `regw 0x0342a4 0`（清 clear-over-ready 字）
+   - 复位脉冲：`regw 0x2c0004 0xfffff3ff` / 50 ms / `regw 0x2c0004 0xffffffff`
+   - **用 `xpcsw` 把 XPCS0 的 VEND2 profile 重放一遍**（AN_CTRL、BMCR、DIG_CTRL1）
+   - **判据：`reg 0x342a4` 变成 1 并保持住；`reg 0x90` 变成 0x38xx；
+     再打一组 PC 帧，0x142400 动而且帧真的到了 IDM**
+     （`rxb` 会打印出帧、`eth0`/`lan-cpu0` 的 rx 包数不再是 0）。
+2. **实验 A**（若 D 的 ready 位起来了但帧仍不到 IDM）：
+   `xpcsw 1 0x1e 0x8001 0x0005`（原厂 AN_CTRL）后再读 `reg 0x90`。
+3. **实验 B**（若 A 也不行）：按 §51.6 的 USXGMII 配方改 lane + `regw 0x140000 0x20010001`。
+4. **正控制**：每轮都要先确认 PC 仍在收到帧（`PC rx_bytes` 增量 > 0）。
+
+### 53.4 这一轮的两个工具/事实
+
+1. **`reg 0x2c0004`（SYS_SOFT_RESET）读出来是 0xffffffff**，
+   所以厂商那种脉冲就是 `0xfffff3ff` → 等 1.7 ms → `0xffffffff`（清 bit10 = XMAC0 复位）。
+2. **XMAC0 的 RX 计数块在 `0x2400` 起**（0x2400 帧、0x2440 字节、0x2460 好广播、
+   0x24a0 CRC 错、0x2640 溢出）；`0x142000-0x1423ff` 是 **TX** 块。
+   **凡是量“RX 通没通”，必须读 0x2400 那一段，读 0x142xxx 会看到 TX 的动静而误判。**
