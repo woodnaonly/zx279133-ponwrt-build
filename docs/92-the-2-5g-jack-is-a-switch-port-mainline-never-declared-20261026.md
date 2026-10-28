@@ -7241,3 +7241,112 @@ np_133.ko 的 `nppt_smac_init()` 对 MAC 4 调 `outerphy_phy_init(4)` 并在 RTL
 
 无论哪一边，**2.5G 口的 netdev 仍然不存在**（`lan1..lan4` 是 DSA port 4..7 = 9132 的
 UNI 口 1..4），所以链路通了之后还要做 §82.5 的第 3 步。
+
+### 84 win104/win105：拓扑定案、厂商 1000BASE-X 序列还原，以及 §83 结论里的一个洞
+
+### 84.1 拓扑现在有测量支撑
+
+win103 在 U-Boot 的 net init **之后**抓到的那几行（`staging/ctl/win103.log` 第 5-8 行）：
+
+```
+np init ok
+mode_eth_1gbase_x_cfg
+uni serdes init succeed
+mac 4 phy status changed: 1000M full-duplex
+```
+
+加上 win84 的 `"xmac 0 speed set 2 in sgmii(xmac speed 3)"`，两条链路就分开了：
+
+- **SoC XMAC0 --SGMII 1G--> 9132 的 CPU 口**（Uni SerDes + XPCS0）。这条是活的：
+  win83 把 PC 插到 1G 口 ping 全通。
+- **9132 chip port 5 --1000BASE-X--> RTL8226 --> 2.5G 口**。这条是死的：
+  U-Boot 下 `1e.758d = 0x801E`（link up）、`07:0x01 = 0x0069`，
+  mainline 下 `1e.758d = 0x8018`（down）、`07:0x01 = 0x002d`。
+
+**SoC 不在 2.5G 口这条链路上**。§83.5 说"差只可能在 SoC 侧这条 lane 上"，这句话的方向
+错了：那条 lane 是 1G 口的命脉，它是好的。
+
+### 84.2 厂商给这个口做的完整 1000BASE-X 序列
+
+`pon/vendor-modules/np_133.ko` 的 `xmac_1gbase_x_conf(xmac_id)`（val 0x1a6ec，
+`devtools/np133.py dis xmac_1gbase_x_conf`）只有七步：
+
+```
+xmac_tx_disable(xmac_id)
+xmac_rx_disable(xmac_id)
+xpcs_1000base_x_conf(xmac_id, speed = 2, xmac = 1)
+xamc_init_conf_by_speed(xmac_id, speed = 3)
+byPassEnableSet(xmac_id, 1)
+__const_udelay(0x8382b0)
+uni_serdes_init(xmac_id, 7)
+```
+
+第三步 `xpcs_1000base_x_conf` 的真身是 np_133.ko 里一个**没有符号**的静态函数
+（val 0x1bc0c，`.text` 里 0x1bc0c..0x1bd29）。它写的是**以全局 `xmac0_pcs_base`
+为基准**的几个字（`devtools/np133at.py` 带重定位反汇编出来的）：
+
+| 基准 + 偏移 | 动作 |
+|---|---|
+| `+0x40000` | `&= ~0x2000` |
+| `+0xc001c` | `= 1`，`&= ~0x2000`，`|= 0x800`，轮询后再 `&= ~0x800` |
+| `+0xe0010` | `&= ~0x1` |
+| `+0xe0040` | 轮询 `bits[4:2] == 4`（400 次，失败返回 -1） |
+
+外加三个 set：`xpcs_set_sr_mii_ctrl_speed(port)`、
+`xpcs_set_sr_mii_ctrl_duplex_mode(port, xmac)`、
+`xpcs_set_vr_mii_an_ctrl_pcs_mode(port, 0)`；最后一个写的地址是
+**`xmac0_pcs_base + 0x7e0004 + (xmac << 20)`**。
+
+厂商打印过 `"xmac0_pcs_base is 0x140000"`（`docs/07` 13259、`zx279133-switch.c:11`）。
+以 0x140000 为基准，上面那四个偏移落在 NPPT 的
+**0x1c001c / 0x1e0010 / 0x1e0040**，那个 `+0x7e0004 + (1<<20)` 落在 **0x8e0004**。
+
+**mainline 一条都没有。** `kernel-overlays/**` 里搜 `0x1c001c|0x8e0004|0xe0010|pcs_base`
+只搜到三处注释，没有一处写。tree 的 XPCS 代码（`zx279133-switch.c` 的
+`zx279133_switch_xpcs_*`）动的是 **SoC 自己的 XPCS0**（0x1a000000，走 MDIO 的
+`mdiodev_c45_*`），那是 CPU lane 的 PCS —— 另一个芯片的 PCS。
+
+### 84.3 §83 的两个结论要改
+
+**(a) "PHY 侧的厂商序列已经跑过" —— 错。**
+`pon/vendor-modules/rlt8226b.ko` 带符号，反汇编（`tools/ponDis.py`）给出三条序列：
+
+- `Rtl8226_serdes_rst`：read `1e.7581`；`&= ~0x10` 写回；再 read；`|= 0x10` 写回（复位脉冲）
+- `Rtl8226_serdes_autoNego_set(id, speed)`：write `1e.7588 = 2`；
+  write `1e.7589 = (speed ? 0x70d0 : 0x71d0)`；write `1e.7587 = 3`
+- `Rtl8226_serdes_link_get`：read `1e.758d` / `1e.758b`
+
+板子上现在是 `7588 = 0x00CE`、`7589 = 0x035A`，**厂商那套值一个都不在**。
+=> 厂商序列**没有跑过**，U-Boot 也没跑过；U-Boot 的链路是 up 的，靠的是它自己
+net init 的另一条路径（把 XMAC0 设成 SGMII，让 9132 用 chip port 5 的 1000BASE-X
+对上 RTL8226）。
+
+**(b) "9132 侧不缺东西" —— 只对已比过的块成立。**
+§83.3/§83.5 的依据是 win102 的逐字 diff，但 win102 实际比过的区间只有
+（`staging/ctl/win102.sh` step 4..10）：
+
+```
+NPPT+0x0 (64w)、+0x4000 (256w)、+0x8000..0x8fff (SPA 1024w)、
++0x40000 / 0x80000 / 0xc0000 / 0x100000 (SMAC 各 64w)、
++0x7c000..0x7ffff (1024w)、
+XMAC0 (+0x140000 256w, +0x142800, +0x143400, +0x144000, +0x148000)、
+XMAC1 (+0x180000 256w)
+```
+
+**没有比过** `+0x1c0000`、`+0x1e0000`、`+0x200000`、`+0x240000`、`+0x8e0000` …
+—— 而 84.2 那套厂商序列写的正是这些切片。所以 §83.2 的结论要改成：
+
+> 9132 侧**已比过的块**不缺；厂商 1000BASE-X 序列写的那几个切片**还没比过**。
+
+### 84.4 win105 的判据（先写死，再看数）
+
+- **J1**：U-Boot 侧 `nppt+0x1c001c` / `0x1e0010` / `0x1e0040` / `0x8e0004` 里有非零值，
+  而内核侧同一批字是零
+  => 缺口就是「9132 内部那套 1000BASE-X PCS，mainline 从来没写过」。
+  下一轮 CI 照抄 84.2 的四个写 + 三个 set + `byPassEnableSet`。
+- **J2**：两侧都是零
+  => 这几个切片也不是缺口，缺口回到 9132 内部别的地方；下一手是厂商自己的
+  `xmac_xpcs_reg_table`（np_133.ko `.data`，file 0x1ee370，812 字节）。
+
+win105 同时会再读一遍 RTL8226 的九个 `1e.7xxx` 寄存器（U-Boot 侧）与
+`07:0x01`（两侧），好把 84.3(a) 这条钉死。

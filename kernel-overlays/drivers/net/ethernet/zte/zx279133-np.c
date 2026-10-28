@@ -1147,6 +1147,24 @@ static char *zx279133_9132_next_token(char **pp)
 	return start;
 }
 
+/*
+ * One read-modify-write of the 9132's registers, with both values printed.
+ *
+ * The point of the "xbasex" command below is to be able to see what every
+ * single step of the vendor's sequence did, so that a wrong base or a wrong
+ * mask shows up as a wrong word rather than as a link that stays down.
+ */
+static void zx279133_9132_xbasex_word(struct zx279133_eth *eth, u32 off,
+				      u32 mask, u32 set, const char *name)
+{
+	u32 before = readl(eth->base + off);
+	u32 after = (before & mask) | set;
+
+	writel(after, eth->base + off);
+	pr_info("xbasex: %-10s nppt+0x%06x 0x%08x -> 0x%08x\n", name, off,
+		before, after);
+}
+
 static ssize_t zx279133_9132_write(struct file *file, const char __user *ubuf,
 				   size_t count, loff_t *ppos)
 {
@@ -1214,6 +1232,13 @@ static ssize_t zx279133_9132_write(struct file *file, const char __user *ubuf,
 	 *	"reg 140010"		read one word
 	 *	"regw 140010 3e8000c6"	write one word and read it back
 	 *	"regs 140000 8"		dump a range of words
+	 *
+	 * and one more that does something:
+	 *
+	 *	"xbasex [base] [speed]"	apply the vendor's own 1000BASE-X
+	 *				sequence to the 9132, at the given
+	 *				nppt-relative base (default 0x140000)
+	 *				and speed (default 2 = 1000BASE-X)
 	 */
 	if (!strcmp(tok, "reg") || !strcmp(tok, "regw") ||
 	    !strcmp(tok, "regs")) {
@@ -1257,6 +1282,111 @@ static ssize_t zx279133_9132_write(struct file *file, const char __user *ubuf,
 			pr_info("soc reg 0x%08x (nppt +0x%06x) = 0x%08x\n",
 				ZX279133_NPPT_BASE + at, at, val);
 		}
+		return count;
+	}
+
+	/*
+	 * The vendor's own 1000BASE-X bring-up for the 9132's outerphy
+	 * port, applied on demand.
+	 *
+	 * np_133.ko's xmac_1gbase_x_conf() is how the vendor puts that port
+	 * into 1000BASE-X.  The part of it that touches the 9132's own PCS
+	 * is a static function with no symbol in .symtab (val 0x1bc0c),
+	 * decoded with devtools/np133at.py: seven writes and one poll, all
+	 * relative to the global xmac0_pcs_base.
+	 *
+	 *	+0x0c001c	= 1, then &= ~0x2000, then |= 0x800, then &= ~0x800
+	 *	+0x0e0010	&= ~0x1
+	 *	+0x0e0040	poll bits[4:2] == 4
+	 *	+0x040000	&= ~0x2000
+	 *	+0x7c0000	SR_MII_CTRL: (w & ~0x2061) | speed, then |= 0x100
+	 *	+0x7e0004	VR_MII_AN_CTRL: pcs_mode = 0, which is 1000BASE-X
+	 *	+0x0e0014	|= 0x10 (the vendor's byPassEnableSet)
+	 *
+	 * The speed code comes from the vendor's own table (np_133.ko
+	 * .rodata, file 0x14278c): speed 2 is 0x40, the 1000BASE-X bit.
+	 *
+	 * The base is an argument because xmac0_pcs_base's value is not
+	 * known with certainty.  The vendor prints "xmac0_pcs_base is
+	 * 0x140000", but with that base the offsets above land on slices
+	 * this tree has never written, and with the NPPT base itself they
+	 * land on the MAC address table - which is not something to guess
+	 * at.  So the command takes the base as an argument and prints
+	 * every word before and after it touches it.
+	 *
+	 * It is a console command, not part of the probe: nothing here runs
+	 * unless somebody asks for it, and the 1G jacks keep working either
+	 * way.
+	 */
+	if (!strcmp(tok, "xbasex")) {
+		static const u32 speed_code[6] = {
+			0x00000000, 0x00002000, 0x00000040,
+			0x00000020, 0x00002020, 0x00002040,
+		};
+		u32 base = 0x140000;
+		u32 speed = 2;
+		u32 w;
+		unsigned int i;
+		int poll = -1;
+
+		tok = zx279133_9132_next_token(&p);
+		if (tok && kstrtou32(tok, 0, &base))
+			return -EINVAL;
+		tok = zx279133_9132_next_token(&p);
+		if (tok && kstrtou32(tok, 0, &speed))
+			return -EINVAL;
+		if (speed >= ARRAY_SIZE(speed_code))
+			return -EINVAL;
+		if (base + 0x7e0004 + 4 > ZX279133_NPPT_WINDOW_SIZE)
+			return -EINVAL;
+
+		zx279133_9132_xbasex_word(eth, base + 0x0c001c, 0, 1,
+					  "ctl");
+		zx279133_9132_xbasex_word(eth, base + 0x0e0010, ~0x1u, 0,
+					  "ctrl1");
+		zx279133_9132_xbasex_word(eth, base + 0x040000, ~0x2000u, 0,
+					  "xmac1");
+
+		/* SR_MII_CTRL: the speed bits, then full duplex. */
+		w = readl(eth->base + base + 0x7c0000);
+		pr_info("xbasex: %-10s nppt+0x%06x 0x%08x -> 0x%08x\n",
+			"sr_mii", base + 0x7c0000, w,
+			(w & ~0x2061u) | speed_code[speed]);
+		writel((w & ~0x2061u) | speed_code[speed],
+		       eth->base + base + 0x7c0000);
+		zx279133_9132_xbasex_word(eth, base + 0x7c0000, ~0x100u,
+					  0x100, "sr_mii");
+
+		zx279133_9132_xbasex_word(eth, base + 0x0c001c, ~0x2000u, 0,
+					  "ctl");
+		zx279133_9132_xbasex_word(eth, base + 0x0c001c, ~0x800u,
+					  0x800, "ctl");
+
+		for (i = 0; i < 400; i++) {
+			w = readl(eth->base + base + 0x0e0040);
+			if (((w >> 2) & 0x7) == 4) {
+				poll = i;
+				break;
+			}
+			usleep_range(1000, 1100);
+		}
+		pr_info("xbasex: %-10s nppt+0x%06x 0x%08x, ready after %d read(s)\n",
+			"status", base + 0x0e0040, w,
+			poll < 0 ? 400 : poll);
+
+		zx279133_9132_xbasex_word(eth, base + 0x0c001c, ~0x800u, 0,
+					  "ctl");
+
+		/* VR_MII_AN_CTRL: pcs_mode = 0 is 1000BASE-X. */
+		zx279133_9132_xbasex_word(eth, base + 0x7e0004, ~0x6u, 0,
+					  "an_ctrl");
+
+		/* byPassEnableSet(port, 1). */
+		zx279133_9132_xbasex_word(eth, base + 0x0e0014, ~0x10u,
+					  0x10, "bypass");
+
+		pr_info("xbasex: done, base nppt+0x%06x, speed %u\n", base,
+			speed);
 		return count;
 	}
 
