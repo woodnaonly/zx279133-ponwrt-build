@@ -15,6 +15,7 @@
 #include <linux/debugfs.h>
 #include <linux/io.h>
 #include <linux/iopoll.h>
+#include <linux/kstrtox.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
 #include <linux/of.h>
@@ -45,6 +46,10 @@ struct zx279133_uni_serdes {
 	struct mutex lock;
 	bool powered;
 	int submode;
+	/* Which of the two 1G images to write: 0 = the tree's own, 1 = the
+	 * loader's measured base-X image (see the two arrays below).
+	 */
+	int image_sel;
 };
 
 /* Vendor uni_mode_eth_10gbase_r_cfg(), used for Uni mode 1. */
@@ -128,10 +133,49 @@ static const u32 zx279133_uni_1g_profile[] = {
 static_assert(ARRAY_SIZE(zx279133_uni_1g_profile) ==
 	      ZX279133_UNI_SERDES_PROFILE_WORDS);
 
+/*
+ * The image the bootloader itself leaves in this block, measured on the
+ * board on 2026-10-28 14:46 with `md 0x16100000 0x40` at the loader's
+ * prompt, after the loader's net init had run (the loader only configures
+ * this lane when its network is brought up - `uni serdes init succeed` and
+ * `mode_eth_1gbase_x_cfg` in its log).
+ *
+ * It differs from the image above in 20 of the 49 words, and the two that
+ * matter most are the mode word and word 0:
+ *
+ *	word 0		0xe0000004 here and in the image above (0xe0001004 was
+ *			the one that used to be wrong here)
+ *	word 21	(mode)	0x00000409 here, 0x00000101 in the image above
+ *
+ * The image above is the one that makes the four 1G jacks work today, so
+ * this one is not put in its place: the console writes either of them on
+ * demand, which is how the two are compared on a live board.
+ */
+static const u32 zx279133_uni_1gbase_x_profile[] = {
+	0xe0000004, 0x4fa8c0a2, 0x013e8604, 0x1f51c8f3,
+	0x00000044, 0x00194000, 0x00ff8000, 0x00238220,
+	0x80000100, 0x00050000, 0x0c633830, 0x00000000,
+	0x00000020, 0x00002000, 0x00000000, 0x00ff0000,
+	0x05a85100, 0x00000000, 0x04005b6a, 0x60002220,
+	0x34000003, 0x00000409, 0x00000080, 0x00000000,
+	0x200574a8, 0x00649052, 0x01000000, 0x40007700,
+	0xa9004000, 0x01108002, 0x000000da, 0x800000c8,
+	0x10371037, 0x01000200, 0x00020001, 0x10000000,
+	0x0000001c, 0x802dc000, 0x000000ff, 0x55555500,
+	0x55555555, 0x00555555, 0x30000818, 0x40002000,
+	0x0000000c, 0x01000000, 0x00000080, 0x00010000,
+	0x00000000,
+};
+
+static_assert(ARRAY_SIZE(zx279133_uni_1gbase_x_profile) ==
+	      ZX279133_UNI_SERDES_PROFILE_WORDS);
+
 static void zx279133_uni_serdes_write_profile(struct zx279133_uni_serdes *priv)
 {
 	const u32 *profile = priv->submode == PHY_INTERFACE_MODE_SGMII ?
-		zx279133_uni_1g_profile : zx279133_uni_10g_profile;
+		(priv->image_sel ? zx279133_uni_1gbase_x_profile :
+				   zx279133_uni_1g_profile) :
+		zx279133_uni_10g_profile;
 	unsigned int i;
 
 	for (i = 0; i < ZX279133_UNI_SERDES_PROFILE_WORDS; i++)
@@ -383,8 +427,11 @@ static void zx279133_uni_serdes_cleanup(void *data)
  * the array in this file, which is circular and once hid a one-bit
  * difference (word 0 was 0xe0001004 here and 0xe0000004 in the loader).
  *
- *	"dump"	print the first 256 words and the two status words
- *	"write"	write the profile again and set the enable bit
+ *	"dump"		print the first 256 words and the two status words,
+ *			and the words in which the two 1G images differ
+ *	"write"		write the image the tree uses again, and set the
+ *			enable bit
+ *	"write 1"	write the loader's measured base-X image instead
  *	"reset"	pulse the rx/tx resets
  */
 static ssize_t zx279133_uni_serdes_console(struct file *file,
@@ -402,6 +449,8 @@ static ssize_t zx279133_uni_serdes_console(struct file *file,
 	buf[count] = '\0';
 
 	if (!strncmp(buf, "dump", 4)) {
+		unsigned int diff = 0;
+
 		for (i = 0; i < 256; i++)
 			pr_info("uni serdes +0x%03x = 0x%08x\n", i * 4,
 				readl(priv->serdes + i * 4));
@@ -409,17 +458,38 @@ static ssize_t zx279133_uni_serdes_console(struct file *file,
 			readl(priv->serdes + ZX279133_UNI_SERDES_MODE_CTRL),
 			readl(priv->serdes + ZX279133_UNI_SERDES_PLL_STATUS),
 			readl(priv->serdes + ZX279133_UNI_SERDES_RX_STATUS));
+		pr_info("uni serdes: image %d\n", priv->image_sel);
+		for (i = 0; i < ZX279133_UNI_SERDES_PROFILE_WORDS; i++)
+			if (zx279133_uni_1g_profile[i] !=
+			    zx279133_uni_1gbase_x_profile[i]) {
+				pr_info("uni serdes: word %u differs: own 0x%08x, loader's 0x%08x\n",
+					i, zx279133_uni_1g_profile[i],
+					zx279133_uni_1gbase_x_profile[i]);
+				diff++;
+			}
+		pr_info("uni serdes: %u of %d word(s) differ between the two images\n",
+			diff, ZX279133_UNI_SERDES_PROFILE_WORDS);
 		return count;
 	}
 
 	if (!strncmp(buf, "write", 5)) {
+		int which = priv->image_sel;
+
+		if (buf[5] == ' ') {
+			if (kstrtoint(buf + 6, 0, &which))
+				return -EINVAL;
+		}
+		if (which != 0 && which != 1)
+			return -EINVAL;
+
 		mutex_lock(&priv->lock);
+		priv->image_sel = which;
 		zx279133_uni_serdes_write_profile(priv);
 		writel(readl(priv->serdes + ZX279133_UNI_SERDES_MODE_CTRL) |
 			ZX279133_UNI_SERDES_ENABLE,
 			priv->serdes + ZX279133_UNI_SERDES_MODE_CTRL);
 		mutex_unlock(&priv->lock);
-		pr_info("uni serdes: profile written again\n");
+		pr_info("uni serdes: image %d written again\n", which);
 		return count;
 	}
 
