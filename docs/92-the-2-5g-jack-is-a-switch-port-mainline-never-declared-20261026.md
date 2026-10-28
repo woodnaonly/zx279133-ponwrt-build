@@ -10156,3 +10156,180 @@ mii 45read 5 0x07 0x01     ->  00E9
 * 近端 PCS 四字应为 `0x2140` / `0x0020` / `0x2000` / `0x0000` ⇒ **N67**；
 * 内核日志出现 `the loader brought this lane up` ⇒ **N63**。
 
+
+### 96.17 判决 ZZ：毁掉 lane 的那一下被定位到 6.742 秒；判决 AAA：这四个字在 MMD 0x1f，不在 0x1e
+
+§96.13 用三条证据支撑「内核的两个复位把加载器的配置与链路状态一起抹掉了」。这一轮把加载器
+自己一侧量清楚之后（§96.15、§96.16），这三条的现状是：
+
+1. **「Uni SerDes 驱动开机时打的复位脉冲把 lane 的 PCS 一起抹掉了」—— 不成立。**
+   复位之后读到的四个 PCS 字（`BMCR 0x2140` / `speed 0x0020` / `DIG_CTRL1 0x2000` /
+   `AN_CTRL 0x0000`）与加载器 net init 之后的一模一样（§96.15.1）。
+   上一次之所以看起来被抹掉了，是因为拿 **1G 分支**的加载器值去比 **2.5G 分支**那一次开机。
+2. **「XMAC0 的复位字与 PCS 共享，所以连 PCS 的链路状态一起带走」—— 仍然没有单独量过。**
+   run233 里状态字从 `0x380b` 变 `0x280b`，发生在驱动改写 PCS 的同一个区间里，两件事分不开。
+   ⇒ 这一条降级为「未量」。补丁不再依赖它（XMAC0 现在也不复位了），但它不能再当证据用。
+3. **「驱动把 PCS 改写成 1G 那一份，是毁掉 lane 的那一下」—— 成立，而且已经定位到字。**
+   近端被改成 1G base-X（`BMCR 0x1140` / `DIG_CTRL1 0x2200` / `AN_CTRL 0x0005`，自动协商开着），
+   远端在 2500BASE-X（`1e.0x7580 = 0x9416`）且它的自动协商在 `0x00e9`（锁上）与 `0x00ad`
+   （重启）之间抖。两端不是一个档，就是这个。
+
+⇒ **判决 TT 的结论不受影响**（「加载器带起来的 lane 不要动」），**理由换成第 3 条**：
+不是复位抹掉了它，是这个驱动**写成了另一份配方**。这一轮的两处改动（不重写 Uni SerDes 的
+图像、继承分支不碰 PCS 的四个字）挡的正是第 3 条。
+
+#### 96.17.1 判决 ZZ：开机日志自带两次快照，那一下在哪一秒
+
+run233 的开机日志里有两次 lane 快照，前后各一份，**中间没有第三个人动过这个 lane**。
+把两份并排放，毁掉 lane 的那一下就自己站出来了（`staging/ctl/serial.log`，2026-10-29 05:28 那次开机）：
+
+```
+[  1.650881] lane pre-serdes: XPCS0 status=0x380b (bits 11..13 = 0x007) XMAC link=0x0001
+[  1.650895] lane pre-serdes: XMAC0 tx=0xc0010000 rx=0x3e8000c6 ...
+[  1.651115] Uni SerDes lane set to SGMII mode
+[  5.662423] Uni SerDes 1G profile written: mode 0x101 already, image differs in 0/49 word(s)
+[  5.662486] lane pre-pcs: XPCS0 status=0x380b (bits 11..13 = 0x007) XMAC link=0x0001
+[  5.662548] lane pre-pcs: XPCS vend2 AN_CTRL   = 0x0000
+[  5.662561] lane pre-pcs: XPCS vend2 DIG_CTRL1 = 0x2000
+[  5.662573] lane pre-pcs: XPCS vend2 BMCR      = 0x2140
+[  5.662586] lane pre-pcs: XPCS pcs BMCR        = 0x0440
+[  5.662598] the NPPT PCS status word is 0x380b; the lane is programmed here, not inherited
+[  5.664457] the 2.5G jack's MAC (XMAC0) runs at 2.5G; the loader's TX_CTRL speed field was 6
+[  6.742327] lane after: XPCS0 status=0x280b (bits 11..13 = 0x005) XMAC link=0x0001
+[  6.742384] lane after: XPCS vend2 AN_CTRL   = 0x0005
+[  6.742397] lane after: XPCS vend2 DIG_CTRL1 = 0x2200
+[  6.742409] lane after: XPCS vend2 BMCR      = 0x1140
+[  6.742421] lane after: XPCS pcs BMCR        = 0x0440
+```
+
+⇒ 加载器在 **5.662 秒之前**把这条 lane 带成了 2.5G：Uni SerDes 里是它的 2.5G 图像，
+PCS 的四个字是 `0x2140 / 0x0020 / 0x2000 / 0x0000`，XMAC0 的速率档是 6。
+内核在 **5.662 秒**把 Uni SerDes 换成树自己的 1G 图像（`mode 0x101`），
+在 **6.742 秒**把 PCS 的四个字换成驱动的 1G 那份（`0x1140 / 0x0020 / 0x2200 / 0x0005`），
+状态字跟着从 `0x380b` 变成 `0x280b`。**两次写都是这个驱动自己干的，两次写的都是 1G 配方。**
+
+这比 §96.13 的说法精确：**不是「复位抹掉了」，是「驱动改写成了另一份配方」**，
+而那份配方（1G base-X，自动协商开着）对不上远端的 2500BASE-X。
+两次写里致命的是第二次（PCS 的四个字），第一次（SerDes 图像）把速率档也一起改成了 1G。
+
+⇒ CI #236（Uni SerDes：块里已经配过就不复位不重写）与 CI #237（继承分支：不碰 PCS 的四个字）
+正好各挡掉一次写。两样都挡住，这条 lane 就会保持加载器交下来的样子。
+
+#### 96.17.2 判决 AAA：这四个字在 MMD 0x1f（VEND2），不在 0x1e（VEND1）
+
+上面那两份快照里，`vend2` 三个字是从 **MMD 0x1f** 读出来的：`MDIO_MMD_VEND2 = 31 = 0x1f`
+（`include/uapi/linux/mdio.h`：`MDIO_MMD_VEND1 = 30 = 0x1e`、`MDIO_MMD_VEND2 = 31 = 0x1f`、
+`MDIO_MMD_PCS = 3`、`MDIO_MMD_AN = 7`）。驱动写的也是这个 MMD
+（`zx279133_switch_xpcs_write_words()` 用的就是 `MDIO_MMD_VEND2`）。
+
+⇒ 上一轮（win134）那次活体实验写错了 bank：它把加载器的 2.5G 配方写去了 **0x1e**，
+读回 `0x0000` / `0x7996`，于是记成「这四个字在 NPPT prepare 之后写不进去」。
+写不进去的是 **0x1e 这个 bank**，跟这四个字没有关系 —— 而 `0x1f 0x0000` 在同一时刻读出来
+是 `0x1140`，正是驱动自己 6.742 秒写进去的那个值，读得出来。
+
+**活体复核（win135，2026-10-29 05:50–05:53，staging/ctl/win135.log）**：
+
+```
+k xpcsw 0x1e 0x0000 0x2140 -> 0000      写在 0x1e：写不进
+k xpcsw 0x1e 0x0004 0x0020 -> 7996      读回的还是原值
+k xpcsw 0x1e 0x8000 0x2000 -> 0000
+k xpcsw 0x1e 0x8001 0x0000 -> 0000
+k xpcs  0x1f 0x0000 1140                0x1f 上的还是驱动的 1G 那份
+k xpcs  0x1f 0x0004 0020
+k xpcs  0x1f 0x8000 2200
+k xpcs  0x1f 0x8001 0005
+k xpcsw 0x1f 0x0000 0x2140 -> 2140      写在 0x1f：写进去了
+k xpcsw 0x1f 0x0004 0x0020 -> 0020
+k xpcsw 0x1f 0x8000 0x2000 -> 2000
+k xpcsw 0x1f 0x8001 0x0000 -> 0000
+```
+
+⇒ **判决 AAA 成立**：这四个字在 `0x1f`，在 `0x1e` 写不进不是 PCS 的毛病。
+
+⇒ **必须改掉的一句**：`zx279133-np.c` 调试台注释里写着「the switch driver reaches the same
+registers by a different map ... the same words live at MMD 0x1e (SR-MII and VR-MII)」。
+这句是错的：字在 `0x1f`。`0x1e` 是 VEND1，是另一个 bank（它在 5.66 秒读到 `0x0440`，
+在 prepare 之后读到 `0x0000`/`0x7996`；这两个时点之间发生过什么没有单独量过）。
+正是这句错的注释把 win134 带到了 `0x1e` 上。
+
+⇒ 顺带把树里两个名字改对：`image1`（`mode 0x409`）现在被叫成「the board's 1G base-X image」，
+但它其实是**加载器 2.5G 分支留下的那一份**（§96.15 测得 49 个字 0/49 差异）；
+`image2`（`mode 0x408`）才是厂商 `np_133.ko` 的 2.5G 图，而加载器不用它（差 word6/word21）。
+
+#### 96.17.2.1 判决 BBB：把 2.5G 配方拿走的是 lane 的 watch，不是任何复位
+
+win135 把加载器的 2.5G 配方原样写回了 `0x1f`（`0x2140 / 0x0020 / 0x2000 / 0x0000`），
+读回来四个字全对，**一秒不到**就被改回去了。内核日志把动手的人写了出来：
+
+```
+[  109.690734] xpcs lane 1 devad 0x1f reg 0x8001 = 0x0000     我们写的 AN_CTRL
+[  110.720442] the lane's PCS lost its configuration (AN_CTRL = 0x0000);
+                the loader's values are written again
+[  110.720510] the lane's PCS took the loader's values again (AN_CTRL = 0x0005)
+[  121.694945] xpcs lane 1 devad 0x1f reg 0x0000 = 0x1140      又变回 1G 那份
+```
+
+⇒ 不是复位，不是硬件自己清零（**N79**：win136 里写完模式字 `0x8001 = 0x0000` 之后立刻读
+`0x1f 0x0000`，读到的还是 `0x1140`，一个字也没少 —— 写模式字不会清掉 BMCR），
+是**驱动自己的 lane watch** 把它当成了「配置丢了」。
+
+原因在 run233 那版 watch 的判据：它拿 AN_CTRL 和一个写死的值（`0x0005`，1G 那份的）
+比。加载器的 2.5G 配方的 AN_CTRL 合法地就是 `0x0000`（定速链路，自动协商是关着的），
+所以每一次都判成「配置丢了」，然后把 1G 那份写回去。
+
+⇒ **CI #235 已经改掉这一条**：现在的 watch 只看一件事 —— 块是不是空的
+（`AN_CTRL` 与 `BMCR` 都是 0）。2.5G 配方下 `BMCR = 0x2140` 不是 0，块不空，watch 不动手。
+⇒ 这也解释了 §96.17.1 里那句「状态字从 `0x380b` 变 `0x280b`」：改的不只是 PCS 的字，
+还有 mode —— 而 mode 一变，远端就再也协商不上了。
+
+#### 96.17.2.2 活体实验另外问出来的三件事
+
+1. **N74：NPPT 的 prepare 没有抹掉 Uni SerDes 的图像。**
+   prepare 在开机约 13 秒，之后读模式字仍是 `0x00000101`（树自己的 1G 图像），
+   不是复位默认的 `0x01`。所以「prepare 把 lane 拆了」这个说法也不成立。
+2. **只把 Uni SerDes 换回 image1，远端的 SerDes 链路就起来了。**
+   写之前 `1e.0x758d = 0x8018`（bit1 清着），写完立刻变成 `0x801e`（bit1 置上），
+   而且这时 PCS 还是 1G 那份。⇒ 决定链路起不起的是 **SerDes 图像**，不是 PCS 的四个字。
+3. **帧仍然进不来。** PCS 停在 1G 那份时，`lan5` 的 rx 是 **0 字节 0 包**，
+   远端的 `7.0x01` 停在 `0x00ad`（`0x40` 位清着），而加载器那里是 `0x00e9`。
+   ⇒ 两端必须同时在 2.5G 档，这一条 lane 才走帧。
+
+顺带量到两条与 lane 有关的旁证（同一块板，同一次开机）：
+- `XMAC0 TX_CTRL = 0xc0010001`，速率字段 31:29 仍然是 **6（2.5G）**，
+  开机 293 秒后也没有被 phylink 改回 1G ⇒ 判决 FF 的那一版是稳的。
+- NPPT 的 PCS 状态字在写回 2.5G 配方之后回到 `0x380b`（加载器 2.5G 档的签名），
+  而 1G 配方下是 `0x280b` ⇒ 这个字确实跟着配方走，可以当旁证用。
+
+#### 96.17.3 配方跟档走：下一轮的代码怎么改
+
+两个分支各有一份配方，加载器按远端的 SerDes 模式选（判决 UU）：
+
+| 档 | Uni SerDes 图像 | PCS BMCR | SR-MII speed | DIG_CTRL1 | AN_CTRL | XMAC0 速率档 |
+|---|---|---|---|---|---|---|
+| 1G  base-X | image0 `mode 0x101` | `0x1140` | `0x0020` | `0x2200` | `0x0005` | 3 |
+| 2.5G base-X | image1 `mode 0x409` | `0x2140` | `0x0020` | `0x2000` | `0x0000` | 6 |
+
+两边只差五个位：`BMCR` 的 bit13、`DIG_CTRL1` 的 bit9、`AN_CTRL` 的 bit0 与 bit2，
+以及 `AN_CTRL` 全零（2.5G 支跑的是定速链路，自动协商是关着的）。
+
+⇒ 速率档的来源已经有了（判决 FF：加载器的 `XMAC0 TX_CTRL` 的速率字段，6 = 2.5G / 3 = 1G），
+所以「配方跟档走」是现成的：驱动自己编程这条 lane 的时候，PCS 的四个字与 Uni SerDes 的图像
+都按这个档取，而不是一律取 1G 那一份。继承分支（CI #237）不动 PCS，也就不受这条影响。
+
+#### 96.17.4 已经问出来的，和还要问的
+
+| 编号 | 判据 | 状态 |
+|---|---|---|
+| N74 | NPPT prepare 之后 Uni SerDes 的模式字还是不是加载器留下的那一个 | **已答**：prepare 之后仍是 `0x101`，prepare 没有抹掉图像（win135） |
+| N75 | 把 2.5G 配方写回 `MMD 0x1f` 之后，远端 `1e.0x758d` 的 bit1 是不是置上、`7.0x01` 的 `0x40` 位是不是保住 | **一半**：`0x758d` 置上了（`0x801e`），但那是只换 SerDes 图像的效果；`7.0x01` 仍是 `0x00ad`，因为 PCS 那时被 watch 改回了 1G（win135） |
+| N76 | 同一时刻远端 `1e.0x7580` 的模式字段是不是 `0x16`（2500BASE-X） | **已答**：`0x9416`（run233 的开机日志，远端一直在 2500BASE-X） |
+| N77 | 继承分支（CI #237）开机后，lane 的六个读数是不是加载器交下来的那六个 | 待镜像（`staging/ctl/win132.sh`） |
+| N78 | 配方对之后这条 lane 是不是真的走帧：`lan5 rx` 与 `lan-cpu0 rx` 同步涨 | **当前是反例**：PCS 停在 1G 那份时 `lan5 rx = 0 字节 0 包` |
+| N79 | 写模式字会不会把 BMCR 清零 | **已答**：不会（win136，写完 `0x8001 = 0x0000` 立刻读 `0x0000` 仍是 `0x1140`） |
+| N80 | 四个字的写入顺序 | **已答**：顺序无所谓，四个字都能写进去（win136） |
+| N81 | 完整 2.5G 配方在位且 watch 不插手时，远端 `7.0x01` 是不是 `0x00e9` | 待镜像（watch 在 run233 里会插手，测不了） |
+| N82 | 同上，远端 `1e.0x758d` 是不是稳在 `0x801e` | 同上 |
+
+活体实验：`staging/ctl/win135.sh`（配方回写 + 两个 bank）、
+`staging/ctl/win136.sh`（写入顺序与「模式字会不会清零 BMCR」）；
+镜像验证：`staging/ctl/win132.sh`（继承分支 + 远端读数 + 帧流）。

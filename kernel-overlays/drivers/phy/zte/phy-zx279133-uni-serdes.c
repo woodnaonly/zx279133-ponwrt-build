@@ -52,8 +52,9 @@ struct zx279133_uni_serdes {
 	struct mutex lock;
 	bool powered;
 	int submode;
-	/* Which of the two 1G images to write: 0 = the tree's own, 1 = the
-	 * loader's measured base-X image (see the two arrays below).
+	/* Which of the three images to write: 0 = the tree's own 1G one,
+	 * 1 = the loader's 2.5G one, 2 = the vendor's 2.5G one (see the
+	 * three arrays below).
 	 */
 	int image_sel;
 };
@@ -146,12 +147,20 @@ static_assert(ARRAY_SIZE(zx279133_uni_1g_profile) ==
  * this lane when its network is brought up - `uni serdes init succeed` and
  * `mode_eth_1gbase_x_cfg` in its log).
  *
- * It differs from the image above in 20 of the 49 words, and the two that
+ * It differs from the image above in 18 of the 49 words, and the two that
  * matter most are the mode word and word 0:
  *
  *	word 0		0xe0000004 here and in the image above (0xe0001004 was
  *			the one that used to be wrong here)
  *	word 21	(mode)	0x00000409 here, 0x00000101 in the image above
+ *
+ * Which image this is, settled by measurement on 2026-10-29 05:11 at the
+ * loader's own prompt in a boot where the loader took its 2.5G branch
+ * (docs/92 §96.15): the 49 words the loader left behind then are this
+ * image, word for word - 0 of 49 different.  The loader's other branch,
+ * the 1G one, leaves the image above (mode 0x101).  So this is the
+ * loader's 2.5G image, and the name it used to carry here ("the board's
+ * 1G base-X image") was wrong.
  *
  * The image above is the one that makes the four 1G jacks work today, so
  * this one is not put in its place: the console writes either of them on
@@ -190,6 +199,11 @@ static_assert(ARRAY_SIZE(zx279133_uni_1gbase_x_profile) ==
  * (0x00ff8000 here, 0x0b080000 in the vendor's copy) and word 21, the mode
  * word at 0x16100054 (0x409 here, 0x408 in the vendor's copy; bit 0 is the
  * enable bit and the driver sets it anyway).
+ *
+ * The loader does not use this one: in its 2.5G branch the block is left
+ * holding the array above, word for word (0 of 49 different, measured
+ * 2026-10-29 05:11 at the loader's prompt, docs/92 §96.15), and this one
+ * differs from that in exactly the two words named here.
  *
  * The mode word is what tells the two apart at runtime: 0x101 is the 1G
  * image, 0x409 is the 2.5G one.  On 2026-10-29 the driver was seen putting
@@ -410,8 +424,8 @@ static int zx279133_uni_serdes_power_on(struct phy *phy)
 			 */
 			static const char *const names[] = {
 				"the tree's 1G image",
-				"the board's 1G base-X image",
-				"the vendor's 2.5G base-X image",
+				"the loader's 2.5G image",
+				"the vendor's 2.5G image",
 			};
 			const u32 *profile;
 			int match = -1;

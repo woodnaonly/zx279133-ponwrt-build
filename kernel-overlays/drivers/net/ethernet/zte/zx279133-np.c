@@ -1591,37 +1591,24 @@ static ssize_t zx279133_9132_write(struct file *file, const char __user *ubuf,
 	 * The first argument picks the lane: 0 = the PCS of eth0's MAC (XMAC1
 	 * by default), 1 = the LAN lane's PCS (XMAC0's).
 	 *
-	 * The "devad" is NOT a Clause 45 MMD here, and using it as one is
-	 * how this console was misread for a whole round.  The console goes
-	 * through the XPCS platform driver's own register window, and that
-	 * window decodes an access as
+	 * The "devad" is a real Clause 45 MMD.  The console goes through the
+	 * SoC's own MDIO controller, the same one the switch driver uses, and
+	 * MMD 0x1f - MDIO_MMD_VEND2 - is where this lane's four words live:
+	 * the BMCR, the SR-MII speed word, DIG_CTRL1 and AN_CTRL.  That is
+	 * where zx279133_switch_xpcs_write_words() writes them, and where
+	 * they read back.
 	 *
-	 *	base + ((devad << 16) | reg) * 4
+	 * MMD 0x1e is MDIO_MMD_VEND1, a different bank.  Measured 2026-10-29
+	 * 05:52 (staging/ctl/win135.log): the loader's 2.5G recipe written
+	 * there does not take - 0x0000 stays 0x0000 and 0x0004 stays 0x7996 -
+	 * while the same four writes on 0x1f read back exactly what was
+	 * written (0x2140 / 0x0020 / 0x2000 / 0x0000).  So a read of 0x1e
+	 * that answers zero says nothing about this lane's four registers.
 	 *
-	 * (drivers/net/pcs/pcs-xpcs-plat.c), so the "devad" is a bank select
-	 * and the banks are:
-	 *
-	 *	0x1f	0x7c0000, the SR-MII words, and 0x7e0000, the VR-MII words
-	 *	0x03	0x0c0000, the PMAPMD words, and 0x0e0000, the XS PCS words
-	 *	0x01	0x040000, the PHY words
-	 *
-	 * which is the map the vendor's own np_133.ko uses, because the
-	 * vendor addressed the block by raw offsets.
-	 *
-	 * The switch driver reaches the same registers by a different map:
-	 * through the SoC's MDIO controller, where the "devad" is a real
-	 * Clause 45 MMD and the same words live at MMD 0x1e (SR-MII and
-	 * VR-MII), 0x04 (PMAPMD and XS PCS) and 0x03 (PHY).  Both maps reach
-	 * the same registers - measured 2026-10-29: the driver read back a
-	 * value this console had written, and then put the loader's value
-	 * back - but the wrong one reads a dead window, which is what
-	 * "xpcs 1 0x1e 0x8001" does: it answers 0x0000 while the live
-	 * AN_CTRL is 0x0005.
-	 *
-	 * So the devad goes up to 63, not 31: the banks above are 0x1f, 0x03
-	 * and 0x01, and the tree's own drivers address the PCS's own
-	 * registers through the other map, so the console has to be able to
-	 * reach both.
+	 * This comment used to say the opposite - that the four words live on
+	 * MMD 0x1e - and that is what sent the measurements of the round
+	 * before this one to the wrong bank (staging/ctl/win134.log), where
+	 * the write "did not take" and the block was declared unwritable.
 	 */
 	if (!strcmp(tok, "xpcs") || !strcmp(tok, "xpcsw")) {
 		bool is_write = tok[4] == 'w';
