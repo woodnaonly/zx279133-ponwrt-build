@@ -383,19 +383,58 @@ static int zx279133_uni_serdes_power_on(struct phy *phy)
 		 * not touch it.
 		 */
 		{
-			const u32 *profile = zx279133_uni_serdes_image(priv->image_sel);
-			bool inherited = true;
+			/*
+			 * Is there anything in this block at all?
+			 *
+			 * The reset default of this block is the mode word 0x01
+			 * and a run of words this driver does not know.  Any
+			 * other mode word means somebody configured this
+			 * SerDes - and on this board that somebody is the
+			 * bootloader, whose net bring-up writes one of the
+			 * vendor's images into this block.
+			 *
+			 * Which image it is does not have to be known to
+			 * decide this.  The bootloader runs the vendor's own
+			 * U-Boot code, and its copy of an image is not
+			 * necessarily word for word the copy in np_133.ko -
+			 * the mode word is what says "configured", and the
+			 * three known images are only used to name it in the
+			 * log.
+			 *
+			 * Not touching this block matters more than writing
+			 * the right one: this block's reset takes the SerDes
+			 * domain down, and the lane's PCS lives in that
+			 * domain.  The reset is what emptied the PCS
+			 * (AN_CTRL 0x0000) in every boot measured on
+			 * 2026-10-29 (staging/ctl/win129.log).
+			 */
+			static const char *const names[] = {
+				"the tree's 1G image",
+				"the board's 1G base-X image",
+				"the vendor's 2.5G base-X image",
+			};
+			const u32 *profile;
+			int match = -1;
+			int sel;
 
-			for (i = 0; i < ZX279133_UNI_SERDES_PROFILE_WORDS; i++)
-				if (readl(priv->serdes + i * 4) != profile[i]) {
-					inherited = false;
+			status = readl(priv->serdes + ZX279133_UNI_SERDES_MODE_CTRL);
+			for (sel = 0; sel < (int)ARRAY_SIZE(names); sel++) {
+				profile = zx279133_uni_serdes_image(sel);
+				for (i = 0; i < ZX279133_UNI_SERDES_PROFILE_WORDS; i++)
+					if (readl(priv->serdes + i * 4) != profile[i])
+						break;
+				if (i == ZX279133_UNI_SERDES_PROFILE_WORDS) {
+					match = sel;
 					break;
 				}
-			status = readl(priv->serdes + ZX279133_UNI_SERDES_MODE_CTRL);
-			if (inherited && (status & ZX279133_UNI_SERDES_ENABLE)) {
+			}
+			if ((status & ZX279133_UNI_SERDES_ENABLE) &&
+			    (status & ~ZX279133_UNI_SERDES_ENABLE)) {
 				dev_info(priv->dev,
-					 "Uni SerDes image inherited: mode %#x, image differs in 0/%d word(s), status %#x/%#x; the block is not reset\n",
-					 status, ZX279133_UNI_SERDES_PROFILE_WORDS,
+					 "Uni SerDes image inherited: mode %#x, %s, status %#x/%#x; the block is not reset\n",
+					 status,
+					 match >= 0 ? names[match] :
+					 "an image this driver does not know",
 					 readl(priv->serdes + ZX279133_UNI_SERDES_PLL_STATUS),
 					 readl(priv->serdes + ZX279133_UNI_SERDES_RX_STATUS));
 				priv->powered = true;

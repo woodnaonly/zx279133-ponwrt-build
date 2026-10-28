@@ -9897,3 +9897,139 @@ MISC_CFG |= 0x200）——**厂商 Linux 的 XMAC 编程与这条 lane 能通的
 （待补：CI #234/#235 的镜像上的结果；以及「加载器真的把 lane 带起来」那一次
 开机——需要 PC 的网线插在面板 LAN1 上让 U-Boot 的 net init 走这条 lane。）
 
+
+### 96.14 判决 UU/VV/WW：加载器有两条配方，内核把它们都毁了（2026-10-29 05:05–06:10）
+
+这一轮没有等镜像。CI #234 与 #235 在跑的时候，把串口日志里 **1163 次 U-Boot 开机**全部切段统计了一遍
+（`staging/ctl/bootscan.py`、`staging/ctl/branchscan.py`、`staging/ctl/ubdiff.py`），问的是一个
+一直没问过的问题：**加载器对这条 lane 到底做了什么，有几种做法。**
+
+#### 96.14.1 判决 UU：加载器按远端 PHY 的 SerDes 模式选两条配方
+
+加载器的 net init 里有一段专门对付 outerphy（RTL8226）的代码，它先读远端 PHY 的 SerDes 模式，
+再据此选一条配方。把 1G 那次与 2.5G 那次的整段逐行 diff（`staging/ctl/uboot_1g.txt`、
+`staging/ctl/uboot_2p5g.txt`）：
+
+```
+--- 1G 支                                    +++ 2.5G 支
+PHY_RLT8226_MDIO_READ_EXTENDED(0x2)          PHY_RLT8226_MDIO_READ_EXTENDED(0x16)
+test:cur 0 phy sereds mode : 0x6             test:cur 0 phy sereds mode : 0x3
+mode_eth_1gbase_x_cfg                        mode_eth_2p5gbase_x_cfg
+com_pll_lock_ready                           sc_pll_lock_ready
+uni serdes init succeed                      uni serdes init succeed
+xmac 0 speed set 2 in sgmii(xmac speed 3)    （没有这一行）
+mac 4 phy status changed: 1000M full-duplex  mac 4 phy status changed: 2.5G full-duplex
+```
+
+⇒ 三条：
+
+1. **选档的依据在远端**：读的是 RTL8226 的 SerDes 模式（clause-22 扩展页 0x2 与 0x16），读出
+   `0x6` 走 1G base-X 配方、读出 `0x3` 走 2.5G base-X 配方。
+2. **1G 支多一行 `xmac 0 speed set 2 in sgmii(xmac speed 3)`** —— 这就是近端 XMAC0 的速率档被
+   写成 3（1G）的地方（`TX_CTRL` = `0x60010000`，速率位 31:29 = 3）。2.5G 支不写这一行，
+   近端留下的是 `0xc0010000`（速率位 = 6）。
+3. **两支都调 `uni_serdes_init`**，也就是两支写的 Uni SerDes 图像不同
+   （`mode_eth_1gbase_x_cfg` 与 `mode_eth_2p5gbase_x_cfg`）。
+
+统计：1163 次开机里 **75 次走 1G 支、14 次走 2.5G 支**。两支都在 boot 1115→1120 之间切换过一次
+（1G 支结束于 boot 1115，2.5G 支从 boot 1120 开始）。
+
+#### 96.14.2 判决 VV：`0x380b` 与 `0x2c03` 是**模式签名**，不是通断签名 —— 修正 §96.13 写下的 N62
+
+把每一次开机里 mainline 的起手快照与加载器那一支对齐（`staging/ctl/branchscan2.py`）：
+
+| 加载器 | 次数 | `lane pre-serdes` 整行 |
+|---|---|---|
+| 走 1G 支 | 58 | `XPCS0 status=0x2c03 link=down XMAC link=0x0001` |
+| 走 2.5G 支 | 10 | `XPCS0 status=0x380b link=up XMAC link=0x0001` |
+| 根本没配 outerphy | 373 | `XPCS0 status=0x380b link=up XMAC link=0x0000` |
+
+⇒ **通断看 `nppt+0x0084`（XMAC link），不看 PCS 状态字**：加载器配过这条 lane 的 68 次开机，
+`0x0084` **全是 `0x0001`**；加载器没碰过它的 373 次，**全是 `0x0000`**。
+
+⇒ 而 PCS 状态字只跟着工作模式走：1G 支是 `0x2c03`、2.5G 支是 `0x380b`、内核自己动过 PCS 之后是
+`0x280b`。**三个值都是「配好了」的形态**，只表示配成了哪个档。
+
+⇒ **§96.13 末尾写的 N62（「近端 `NPPT+0x0090` 读 `0x2c03` 一类 = 通流」）作废**：2.5G 分支那 14 次
+开机同样带着帧在跑，只是那个字是 `0x380b`。判据换成 `nppt+0x0084`。
+
+#### 96.14.3 判决 WW：加载器的 2.5G 分支在 U-Boot 里是通的，进内核后被毁掉
+
+**加载器这一侧是通的**。boot 1162（04:47，跑 run233 那次）走的是 2.5G 支，而同一次开机里：
+
+```
+Using eth0 device
+TFTP from server 192.168.9.25; our IP address is 192.168.9.1
+Filename 'run233.itb'.
+Bytes transferred = 12163332 (b99904 hex)
+```
+
+⇒ **12,163,332 字节在加载器的配置下过过这条 lane**。这条 lane 在加载器手里是能跑流量的。
+
+**内核这一侧把它毁了**，三个动作，一件一件来（run233 的内核日志，`staging/ctl/win129.log`）：
+
+| 时刻 | 事件 | 证据 |
+|---|---|---|
+| 1.58 s | 加载器交下来的原状 | `XPCS0 status=0x380b`、`XMAC link=0x0001`、`XMAC0 tx=0xc0010000 rx=0x3e8000c6 frame=0x80000001` |
+| 5.59 s | **Uni SerDes 驱动复位了 SerDes 域，然后写回自己那份 1G 图像** | `Uni SerDes 1G profile written: mode 0x101 already, image differs in 0/49 word(s)` |
+| 5.59 s | 紧接着的快照：PCS 已被清空 | `XPCS vend2 AN_CTRL = 0x0000`、`DIG_CTRL1 = 0x2000`、`BMCR = 0x2140` |
+| 6.67 s | 驱动把 PCS 编成自己那份 1G 四字 | `AN_CTRL = 0x0005`、`DIG_CTRL1 = 0x2200`、`BMCR = 0x1140`，状态字变 `0x280b` |
+| 16.12 s | 远端锁上了 | `AN status 0x00e9`，四个位 `0x01 0x08 0x20 0x40` 全在（`0x0069`） |
+| 16.14 s | 远端又掉了 | `AN status (devad 0x7 reg 0x01) = 0x00ad`（`0x40` 位掉、`0x02` 位置起来） |
+
+⇒ **近端被编成 1G base-X，远端在 2500BASE-X**（`1e.0x7580 = 0x9416`，模式字段 `0x16`），两端档位
+不同，自动协商就在「锁上 / 重启」之间抖，一个帧都不过来。
+
+⇒ **判决 WW：内核做的三件事，各自 作恶**，缺一不可：
+
+1. Uni SerDes 驱动开机时打的复位脉冲 —— 把 SerDes 域拉下水，而**lane 的 PCS 就在这个域里**
+   （复位后 `AN_CTRL` 读 `0x0000`）；
+2. 复位之后写回**树自己那份 1G 图像**（`mode 0x101`），而加载器留的是 2.5G 那张图；
+3. 把 PCS 编成**驱动的 1G 四字**（`0x1140 / 0x0020 / 0x2200 / 0x0005`）。
+
+⇒ 第 1 条是判决 TT 的正身；第 2、3 条是判决 TT 没有覆盖到的两半：**不碰它**才是对的，
+而不是**把它改成另一份**。
+
+#### 96.14.4 这一轮改的代码
+
+- `phy-zx279133-uni-serdes.c`：**块里的模式字只要不是复位默认的 `0x01`，就当作「 somebody 配置过」**，
+  不复位、不重写；三份已知图像（树自己的 1G、板上量到的 1G base-X、厂商的 2.5G base-X）只用来在
+  日志里点名 —— 加载器跑的是厂商 U-Boot，它那份图像与 `np_133.ko` 的那份不保证逐字相同，
+  所以判据是「有没有被配置过」，不是「是不是我这份」。
+- `zx279133-switch.c`：
+  - **继承判据换成两个字**：`(nppt+0x0084) != 0`（加载器配过这条 lane）且
+    `PCS 的 AN_CTRL != 0`（PCS 不是复位值）。命中就**完全不碰 PCS**，只把 XMAC0 的使能位置上
+    （判决 JJ：使能位 mainline 是对的）。
+  - **加载器的四个 PCS 字原样存下来**（`BMCR` / `SR-MII speed` / `DIG_CTRL1` / `AN_CTRL`），
+    watcher 在块被清空时恢复的是**它们**，不是驱动的 1G 四字 —— 后者在 2.5G lane 上是错的。
+  - `pre-pcs` 快照之后把加载器留下的四个字逐个打进日志。
+- 判决 TT 那一版（不复位 XMAC0、Uni SerDes 镜像已在位则不复位）已经在 CI #235 里；
+  这一版是它的补完，#236。
+
+#### 96.14.5 下一轮的判据（先写死）
+
+* **N63** 内核日志出现 `the loader brought this lane up (XMAC link = 0x0001, the PCS's AN_CTRL = 0x....)`
+  ⇒ 继承分支生效，PCS 没被这个驱动重编。
+* **N64** 同一份日志里出现 `Uni SerDes image inherited: mode 0x....`，且**没有**
+  `Uni SerDes 1G profile written` ⇒ SerDes 域没被复位。
+* **N65** 远端 `1e.0x758d` 的 bit1 置位（`0x801e`），且 devad 7 reg 1 的 `0x40` 位一直是 1
+  （`0x00e9`）⇒ 两端在同一个档上并锁住。
+* **N66** lan5 的 rx 涨（对端在面板 LAN1 上有流量）。
+* **N64 不成立** ⇒ 加载器留下的 SerDes 图像不在这三份里 ⇒ 在**同一个**开机里把加载器在提示符下
+  留下的 49 字（`md 0x16100000 0x40`）逐字读回来，与 `np_133.ko` 的三张图逐字比。
+
+#### 96.14.6 owner 侧要动的一件事（重要）
+
+**加载器只在面板 LAN1 的对端有链路的时候才会去配 outerphy 这条 lane**：1163 次开机里，89 次配了
+（75 次 1G 支 + 14 次 2.5G 支），其余的没配。加载器不配它的时候，近端留着的是复位值，
+`nppt+0x0084` 是 `0x0000`，内核只能自己从零编 —— 而从零编这条路已经证伪过五轮
+（§96.7 的 N8 到 §96.13 的 N62）。
+
+⇒ 所以**要把 PC 的网线插到面板 LAN1 再开一次机**。这一轮 PC 在 LAN2，所以加载器的 net init 走的是
+内部 1G 口那条路，outerphy 只是「看见了对端」而被顺带配了一下；PC 在 LAN1 时，流量本身就走这条
+lane（§14/§15 那次 11,471,728 字节的收发就是这么量的，计数涨在 `0x19142400` 与 `0x19142070`
+这两个 XMAC0 窗口的字上）。
+
+⇒ 同时这一次也是端到端（N10）的机会：PC 在 LAN1 上，lan5 的收计数与 `lan-cpu0` 的收计数
+应当同步涨。**测完把网线插回 LAN2**，保住 TFTP 与管理路径。
+

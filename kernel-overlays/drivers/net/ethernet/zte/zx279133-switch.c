@@ -451,6 +451,17 @@ struct zx279133_switch {
 	struct delayed_work lane_work;
 	bool lane_lost;
 	u32 lane_tries;
+	/*
+	 * The loader's own four words for this lane's PCS, saved when the
+	 * loader is the one that configured it (judgment TT).
+	 *
+	 * The watch puts the lane back when the SerDes domain's reset has
+	 * emptied the block, and what it puts back has to be the loader's
+	 * configuration and not this driver's own: this driver's image is a
+	 * 1G one, and the lane may be a 2.5G one.
+	 */
+	bool lane_pcs_inherited;
+	u32 lane_pcs_words[4];
 	u16 saved_vend2_bmcr;
 	u16 saved_vend2_an_ctrl;
 	u16 saved_xpcs_bypass;
@@ -586,31 +597,44 @@ static int zx279133_switch_xpcs_init(struct zx279133_switch *priv)
  * They are written whole, and the read-back is printed, because the whole
  * point is what the block holds.
  */
-static int zx279133_switch_xpcs_program_lane(struct zx279133_switch *priv)
+static int zx279133_switch_xpcs_write_words(struct zx279133_switch *priv,
+					     u32 bmcr, u32 speed,
+					     u32 dig_ctrl1, u32 an_ctrl)
 {
-	int val;
 	int ret;
 
 	ret = zx279133_switch_xpcs_write(priv, MDIO_MMD_VEND2, MII_BMCR,
-					  ZX279133_XPCS_UBOOT_BMCR);
+					  bmcr);
 	if (ret)
 		return ret;
 
 	ret = zx279133_switch_xpcs_write(priv, MDIO_MMD_VEND2,
 					  ZX279133_XPCS_VEND2_SR_MII_SPEED,
-					  ZX279133_XPCS_UBOOT_SR_MII_SPEED);
+					  speed);
 	if (ret)
 		return ret;
 
 	ret = zx279133_switch_xpcs_write(priv, MDIO_MMD_VEND2,
 					  ZX279133_XPCS_VR_MII_DIG_CTRL1,
-					  ZX279133_XPCS_UBOOT_DIG_CTRL1);
+					  dig_ctrl1);
 	if (ret)
 		return ret;
 
-	ret = zx279133_switch_xpcs_write(priv, MDIO_MMD_VEND2,
+	return zx279133_switch_xpcs_write(priv, MDIO_MMD_VEND2,
 					  ZX279133_XPCS_VR_MII_AN_CTRL,
-					  ZX279133_XPCS_UBOOT_AN_CTRL);
+					  an_ctrl);
+}
+
+static int zx279133_switch_xpcs_program_lane(struct zx279133_switch *priv)
+{
+	int val;
+	int ret;
+
+	ret = zx279133_switch_xpcs_write_words(priv,
+					ZX279133_XPCS_UBOOT_BMCR,
+					ZX279133_XPCS_UBOOT_SR_MII_SPEED,
+					ZX279133_XPCS_UBOOT_DIG_CTRL1,
+					ZX279133_XPCS_UBOOT_AN_CTRL);
 	if (ret)
 		return ret;
 
@@ -712,7 +736,19 @@ static void zx279133_switch_lane_watch(struct work_struct *work)
 		priv->lane_tries = 0;
 	}
 
-	ret = zx279133_switch_xpcs_program_lane(priv);
+	if (priv->lane_pcs_inherited) {
+		/*
+		 * The loader configured this lane, so the loader's words
+		 * are the ones that belong in this block - not this
+		 * driver's own image, which is a 1G one and this lane may
+		 * be a 2.5G one.
+		 */
+		ret = zx279133_switch_xpcs_write_words(priv,
+				priv->lane_pcs_words[0], priv->lane_pcs_words[1],
+				priv->lane_pcs_words[2], priv->lane_pcs_words[3]);
+	} else {
+		ret = zx279133_switch_xpcs_program_lane(priv);
+	}
 	priv->lane_tries++;
 
 	/*
@@ -725,7 +761,9 @@ static void zx279133_switch_lane_watch(struct work_struct *work)
 	 */
 	an_ctrl = zx279133_switch_xpcs_read(priv, MDIO_MMD_VEND2,
 					     ZX279133_XPCS_VR_MII_AN_CTRL);
-	if (an_ctrl == ZX279133_XPCS_UBOOT_AN_CTRL) {
+	if (an_ctrl == (int)(priv->lane_pcs_inherited ?
+			     priv->lane_pcs_words[3] :
+			     ZX279133_XPCS_UBOOT_AN_CTRL)) {
 		dev_info(priv->dev,
 			 "the lane's PCS took the values again (AN_CTRL = 0x%04x)\n",
 			 an_ctrl & 0xffff);
@@ -2489,6 +2527,8 @@ static int zx279133_switch_probe(struct platform_device *pdev)
 	struct device_node *mdio_np;
 	struct zx279133_switch *priv;
 	u32 status;
+	u32 link;
+	int an_ctrl;
 	int ret;
 
 	if (!dev->parent || !dev->parent->of_node)
@@ -2700,29 +2740,87 @@ static int zx279133_switch_probe(struct platform_device *pdev)
 	 */
 	zx279133_switch_lane_snapshot(priv, "pre-pcs");
 	status = zx279133_switch_nppt_read(priv, ZX279133_NPPT_XPCS0_STATUS);
+	link = zx279133_switch_nppt_read(priv, ZX279133_NPPT_XMAC_LINK);
+	an_ctrl = zx279133_switch_xpcs_read(priv, MDIO_MMD_VEND2,
+					    ZX279133_XPCS_VR_MII_AN_CTRL);
 	/*
-	 * The lane is programmed here, every time.  It used to be inherited
-	 * instead whenever this status word said the link was up, and that was
-	 * exactly backwards.
+	 * This status word is not a link indicator, and it is not a mode
+	 * indicator either - it is the signature of the work mode the PCS
+	 * was left in, and both of the modes this lane ever runs in have
+	 * their own value: 0x2c03 in the boots where the loader brought the
+	 * lane up at 1G, 0x380b in the boots where it brought it up at
+	 * 2.5G, and 0x280b in the boots where this driver had done its own
+	 * work on the PCS (docs/92 §96.14, judgment VV).
 	 *
-	 * The word is not a link indicator for this lane.  In the board's own
-	 * U-Boot it reads 0x380b on every cold boot and 0x2c03 after a U-Boot
-	 * session that had run a ping, and it does not change with the PCS's
-	 * work mode at all (docs/92 §76: the whole 0x19000080..0x190000bf area
-	 * reads the same 0x280b / 0x380b / 0x069b / 0x069b in base-X and in
-	 * SGMII).  Of the 323 mainline boots in the log, the 311 cold ones read
-	 * 0x380b and took the inherit branch - and in those the lane never
-	 * carried a frame, with the XMAC the bootloader handed over reading all
-	 * zeros.  The 12 that read 0x2c03 took the reprogram branch, and those
-	 * are the boots that carried.
-	 *
-	 * There is nothing to inherit either.  The bootloader has no XPCS
-	 * driver - the vendor's own device tree has xpcs@1a000000 disabled -
-	 * and its net init gives up on this lane ("xmac doesn't support this
-	 * pcs mode"), so the PCS is at its reset value when the kernel gets
-	 * here: the snapshot above reads 0x0000 for VR_MII_AN_CTRL,
-	 * VR_MII_DIG_CTRL1 and the VEND2 BMCR, all three of them.
+	 * So it is not used to decide anything here.  The two words that do
+	 * decide are read above.
 	 */
+	/*
+	 * Did the loader bring this lane up?
+	 *
+	 * Two words say so, and they are the only two that do.
+	 *
+	 * The XMAC link word (NPPT + 0x0084) is the one the loader's own
+	 * net bring-up sets when it configures the outerphy port.  Counted
+	 * over the 1163 boots in the serial log (docs/92 §96.14): in the 68
+	 * boots where the loader took that port it reads 1, and in the 373
+	 * boots where it did not it reads 0.  Nothing in this driver has
+	 * touched it at this point - the snapshot above is taken before the
+	 * first write of this driver.
+	 *
+	 * The PCS's own AN_CTRL says the same thing from the other side:
+	 * zero means the PCS is at its reset value and nobody configured
+	 * it, anything else means somebody did.
+	 *
+	 * When the loader left the lane up, this driver leaves the PCS
+	 * alone.  That is the whole of judgment TT.  The loader's
+	 * configuration is a working one - it moved twelve megabytes over
+	 * this lane in those boots, before the kernel even started - and
+	 * programming the PCS is what destroys it.  This driver's own image
+	 * is a 1G one, and the far end of this lane is in 2500BASE-X
+	 * (1e.0x7580 = 0x9416, the mode field 0x16), so a 1G near end
+	 * against a 2.5G far end negotiates nothing: the far end's status
+	 * word was read at 0x00e9 (locked) nineteen milliseconds after this
+	 * driver programmed the near end, and at 0x00ad (restarting) the
+	 * next time it was read.
+	 */
+	if (link && an_ctrl > 0) {
+		static const struct {
+			int reg;
+			const char *name;
+		} words[] = {
+			{ MII_BMCR, "BMCR" },
+			{ ZX279133_XPCS_VEND2_SR_MII_SPEED, "SR-MII speed" },
+			{ ZX279133_XPCS_VR_MII_DIG_CTRL1, "DIG_CTRL1" },
+			{ ZX279133_XPCS_VR_MII_AN_CTRL, "AN_CTRL" },
+		};
+		unsigned int i;
+
+		dev_info(dev,
+			 "the loader brought this lane up (XMAC link = 0x%04x, the PCS's AN_CTRL = 0x%04x); the PCS is left as it is\n",
+			 link, an_ctrl & 0xffff);
+
+		/*
+		 * The loader's four words for this block, saved word for
+		 * word.  The watch puts the lane back if the SerDes domain's
+		 * reset empties the block later on, and what it puts back
+		 * has to be the loader's configuration: this driver's own
+		 * image is a 1G one and this lane may be a 2.5G one.
+		 */
+		for (i = 0; i < ARRAY_SIZE(words); i++) {
+			int val = zx279133_switch_xpcs_read(priv, MDIO_MMD_VEND2,
+							    words[i].reg);
+
+			priv->lane_pcs_words[i] = val < 0 ? 0 : (u32)val;
+			dev_info(dev, "the loader's %s = 0x%04x\n",
+				 words[i].name, priv->lane_pcs_words[i] & 0xffff);
+		}
+		priv->lane_pcs_inherited = true;
+
+		zx279133_switch_xmac_configure(priv, false);
+		goto report;
+	}
+
 	dev_info(dev,
 		 "the NPPT PCS status word is 0x%04x; the lane is programmed here, not inherited\n",
 		 status);
