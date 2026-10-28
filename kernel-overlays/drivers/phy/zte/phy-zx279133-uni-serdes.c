@@ -210,10 +210,31 @@ static int zx279133_uni_serdes_power_on(struct phy *phy)
 		 * The vendor's uni_serdes_init() writes it like this: reset the
 		 * datapath, write the 49 words, set the enable bit, then wait for
 		 * the PLL and the CDR.  Neither wait is fatal here.  The CDR only
-		 * locks once the far end of this lane - the RTL8226 on the 2.5G
-		 * jack - is up, and that is the switch driver's business, not
-		 * this driver's; failing the attach over a wait that has not
-		 * timed out yet would take the whole datapath down.
+		 * locks once the far end of this lane is up, and that is the
+		 * switch driver's business, not this driver's; failing the
+		 * attach over a wait that has not timed out yet would take the
+		 * whole datapath down.
+		 *
+		 * The far end of this lane is **the 9132's CPU port**, not the
+		 * 2.5G jack's PHY.  The path across this board is:
+		 *
+		 *	PC --[1G jack]----- 9132 internal PHY   chip ports 1..4
+		 *	PC --[2.5G jack]--- RTL8226 --(1000BASE-X)-- 9132 chip port 5
+		 *	                                       9132 CPU port
+		 *	                                           |
+		 *	                         (this lane: Uni SerDes / XPCS0 /
+		 *	                          XMAC0, SGMII 1G)
+		 *	                                           |
+		 *	                                         SoC
+		 *
+		 * An earlier version of this comment said "the far end of
+		 * this lane - the RTL8226 on the 2.5G jack", and that was
+		 * wrong, and it was wrong in a way that cost a kernel build:
+		 * it made this lane's PCS mode look like the reason the 2.5G
+		 * jack was dead, and the PCS mode was programmed as 1000BASE-X
+		 * when the working state is SGMII.  This lane was never the
+		 * problem - the 1G jacks go through it, and they work
+		 * (docs/92 §81, §82).
 		 */
 		ret = zx279133_uni_serdes_reset_pulse(priv);
 		if (ret)

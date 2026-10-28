@@ -138,14 +138,29 @@ extern u16 zx279133_tx_port;
 #define ZX279133_9132_UNI_PPU_LAST	4
 #define ZX279133_9132_CONDUIT_PPU	15
 /*
- * PPU 5 is the 2.5G jack's lane: the vendor's own port for that jack, whose
- * attribute table it names spa_port_attr_xmac_0 (docs/92 §70.3).  It is not
- * one of the four UNI jacks and it is not the CPU trap port, so
+ * PPU 5 is the 2.5G jack's port on the 9132: the vendor's own port for that
+ * jack, whose attribute table it names spa_port_attr_xmac_0 (docs/92 §70.3).
+ * It is not one of the four UNI jacks and it is not the CPU trap port, so
  * zx279133_9132_port_init() leaves it alone - zx279133_9132_ppu5_words()
  * gives it the vendor's whole word set instead.
  *
+ * What is on the far side of it, and what is not (docs/92 §82, measured):
+ *
+ *   - the far side is the **RTL8226**, over a 1000BASE-X link (the RTL8226
+ *     answers Clause 45 with a 1000BASE-X PCS BMCR of 0x3000, and U-Boot's
+ *     own net init brings that link up: "phy_id:0x5; port:0x4;", "mac 4 phy
+ *     status changed: 1000M full-duplex");
+ *   - the **XMAC0 lane is not this port**.  XMAC0 + Uni SerDes + XPCS0 is
+ *     the 9132's **CPU port** - the DSA conduit, the lane every 1G jack
+ *     reaches the SoC through, and the lane the switch driver programs.
+ *
+ * So the 2.5G jack needs a DSA port on the 9132 with the RTL8226 as that
+ * port's PHY (docs/92 §82.5), and the RTL8226's own SerDes side has to be
+ * brought up - the vendor's outerphy sequence, which nothing in this tree
+ * runs (zx279133-np.c:1319).
+ *
  * The IDM reports the source port of a frame in the descriptor's word 1, so
- * a frame that came in on this lane is the one with source 5 - and there is
+ * a frame that came in on this port is the one with source 5 - and there is
  * no DSA user port for it yet (docs/92 §72).
  */
 #define ZX279133_9132_OUTERPHY_PPU	5

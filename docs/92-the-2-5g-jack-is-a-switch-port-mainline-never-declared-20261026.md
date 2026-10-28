@@ -6906,6 +6906,12 @@ Linux 在这个口上一个字节都没收到过，它那套配置带着「已�
 
 ## 81. 找到了：1G 口通 ⇒ lane 是活的；U-Boot 那条 lane 是 SGMII，不是 base-X
 
+> **更正（2026-10-28，§82）**：本节的**事实**都成立（1G 口通、U-Boot 那条 lane 是
+> SGMII、我们的 base-X 序列把它踩掉了），但**推论错了**：那条 lane 的远端不是 2.5G 口上
+> 的 RTL8226，而是 9132 的 CPU 口。2.5G 口的远端是 9132 的 outerphy 口（chip port 5）。
+> 所以「base-X 序列踩掉了 2.5G 口的 lane」不成立——被踩掉的那条 lane 本来就是通的。
+> 保留本节是为了让 §82 的更正有对照；结论请看 §82。
+
 §80.2 那张表里的 #1 现在有答案了，而且答案不是「再读一个寄存器」，是换一条路。
 
 ### 81.1 win83（09:11）：同一个内核、同一个板子，插 1G 口 ping 全通
@@ -7031,3 +7037,98 @@ RTL8226 侧剩下的唯一差异是 `devad 0x1e:0x758d`：U-Boot 0x801E，内核
 * PC 网线插 **2.5G 口**，`ping -n 6 -w 1000 192.168.9.1` ⇒ 6/6 全通 = 成；
 * 板子 `2.5G jack's lane: frames 0 dropped 0` ⇒ 帧开始走；
 * 若仍不通，以上四条日志至少要给出一条，用来决定下一笔改哪里。
+
+## 82. 拓扑更正：2.5G 口的远端是 9132 的 outerphy 口，不是这条 lane
+
+### 82.1 §81 的立论错在哪
+
+§81 的结论是「我们的 base-X 序列踩掉了 U-Boot 那份能工作的 SGMII 状态，所以 2.5G 口
+不通」。这个立论建立在**一条错误的注释**上：
+
+`phy-zx279133-uni-serdes.c` 里写着「the far end of this lane - the RTL8226 on the 2.5G
+jack」。**那是错的。** 这条 lane 的远端是 **9132 的 CPU 口**。
+
+### 82.2 四条证据
+
+1. **本仓库自己早就写对了**，而且写明是实测不是推断（`zx279133-rgmii.c` 的文件头）：
+
+   > XMAC0 goes into SGMII at 1G over the Uni SerDes - that is the 9132's CPU port -
+   > and the RTL8226 comes up on the 9132's port 4.  The 2.5G jack is therefore a
+   > copper port of the 9132 with an external PHY, and the SoC reaches it the same
+   > way it reaches the other three jacks: over the 9132's CPU port.
+
+2. **docs/16 §2 的活板取数**：厂商驱动眼里 9132 的八个口是
+
+   | 厂商 switch port | 含义 | enable | link |
+   |---|---|---|---|
+   | sw0..sw3 | UNI 口 1..4（内部 PHY 0x0a..0x0d） | 1 | sw1 = 1（PC 插的就是这个口） |
+   | sw4 | **outerphy**（`outerphy_mode=5,outerphy_name=phy_RTL8226`） | 1 | 0 |
+   | sw5 / sw6 | 非 smac（xmac0 / xmac1_to_extend） | — | 1 |
+
+   厂商的 `sw_port_change_to_chip_port()` 把 switch port p 映射到 chip port p+1
+   ⇒ **chip port 5 = sw4 = outerphy = 2.5G 口**（这正是 `ZX279133_9132_OUTERPHY_PPU = 5`
+   的来历）。
+
+3. **RTL8226 的 Clause-45 身份**：它的 devad 0x07（PCS MMD）的 BMCR 是 **0x3000**——
+   1000BASE-X PCS 的复位值。它的 SerDes 对端因此是一个 **1000BASE-X** 对端，也就是
+   9132 的 outerphy 口；不可能是 SoC 的 XPCS0（SoC 那一侧 U-Boot 是 SGMII）。
+
+4. **1G 口能通，就是这条 lane 是活的的反证**：PC 插 1G 口时的帧路径是
+
+   ```
+   PC → 9132 UNI → 9132 内部 fabric → 9132 CPU 口 → Uni SerDes/XPCS0/XMAC0 → SoC
+   ```
+
+   win83 实测这条路 6/6 全通 ⇒ **这条 lane 本来就是通的，我们的 base-X 编程没有把它弄坏。**
+
+### 82.3 于是 §81 要改写的地方
+
+| §81 写的 | 更正后 |
+|---|---|
+| 2.5G 口不通是因为我们的 lane 编程踩掉了 U-Boot 那份 | 2.5G 口不通是因为 **9132 chip port 5 ↔ RTL8226 之间那条 1000BASE-X 链路没有起来** |
+| base-X 序列是错的那一方 | base-X 序列管的是 9132 的 CPU 口，**与 2.5G 口无关**，而那条口是通的 |
+| 2.5G 口的远端是 RTL8226 | 2.5G 口的远端是 **9132 的 outerphy 口**；RTL8226 在 9132 的**另一边** |
+
+**run213（`31f2a35`，CI #213 在编译）改的正是 XPCS0** —— 也就是那条本来就通的口。它仍然
+值得上板看一眼（SGMII 模式是不是比 base-X 更贴近 U-Boot 的活状态、看门狗的日志怎么说），
+但它不会让 2.5G 口通。真正要改的是别的两个地方。
+
+### 82.4 真正缺的东西：厂商的 outerphy 序列，从来没人跑过
+
+`zx279133-np.c:1319` 已经把话说尽了：
+
+> So the PHY is alive and configured by a generic driver, and **the one thing nobody in
+> this tree ever runs is the vendor's outerphy sequence** for the PHY's SoC-facing side:
+> `Rtl8226_serdes_rst()` toggles BIT(4) of devad 0x1e reg 0x7581,
+> `Rtl8226_serdes_autoNego_set()` writes 0x7588 and then 0x7589 = 0x70d0/0x71d0,
+> `Rtl8226_serdes_link_get()` reads 0x758b and 0x758d, and `Rtl8226b_phy_init()`
+> downloads the DSP patch through devad 0x1f's 0xa436/0xa438 (rlt8226b.ko).
+
+这一串全是 Clause-45，mainline 里**一条都没跑过**。
+
+而实测的两端是：
+
+| 读数 | U-Boot | 内核 | 含义 |
+|---|---|---|---|
+| devad 0x01 reg 0x01（BMSR） | 0x0002 | **0x0006** | **铜口链路 UP**——PC↔RTL8226 那一段是好的 |
+| devad 0x07 reg 0x01（PCS 状态） | **0x0069** | **0x002d** | 差 bit 6 = link status：**PHY 背后那段（1000BASE-X）没起来** |
+| devad 0x1e reg 0x758d | 0x801E | 0x8018 | 差一个 bit（SerDes 状态） |
+
+⇒ **坏的是 PHY 背后那一段**，不是铜口。
+
+而 mainline 对 PPU 5 做的是 `zx279133_9132_port_words_vendor()`：给它「四个 UNI 口的那
+一套词」加两个 flood 词。**PPU 5 不是 UNI 口**，它是一个带外接 PHY 的 SerDes 口。
+
+### 82.5 下一步（按代价从低到高）
+
+1. **win89**：把 9132 的寄存器窗口从内核侧 dump 出来（SPA 0x8000 / smac0..3 0x40000、
+   0x80000、0xc0000、0x100000 / XMAC0 0x140000 / XMAC1 0x180000 / IDM 0x280000），
+   下一次上电后在 U-Boot 提示符上取 net init 前后的同一份，两边逐字对比 ⇒ **厂商给
+   outerphy 口写的那些字**。
+2. **mainline 补上 outerphy 口的配置**：9132 侧（芯片口 5 的 MAC/SerDes 与端口属性）+
+   RTL8226 侧（厂商那一串 Clause-45）。两边缺哪边就补哪边。
+3. **给 PPU 5 做一个 netdev**：IDM 收到 source=5 的帧要有一个网口接住（lan1），发出去的
+   帧要写 outport=5，lan1 要进 br-lan。
+
+2.5G 口的 netdev 在 mainline 里**至今不存在**（`lan1..lan4` 是 DSA port 4..7 = 9132 的
+UNI 口 1..4），所以第 2 步通了之后，第 3 步是必须的。
