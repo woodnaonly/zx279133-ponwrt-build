@@ -193,7 +193,13 @@ static int zx279133_rgmii_show(struct seq_file *s, void *data)
 
 static int zx279133_rgmii_open(struct inode *inode, struct file *file)
 {
-	return single_open(file, zx279133_rgmii_show, file->private_data);
+	/*
+	 * The pointer handed to debugfs_create_file() arrives in the inode as
+	 * inode->i_private - debugfs does not fill file->private_data.
+	 * single_open() takes over file->private_data with the seq_file it
+	 * allocates, so the block pointer has to come from the inode.
+	 */
+	return single_open(file, zx279133_rgmii_show, inode->i_private);
 }
 
 static char *zx279133_rgmii_next_token(char **p)
@@ -217,7 +223,13 @@ static char *zx279133_rgmii_next_token(char **p)
 static ssize_t zx279133_rgmii_write(struct file *file, const char __user *ubuf,
 				     size_t count, loff_t *ppos)
 {
-	struct zx279133_rgmii *rgmii = file->private_data;
+	/*
+	 * Not file->private_data: the open() callback above handed that to
+	 * single_open(), which fills it with the seq_file.  Reading it here
+	 * would take the seq_file for the block and write the seq_file's
+	 * memory out to the registers.
+	 */
+	struct zx279133_rgmii *rgmii = file_inode(file)->i_private;
 	char buf[256];
 	char *p, *tok;
 	u32 off, val;

@@ -7747,6 +7747,107 @@ devm_debugfs_create_dir` 这一行会被原样挖出来。
 
 ⇒ 以后 CI 再挂，第一件事就是看 run 页面的注解里有没有 `cc:` 开头的那几行。
 
+### 88.6 §88.3 能把 #217 编过去，但同一处误解还藏着两处 —— 编译器一句话都不会说
+
+§88.3 的改法（`debugfs_create_dir()` + `debugfs_create_file()` + `devm_add_action_or_reset()`）
+能把 #217 编过去，但**编过去不等于对**。同一个误解在这棵树里还有两处，类型全都合法，
+编译器一句都不会说。
+
+先把落点钉死（这棵树 cnjn/linux-mainline-zte-zxslc-sr1010 @ 96e5a241，KVER 6.18.38）：
+
+- `fs/debugfs/inode.c` 的 `__debugfs_create_file()`：`inode->i_private = data;` ——
+  `debugfs_create_file()` 的第 4 个参数落到 **inode** 上；
+- `include/linux/debugfs.h` 的注释写得一样明白：*"The inode.i_private pointer will
+  point to this value on the open() call."*
+
+⇒ **debugfs 从不填 `file->private_data`**。把它当成 `debugfs_create_file()` 传进去的
+那个指针，拿到的是 NULL（或者更糟的东西）。
+
+对照组是 `np.c`：它的两个控制台都是对的 —— `zx279133_9132_open()` 写的是
+`single_open(file, zx279133_9132_show, inode->i_private)`，wanid 那个是
+`DEFINE_SHOW_ATTRIBUTE()` 生成的，而那个宏内部的 open 同样用 `inode->i_private`。
+`np.c` 的 write 回调是另一种写法：`file->private_data` 里放的**确实**是
+`single_open()` 分配的那个 `struct seq_file`，所以它写成 `m->private` 去取 ——
+那才是对的用法。
+
+错的两处：
+
+1. **`phy-zx279133-uni-serdes.c`**（§88.3 刚改的那个文件）：控制台的 write 回调里
+   `struct zx279133_uni_serdes *priv = file->private_data;` ⇒ 恒为 NULL ⇒ 一条
+   `echo dump > /sys/kernel/debug/zx279133-uni-serdes/serdes` 就是 NULL 解引用。
+   改法：加 `.open` 回调 `file->private_data = inode->i_private;`（这里没有
+   `single_open()`，`file->private_data` 归自己管，没有歧义）。
+
+2. **`zx279133-rgmii.c`**（**从 #216 就在镜像里**）：更糟，是类型混淆：
+   - `.open` 里 `single_open(file, zx279133_rgmii_show, file->private_data)` ——
+     传给 show 的 private 是 NULL；
+   - `single_open()` 会把 `file->private_data` 换成它自己分配的那个
+     `struct seq_file *`，而 write 回调里
+     `struct zx279133_rgmii *rgmii = file->private_data;` 把这个 **seq_file 指针
+     当成 rgmii 结构体**用；
+   - 紧接着 `writel(val, rgmii->base + off)` ⇒ 把 seq_file 的内存当寄存器地址去写；
+     `dev_info(rgmii->dev, ...)` ⇒ 把 seq_file 的内存当 `struct device *` 用。
+
+   ⇒ 这是 #216 之后每个镜像上都躺着的**真机内存破坏**，只要有人往
+   `/sys/kernel/debug/zx279133-rgmii` 写一条命令（`r` / `w` / `dump` / `stats`）。
+
+   改法：`.open` 改用 `inode->i_private`（和 np.c 一致），`.write` 改用
+   `file_inode(file)->i_private` —— **不能**用 `file->private_data`，那里现在是
+   seq_file。
+
+一句话教训：**`debugfs_create_file()` 的 data 是给 inode 的，不是给 file 的**。
+走 seq_file 的（`single_open`）时候 data 落到 `s->private`；走普通 fops 的时候要
+自己在 `.open` 里搬。
+
+## 89. 厂商自己的口编号对上了，lan1 的判决有了独立证据
+
+2026-10-28 15:55。CI 在跑，板子上一次启动（win109，14:46）的厂商 U-Boot 输出还留在
+串口日志里。拿它和**同一次启动**的内核读数一对，厂商的编号就定下来了。
+
+win109 那次启动，一套接线，两个视角：
+
+| 厂商 U-Boot | 内核（同一个 boot） |
+|---|---|
+| `mac 0 link down` | `lan1: NO-CARRIER, LOWERLAYERDOWN` |
+| `mac 1 phy status changed: 1000M full-duplex` | `lan2: UP, LOWER_UP` |
+| `mac 2 link down` | `lan3: NO-CARRIER, LOWERLAYERDOWN` |
+| `mac 3 link down` | `lan4: NO-CARRIER, LOWERLAYERDOWN` |
+| `mode_eth_2p5gbase_x_cfg` → `uni serdes init succeed` → `mac 4 phy status changed: 2.5G full-duplex` | （2.5G 口：SoC 侧那条 base-X 链路） |
+
+⇒ **判决 I：厂商的 `mac N` ↔ 9132 内部 PHY `0x0a+N`**（mac0 = lan1，mac1 = lan2，
+mac2 = lan3，mac3 = lan4），**`mac 4` = 外置的 RTL8226**（厂商日志里同一段写着
+`phy_id:0x5; port:0x4;` 和 `5 serdes option is 0`，指的就是 MDIO 地址 5 上那颗）。
+
+⇒ **判决 J：lan1 在厂商固件下也是 `link down`。** 这条证据**独立于 mainline**：
+§87 的结论（lan1 硬件层面不通）现在有了第二个来源 —— 不是 mainline 没把它配起来，
+是厂商自己的固件同样拉不起来。**J1 已经有答案，答案是 down。**
+
+⇒ win110 的第一问不用再花一个上电节拍去问了；剩下的决定性问题是 J3/J4（2.5G 口
+那条 lane 的 image 是不是缺口）。win110 仍然会抓这行，但它是**复核**，不是未知量。
+
+### 89.1 2.5G 口的缺口有两层，不是一层
+
+厂商那次启动里，`mode_eth_2p5gbase_x_cfg`（把 PON SerDes 配成 2.5G base-X）紧跟着
+`mac 4 ... 2.5G full-duplex` ⇒ 厂商是拿 **PON SerDes 跑 2.5G base-X 去对 RTL8226 的
+serdes 侧**。
+
+而 mainline 侧， PON SerDes 起的是 **SGMII**：
+
+```
+[    1.549658] zx279133-pon-serdes 16000000.phy: SGMII SerDes ready, status 0xc87bbb83/0x1000706
+```
+
+⇒ 2.5G 口的缺口至少有两层，**两层都得有实验**：
+
+1. **SerDes 模式**：base-X（厂商）对 SGMII（mainline）。RTL8226 的对端看到的是
+   SGMII 信号时，它自己的 serdes 侧不会像厂商那样起来。
+2. **lane image**：Uni SerDes 那 49 个字（mode `0x101` 对 `0x409`）—— §86 的实验
+   测的是这一层。
+
+⇒ 而 `eth0` 的 `phy-mode` 现在写的是 `sgmii`（upstream dtsi 是 `2500base-x`），
+这正是第 1 层要动的地方。**先做第 2 层的实验（write 1），因为它不用改代码**；
+若 J4 成立，第 1 层就是要动的下一处。
+
 
 
 

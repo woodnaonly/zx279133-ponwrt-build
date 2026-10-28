@@ -14,6 +14,7 @@
 #include <linux/clk.h>
 #include <linux/debugfs.h>
 #include <linux/device.h>
+#include <linux/fs.h>
 #include <linux/io.h>
 #include <linux/iopoll.h>
 #include <linux/kernel.h>
@@ -425,6 +426,20 @@ static void zx279133_uni_serdes_cleanup(void *data)
 }
 
 /*
+ * debugfs hands the pointer given to debugfs_create_file() to the
+ * inode as inode->i_private - it does not fill file->private_data.
+ * The console wants the pointer in file->private_data, so it has to
+ * be picked up when the file is opened.
+ */
+static int zx279133_uni_serdes_console_open(struct inode *inode,
+					    struct file *file)
+{
+	file->private_data = inode->i_private;
+
+	return 0;
+}
+
+/*
  * A console for this block.
  *
  * The point is to be able to compare the image in the block with what the
@@ -513,6 +528,7 @@ static ssize_t zx279133_uni_serdes_console(struct file *file,
 
 static const struct file_operations zx279133_uni_serdes_console_fops = {
 	.owner	= THIS_MODULE,
+	.open	= zx279133_uni_serdes_console_open,
 	.write	= zx279133_uni_serdes_console,
 };
 
