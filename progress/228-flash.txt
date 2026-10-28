@@ -1,9 +1,6 @@
-=== 14:25:10 beat 9 log=3291 frozen=0 wrote=yes ===
+=== 14:31:12 beat 12 log=3388 frozen=0 wrote=yes ===
 --- signals: quiet=0s writes=1800s newproc=900s hard=5400s cmp=-cnewer proc=0s ---
 --- the last 30 lines of the build's own log ---
- make[3] -C tools/libtool compile
- make[3] -C tools/dosfstools compile
- make[3] -C tools/cmake compile
  make[3] -C tools/flex compile
  make[3] -C tools/fakeroot compile
  make[3] -C tools/gengetopt compile
@@ -31,36 +28,39 @@
  make[3] -C toolchain/gcc/initial compile
  make[3] -C toolchain/kernel-headers compile
  make[3] -C toolchain/musl compile
+ make[3] -C toolchain/gcc/final compile
+ make[2] target/compile
+ make[3] -C target/linux compile
 --- the build's own processes ---
-   1552 Ss   /usr/bin/python3 /usr/bin/networkd-dispatcher --run-startup-triggers
-   1552 Ss   /usr/bin/python3 -u /usr/sbin/waagent -daemon
-   1551 Sl   /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
-    971 S    timeout --kill-after=60s 280m bash -c echo $$ > ../compile-make.pid; exec make -j"$(nproc)"
-    971 S    tee ../compile-parallel.log
-    971 S    make -j4
-    966 S    /bin/sh -c _limit=`ulimit -n`; [ "$_limit" = "unlimited" -o "$_limit" -ge 1024 ] || ulimit -n 1024; umask 022; cmd() { >/dev/null 2>&1 make -s "$@" < /dev/null || { echo "make $*: build failed. Please re-run make with -j1 V=s or V=sc for a higher verbosity level to see what's going on"; false; } } 8>&1 9>&2; cmd -r world 
-    966 S    make -s -r world
-    447 S    make --no-print-directory toolchain/compile
-      3 S    bash -c /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/time.pl "time: toolchain/musl/compile" make  -r -C toolchain/musl BUILD_SUBDIR="toolchain/musl" BUILD_VARIANT="" ALL_VARIANTS="" compile  || ?(?{ printf "%s\n" "    ERROR: toolchain/musl failed to build." >&8 || printf "%s\n" "    ERROR: toolchain/musl failed to build."; } 2>/dev/null;   exit 1;) 
-      3 S    perl /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/time.pl time: toolchain/musl/compile make -r -C toolchain/musl BUILD_SUBDIR=toolchain/musl BUILD_VARIANT= ALL_VARIANTS= compile
-      3 S    make -r -C toolchain/musl BUILD_SUBDIR=toolchain/musl BUILD_VARIANT= ALL_VARIANTS= compile
-      3 S    make --jobserver-auth=3,4 -C /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/build_dir/toolchain-aarch64_cortex-a53_gcc-14.3.0_musl/musl-1.2.5 DESTDIR=/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/toolchain-aarch64_cortex-a53_gcc-14.3.0_musl/ LIBCC=/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/toolchain-aarch64_cortex-a53_gcc-14.3.0_musl/lib/gcc/aarch64-openwrt-linux-musl/14.3.0/libgcc.a all
-      0 S    aarch64-openwrt-linux-musl-gcc -std=c99 -nostdinc -ffreestanding -fexcess-precision=standard -frounding-math -fno-strict-aliasing -Wa,--noexecstack -D_XOPEN_SOURCE=700 -I./arch/aarch64 -I./arch/generic -Iobj/src/internal -I./src/include -I./src/internal -Iobj/include -I./include -g -O2 -fno-align-jumps -fno-align-functions -fno-align-loops -fno-align-labels -fira-region=one -fira-hoist-pressure -freorder-blocks-algorithm=simple -fno-prefetch-loop-arrays -fno-tree-ch -pipe -fno-unwind-tables -fno-asynchronous-unwind-tables -ffunction-sections -fdata-sections -Wno-pointer-to-int-cast -Werror=implicit-function-declaration -Werror=implicit-int -Werror=pointer-sign -Werror=pointer-arith -Werror=int-conversion -Werror=incompatible-pointer-types -Werror=discarded-qualifiers -Werror=discarded-array-qualifiers -Waddress -Warray-bounds -Wchar-subscripts -Wduplicate-decl-specifier -Winit-self -Wreturn-type -Wsequence-point -Wstrict-aliasing -Wunused-function -Wunused-label -Wunused-variable -pipe -mcpu=cortex-a53 -fno-caller-saves -fno-plt -fhonour-copts -Wformat -Werror=format-security -fstack-protector -D_FORTIFY_SOURCE=1 -Wl,-z,now -Wl,-z,relro -Wl,-z,pack-relative-relocs -c -o obj/src/misc/fmtmsg.o src/misc/fmtmsg.c
+   1915 Ss   /usr/bin/python3 /usr/bin/networkd-dispatcher --run-startup-triggers
+   1915 Ss   /usr/bin/python3 -u /usr/sbin/waagent -daemon
+   1914 Sl   /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
+   1334 S    timeout --kill-after=60s 280m bash -c echo $$ > ../compile-make.pid; exec make -j"$(nproc)"
+   1334 S    tee ../compile-parallel.log
+   1334 S    make -j4
+   1329 S    /bin/sh -c _limit=`ulimit -n`; [ "$_limit" = "unlimited" -o "$_limit" -ge 1024 ] || ulimit -n 1024; umask 022; cmd() { >/dev/null 2>&1 make -s "$@" < /dev/null || { echo "make $*: build failed. Please re-run make with -j1 V=s or V=sc for a higher verbosity level to see what's going on"; false; } } 8>&1 9>&2; cmd -r world 
+   1329 S    make -s -r world
+     33 S    make --no-print-directory target/compile
+     32 S    bash -c /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/time.pl "time: target/linux/compile" make  -r -C target/linux BUILD_SUBDIR="target/linux" BUILD_VARIANT="" ALL_VARIANTS="" compile  || ?(?{ printf "%s\n" "    ERROR: target/linux failed to build." >&8 || printf "%s\n" "    ERROR: target/linux failed to build."; } 2>/dev/null;   exit 1;) 
+     32 S    perl /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/time.pl time: target/linux/compile make -r -C target/linux BUILD_SUBDIR=target/linux BUILD_VARIANT= ALL_VARIANTS= compile
+     32 S    make -r -C target/linux BUILD_SUBDIR=target/linux BUILD_VARIANT= ALL_VARIANTS= compile
+     32 S    make V=s -C zte compile
+     31 S    make -C /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/build_dir/target-aarch64_cortex-a53_musl/linux-zte_zx279133/linux-6.18.38 KCFLAGS=-fmacro-prefix-map=/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/build_dir/target-aarch64_cortex-a53_musl=target-aarch64_cortex-a53_musl -fno-caller-saves  HOSTCFLAGS=-O2 -I/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/host/include -Wall -Wmissing-prototypes -Wstrict-prototypes CROSS_COMPILE=aarch64-openwrt-linux-musl- ARCH=arm64 KBUILD_HAVE_NLS=no KBUILD_BUILD_USER= KBUILD_BUILD_HOST= KBUILD_BUILD_TIMESTAMP=Mon Oct 26 04:58:01 2026 KBUILD_BUILD_VERSION=0 KBUILD_HOSTLDFLAGS=-L/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/host/lib CONFIG_SHELL=bash V= cmd_syscalls= CC=aarch64-openwrt-linux-musl-gcc Image dtbs modules
 --- the oldest processes that are not kernel threads ---
-   1558 Ss   /sbin/init
-   1557 S<s  /lib/systemd/systemd-journald
-   1557 SLsl /sbin/multipathd -d -s
-   1557 Ss   /lib/systemd/systemd-udevd
-   1557 Ss   /usr/lib/linux-tools/6.8.0-1070-azure/hv_kvp_daemon -n
-   1556 Ss   /usr/sbin/haveged --Foreground --verbose=1
-   1556 Ss   /lib/systemd/systemd-networkd
-   1556 Ss   /lib/systemd/systemd-resolved
+   1921 Ss   /sbin/init
+   1920 S<s  /lib/systemd/systemd-journald
+   1920 SLsl /sbin/multipathd -d -s
+   1920 Ss   /lib/systemd/systemd-udevd
+   1920 Ss   /usr/lib/linux-tools/6.8.0-1070-azure/hv_kvp_daemon -n
+   1919 Ss   /usr/sbin/haveged --Foreground --verbose=1
+   1919 Ss   /lib/systemd/systemd-networkd
+   1919 Ss   /lib/systemd/systemd-resolved
 --- what is running under the build ---
 --- the directories the build touched lately ---
+target-aarch64_cortex-a53_musl
 toolchain-aarch64_cortex-a53_gcc-14.3.0_musl
 host
-target-aarch64_cortex-a53_musl
 --- how big the root filesystem is getting ---
 --- memory and load ---
-Mem:           15988         828        1348          51       13812       14750
- 22:25:10 up 25 min,  0 users,  load average: 3.39, 5.33, 4.44
+Mem:           15988        1228        1080          51       13680       14361
+ 22:31:12 up 32 min,  0 users,  load average: 4.97, 5.25, 4.72
