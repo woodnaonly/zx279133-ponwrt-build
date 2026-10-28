@@ -7350,3 +7350,155 @@ XMAC1 (+0x180000 256w)
 
 win105 同时会再读一遍 RTL8226 的九个 `1e.7xxx` 寄存器（U-Boot 侧）与
 `07:0x01`（两侧），好把 84.3(a) 这条钉死。
+
+## 85. win107/win108/win109：1G 口的判决、厂商 base-X 的基址、以及两个从没读过的地方
+
+2026-10-28 13:40 - 13:56。这一节记的是三件事：**1G 口其实是好的**、**厂商那套
+base-X 写的不是 9132 内部 PCS 而是 PON SerDes**、**有两个块两侧都从没读过**。
+
+### 85.1 1G 口健康，面板口 ↔ PHY ↔ netdev 的对应定下来了
+
+owner 把 PC 的网线从 2.5G 口换到 **lan2**（1G 口）之后，内核侧读 9132 的四个
+内部 PHY（`m <devad> 0x01` = BMSR）：
+
+```
+9132 mdio: addr 0a reg 01 = 0x7949      <- 无链路（没插线）
+9132 mdio: addr 0b reg 01 = 0x796d      <- bit2 置位 = 有链路
+9132 mdio: addr 0c reg 01 = 0x7949
+9132 mdio: addr 0d reg 01 = 0x7949
+```
+
+同时 `ip -o link show` 里 **只有 lan2 是 LOWER_UP**，`ping 192.168.9.1` 四发四收、
+0% 丢包、平均 <1ms。于是：
+
+| 面板 | 9132 内部 PHY | netdev | 实测 |
+|---|---|---|---|
+| lan1 | devad 0x0a | lan1 | 未插线，BMSR 0x7949 |
+| lan2 | devad 0x0b | lan2 | **LOWER_UP，ping 通** |
+| lan3 | devad 0x0c | lan3 | 未插线 |
+| lan4 | devad 0x0d | lan4 | 未插线 |
+
+**判决 A**：1G 口的链路与转发在 mainline 里是好的。run213 的 lane 看门狗**没有**
+弄坏 1G 口 —— 13:44 那次 ping 100% 丢包的原因只是网线还插在 2.5G 口上（RTL8226
+的铜侧照样协商出 1G，PC 侧显示 1 Gbps，而 9132 的四个内部 PHY 自然全是 down）。
+
+**判决 B**：**2.5G 口不是 9132 的内部 PHY。** 四个内部 PHY 的 ID 全是
+`0x84b9:0x5032`（9132 自己的），而 2.5G 口的 RTL8226 挂在 SoC 的 mdio1
+（`14f02000.mdio:05`，phy_id `0x001cc849`）。它属于 `&nppt` 那个 MAC 节点
+（`eth0`），也就是说 2.5G 口在 **SoC 侧**，不在 9132 的 UNI 口里。
+
+### 85.2 厂商那套 base-X 的基址是 PON SerDes，不是 9132 内部 PCS
+
+`np_133.ko` 里有两个名字相近的函数：
+
+- `mode_eth_1gbase_x_cfg`（`.text` 0x6df4，948 字节）—— **U-Boot 的 net init
+  打印的就是它**（`enter outerphy info init!` 之后那串 `mode_eth_1gbase_x_cfg`）。
+- `uni_mode_eth_1gbase_x_cfg`（`.text` 0x9574，504 字节）—— Uni SerDes 那一半。
+
+新工具 `devtools/fnref.py`（把一个函数范围内的 relocation 全部列出来）给出判决：
+
+```
+mode_eth_1gbase_x_cfg  sec=.text  val=0x6df4 size=948
+  pc=0x6e18  type=275  addend=0x0  pon_serdes_base
+  pc=0x6e2c  type=286  addend=0x0  pon_serdes_base
+  ...
+```
+
+⇒ `mode_eth_1gbase_x_cfg` 写的 46 个字**基址是 `pon_serdes_base`（0x16000000）**，
+不是 9132 内部 PCS。而它写的那些字里有两个是地址：
+
+```
+[  3] +0xc    x0       0x19000200      <- NPPT + 0x200
+[  5] +0x14   x0       0x00190002      <- NPPT + 0x002
+```
+
+**判决 C**：厂商把 **NPPT+0x200 的一段地址**写进了 PON SerDes 块。而
+**U-Boot 侧从来没有读过 PON SerDes 块，也没有读过 NPPT+0x200** —— 内核侧读不到
+PON SerDes（`/dev/mem` 拒绝设备地址，debugfs 只够得着 NPPT 窗口），所以**U-Boot
+提示符是唯一能读这两个块的地方**，每读一次就要花一次上电节拍。
+
+### 85.3 win108：内核侧第一次带着 0x 前缀读完 9132 的切片
+
+win105 的内核半边作废（偏移没带 `0x`，被 `kstrtou32(tok, 0, ...)` 当十进制）。
+win108 用 `regs 0x1c0000 64` 这种写法重读，拿到的是**两侧第一份可比的数据**：
+
+| 窗口 | U-Boot 侧（win105） | 内核侧（win108） | 结论 |
+|---|---|---|---|
+| `nppt+0x1c0000` | 全 0 | **全 0** | 一致 |
+| `nppt+0x1e0000` | 全 0 | **全 0** | 一致 |
+| `nppt+0x140000`（XMAC0） | `60010000` / `3e8000c6` / `80000001` | `60010001` / `3e8000c7` / `80000000` | 三个字不同 |
+| `nppt+0x040000` / `0x0c0000` / `0x0e0000` | `00ba2200` … | `00fa2203` … | **第一个字不同** |
+| `nppt+0x200` .. `0x3fc` | **没读过** | 全 0 | 待 U-Boot 侧 |
+| `nppt+0x400` 起 | **没读过** | 有配置（`0x380b` = XPCS0 status） | 待 U-Boot 侧 |
+| `nppt+0x8c0000` | 没读过 | 64 个字全 `0x9c` | 待 U-Boot 侧 |
+| `nppt+0x8e0000` | 全 0 | 64 个字全 `0x9e` | **不同** |
+
+⇒ **84.4 的 J2 成立**：厂商 base-X 序列要写的那几个切片，两侧都是零。
+⇒ 而 `0x8c0000` / `0x8e0000` 这两个窗口，**U-Boot 侧是零、内核侧是一整片常数**
+—— `0x8c0000` 正是 `np.c` 的 `xbasex` 命令按 base `0x140000` 推算出来的位置
+（`+0x7c0000`）。也就是说：树里正在往一个**厂商从未碰过的窗口**里写一整套
+1000BASE-X image。base 是猜的，猜错就等于往别人的寄存器堆里乱写。
+
+### 85.4 ERAM 的表在 12288 之后，之前读的根本不是表
+
+`cat /sys/kernel/debug/zx279133-9132` 会打印 ERAM 的**表目录**：44 张表，
+每张给出 base block 与每项位数。base block 从 12288 到 25089。
+
+⇒ 之前 `er 0 64` 读的是 block 0..63，而**所有表的 base 都在 12288 以上**，
+所以那些"全 0"是必然的，不是结论。实测：
+
+```
+er 12288 8   -> 表 0x6f：八个 block 全 0
+er 25089 4   -> 表 0x00：ffc00000 0000ffff ffffffff 00003003，其后全 0
+```
+
+⇒ 厂商那几张端口流表/转发表在 mainline 里基本是空的。这不影响 1G 口
+（它是空的也照样通），但它是一个真实的差别，记在这里。
+
+### 85.5 新加的一条命令：内核侧直接读 SoC 侧的 SerDes/PCS
+
+85.2 说 PON SerDes 只能去 U-Boot 提示符读，每读一次一个上电节拍。给它加一条
+命令更省事：`soc <地址> <字数>`，白名单只放这块板真有的块：
+
+```
+soc 0x16000000 64      PON SerDes
+soc 0x16100000 49      Uni SerDes
+soc 0x1a000000 64      XPCS0
+soc 0x1b000000 64      XPCS1
+```
+
+只读、且必须整个落在白名单块内 —— 这条总线上没映射的地址不是读出 0，是直接把
+板子带走，控制台命令必须经得起乱敲。
+
+### 85.6 顺带钉死的一条：Uni SerDes 的 base-X image 只差两个字
+
+`mode_eth_1gbase_x_cfg` 写的最后 49 个字就是 Uni SerDes 的 image
+（entries 46..94）。它与树里 `zx279133_uni_1g_profile[]` 的逐字比较：
+
+| 字 | 厂商 image | 树里（改之前） | 板子自己的 U-Boot 实测 |
+|---|---|---|---|
+| 0 | `0xe0000004` | `0xe0001004` | **`0xe0000004`** |
+| 6 | `0x0b016100` | `0x00ff8000` | `0x00ff8000` |
+| 21 | `0x101` → `0x100` | `0x00000101` | `0x00000101` |
+
+⇒ **第 0 字该是 `0xe0000004`**（这一轮才改，之前 `0xe0001004` 从来没进过任何
+镜像 —— 板上跑的 run213 打的是 "Uni SerDes 1G inherited: mode 0x1 already"，
+说明连 U-Boot 的 net init 都没跑过，这块 lane 一直停在复位默认），而**第 6、21
+两个字要按板子实测值**（`0x00ff8000` / `0x00000101`），**不能照抄厂商 image**。
+三个字合起来才是一份能用的 image —— 这是下一轮验证的点。
+
+### 85.7 下一步（win109 已写好，等一个上电节拍）
+
+win109 在 U-Boot 侧读这批**从没被读过的**地方，再 boot 一次做内核侧对照：
+
+```
+md 0x16000000 0x100     PON SerDes        <- 厂商 base-X 真正写的块
+md 0x16100000 0x40      Uni SerDes 49 字
+md 0x19000200 0x100     NPPT + 0x200      <- 厂商写进 PON SerDes 的那个地址
+md 0x19000400 0x100     NPPT + 0x400      <- 内核侧有配置、U-Boot 侧未知
+md 0x198c0000 0x100     0x8c0000          <- 内核侧全 0x9c
+md 0x198e0000 0x100     0x8e0000          <- 内核侧全 0x9e、U-Boot 侧全 0
+```
+
+两侧的差集就是下一轮 CI 要照抄的东西。
+

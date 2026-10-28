@@ -10,7 +10,9 @@
  * the RTL8372N switch are separate consumers.
  */
 
+#include <linux/bitfield.h>
 #include <linux/clk.h>
+#include <linux/debugfs.h>
 #include <linux/io.h>
 #include <linux/iopoll.h>
 #include <linux/module.h>
@@ -73,14 +75,27 @@ static_assert(ARRAY_SIZE(zx279133_uni_10g_profile) ==
  * - 49 words - taken right after `xmac_test xmac_work_mode_set 0 2`, which
  * printed "mode_eth_1gbase_x_cfg" and "work in 1000BASE-X mode. ret = 0".
  *
- * This file used to hold the other image: the 49 words U-Boot leaves behind
- * when it has *not* configured this lane for base-X.  The two differ in
- * exactly 28 of the 49 words, and 28 is the number this driver has been
- * reporting since it started looking ("Uni SerDes 1G inherited: ... image
- * differs in 28/49 word(s)").  The word at 0x16100054 - the mode register -
- * reads 0x101 here and 0x01 in the other image, and the log has been saying
- * "mode 0x101 already" all along: the board was holding the base-X image the
- * whole time and the reference file in this driver was the wrong one.
+ * 2026-10-28 13:00, one bit corrected.  The same U-Boot window, read again
+ * after its net init (win105, staging/ctl/win105.log) and cross-checked
+ * against the vendor's own mode_eth_1gbase_x_cfg() image
+ * (devtools/np133.py image mode_eth_1gbase_x_cfg, entries 46..94), gives
+ * word 0 = 0xe0000004 - not 0xe0001004.  The vendor's image and the board's
+ * own measurement agree, and the bit 12 that was set here is in neither.
+ *
+ * That mistake was invisible to this driver's own check: it writes the
+ * array and then compares the block against the same array, so it reported
+ * "image differs in 0/49 word(s)" while the block differed from the
+ * working U-Boot by exactly that one bit.  The window now has a dump
+ * (below) so that the block can be compared with what the loader leaves
+ * behind instead of with what this file says.
+ *
+ * The two images differ in 28 of the 49 words, and 28 is the number this
+ * driver has been reporting since it started looking ("Uni SerDes 1G
+ * inherited: ... image differs in 28/49 word(s)").  The word at
+ * 0x16100054 - the mode register - reads 0x101 here and 0x01 in the other
+ * image, and the log has been saying "mode 0x101 already" all along: the
+ * board was holding the base-X image the whole time and the reference file
+ * in this driver was the wrong one.
  *
  * What the two images mean: the base-X one has the mode word at 0x101 and
  * the 1.25G lane state in the registers around it; the other one (0x01, and
@@ -95,7 +110,7 @@ static_assert(ARRAY_SIZE(zx279133_uni_10g_profile) ==
  * the wrong file.
  */
 static const u32 zx279133_uni_1g_profile[] = {
-	0xe0001004, 0x4fa840a3, 0x013e860f, 0x0210c073,
+	0xe0000004, 0x4fa840a3, 0x013e860f, 0x0210c073,
 	0x00000048, 0x00000000, 0x00ff8000, 0x00238620,
 	0x80000000, 0x00050000, 0x0c633830, 0x00000007,
 	0x00000020, 0x00002000, 0x00000000, 0x00ff0000,
@@ -360,12 +375,79 @@ static void zx279133_uni_serdes_cleanup(void *data)
 		zx279133_uni_serdes_power_off(priv->phy);
 }
 
+/*
+ * A console for this block.
+ *
+ * The point is to be able to compare the image in the block with what the
+ * bootloader leaves behind - the driver's own check compares the block with
+ * the array in this file, which is circular and once hid a one-bit
+ * difference (word 0 was 0xe0001004 here and 0xe0000004 in the loader).
+ *
+ *	"dump"	print the first 256 words and the two status words
+ *	"write"	write the profile again and set the enable bit
+ *	"reset"	pulse the rx/tx resets
+ */
+static ssize_t zx279133_uni_serdes_console(struct file *file,
+					   const char __user *ubuf,
+					   size_t count, loff_t *ppos)
+{
+	struct zx279133_uni_serdes *priv = file->private_data;
+	char buf[32];
+	unsigned int i;
+
+	if (count >= sizeof(buf))
+		return -EINVAL;
+	if (copy_from_user(buf, ubuf, count))
+		return -EFAULT;
+	buf[count] = '\0';
+
+	if (!strncmp(buf, "dump", 4)) {
+		for (i = 0; i < 256; i++)
+			pr_info("uni serdes +0x%03x = 0x%08x\n", i * 4,
+				readl(priv->serdes + i * 4));
+		pr_info("uni serdes: mode 0x%08x status 0x%08x/0x%08x\n",
+			readl(priv->serdes + ZX279133_UNI_SERDES_MODE_CTRL),
+			readl(priv->serdes + ZX279133_UNI_SERDES_PLL_STATUS),
+			readl(priv->serdes + ZX279133_UNI_SERDES_RX_STATUS));
+		return count;
+	}
+
+	if (!strncmp(buf, "write", 5)) {
+		mutex_lock(&priv->lock);
+		zx279133_uni_serdes_write_profile(priv);
+		writel(readl(priv->serdes + ZX279133_UNI_SERDES_MODE_CTRL) |
+			ZX279133_UNI_SERDES_ENABLE,
+			priv->serdes + ZX279133_UNI_SERDES_MODE_CTRL);
+		mutex_unlock(&priv->lock);
+		pr_info("uni serdes: profile written again\n");
+		return count;
+	}
+
+	if (!strncmp(buf, "reset", 5)) {
+		int ret;
+
+		mutex_lock(&priv->lock);
+		ret = zx279133_uni_serdes_reset_pulse(priv);
+		mutex_unlock(&priv->lock);
+		pr_info("uni serdes: reset pulse returned %d\n", ret);
+		return count;
+	}
+
+	return -EINVAL;
+}
+
+static const struct file_operations zx279133_uni_serdes_console_fops = {
+	.owner	= THIS_MODULE,
+	.write	= zx279133_uni_serdes_console,
+};
+
 static int zx279133_uni_serdes_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
 	struct zx279133_uni_serdes *priv;
 	struct phy_provider *provider;
 	struct phy *phy;
+	struct dentry *dir, *df;
 	int ret;
 
 	priv = devm_kzalloc(dev, sizeof(*priv), GFP_KERNEL);
@@ -405,7 +487,19 @@ static int zx279133_uni_serdes_probe(struct platform_device *pdev)
 		return ret;
 
 	provider = devm_of_phy_provider_register(dev, of_phy_simple_xlate);
-	return PTR_ERR_OR_ZERO(provider);
+	if (IS_ERR(provider))
+		return PTR_ERR(provider);
+
+	dir = devm_debugfs_create_dir("zx279133-uni-serdes", dev);
+	if (IS_ERR(dir))
+		return PTR_ERR(dir);
+
+	df = devm_debugfs_create_file("serdes", 0644, dir, priv,
+				      &zx279133_uni_serdes_console_fops, NULL);
+	if (IS_ERR(df))
+		return PTR_ERR(df);
+
+	return 0;
 }
 
 static const struct of_device_id zx279133_uni_serdes_of_match[] = {

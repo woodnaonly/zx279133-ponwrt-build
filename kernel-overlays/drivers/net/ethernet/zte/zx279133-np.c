@@ -1165,6 +1165,37 @@ static void zx279133_9132_xbasex_word(struct zx279133_eth *eth, u32 off,
 		before, after);
 }
 
+/*
+ * The blocks the console may read outside the NPPT window.
+ *
+ * Each entry is a block's start and its size.  A read that is not wholly
+ * inside one of them is refused: this bus does not read an unmapped
+ * address as zero, it faults, and the board does not come back.
+ */
+static bool zx279133_soc_block_ok(u32 addr, u32 len)
+{
+	static const struct {
+		u32 start;
+		u32 size;
+	} blocks[] = {
+		{ 0x14f01000, 0x00004000 },	/* MDIO controller 0 */
+		{ 0x14f02000, 0x00004000 },	/* MDIO controller 1 */
+		{ 0x16000000, 0x00010000 },	/* PON SerDes */
+		{ 0x16010000, 0x00010000 },	/* PON SerDes PLL */
+		{ 0x16100000, 0x00100000 },	/* Uni SerDes */
+		{ 0x1a000000, 0x00800000 },	/* XPCS0 */
+		{ 0x1b000000, 0x00800000 },	/* XPCS1 */
+	};
+	unsigned int i;
+
+	for (i = 0; i < ARRAY_SIZE(blocks); i++)
+		if (addr >= blocks[i].start &&
+		    addr + len <= blocks[i].start + blocks[i].size)
+			return true;
+
+	return false;
+}
+
 static ssize_t zx279133_9132_write(struct file *file, const char __user *ubuf,
 				   size_t count, loff_t *ppos)
 {
@@ -1229,9 +1260,14 @@ static ssize_t zx279133_9132_write(struct file *file, const char __user *ubuf,
 	 * back into a register and watched, one experiment at a time,
 	 * without a rebuild for each of them.
 	 *
-	 *	"reg 140010"		read one word
-	 *	"regw 140010 3e8000c6"	write one word and read it back
-	 *	"regs 140000 8"		dump a range of words
+	 *	"reg 0x140010"		read one word
+	 *	"regw 0x140010 0x3e8000c6"	write one word and read it back
+	 *	"regs 0x140000 8"		dump a range of words
+	 *
+	 * The offsets are read with kstrtou32(tok, 0, ...), so base 0: "140010"
+	 * is DECIMAL unless it carries the 0x.  A round of measurements lost
+	 * half an hour to that (staging/ctl/win105.sh asked for "regs 140000
+	 * 64" and got the window at nppt + 0x222e0).
 	 *
 	 * and one more that does something:
 	 *
@@ -1562,6 +1598,51 @@ static ssize_t zx279133_9132_write(struct file *file, const char __user *ubuf,
 			return ret2;
 		pr_info("xpcs lane %u devad %#02x reg %#04x = 0x%04x\n",
 			which, devad, reg, (u16)ret2);
+		return count;
+	}
+
+	/*
+	 * The SoC's own SerDes and PCS blocks, outside the NPPT window.
+	 *
+	 * Why this is here: the blocks on the far side of the 2.5G jack's
+	 * lane - the PON SerDes (0x16000000), the Uni SerDes (0x16100000)
+	 * and the two PCS blocks (0x1a000000, 0x1b000000) - are not in the
+	 * NPPT window, and the kernel cannot reach them otherwise: /dev/mem
+	 * refuses device addresses and this console reaches the NPPT only.
+	 * The loader's prompt was the only other place they could be read,
+	 * and that costs a power cycle every time.  So they are read here
+	 * instead.
+	 *
+	 *	"soc 0x16000000 64"	read 64 words and print them
+	 *
+	 * Only the blocks this board actually has are allowed, and only
+	 * reads are allowed.  A read that leaves the list is refused
+	 * rather than attempted: on this bus an address that is not
+	 * mapped does not read as zero, it takes the board down, and a
+	 * console command has to be safe to type.
+	 */
+	if (!strcmp(tok, "soc")) {
+		u32 addr, n = 1, i;
+		void __iomem *map;
+
+		tok = zx279133_9132_next_token(&p);
+		if (!tok || kstrtou32(tok, 0, &addr))
+			return -EINVAL;
+		tok = zx279133_9132_next_token(&p);
+		if (!tok || kstrtou32(tok, 0, &n))
+			return -EINVAL;
+		if (!n || n > 256)
+			return -EINVAL;
+		if (!zx279133_soc_block_ok(addr, n * 4))
+			return -EINVAL;
+
+		map = devm_ioremap(eth->dev, addr, n * 4);
+		if (!map)
+			return -ENOMEM;
+		for (i = 0; i < n; i++)
+			pr_info("soc reg 0x%08x = 0x%08x\n",
+				addr + 4 * i, readl(map + 4 * i));
+		devm_iounmap(eth->dev, map);
 		return count;
 	}
 
