@@ -683,8 +683,52 @@
 				};
 			};
 
+			/*
+			 * The 2.5G jack: the panel's LAN1.
+			 *
+			 * It is the 9132's fifth user port - the one the
+			 * vendor calls the outerphy - and its PHY is the
+			 * external RTL8226, which is on &mdio1 at address 5
+			 * and not on the 9132's own bus.  The port is behind
+			 * the switch's fabric like the four UNI ports, and
+			 * the SoC reaches it the same way it reaches them:
+			 * over the 9132's CPU port.
+			 *
+			 * The port runs 1000BASE-X to that PHY (the vendor's
+			 * mode_eth_2p5gbase_x_cfg) and carries the transport
+			 * VID 63, which is 55 + this port number - the same
+			 * scheme the four jacks use, and the untag SVID the
+			 * NPPT driver gives PPU 5.
+			 *
+			 * It is a fixed-link port: the RTL8226 is not a PHY
+			 * of this switch's own bus, so the core must not go
+			 * looking for one there.  The driver reports the
+			 * jack's real link state from the RTL8226's own
+			 * auto-negotiation status instead.
+			 */
 			port@8 {
 				reg = <8>;
+				label = "lan5";
+				phy-mode = "1000base-x";
+
+				fixed-link {
+					speed = <1000>;
+					full-duplex;
+				};
+			};
+
+			/*
+			 * The CPU port: the one that faces the conduit, on
+			 * the SoC's own SGMII lane at 1G.
+			 *
+			 * It is port 9 and not 8 because the 2.5G jack took
+			 * 8 - the user ports are a run and the CPU port is
+			 * the one after them, which is the shape the tree's
+			 * RTL8372N node has (ports 4..7 and the CPU port at
+			 * 8).
+			 */
+			port@9 {
+				reg = <9>;
 				ethernet = <&lan_cpu>;
 				phy-mode = "sgmii";
 

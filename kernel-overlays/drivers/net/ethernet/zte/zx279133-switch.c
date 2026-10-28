@@ -331,32 +331,51 @@
  * protocol number is already in the tree's include/net/dsa.h.
  */
 #define ZX279133_SWITCH_DSA_PORT_MIN	4
-#define ZX279133_SWITCH_DSA_PORT_MAX	7
-#define ZX279133_SWITCH_DSA_NUM_PORTS	9
+/*
+ * The four jacks with an internal PHY, and then the 2.5G jack.
+ *
+ * The 2.5G jack is the 9132's fifth user port - the one the vendor calls
+ * the outerphy - and its PHY is the external RTL8226, so it is not on the
+ * 9132's own MDIO bus and has no PHY address in the 0x0a..0x0d run.
+ *
+ * It is a user port like the other four, and the shape is kept: the user
+ * ports are a run and the CPU port is the one after them.
+ */
+#define ZX279133_SWITCH_DSA_JACK_MAX	7
+#define ZX279133_SWITCH_DSA_OUTER_PORT	8
+#define ZX279133_SWITCH_DSA_PORT_MAX	8
+#define ZX279133_SWITCH_DSA_NUM_PORTS	10
 /*
  * The CPU port: the one that faces the conduit.
  *
- * It is index 8 and not 0 because that is what the tree's own DSA switch
+ * It is index 9 and not 0 because that is what the tree's own DSA switch
  * does.  The tree's RTL8372N node (arch/arm64/boot/dts/zte/zx279133-sr1010.dts)
  * describes its chassis LAN1..LAN4 as ports 4..7 and its CPU port as
  * port@8, and its driver answers "port == 8" wherever the CPU port is
  * asked about (zx279133_rtl8372n_phylink_fixed_state()).  This tree's DSA
  * fork looks a port up by index (dsa_to_port()) and leaves the numbers
  * between the CPU port and the user ports unused, so the same shape is
- * used here: the four UNI jacks are 4..7 and the CPU port is 8.
+ * used here: the user ports are 4..8 and the CPU port is 9.
  *
  * The tagger does not care which end is which - it puts
  * TRANSPORT_VID_BASE + port on a user port's frames and reads the port
- * back out of the VID - so the four jacks keep the transport VIDs 59..62,
- * which are exactly the PVIDs zx279133_9132_port_init() programs.
+ * back out of the VID - so the five user ports keep the transport VIDs
+ * 59..63, which are exactly the PVIDs zx279133_9132_port_init() programs
+ * for the 9132's PPU ports 1..5.
  */
-#define ZX279133_SWITCH_DSA_CPU_PORT	8
-/* The 9132's PPU port behind a DSA port: DSA 4..7 are PPU 1..4. */
+#define ZX279133_SWITCH_DSA_CPU_PORT	9
+/* The 9132's PPU port behind a DSA port: DSA 4..8 are PPU 1..5. */
 #define ZX279133_SWITCH_DSA_PPU(port)	((port) - \
 					 (ZX279133_SWITCH_DSA_PORT_MIN - 1))
 /* The 9132's internal PHY behind a DSA port: PPU 1..4 are PHY 0x0a..0x0d. */
 #define ZX279133_SWITCH_DSA_PHY(port)	(0x0a + \
 					 (port) - ZX279133_SWITCH_DSA_PORT_MIN)
+/*
+ * The external PHY: the RTL8226 on the 2.5G jack, at address 5 on the SoC's
+ * MDIO controller #1.  It is not on the 9132's own bus, so it has no address
+ * in the 0x0a..0x0d run above.
+ */
+#define ZX279133_SWITCH_OUTERPHY_ADDR	5
 
 struct zx279133_switch {
 	/* The device this driver was probed on.  Two of the helpers below
@@ -370,6 +389,13 @@ struct zx279133_switch {
 	struct phy *serdes;
 	struct mdio_device *xpcs_mdiodev;
 	struct mii_bus *uni_mdio;
+	/*
+	 * The bus of the external PHY - the RTL8226 on the 2.5G jack - which
+	 * is the SoC's MDIO controller #1.  It is a different bus from the
+	 * 9132's own four internal PHYs, and the 2.5G jack's link state has
+	 * to be read there.
+	 */
+	struct mii_bus *outer_mdio;
 	/*
 	 * The bus of the switch's own, which the four user ports' PHYs are
 	 * on: DSA port N is at MDIO address N on it, and it translates to
@@ -1458,6 +1484,62 @@ static int zx279133_switch_uni_link(struct zx279133_switch *priv, int port)
 }
 
 /*
+ * The link state of the 2.5G jack, read from its own PHY.
+ *
+ * The jack is the 9132's fifth user port - the one the vendor calls the
+ * outerphy - and the PHY behind it is the external RTL8226, at address 5 on
+ * the SoC's MDIO controller #1.  That PHY does not answer the registers the
+ * other four are read through: its MMD 0 (the basic block) reads zero for
+ * BMCR and BMSR - measured on the running board on 2026-10-28, where
+ * 00:0x00 and 00:0x01 were both 0x0000 while 07:0x01 read 0x00e9 - so the
+ * standard "the link bit is in BMSR" does not exist on this chip.
+ *
+ * MMD 7 is the auto-negotiation block and register 1 is its status.  Bits
+ * 2..5 are the negotiation status: 00 is no link, 01 a link without
+ * autonegotiation, 10 a link with it complete and 11 a link with a restart
+ * in progress.  Bits 2 and 3 alone tell "no link" from "a link".
+ *
+ * Measured with the vendor's own loader on the same board and the same
+ * cable: the loader's port scan says "mac 4 phy status changed: 2.5G
+ * full-duplex", and the kernel side reads 0x00e9 - bits 2..5 = 10, the
+ * autonegotiation complete with a link.  The two agree, and the link is up
+ * in mainline too, so this port's problem has never been the cable.
+ *
+ * The bus is looked up when it is needed rather than at the probe, because
+ * the MDIO controller is a separate device and the two are not probed in a
+ * fixed order.
+ */
+static int zx279133_switch_outerphy_link(struct zx279133_switch *priv)
+{
+	struct device_node *np;
+	struct phy_device *pd;
+	struct mii_bus *bus;
+	int val;
+
+	if (!priv->outer_mdio) {
+		np = of_parse_phandle(priv->dev->parent->of_node,
+				       "zx279133,outer-phy-bus", 0);
+		if (!np)
+			return -1;
+		bus = of_mdio_find_bus(np);
+		of_node_put(np);
+		if (!bus)
+			return -1;
+		priv->outer_mdio = bus;
+	}
+
+	pd = mdiobus_get_phy(priv->outer_mdio, ZX279133_SWITCH_OUTERPHY_ADDR);
+	if (!pd)
+		return -1;
+
+	val = phy_read_mmd(pd, 7, 1);
+	if (val < 0)
+		return -1;
+
+	return !!(val & 0xc);
+}
+
+/*
  * phylink asks the driver for the link state of a port it has no PHY to
  * poll.  The 9132's ports do have PHYs - internal ones - so the answer is
  * read there.  DSA sets poll_fixed_state when the driver provides this, so
@@ -1478,8 +1560,17 @@ static void zx279133_switch_phylink_fixed_state(struct dsa_switch *ds, int port,
 		return;
 	}
 
+	if (port == ZX279133_SWITCH_DSA_OUTER_PORT) {
+		/* The 2.5G jack: the external RTL8226's own link state. */
+		link = zx279133_switch_outerphy_link(priv);
+		state->link = link == 1;
+		state->speed = SPEED_1000;
+		state->duplex = DUPLEX_FULL;
+		return;
+	}
+
 	if (port < ZX279133_SWITCH_DSA_PORT_MIN ||
-	    port > ZX279133_SWITCH_DSA_PORT_MAX) {
+	    port > ZX279133_SWITCH_DSA_JACK_MAX) {
 		state->link = false;
 		return;
 	}
@@ -1501,8 +1592,22 @@ static void zx279133_switch_phylink_get_caps(struct dsa_switch *ds, int port,
 		return;
 	}
 
+	if (port == ZX279133_SWITCH_DSA_OUTER_PORT) {
+		/*
+		 * The 2.5G jack: the 9132's port runs 1000BASE-X to the
+		 * external RTL8226 (the vendor's mode_eth_2p5gbase_x_cfg), so
+		 * that is the mode this port has.  The rate is the fabric's,
+		 * which is 1G - the CPU port this board reaches the switch
+		 * through is a 1G SGMII lane.
+		 */
+		__set_bit(PHY_INTERFACE_MODE_1000BASE_X,
+			  config->supported_interfaces);
+		config->mac_capabilities = MAC_1000FD;
+		return;
+	}
+
 	if (port < ZX279133_SWITCH_DSA_PORT_MIN ||
-	    port > ZX279133_SWITCH_DSA_PORT_MAX)
+	    port > ZX279133_SWITCH_DSA_JACK_MAX)
 		return;
 
 	/*
@@ -1616,8 +1721,23 @@ static int zx279133_switch_port_enable(struct dsa_switch *ds, int port,
 	if (port == ZX279133_SWITCH_DSA_CPU_PORT)
 		return 0;
 
+	if (port == ZX279133_SWITCH_DSA_OUTER_PORT)
+		/*
+		 * The external RTL8226 is not a PHY this port owns: the port
+		 * is a fixed-link one, and the RTL8226 carries the
+		 * configuration the vendor's own sequence gives it - the
+		 * loader's net bring-up writes it, and the NPPT driver has
+		 * already put the port's own words in place.  Powering it down
+		 * and letting phylib configure it from scratch would throw
+		 * away the very state the link is working with: the
+		 * autonegotiation status reads 0x00e9 in mainline, which is
+		 * the same "link up, autonegotiation complete" the loader
+		 * leaves it in.
+		 */
+		return 0;
+
 	if (port < ZX279133_SWITCH_DSA_PORT_MIN ||
-	    port > ZX279133_SWITCH_DSA_PORT_MAX)
+	    port > ZX279133_SWITCH_DSA_JACK_MAX)
 		return -EINVAL;
 	if (!priv->uni_mdio)
 		return 0;
@@ -1708,7 +1828,7 @@ static int zx279133_switch_mdio_read(struct mii_bus *bus, int addr, int regnum)
 	int val;
 
 	if (addr < ZX279133_SWITCH_DSA_PORT_MIN ||
-	    addr > ZX279133_SWITCH_DSA_PORT_MAX)
+	    addr > ZX279133_SWITCH_DSA_JACK_MAX)
 		return -EIO;
 	if (!priv->uni_mdio)
 		return -ENODEV;
@@ -1736,7 +1856,7 @@ static int zx279133_switch_mdio_write(struct mii_bus *bus, int addr, int regnum,
 	struct zx279133_switch *priv = bus->priv;
 
 	if (addr < ZX279133_SWITCH_DSA_PORT_MIN ||
-	    addr > ZX279133_SWITCH_DSA_PORT_MAX)
+	    addr > ZX279133_SWITCH_DSA_JACK_MAX)
 		return -EIO;
 	if (!priv->uni_mdio)
 		return -ENODEV;
@@ -1761,7 +1881,7 @@ static int zx279133_switch_phy_match(struct phy_device *phydev,
 
 	return bus && bus->read == zx279133_switch_mdio_read &&
 	       phydev->mdio.addr >= ZX279133_SWITCH_DSA_PORT_MIN &&
-	       phydev->mdio.addr <= ZX279133_SWITCH_DSA_PORT_MAX;
+	       phydev->mdio.addr <= ZX279133_SWITCH_DSA_JACK_MAX;
 }
 
 static int zx279133_switch_phy_probe(struct phy_device *phydev)
@@ -1900,9 +2020,9 @@ static int zx279133_switch_mdio_setup(struct zx279133_switch *priv,
 
 	dev_info(ds->dev,
 		 "the 9132's four PHYs are on a bus of the switch's own: DSA ports %u..%u are MDIO %02x..%02x on the SoC's controller #0\n",
-		 ZX279133_SWITCH_DSA_PORT_MIN, ZX279133_SWITCH_DSA_PORT_MAX,
+		 ZX279133_SWITCH_DSA_PORT_MIN, ZX279133_SWITCH_DSA_JACK_MAX,
 		 ZX279133_SWITCH_DSA_PHY(ZX279133_SWITCH_DSA_PORT_MIN),
-		 ZX279133_SWITCH_DSA_PHY(ZX279133_SWITCH_DSA_PORT_MAX));
+		 ZX279133_SWITCH_DSA_PHY(ZX279133_SWITCH_DSA_JACK_MAX));
 
 	return 0;
 }
@@ -1965,9 +2085,10 @@ static int zx279133_switch_setup(struct dsa_switch *ds)
 			ERR_PTR(ret));
 
 	dev_info(ds->dev,
-		 "the 9132 is serving: the jacks are the 9132's UNI ports %u..%u, they are DSA ports %u..%u, the CPU port is %u and the transport VIDs are %u..%u\n",
+		 "the 9132 is serving: the jacks are the 9132's UNI ports %u..%u (DSA ports %u..%u), the 2.5G jack is the outerphy port %u (DSA port %u), the CPU port is %u and the transport VIDs are %u..%u\n",
 		 ZX279133_SWITCH_UNI_PORT_MIN, ZX279133_SWITCH_UNI_PORT_MAX,
-		 ZX279133_SWITCH_DSA_PORT_MIN, ZX279133_SWITCH_DSA_PORT_MAX,
+		 ZX279133_SWITCH_DSA_PORT_MIN, ZX279133_SWITCH_DSA_JACK_MAX,
+		 ZX279133_9132_OUTERPHY_PPU, ZX279133_SWITCH_DSA_OUTER_PORT,
 		 ZX279133_SWITCH_DSA_CPU_PORT,
 		 ZX279133_RTL8372N_TRANSPORT_VID_BASE +
 		 ZX279133_SWITCH_DSA_PORT_MIN,

@@ -7903,9 +7903,187 @@ gpiochip2: 16 GPIOs, parent: platform/10d10080.gpio, 10d10080.gpio:
 
 ⇒ **还差一个数：gpio2 pin 1 在 CI 镜像里的真实电平。** 旧镜像里没人申请它，
 量不到；win110 加了一步（读 `/sys/kernel/debug/gpio` 里的 `gpio-33`，再读红灯
-的 brightness）：
+的 brightness）。
 
-- 读到 **0** ⇒ 极性对（无光=红），面板上应该常亮红；
-- 读到 **1** ⇒ 极性反了，dts 里 `opsd-gpios = <&gpio2 1 GPIO_ACTIVE_HIGH>` 要
-  改成 `GPIO_ACTIVE_LOW`。
+**这一条要分两种故事，别把它读成"极性反了"**（2026-10-28 16:16 修正：owner 说
+**厂商的恢复模式里 PON 是能起来的**，所以光纤、ISP、光路都是好的，**我们缺的
+只是 G5 那个协议状态机**，不是硬件）：
 
+- 读到 **0**（无光）⇒ 在我们这套镜像里光路根本没有光 —— 与 docs/91 记的那件
+  事一致：PON SerDes 被 `zx279133_pon_serdes_configure_pll()` 明确切成了以太网
+  模式，光模块那条路是断的 ⇒ 红灯该常亮红（无光=红），而恢复模式里它不亮，
+  因为恢复模式把 PON 拉起来了。
+- 读到 **1**（有光）⇒ 光纤上的光一直在，RX_SD 一直有效；红灯灭是**对的**
+  （有光就不该报 LOS），U-Boot 里那盏红灯是厂商"还没注册上"的意思，不是
+  "没有光"。
+
+⇒ 两种读数都不指向"改极性"：`opsd-gpios = <&gpio2 1 GPIO_ACTIVE_HIGH>` 是照着
+厂商 4.19 的 `optical_signal_rxsd_get()` 抄的（1 = 有光 = 灯灭，docs/91 §4 的
+反汇编结论），只有当读数与厂商 4.19 不一致时才有资格怀疑极性。现在缺的只是
+**我们自己这份镜像里的读数**。
+
+### 89.4 恢复模式里 PON 能起来 ⇒ 光路是好的，缺的只是 G5
+
+owner 2026-10-28 16:16：**厂商的恢复模式里 PON 是能起来的**（注册上、有光），
+而我们这套 mainline 镜像里 PON 永远没有。
+
+⇒ 这一句把"最后能不能做成一只可用的光猫"的**硬件前提**排掉了：
+
+| 环节 | 状态 |
+|---|---|
+| 光纤、ISP、OLT 侧 | 好（厂商固件能注册） |
+| 光模块与 RX_SD 那条线 | 好（同上） |
+| 我们的 G5 协议栈（PLOAM/GEM/OMCI/注册） | **没有**（按计划第 7 节保持冻结） |
+| LAN 侧（1G 口、2.5G 口） | 1G 口好；2.5G 口是本轮在做的事 |
+
+⇒ 所以 §89.3 那个 gpio2 pin 1 的读数，回答的是"**我们这套镜像里光模块有没有被
+拉起来**"，不是"光纤有没有光"——两件事，别混。
+
+⇒ 并且 mainline 的 PON SerDes 是被 `zx279133_pon_serdes_configure_pll()` 明确切成
+以太网模式的（docs/91 §2/§3），所以在我们这套镜像里光路本来就是断的，**红灯
+该常亮**。恢复模式里它不亮，是因为恢复模式把 PON 拉起来了。
+
+⇒ 结论：最终目标（一只可用的光猫）在硬件上没有被挡路，挡路的是 G5 —— 而 G5 是
+**主动选择**冻结的，不是做不到。LAN 侧的工作（2.5G 口）与它无关，可以先做完。
+
+## 90. win110 的判决，与 2.5G 口这条 DSA 口的补上（2026-10-28 17:46 起）
+
+### 90.1 这一轮量到的（`staging/ctl/win110.log`）
+
+板子跑的是 CI #223 的 initramfs（`run223.itb`，TFTP 传进 RAM，没写 flash）。继电器
+在 17:46:05 发出的那串 `uname -a` 正好打断 U-Boot 的倒计时，loader 停在 `=>`，
+12 MB 的镜像 12 秒传完，`bootm` 之后 17:47:06 内核 shell 起来。
+
+**U-Boot 侧（step 1）：**
+
+```
+ub enter outerphy info init!
+ub [outerphy_phy_init]Warning: No outerphy on this port<6>
+ub 5 serdes option is 0
+ub xmac0 is used.
+ub [outerphy_phy_init]Warning: No outerphy on this port<5>
+ub mac 0 link down
+ub mac 1 phy status changed: 1000M full-duplex
+ub mac 2 link down
+ub mac 3 link down
+ub mode_eth_2p5gbase_x_cfg
+ub uni serdes init succeed
+ub mac 4 phy status changed: 2.5G full-duplex
+```
+
+**内核侧（step 5–12）：**
+
+| 量 | 读数 |
+|---|---|
+| Uni SerDes `0x16100000` | 49 字 = 树里那份 1G image（word0 `0xe0000004`，mode `0x101`） |
+| 两份 image 之差 | 18/49 字；厂商那份的 mode 字是 `0x409` |
+| RTL8226 `07:0x01`（写 image 0 之前） | **`0x00e9`** |
+| RTL8226 `07:0x01`（写厂商 image + reset 之后） | **`0x00ad`** |
+| RTL8226 `1e:0x758b` / `1e:0x758d` | `0x0005` / `0x8018`（前后不变） |
+| Uni SerDes mode（reset 之后） | **`0x00000001`** |
+| 内部 PHY `0x0a`/`0x0b`/`0x0c`/`0x0d` 的 BMSR | `0x7949` / `0x796d` / `0x7949` / `0x7949` |
+| 网口 | lan1 NO-CARRIER、lan2 UP、lan3/lan4 NO-CARRIER、br-lan UP |
+| `ping 192.168.9.1` | 4/4，0% 丢包 |
+| LOS 红灯 | `gpio-9 (skyworth:red:los) out lo ACTIVE LOW`，brightness 1 = 亮 |
+| PON SerDes `0x16000000`（step 14） | 与 Uni SerDes **逐字相同**的 49 字；XPCS1 `0x1b000000` 全 0，板子活着 |
+
+### 90.2 判决 M：2.5G 口是 9132 的第五个用户口（PPU 5，厂商叫 outerphy）
+
+这一条把"2.5G 口的网口到底归谁"钉死了，证据是同一次开机里 loader 自己说的话：
+
+- `5 serdes option is 0` —— 5 是 **PHY 地址**，`zx_mdio_extern` 上那颗 `0xc849`；
+- `mac 4 phy status changed: 2.5G full-duplex` —— 4 是 **交换机口号**，也就是厂商
+  `sw_port_change_to_chip_port()` 的 p+1 ⇒ SPA memory 5；
+- `mode_eth_2p5gbase_x_cfg` + `uni serdes init succeed` + `xmac 0 speed set 2 in sgmii`
+  —— XMAC0 走的是 SGMII 1G 那条 Uni SerDes lane，也就是 **9132 的 CPU 口**。
+
+⇒ **面板 LAN1 那根线：2.5G 口 → RTL8226 →（base-X）→ 9132 的 PPU 5 → 9132 的
+CPU 口 → Uni SerDes lane → XPCS0 → XMAC0 → SoC。** SoC 走到这根口的路，和走另外
+三个千兆口完全一样。
+
+⇒ 与树里已有的三处一致：`zx279133.h:166` 的 `ZX279133_9132_OUTERPHY_PPU 5`
+（= 厂商的 `spa_port_attr_xmac_0`）、`ZX279133_9132_CONDUIT_PPU 15`（trap 口）、
+`np.c` 的 `zx279133_9132_ppu5_words()`（**探测时已经在写 PPU 5 的厂商端口字和第五组
+flood word**，`np.c:5668` 调用它）。
+
+⇒ **交换机侧不缺东西，缺的是一条 DSA 口。** 这也正是本篇标题那句话：2.5G 口是
+交换机的口，而 mainline 从来没有声明过它。
+
+⇒ **并且推翻 `02_network` 里那句「eth0 是面板 LAN1（2.5G 口）」**：eth0 是 NPPT
+自己的网口（SoC 的 XMAC1 = PON 侧），2.5G 口是 9132 的 outerphy 口。那句注释是
+照着厂商 `/etc/config/network` 的 `wan.device = eth0` 抄的，而厂商自己那份也是错的
+—— 它的 `eth0` 背后是那颗从没被初始化过的 RGMII 块（`zx279133-rgmii.c` 的注释
+里有那段证据），厂商的 2.5G 口"一个字节也没收到过"。
+
+### 90.3 判决 N：这条链路的链路状态一直是通的
+
+`07:0x01` 是 MMD 7（自动协商块）的寄存器 1，IEEE 802.3 的 AN Status：bit0 是 AN
+Enable，bits 2..5 是协商状态（`00` 无链路 / `01` 链路通未协商 / `10` 协商完成 /
+`11` 链路通且正在重启）。
+
+| 读数 | bits 2..5 | 含义 |
+|---|---|---|
+| `0x0069`（厂商 U-Boot 侧，14:46 那次） | `10` | 协商完成，链路通 |
+| `0x00e9`（mainline，写 image 0 时） | `10` | 协商完成，链路通 |
+| `0x002d`（mainline，今天早些时候） | `11` | 链路通，正在重启 |
+| `0x00ad`（mainline，写厂商 image + reset 之后） | `11` | 链路通，正在重启 |
+
+⇒ **mainline 里这条链路是通的**，和厂商 U-Boot 读到的是同一个状态。
+
+⇒ 顺带量到的一件事：**这颗 PHY 的 MMD 0 不回答**。`00:0x00`（BMCR）、`00:0x01`
+（BMSR）、`00:0x1e` 在 mainline 里全读回 `0x0000`，而 `07:0x01` 读得到值。所以
+"链路位在 BMSR 里"这条常规路子在这颗芯片上不存在，链接状态只能从 AN Status 取。
+
+⇒ 判决 N：**2.5G 口从来没断过，断的是它在 mainline 里没有 netdev。**
+
+### 90.4 判决 O：厂商那份 Uni SerDes image 靠写寄存器保持不住
+
+`write 1` 是成功的（`uni serdes: image 1 written again`），可随后的 `reset` 之后
+mode 字读回 **`0x00000001`**，而不是厂商那份的 `0x409`；两份 image 有 18/49 字
+不同，word0 却是同一份（`0xe0000004`）。
+
+⇒ 判决 O：**厂商那份 image 的关键字是 reset 之后硬件/驱动自己改回去的，靠写寄存器
+保不住。** 而且这条 lane 本来就是四个千兆口走的路（1G SGMII），它不是 2.5G 口的
+路 —— 90.2 已经把它排除了。
+
+⇒ 所以 J4 成立：**2.5G 口的病不在 Uni SerDes 那份 image 上。**
+
+### 90.5 判决 P：红灯现在的亮法是对的
+
+`gpio-9 (skyworth:red:los) out lo ACTIVE LOW`、brightness 1 ⇒ 灯亮 = 无光。
+和 owner 说的「PON 永远没有光」一致，也和 §89.4 一致：mainline 的 PON SerDes 被
+明确切成以太网模式，光路在我们这套镜像里本来就是断的，**红灯该常亮**。
+
+⇒ 但 `gpio2 pin 1`（global 33，RX_SD）在 run223 里**没有任何人申请**，读不到电平
+⇒ §89.3 里缺的那一行（"我们自己这份镜像里的读数"）仍然缺。这盏灯现在只反映
+**我们这套镜像没拉起 PON**，不反映光纤有没有光。
+
+### 90.6 改动：把 outerphy 声明成一条 DSA 口
+
+既然交换机侧（端口字、第五组 flood word、MF 镜像）树里早就在写，缺的只是那条
+DSA 口，这次就把它补上：
+
+- **DTS**：新增 `port@8`（`label = "lan5"`、`phy-mode = "1000base-x"`、
+  `fixed-link 1000 full`），CPU 口从 `port@8` 挪到 `port@9`。
+  为什么是 8：树里的两套约定是"DSA 口号 = PPU + 3"和"transport VID = 55 + DSA
+  口号"，两条都指向 outerphy = 8、VID = 63；**四个千兆口的 4..7 和 59..62 一个
+  都没动**。
+- **驱动**（`zx279133-switch.c`）：这条口的链路状态从 RTL8226 自己的 AN Status 取
+  （`mdio1` 地址 5，MMD 7 寄存器 1，90.3 那张表）；`port_enable` **不碰**那颗 PHY
+  —— 它带着厂商序列给它的配置，而那正是链路能通的原因；能力报 1000BASE-X / 1000FD。
+- **`zx279133-np.c`**：`usv` 命令现在也给 PPU 5 它的 transport VID（63）；
+  `ZX279133_LAN_TRANSPORT_VID_MAX` 62 → 63。
+- **`02_network`**：`lan5` 存在就进桥；那句错的"eth0 是面板 LAN1"改掉。
+- **`tools/portsall.sh`**：想要的口列表里加 lan5，但只写板上真有的那几个口。
+
+### 90.7 下一步
+
+1. 等这一轮 CI 的镜像，跑 win111：**lan5 是否出现**、carrier 是不是 1、桥里有没有
+   它、把 PC 插到面板 LAN1 能不能拿到地址。
+2. 若 lan5 不出现：先看 dmesg 里 `the 9132 is serving: ...` 那行和 DSA 的注册错误。
+3. 若 lan5 出现但没有流量：查 VID 63 那两张表（VLAN action table、flood table）
+   和 IDM 的出口端口。
+4. **不必等镜像就能做的实验**：镜像已经在 RAM 里之后，把 PC 的网线从 lan2 换到面板
+   LAN1，看帧能不能到 CPU 口（`/proc/net/dev` 的 lan-cpu0 收包数）。能到，就说明
+   交换机侧本来就是通的，缺的确实只是那条 DSA 口；不能到，就把 PPU 5 的 SVID 与
+   flood word 在运行期读回来对着看。

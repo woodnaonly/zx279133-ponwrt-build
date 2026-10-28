@@ -28,7 +28,7 @@ set -eu
 cd "$(dirname "$0")"
 export MSYS_NO_PATHCONV=1
 
-WANT_PORTS=${WANT_PORTS:-"lan1 lan2 lan3 lan4 lan-cpu0"}
+WANT_PORTS=${WANT_PORTS:-"lan1 lan2 lan3 lan4 lan5 lan-cpu0"}
 WAN=${WAN:-eth0}
 BIND=${SKD_BIND:-192.168.9.25}
 HOST=${SKD_HOST:-192.168.9.1}
@@ -50,10 +50,18 @@ if ! echo 'echo alive' | board >/dev/null 2>&1; then
 	exit 1
 fi
 
+# The ports the board actually has.  A port that is not there is left out
+# rather than named: netifd keeps a named port that does not exist in a
+# pending state, and the images from before the 2.5G jack became a DSA
+# port have no lan5 at all.
+have=$(echo "for p in $WANT_PORTS; do [ -e /sys/class/net/\$p ] && printf '%s ' \$p; done" |
+	board 2>&1 | tr -d '\r' | tail -1 | sed 's/ *$//')
+[ -n "$have" ] || have="$WANT_PORTS"
+
 got=$(
 	{
 		echo 'uci -q delete "network.@device[0].ports"'
-		for p in $WANT_PORTS; do
+		for p in $have; do
 			echo "uci add_list \"network.@device[0].ports\"=$p"
 		done
 		echo "uci set network.wan.device=$WAN"
@@ -61,8 +69,8 @@ got=$(
 		echo 'uci -q get "network.@device[0].ports"'
 	} | board 2>&1 | tail -1 | tr -d '\r'
 )
-if [ "$got" != "$WANT_PORTS" ]; then
-	echo "portsall: the port list is '$got', and it should be '$WANT_PORTS'" >&2
+if [ "$got" != "$have" ]; then
+	echo "portsall: the port list is '$got', and it should be '$have'" >&2
 	echo "portsall: stopping here rather than measuring a bridge that is not" >&2
 	echo "portsall: the one that was asked for" >&2
 	exit 1
@@ -101,7 +109,7 @@ echo "portsall: wan and wan6 are both on '$WAN'"
 # a script that never ran and a file that matched would both print nothing.
 file=$(
 	{
-		echo "for p in $WANT_PORTS; do grep -q \"list ports '\$p'\" /etc/config/network || echo \"missing \$p\"; done"
+		echo "for p in $have; do grep -q \"list ports '\$p'\" /etc/config/network || echo \"missing \$p\"; done"
 		echo "grep -q \"option device '$WAN'\" /etc/config/network || echo missing-wan"
 		echo file-ok
 	} | board 2>&1 | tr -d '\r'
@@ -121,7 +129,7 @@ case "$file" in
 	exit 1
 	;;
 esac
-echo "portsall: the committed file carries $WANT_PORTS and the wan on $WAN"
+echo "portsall: the committed file carries $have and the wan on $WAN"
 
 # The restart goes over the console and detached, because the board's LAN
 # address leaves this PC's segment while it runs and the session it arrived
@@ -147,8 +155,8 @@ now=$(
 		sed -n '/^### /,$p' | tail -n +2 | grep -av '^[[:space:]]*$' |
 		head -1 | tr -d '\r'
 )
-if [ "$now" != "$WANT_PORTS" ]; then
-	echo "portsall: the running bridge is '$now', and it should be '$WANT_PORTS'" >&2
+if [ "$now" != "$have" ]; then
+	echo "portsall: the running bridge is '$now', and it should be '$have'" >&2
 	echo "portsall: the file on flash can be right while netifd never read it -" >&2
 	echo "portsall: that is what this check exists for, so it stops the run" >&2
 	exit 1

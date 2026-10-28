@@ -1925,7 +1925,7 @@ static ssize_t zx279133_9132_write(struct file *file, const char __user *ubuf,
 			return -EINVAL;
 
 		for (ppu = ZX279133_9132_UNI_PPU_FIRST;
-		     ppu <= ZX279133_9132_UNI_PPU_LAST; ppu++) {
+		     ppu <= ZX279133_9132_OUTERPHY_PPU; ppu++) {
 			u32 svid = on ? ZX279133_LAN_TRANSPORT_VID_MIN +
 					 (ppu - 1) : 0;
 
@@ -1937,7 +1937,7 @@ static ssize_t zx279133_9132_write(struct file *file, const char __user *ubuf,
 		if (err)
 			return err;
 		eth->lan_untag_svid = on;
-		pr_info("the UNI ports' untag SVID is now %s\n",
+		pr_info("the user ports' untag SVID is now %s\n",
 			on ? "their transport VID" : "0");
 		return count;
 	}

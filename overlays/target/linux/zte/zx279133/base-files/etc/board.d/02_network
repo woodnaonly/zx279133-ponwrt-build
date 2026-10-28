@@ -69,7 +69,7 @@ skyworth,sk-d840n)
 	# which is the one thing that makes every jack reachable from the router.
 	lan_dev=""
 	uni=""
-	for d in lan1 lan2 lan3 lan4; do
+	for d in lan1 lan2 lan3 lan4 lan5; do
 		[ -e "/sys/class/net/$d" ] && { lan_dev="$lan_dev${lan_dev:+ }$d"; uni=1; }
 	done
 	[ -n "$lan_dev" ] || { [ -e /sys/class/net/lan-cpu0 ] && lan_dev="lan-cpu0"; }
@@ -111,7 +111,18 @@ skyworth,sk-d840n)
 	#   DSA port 5 = PPU 2 = PHY 0x0b = lan2   panel LAN2
 	#   DSA port 6 = PPU 3 = PHY 0x0c = lan3   panel LAN3
 	#   DSA port 7 = PPU 4 = PHY 0x0d = lan4   panel LAN4
-	#   (not DSA)    NPPT   = RTL8226  = eth0  panel LAN1, the 2.5G jack
+	#   DSA port 8 = PPU 5 = RTL8226 = lan5    panel LAN1, the 2.5G jack
+	#   (not DSA)    NPPT   = the PON side = eth0
+	#
+	# The 2.5G jack is the 9132's fifth user port, the one the vendor
+	# calls the outerphy, and its PHY is the external RTL8226 on &mdio1
+	# at address 5 - not the SoC's own MAC.  An earlier version of this
+	# comment claimed the opposite ("eth0 is the panel's LAN1 2.5G jack")
+	# and it was wrong: the loader's own log says the RTL8226 comes up on
+	# the 9132's port 4 (the outerphy) and that the SoC reaches it over
+	# the 9132's CPU port, the same way it reaches the other three jacks
+	# (docs/92 §90).  eth0 is the NPPT's own netdev - the PON side - and
+	# is the `wan` slot.
 	#
 	# lan1 being a netdev with no jack behind it is why leaving it in the bridge
 	# costs nothing and why it must not be "tidied" out of one.

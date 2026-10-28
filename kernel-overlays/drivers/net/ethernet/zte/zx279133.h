@@ -118,7 +118,12 @@ extern u16 zx279133_tx_port;
 #define ZX279133_LAN_TX_PORT		2
 #define ZX279133_LAN_RX_QUEUE_COUNT	8
 #define ZX279133_LAN_TRANSPORT_VID_MIN	59
-#define ZX279133_LAN_TRANSPORT_VID_MAX	62
+/*
+ * 63 is the fifth user port's: the 2.5G jack is the 9132's outerphy port
+ * (PPU 5) and the DSA port it is behind is 8, and the tagger's VID is
+ * 55 + the DSA port number.
+ */
+#define ZX279133_LAN_TRANSPORT_VID_MAX	63
 #define ZX279133_LAN_INGRESS_VID	1
 #define ZX279133_LAN_VID		62
 #define ZX279133_LAN_MAX_MTU		(ZX279133_MAX_MTU + VLAN_HLEN)
