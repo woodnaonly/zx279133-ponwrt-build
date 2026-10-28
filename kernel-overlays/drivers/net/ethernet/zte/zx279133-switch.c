@@ -409,6 +409,14 @@ struct zx279133_switch {
 	 */
 	u32 outerphy_an_status;
 	/*
+	 * Whether the outer PHY's own configuration has been printed yet.
+	 *
+	 * The print happens on the first read of the PHY, because the MDIO
+	 * controller it sits on is a separate device and the two are not
+	 * probed in a fixed order.
+	 */
+	bool outerphy_dumped;
+	/*
 	 * The bus of the switch's own, which the four user ports' PHYs are
 	 * on: DSA port N is at MDIO address N on it, and it translates to
 	 * the SoC's controller #0 address 0x0a..0x0d.
@@ -1506,6 +1514,8 @@ static int zx279133_switch_uni_link(struct zx279133_switch *priv, int port)
 	return !!(bmsr & BMSR_LSTATUS);
 }
 
+static void zx279133_switch_outerphy_dump(struct zx279133_switch *priv);
+
 /*
  * The link state of the 2.5G jack, read from its own PHY.
  *
@@ -1592,7 +1602,72 @@ static int zx279133_switch_outerphy_link(struct zx279133_switch *priv)
 			 " - at least one of them is missing, the lane carries no code");
 	}
 
+	zx279133_switch_outerphy_dump(priv);
+
 	return !!(val & 0xc);
+}
+
+/*
+ * The outer PHY's own configuration, printed once per boot.
+ *
+ * This is the chip on the far end of the 2.5G jack, and the only thing that
+ * has ever been different about it between the vendor's loader and mainline
+ * is its SerDes configuration: the tree's generic Realtek driver rewrites
+ * the SerDes option and the DSP patch window when phylib attaches to it
+ * (docs/92 §94.3), and the LAN's own status word says the base-X lane is
+ * not locked (§94.6's N3).
+ *
+ * The words printed here are the ones that decide which SerDes mode the chip
+ * is in, and the vendor's own values for them, read out of the board's U-Boot
+ * on 2026-10-29 00:47:
+ *
+ *	1e.0x697a	0x0003	the SerDes option
+ *	1e.0x7580	-	the SerDes mode (the tree reads 0x02 as SGMII and
+ *				0x16 as 2500BASE-X; the vendor's value was never
+ *				measured)
+ *	1e.0x758d	0x0010	the SerDes control word; mainline reads
+ *				0x8018, and bit 15 of it is set by the chip
+ *				itself (writing 0x0010 leaves it set, measured
+ *				2026-10-29 01:31)
+ *	1f.0xa438	0x0002	the DSP patch window (mainline read 0x0038)
+ *
+ * The auto-negotiation block is printed with them, because the interesting
+ * pair is there: the partner's advertisement (7.0x20) was 0x00a1 under the
+ * loader and is 0x00a1 in mainline too - the peer on the jack is talking -
+ * while the status word (7.0x01) says the negotiation keeps restarting.
+ */
+static void zx279133_switch_outerphy_dump(struct zx279133_switch *priv)
+{
+	static const struct {
+		u32 devad;
+		u32 reg;
+		const char *name;
+	} regs[] = {
+		{ 7, 0x00, "AN BMCR" },
+		{ 7, 0x01, "AN status" },
+		{ 7, 0x10, "AN capabilities" },
+		{ 7, 0x13, "AN capabilities 2" },
+		{ 7, 0x20, "AN partner" },
+		{ 0x1e, 0x697a, "SerDes option" },
+		{ 0x1e, 0x7580, "SerDes mode" },
+		{ 0x1e, 0x758d, "SerDes ctrl" },
+		{ 0x1f, 0xa438, "DSP patch" },
+	};
+	int i;
+
+	if (priv->outerphy_dumped)
+		return;
+	priv->outerphy_dumped = true;
+
+	for (i = 0; i < ARRAY_SIZE(regs); i++) {
+		int val = mdiobus_c45_read(priv->outer_mdio,
+					   ZX279133_SWITCH_OUTERPHY_ADDR,
+					   regs[i].devad, regs[i].reg);
+
+		dev_info(priv->dev, "the 2.5G jack's PHY: %s (devad %#02x reg %#04x) = 0x%04x\n",
+			 regs[i].name, regs[i].devad, regs[i].reg,
+			 val < 0 ? 0xffff : val);
+	}
 }
 
 /*
