@@ -898,6 +898,37 @@ jobs:
           if [ "$rc" = 124 ]; then
             echo "::warning::the first pass was killed after 280 minutes - it was not slow, it was stuck"
           fi
+          # The compiler's own message, out of the PARALLEL log.
+          #
+          # This is the one thing a reader of the run page needs, and the
+          # old path could not give it: the compiler says WHY in the first
+          # lines it prints, while the make chain that says WHICH file says
+          # it last.  The serial retry further down digs the reason out of
+          # its own log, but that retry is bounded (ten minutes) and may
+          # never reach the file that broke - run #217 lost its reason
+          # exactly there: its annotations showed "make[11]: *** [.../
+          # zx279133-switch.o] Error 1" and nothing at all about what was
+          # wrong with the file, which cost a whole round to guess.
+          #
+          # The parallel log holds the same compiler output, and it is right
+          # here, so dig it out before anything else is tried.  It goes into
+          # the annotations AND into the job summary: the annotations are
+          # what a machine without a token reads, and the summary has no
+          # ten-lines-per-step ceiling.
+          {
+            grep -naE "fatal error:|\berror:|implicit declaration|undefined reference|No such file|not defined" \
+              ../compile-parallel.log 2>/dev/null | head -n 12 || true
+          } | while IFS= read -r line; do
+            echo "::error::cc: $(printf '%s' "$line" | sed -e 's/%/%25/g' -e 's/#/%23/g' | tr -d '\r')"
+          done
+          {
+            echo "### the compiler's own message (the parallel pass's log)"
+            echo
+            echo '```'
+            grep -naE "fatal error:|\berror:|implicit declaration|undefined reference|No such file|not defined" \
+              ../compile-parallel.log 2>/dev/null | head -n 20 || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
           # The evidence, while it is still here.  A step that is killed never
           # reaches the lines that would have said where it was, and a job's
           # annotations are only published when the job ENDS - so this is the

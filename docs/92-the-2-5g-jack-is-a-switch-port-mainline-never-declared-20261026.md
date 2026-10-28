@@ -7728,6 +7728,25 @@ include 进来：控制台用 `copy_from_user`、`strncmp`、`pr_info`，不该�
 - 这次能定位到 Compile 步骤，靠的是 88.1 那个 API 端点 —— 值得记住，
   下次再遇到"CI 挂了但看不到日志"，先打这一步，别急着猜。
 
+### 88.5 工作流也改了：编译器自己的报错，从现在起会出现在 run 页面上
+
+88.1 那条路只能看到"挂在哪一步"。真正要修，还得看到编译器说了什么，而工作流
+里其实**已经有**这个机制，只是抓错了日志：它在串行重试（`make -j1 V=s`）那份
+`compile-v1.log` 里 grep `fatal error:|error:|implicit declaration|...`，而那次
+重试只有十分钟，常常还没编到坏掉的那个文件就结束了 —— #217 正是这样丢掉了原因，
+注解里只剩 `make[11]: *** [.../zx279133-switch.o] Error 1`。
+
+⇒ 改法：在**并行**日志 `compile-parallel.log` 里也挖一遍，那份日志里就有编译器
+的原话，而且是在重试之前就挖。两处都写：
+
+- `::error::cc:` 注解 —— 没有 token 的机器读的就是它；
+- job summary（`$GITHUB_STEP_SUMMARY`）—— 注解有每步十行的上限，summary 没有。
+
+实测（用假的编译日志跑一遍那段 shell）：`error: implicit declaration of function
+devm_debugfs_create_dir` 这一行会被原样挖出来。
+
+⇒ 以后 CI 再挂，第一件事就是看 run 页面的注解里有没有 `cc:` 开头的那几行。
+
 
 
 
