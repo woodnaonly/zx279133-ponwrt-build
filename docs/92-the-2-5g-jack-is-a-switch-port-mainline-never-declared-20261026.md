@@ -7132,3 +7132,112 @@ jack」。**那是错的。** 这条 lane 的远端是 **9132 的 CPU 口**。
 
 2.5G 口的 netdev 在 mainline 里**至今不存在**（`lan1..lan4` 是 DSA port 4..7 = 9132 的
 UNI 口 1..4），所以第 2 步通了之后，第 3 步是必须的。
+
+## 83. win102：同一次启动里两侧逐字对照 ⇒ 9132 不是缺口，差在 SoC 侧
+
+### 83.1 先说方法：win101 的坑
+
+win101 在 U-Boot 提示符上 dump 了 9132 的窗口，拿回来的数看起来"不对"：XMAC0 与
+XMAC1 全是 0，SPA 窗口大半是 `0xffffffff`，而内核侧有真值。原因在日志里：
+
+```
+=== >>> 11:37:04 sent: uname -a ===          <- 提示符上先探了一次
+...
+=== >>> 11:37:40 sent: tftpboot 0x89000000 run211.itb ===
+...
+np init ok
+mac 0 link down ... mac 3 link down
+phy_id:0x5;  port:0x4;
+mode_eth_1gbase_x_cfg
+uni serdes init succeed
+xmac 0 speed set 2 in sgmii(xmac speed 3)
+mac 4 phy status changed: 1000M full-duplex
+```
+
+**厂商 U-Boot 的网络栈是懒加载的**：它的 net init 在**第一条网络命令**时才跑，
+不是在进提示符之前。所以 win101 dump 到的是"复位后、net init 前"的状态。
+
+win102 因此把顺序改了：先进提示符 -> 用一次 `tftpboot` 把 net init 逼出来 -> 再 dump。
+并且两侧取自**同一次启动**（win84/win85 的教训：同次启动的 A/B 才是干净的对照）。
+
+### 83.2 判据（先写死，再看数）
+
+| | 判据 | 结论 |
+|---|---|---|
+| J1 | PPU 5 自己的块（nppt+0x8500）与 PPU 1..4 不同 | 那个字就是 PPU 5 缺的，mainline 要写 |
+| J2 | work-mode 块或某个 SMAC 块不同 | 口的 MAC 或模式配得不一样 |
+| J3 | 什么都没差 | 差异不在 9132 的寄存器里，下一个候选是 PHY 的 DSP patch 或 PHY 侧重协商 |
+
+### 83.3 实测（win102，12:01，一次启动两侧各 3008 / 2688 字）
+
+| 区域 | 比过的字 | 不同的字 |
+|---|---|---|
+| work mode（nppt+0x4000，256 字） | 256 | 0 |
+| SPA PPU 0..3（nppt+0x8000..0x83ff） | 1024 | 94（只在 MAC 表那块） |
+| **SPA PPU 4（nppt+0x8400）** | 256 | **0** |
+| **SPA PPU 5（nppt+0x8500）** | 256 | **0** |
+| **SPA PPU 6 / PPU 7** | 512 | **0** |
+| SMAC0..3（nppt+0x40000/0x80000/0xc0000/0x100000） | 256 | 6（+0x00 与 +0xe0） |
+| XMAC0（nppt+0x140000，256 字） | 256 | 12，**每一个都只差一个 bit** |
+| XMAC0 +0x280（64 字） | 64 | 0 |
+| XMAC0 +0x3400（64 字） | 64 | 4（bit 9） |
+| XMAC1（nppt+0x180000，256 字） | 256 | 16 |
+
+XMAC0 的 12 个不同点，逐个都是一位：
+
+```
++0x0000 TX_CTRL   U-Boot 0x60010000   内核 0x60010001
++0x0010 RX_CTRL   U-Boot 0x3e8000c6   内核 0x3e8000c7
++0x0020 FRAME_CFG U-Boot 0x80000001   内核 0x80000000
++0x3400 MISC_CFG  U-Boot 0x00002000   内核 0x00002200
+```
+
+**=> J3：9132 的寄存器不是缺口。**
+
+这句话比它听起来更硬：能把字节搬过 2.5G 口的 U-Boot，和搬不过的 mainline，
+**在 9132 这一侧是逐字相同的**。PPU 5 自己的属性块（nppt+0x8500）**零差异**；
+XMAC0（厂商自己的端口表叫它 `5 = XMAC0`，也就是外接 RTL8226 那个口的 MAC）
+只差 12 个单 bit。一个在"能用"和"不能用"两种配置里被写成一样的东西，
+不可能是这两种配置的区别。
+
+### 83.4 §82 里要改的地方
+
+§82 说"坏的是 9132 chip port 5 与 RTL8226 之间那条 1000BASE-X 链路"，并把
+"mainline 补上 outerphy 口的配置（9132 侧 + RTL8226 侧）"列为第 2 步。
+**这一步的前提现在没了**：9132 侧不缺东西。PPU 5 = XMAC0 这个命名也定案了
+（厂商的 `spa_port_attr_op` 列表写着 `5 = XMAC0 / 6 = XMAC1 / 7 = RGMII1`，
+np_133.ko 的 `nppt_smac_init()` 对 MAC 4 调 `outerphy_phy_init(4)` 并在 RTL8226
+应答时打印 "xmac0 is used"；见 `staging/ctl/outerphy_calls.py`）。
+
+### 83.5 那就只剩 SoC 侧
+
+已经确定的两侧相同项：
+
+- **RTL8226 自己的寄存器**：win84/win85 同次启动对照里逐字相同（1e.7581 / 7588 /
+  7589 / 758b / 75f3 / 697a / 6a04 / 1f.a436 / 1f.a438 / 1f.d044），只有 1e.758d
+  差一位。=> PHY 侧的厂商序列**已经跑过**（U-Boot 灌的，跨内核存活）。
+- **9132 的寄存器**：本节 83.3。=> 9132 侧不缺。
+
+于是差只可能在 **SoC 侧这条 lane** 上，而且差得很具体——lane 的 PCS 四个字：
+
+| | BMCR | DIG_CTRL1 | AN_CTRL | SR-MII |
+|---|---|---|---|---|
+| U-Boot（能搬字节） | **0x1140** | **0x2200** | **0x0005** | **0x0020** |
+| mainline 自己写的 base-X 图 | 0x0140 | 0x2000 | 0x0000 | — |
+
+**run213（`31f2a35`）正是把 U-Boot 那四个字整字抄进 mainline 的那一笔**，它一直没
+上过板。win103 就是把它上板看 `devad 0x07 reg 0x01`（RTL8226 的 1000BASE-X PCS
+状态）：U-Boot 是 **0x0069**（link up），mainline 是 **0x002d**（down）。
+
+### 83.6 下一步
+
+1. **win103**：U-Boot 侧先 dump SoC 的 `0x1a7c0000` / `0x1a7e0000`（PCS 两个窗口）
+   与 `0x16100000`（Uni SerDes）、`0x15900000`（RGMII MAC 块）、`0x16000000`
+   （PON SerDes），**都在 net init 之后**；然后起 run213 的镜像，读 07:0x01。
+2. 若 07:0x01 变成 **0x0069** => lane 那四个字就是缺口，2.5G 口的链路起来了，
+   接着要确认 1G 口在 U-Boot 模式下还通不通。
+3. 若仍是 **0x002d** => 四个字不够，拿 win103 dump 下来的 U-Boot 侧 SoC 窗口和内核
+   侧（boot 日志里的 lane pre-pcs / lane after）继续比。
+
+无论哪一边，**2.5G 口的 netdev 仍然不存在**（`lan1..lan4` 是 DSA port 4..7 = 9132 的
+UNI 口 1..4），所以链路通了之后还要做 §82.5 的第 3 步。

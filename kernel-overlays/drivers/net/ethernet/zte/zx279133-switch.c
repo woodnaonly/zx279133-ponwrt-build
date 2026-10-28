@@ -652,20 +652,32 @@ rearm:
  * zx279133_xpcs_sgmii_quirk() in drivers/net/ethernet/zte/zx279133-mac.c),
  * which programs this block as SGMII, i.e. PCS mode 2.  What this driver used
  * to do instead was the 1000BASE-X variant of it, with the mode field and the
- * BMCR changed - and that is what cost the 2.5G jack its frames:
+ * BMCR changed.
  *
- *   - the lane's far end is the RTL8226 on the 2.5G jack.  phy-zx279133-
- *     uni-serdes.c says so in as many words ("the far end of this lane - the
- *     RTL8226 on the 2.5G jack"), and the PHY agrees: in U-Boot it answers
- *     Clause 45 with a 1000BASE-X PCS BMCR of 0x3000 and a PCS status of
- *     0x0069 - link up, block lock and block sync all set - while the kernel
- *     reads 0x002d, i.e. the link is down.
- *   - U-Boot's lane works, and U-Boot's lane is in SGMII: AN_CTRL = 0x0005,
- *     whose mode field (bits 2:1) is 2.  The 1000BASE-X profile writes 0
- *     there.
+ * What U-Boot leaves in this block is SGMII - AN_CTRL = 0x0005, whose mode
+ * field (bits 2:1) is 2 - so the four registers are written with the values
+ * U-Boot leaves, whole; see zx279133_switch_xpcs_apply_sgmii_vend2().
  *
- * So the mode is SGMII, and the four registers are written with the values
- * U-Boot leaves, whole - see zx279133_switch_xpcs_apply_sgmii_vend2().
+ * WHY THIS IS NOT THE 2.5G JACK'S PROBLEM (win102, 2026-10-28 12:01, one
+ * boot, both sides dumped word by word):
+ *
+ * This driver used to say that the base-X profile "cost the 2.5G jack its
+ * frames", and that the lane's far end is the RTL8226 on that jack.  The
+ * second half of that is the wrong way round: the lane is the 9132's CPU
+ * port, and the 1G jacks work through it (docs/92 §82).  The first half is
+ * not supported by the registers either: in the one boot of win102, the
+ * loader's working state and the kernel's state are the same word for word
+ * in every block that belongs to the 9132 - PPU 5's own attribute block
+ * (nppt+0x8500) has ZERO differences, and XMAC0 (nppt+0x140000), which the
+ * vendor's own port list calls the outerphy port's MAC, differs in twelve
+ * single bits.  A lane that is programmed identically in the configuration
+ * that moves bytes and in the configuration that does not cannot be the
+ * difference between them.
+ *
+ * What is left is the SoC side of this lane: the loader leaves BMCR 0x1140,
+ * DIG_CTRL1 0x2200 and AN_CTRL 0x0005 in the PCS, and this driver overwrites
+ * them with its own base-X image (0x0140 / 0x2000 / 0x0000).  Those four
+ * words are what win103 tests on the board.
  */
 static int zx279133_switch_xpcs_sgmii(struct zx279133_switch *priv)
 {

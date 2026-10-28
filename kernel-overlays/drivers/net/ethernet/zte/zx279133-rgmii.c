@@ -331,6 +331,21 @@ static int zx279133_rgmii_probe(struct platform_device *pdev)
 	rgmii->base = devm_ioremap_resource(&pdev->dev, res);
 	if (IS_ERR(rgmii->base))
 		return PTR_ERR(rgmii->base);
+	/*
+	 * devm_ioremap_resource() returns NULL - not an ERR_PTR - when the
+	 * range could not be reserved, and IS_ERR() does not catch that.  The
+	 * probe used to carry on with base == NULL, print the address it was
+	 * going to use, and register the debug file; the first write through
+	 * it then wrote to address 0 and the board panicked (win95, 2026-10-28
+	 * 10:39: the "dump" verb oopsed on the very first use).  So the NULL
+	 * is a failure here, and the reason is printed rather than guessed.
+	 */
+	if (!rgmii->base) {
+		dev_err(&pdev->dev,
+			"the register range at 0x%08x could not be reserved; not mapping it\n",
+			ZX279133_RGMII_BASE);
+		return -EBUSY;
+	}
 
 	platform_set_drvdata(pdev, rgmii);
 

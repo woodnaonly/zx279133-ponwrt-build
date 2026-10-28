@@ -2408,14 +2408,32 @@ static int zx279133_mf_port_ppuinit(struct zx279133_eth *eth)
  */
 
 /*
- * PPU 5 is also the 9132 side of the DSA CPU port.
+ * PPU 5 is XMAC0, the 9132's MAC for the port that carries the RTL8226.
  *
- * One thing here is not settled yet, and this comment must not be read as
- * settling it: whether PPU 5 is the 9132's fifth user port (the 2.5G jack,
- * model A of docs/92 §70.5) or the SoC's XMAC0 (the lane the jack's PHY
- * hangs off, model B, which the measurements of §71.6 favour) is not yet
- * measured directly.  The mapping below is this driver's own DSA numbering,
- * not a statement about the hardware.
+ * This used to be written as "not settled": whether PPU 5 was the 9132's
+ * fifth user port (the 2.5G jack) or the SoC's XMAC0 was not measured
+ * directly.  It has been measured now, twice, and the answer is PPU 5 =
+ * XMAC0 = the outerphy port's MAC:
+ *
+ *   - the loader's own port list (spa_port_attr_op help, measured 2026-10-21)
+ *     says "5 = XMAC0, 6 = XMAC1, 7 = RGMII1", and np_133.ko's
+ *     nppt_smac_init() calls outerphy_phy_init(4) for that MAC and prints
+ *     "xmac0 is used" when the RTL8226 answers on it (staging/ctl/
+ *     outerphy_calls.py);
+ *   - np_133.ko's xamc_init_conf_by_speed() (0x1a200) writes the block at
+ *     nppt+0x140000 - XMAC0 - with TX_CTRL 0x00010000, RX_CTRL 0x3e8000c6,
+ *     FRAME_CFG 0x80000000, MODE_CFG 2 and MISC_CFG |= 0x200, and the
+ *     loader's binary writes the same six words into the same block
+ *     (backups/mtd1_boot.bin, 0x594c4).
+ *
+ * So PPU 5 and XMAC0 are two names for one thing, and the mapping below is
+ * this driver's own DSA numbering, not a statement about the hardware.
+ *
+ * What that also settles is that the 9132 is NOT where the 2.5G jack is
+ * missing: in the one boot of win102 the loader's working state and the
+ * kernel's state are the same word for word in PPU 5's attribute block and
+ * differ by twelve single bits in XMAC0 (docs/92 §83).  The difference is on
+ * the SoC side of the lane.
  *
  * The port numbering here is the SPA memory id, and the bootloader prints the
  * authoritative list of them (spa_port_attr_op help, measured 2026-10-21):
