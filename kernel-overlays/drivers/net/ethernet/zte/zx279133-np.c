@@ -1585,11 +1585,43 @@ static ssize_t zx279133_9132_write(struct file *file, const char __user *ubuf,
 	 * PHY's bus, so the PCS registers had no way to be read or written at
 	 * runtime.
 	 *
-	 *	"xpcs 1 0x1e 0x8001"		read one register of the LAN lane's PCS
-	 *	"xpcsw 1 0x1e 0x8001 0x0005"	write one and read it back
+	 *	"xpcs 1 0x1f 0x8001"		read one register of the LAN lane's PCS
+	 *	"xpcsw 1 0x1f 0x8001 0x0004"	write one and read it back
 	 *
 	 * The first argument picks the lane: 0 = the PCS of eth0's MAC (XMAC1
 	 * by default), 1 = the LAN lane's PCS (XMAC0's).
+	 *
+	 * The "devad" is NOT a Clause 45 MMD here, and using it as one is
+	 * how this console was misread for a whole round.  The console goes
+	 * through the XPCS platform driver's own register window, and that
+	 * window decodes an access as
+	 *
+	 *	base + ((devad << 16) | reg) * 4
+	 *
+	 * (drivers/net/pcs/pcs-xpcs-plat.c), so the "devad" is a bank select
+	 * and the banks are:
+	 *
+	 *	0x1f	0x7c0000, the SR-MII words, and 0x7e0000, the VR-MII words
+	 *	0x03	0x0c0000, the PMAPMD words, and 0x0e0000, the XS PCS words
+	 *	0x01	0x040000, the PHY words
+	 *
+	 * which is the map the vendor's own np_133.ko uses, because the
+	 * vendor addressed the block by raw offsets.
+	 *
+	 * The switch driver reaches the same registers by a different map:
+	 * through the SoC's MDIO controller, where the "devad" is a real
+	 * Clause 45 MMD and the same words live at MMD 0x1e (SR-MII and
+	 * VR-MII), 0x04 (PMAPMD and XS PCS) and 0x03 (PHY).  Both maps reach
+	 * the same registers - measured 2026-10-29: the driver read back a
+	 * value this console had written, and then put the loader's value
+	 * back - but the wrong one reads a dead window, which is what
+	 * "xpcs 1 0x1e 0x8001" does: it answers 0x0000 while the live
+	 * AN_CTRL is 0x0005.
+	 *
+	 * So the devad goes up to 63, not 31: the banks above are 0x1f, 0x03
+	 * and 0x01, and the tree's own drivers address the PCS's own
+	 * registers through the other map, so the console has to be able to
+	 * reach both.
 	 */
 	if (!strcmp(tok, "xpcs") || !strcmp(tok, "xpcsw")) {
 		bool is_write = tok[4] == 'w';
@@ -1601,17 +1633,6 @@ static ssize_t zx279133_9132_write(struct file *file, const char __user *ubuf,
 		if (!tok || kstrtou32(tok, 0, &which) || which > 1)
 			return -EINVAL;
 		tok = zx279133_9132_next_token(&p);
-		/*
-		 * devad up to 63, not 31: this block has to be able to reach
-		 * MMD 0x2f (MDIO_MMD_PCS), which is where the PCS's own
-		 * registers live - the PCS type (register 7), the PCS's BMCR
-		 * and status, and the XAUI control word.  The tree's own
-		 * drivers address that MMD through mdiodev_c45_read(), so the
-		 * bus underneath takes it; only this console's own check was
-		 * in the way, and it made the PCS unreachable at runtime
-		 * (measured 2026-10-29: "xpcs 1 0x2f 0x7" answered
-		 * "Invalid argument").
-		 */
 		if (!tok || kstrtou32(tok, 0, &devad) || devad > 63)
 			return -EINVAL;
 		tok = zx279133_9132_next_token(&p);

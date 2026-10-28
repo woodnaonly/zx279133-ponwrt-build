@@ -9461,3 +9461,439 @@ mode 字（偏移 0x54 = word 21）把两张图区分得很干净：**1G 图像 
 
 （写 0x1a0c001c / 0x1a040000 有风险：加载器提示符下整段读 0x1a0c0000 会把板子挂住，
 所以只读单个字，且读回来说明写没写进去。）
+
+### 96.13 这一轮：同一个 PCS 有两套寻址，而驱动每 2 秒把配方抹掉
+
+这一轮没有新镜像可用（CI #233 出镜像了，但 #234 还在跑），所以全部结论都是
+在 run232 上量出来的，四轮实验分别是 win125 / win125b / win126，以及一次
+反汇编（np_133.ko 的两条 lane 配方）。
+
+#### 96.13.1 判决 OO：XPCS 的 C45 窗口不是 Clause 45 的 MMD 空间
+
+树自己的平台驱动把这件事写死了（`drivers/net/pcs/pcs-xpcs-plat.c`）：
+
+```c
+static ptrdiff_t xpcs_mmio_addr_format(int dev, int reg)
+{
+	return FIELD_PREP(0x1f0000, dev) | FIELD_PREP(0xffff, reg);
+}
+/* 地址 = reg_base + (csr << 2)，reg-io-width = 4 */
+```
+
+也就是 `地址 = base + ((devad << 16) | reg) * 4`。厂商的 np_133.ko 不用
+devad，它直接用偏移，于是两套编号对上了：
+
+| 厂商偏移（np_133.ko，base = 0x1a000000） | 直通 MMIO 的 devad/reg | MDIO 控制器的 MMD/reg |
+|---|---|---|
+| +0x7c0000　SR_MII_CTRL（BMCR） | 0x1f / 0x0000 | 0x1e / 0x0000 |
+| +0x7c0010　SR-MII 速率字 | 0x1f / 0x0004 | 0x1e / 0x0004 |
+| +0x7e0000　VR_MII DIG_CTRL1 | 0x1f / 0x8000 | 0x1e / 0x8000 |
+| +0x7e0004　VR_MII AN_CTRL | 0x1f / 0x8001 | 0x1e / 0x8001 |
+| +0x7e0028　VR_MII LINK_TIMER | 0x1f / 0x800a | 0x1e / 0x800a |
+| +0x0e0000　XS_PCS DIG_CTRL1 | 0x03 / 0x8000 | 0x04 / 0x8000 |
+| +0x0e0014　XS_PCS BYPASS | 0x03 / 0x8005 | 0x04 / 0x8005 |
+| +0x0c001c　PCS 型别字 | 0x03 / 0x0007 | 0x04 / 0x0007 |
+| +0x040000　脉冲寄存器 | 0x01 / 0x0000 | 0x03 / 0x0000 |
+
+**⇒ 上一轮的「判决 NN」（lane 的 PCS 在 MMD 0x1e，0x1e 是死块）是错的，
+要撤销。** 事实是：同一个 PCS 有两套寻址。
+
+* 直通 MMIO（`pcs-xpcs-plat` 的窗口，np.c 调试台的 `xpcs`/`xpcsw` 走这条）：
+  devad 是**bank select**，0x1f = SR-MII + VR-MII，0x03 = PMAPMD + XS PCS，
+  0x01 = PHY。
+* MDIO 控制器（switch 驱动和树里 `zx279133-mac.c` 走这条）：devad 是真正的
+  Clause 45 MMD，0x1e = SR-MII + VR-MII，0x04 = PMAPMD + XS PCS，0x03 = PHY。
+
+两套指向同一组寄存器，证据是双向的：
+
+* win125 用调试台把 AN_CTRL 写成 0x0004，驱动两秒后打印
+  `the lane's PCS lost its configuration (AN_CTRL = 0x0004)`——驱动读到的是
+  我们刚写的那个值；
+* 驱动把加载器的四个字写回去之后，调试台读到的正是那四个字
+  （win125b：0x1140 / 0x0020 / 0x2200 / 0x0005）。
+
+而用错的一套，会读到死窗口：win124b 量到 `xpcs 1 0x1e 0x0000` = 0x0000、
+`0x1e/0x0004` = 0x7996、`0x1e/0x8000` = 0x0000、`0x1e/0x8001` = 0x0000，
+而同一时刻 `0x1f/0x0000` = 0x1140、`0x1f/0x0004` = 0x0020、
+`0x1f/0x8000` = 0x2200、`0x1f/0x8001` = 0x0005——正是加载器留下的四个值。
+
+**⇒ 树里 `zx279133-mac.c` 和 `zx279133-switch.c` 的 devad 一直是对的**，
+不需要改。错的是 np.c 调试台注释里「devad 是 MMD」这句话，本轮已改。
+
+#### 96.13.2 判决 PP：驱动的 lane_watch 每 2 秒把配方抹掉
+
+win125（run232，04:13–04:16）把厂商的 2.5G 配方写到了 lane 自己的 PCS 上，
+每一步都读了回来确认落地：
+
+| 字 | 写前 | 写后 |
+|---|---|---|
+| BMCR (0x1f/0x0000) | 0x1140 | 0x0140 |
+| AN_CTRL (0x1f/0x8001) | 0x0005 | 0x0004 |
+| DIG_CTRL1 (0x1f/0x8000) | 0x2200 | 0x2000 |
+| PCS 型别 (0x03/0x0007) | 0x0001 | 0x000e |
+| 脉冲 (0x01/0x0000) | 0x0000 | 0x0800 → 0x0000 |
+| XMAC0 | 1G | 速率类 6（2.5G） |
+| Uni SerDes | 1G 图像（mode 0x101） | 2.5G 图像（mode 0x409） |
+
+远端 PCS 状态（`m45 5 0x07 0x01`）22 次采样全是 0x00ad。
+
+**但这个结论不作数**：内核日志里有驱动自己的话——
+
+```
+[127.280878] the lane's PCS lost its configuration (AN_CTRL = 0x0004);
+              the loader's values are written again
+[127.280946] the lane's PCS took the loader's values again (AN_CTRL = 0x0005)
+```
+
+0x0004 正是 win125 刚写进去的值。`zx279133_switch_lane_watch()` 每 2 秒读
+一次 VR_MII AN_CTRL，只要它不等于加载器的 0x0005，就把加载器的四个字整个
+写回去。**⇒ 配方在写下去之后两秒内就被驱动自己抹掉了**，采样看到的自然是
+「没反应」。
+
+这不是小事：这条 lane 从写出来那天起，日志里每两秒都在喊
+「the lane's PCS lost its configuration」，而它真正在做的事是把任何配置
+（包括厂商自己的 base-X 配方）覆盖成加载器留下的 SGMII@1G 四个字。
+
+**⇒ 代码改法**：watch 只该认一件事——**块被清空**（SR-MII 与 VR-MII 都读
+0，那是 SerDes 域被复位的样子）。其它任何值都是一个「配置」，watch 不该
+插手；而且要恢复的话，恢复的应该是驱动自己写的那份配置，不是加载器的。
+
+本轮就这么改了（`zx279133_switch_xpcs_program_lane()`）。
+
+#### 96.13.3 厂商的两条 lane 配方（np_133.ko 反汇编，完整）
+
+```
+xmac_1gbase_x_conf(port)
+	xpcs_1000base_x_conf(port, 2, 1)
+	xamc_init_conf_by_speed(port, 3)	/* XMAC 速率类 3 = 1G */
+	byPassEnableSet(port, 1)
+	udelay(8590000)
+	uni_serdes_init(port, 7)		/* Uni SerDes 的 1G base-X 图像 */
+
+xmac_2pt5gbase_x_conf(port)
+	xpcs_2p5gbase_x_conf(port)
+	xamc_init_conf_by_speed(port, 6)	/* XMAC 速率类 6 = 2.5G */
+	byPassEnableSet(port, 1)
+	udelay(8590000)
+	uni_serdes_init(port, 5)		/* Uni SerDes 的 2.5G base-X 图像 */
+
+xpcs_2p5gbase_x_conf(port)
+	xpcs_prepare_for_switch_mode(port, 4)	/* → exit_sgmii_mode(port) */
+	*(base + port<<24 + 0x0c001c) = 0x0e
+	脉冲：清 bit13 → 置 bit11 → udelay(859000) → 清 bit11
+		（0x040000）
+
+xpcs_exit_sgmii_mode(port)
+	SR_MII (0x7c0000)   清 bit 12		/* AN enable */
+	VR_MII AN_CTRL      清 bit 0、bit 4
+	VR_MII DIG_CTRL1    清 bit 9、bit 2
+	XS_PCS DIG_CTRL1    清 bit 2
+
+xpcs_1000base_x_conf(port, w1=2, w2=1) 的 AN 部分
+	SR_MII   清 bit 12
+	VR_MII AN_CTRL   bit 0 = (w1 & 1) = 0
+	VR_MII DIG_CTRL1 bit 9 = (w1 & 1) = 0
+	XS_PCS DIG_CTRL1 bit 2 = (w2 & 1) = 1
+	VR_MII DIG_CTRL1 bit 2 = (w2 & 1) = 1
+	w2 == 1 → VR_MII LINK_TIMER = 0x7a1，VR_MII DIG_CTRL1 bit 3 = 1
+	w1 == 1 → SR_MII 置 bit 12（这里 w1 = 2，所以不置）
+```
+
+注意厂商的 1G base-X 路径**也**把 PCS 的 2.5G 位打开（bit 2），并把
+LINK_TIMER 写成 0x7a1；速率是由 XMAC 的速率类和 Uni SerDes 的图像决定的。
+
+#### 96.13.4 近端现在是什么，远端现在是什么
+
+* 近端：Uni SerDes 在 1G 图像（mode 字 0x101），XMAC0 速率类 3（1G），
+  PCS 是加载器留下的 0x1140 / 0x0020 / 0x2200 / 0x0005（驱动把被复位的
+  PCS 恢复成了这四个值）。
+* 远端：RTL8226 在 2500BASE-X（MMD 0x1e reg 0x7580 = 0x9416，mode 0x16），
+  OPTION 字 0x697a = 0x0000（mode 0）。
+
+**⇒ 两端口径不一致**：近端 SGMII@1G，远端 2500BASE-X。win125b 把对端
+Uni SerDes 换成 2.5G 图像之后，RX_STATUS（0x161000e4）的 CDR_LOCK 位
+（bit 1）第一次置上了（0x01000706，而 1G 图像下是 0x100019fc）——
+**物理层通了，PCS 的协商没完成**。
+
+#### 96.13.5 04:36–04:43 的第二轮实测（run232，手工六组）
+
+win126 之后，板子一直在跑（04:26 由 run232 引导，uptime 944 s）。这一轮在
+运行中的内核上，用调试台逐项组合，六组的近端状态都读回确认落地了，
+远端 PCS 状态（`m45 5 0x07 0x01`）**全部是 0x00ad**：
+
+| 组 | 近端状态 | N8 |
+|---|---|---|
+| 1 | 加载器四字（BMCR 0x1140 / 速率字 0x0020 / DIG_CTRL1 0x2200 / AN_CTRL 0x0005）+ XMAC0 速率类 6 + SerDes image1 | 0x00ad |
+| 2 | 上面再加型别 0x0e（0x03/0x0007） | 0x00ad |
+| 3 | 上面再加脉冲（0x01/0x0000 ← 0x0800） | 0x00ad |
+| 4 | 上面再加 LINK_TIMER 0x07a1、XS DIG_CTRL1 0x2004、DIG_CTRL1 0x220c | 0x00ad |
+| 5 | win126 的全套（上面所有 + 远端 SerDes AN 序列 0x7588/0x7589） | 0x00ad |
+| 6 | 把型别退回默认 0x0001、脉冲撤掉、回到组 1 | 0x00ad |
+
+**⇒ N8 这一个判据，对近端十余种不同的配置毫无反应**（0x00ad 从 16.04 s 起
+一直是一个值）。这条判据已经不足以区分「近端对」与「近端错」，需要加一个
+更靠近物理层的量（见 96.13.8）。
+
+这一轮量到的三件新东西：
+
+**(a) 脉冲会真的把 PCS 块清空。** 写完型别和脉冲之后，内核日志说：
+
+```
+[797.050729] the lane's PCS lost its configuration (AN_CTRL = 0x0000);
+             the loader's values are written again
+[797.050791] the lane's PCS took the loader's values again (AN_CTRL = 0x0005)
+```
+
+⇒ **脉冲必须排在四个字之前**：厂商的顺序是「型别 → 脉冲 → （8.59 s）→
+SerDes」，四字在脉冲之后。而驱动 watch 的恢复动作恰好能把四字补回来，
+所以在板上手工做时，「先脉冲、后四字」和「先四字、后脉冲」结果不同。
+
+**(b) `write 2` 失败的原因不是 shell 的换行。** 三种写法都返回 EINVAL：
+
+```
+echo    'write 2' > .../serdes   → ash: write error: Invalid argument
+echo -n 'write 2' > .../serdes   → rcA=1
+printf  'write 2' > .../serdes   → rcB=1
+```
+
+真正的原因是 **run232 里根本没有 image2**：厂商的 2.5G 原图（word 6 =
+0x0b080000、mode 字 0x408）是 CI #234 才加进去的，run232 的控制台只认 0/1。
+（run232 能写 image1，写完 mode 字读回 0x409 ✔。）
+
+**(c) 厂商配方的订正（np_133.ko 反汇编）。**
+
+* `xamc_init_conf_by_speed(port, speed)` 的**第二个参数被忽略**：函数体里
+  `uxtb w4, w0` 取的是第一个参数。真正生效的是 port：
+
+  ```
+  XMAC 窗口基址 = 0x140000 + (port << 18)
+  TX_CTRL 速率位 = port << 29
+  RX_CTRL = 0x3e80c6    FRAME_CFG = 0x80000000
+  MODE_CFG(+0x280) = 2  DUPLEX(+0x500) bit24 = 全双工
+  MISC_CFG(+0x143400) |= 0x200
+  ```
+
+  ⇒ 厂商 Linux 那套编码（port 既是偏移又是速率位）和 U-Boot 留下的
+  `XMAC0 tx=0xc0010000`（速率位 6 = 2.5G）**不是同一套编号**；两者不能互相
+  翻译，只能各自照抄。
+
+* `xpcs_2p5gbase_x_conf(port)` 里 `xpcs_prepare_for_switch_mode(port, 4)`
+  在 mode 表是 0 或 2 的时候是**空操作**（只有旧 mode 落在 3..8 之间才会去调
+  `exit_usxgmii/hsgmii/sgmii_mode`）。⇒ **厂商的 2.5G 配方在 PCS 上只有两个
+  动作**：型别字 `+0x0c001c = 0x0e`，和 `+0x040000` 上的低速脉冲
+  （清 bit13 → 置 bit11 → udelay(859000) → 清 bit11）。它**不碰** AN_CTRL、
+  DIG_CTRL1、LINK_TIMER、XS PCS——那些是 1G base-X 那条
+  （`xpcs_auto_negotiation_conf_in_1000base_x_mode`）的产物：
+
+  ```
+  SR_MII BMCR bit12 = 0（base-X 不用 clause 45 的 AN）
+  VR_MII AN_CTRL    bit0 = (speed & 1)
+  VR_MII DIG_CTRL1  bit9 = (speed & 1)      /* MAC auto switch */
+  XS_PCS DIG_CTRL1  bit2 = (duplex & 1)
+  VR_MII DIG_CTRL1  bit2 = (duplex & 1)     /* 2.5G mode enable */
+  duplex == 1  → VR_MII LINK_TIMER = 0x7a1，SR_MII DIG_CTRL1 bit3 = 1
+  speed  == 1  → SR_MII BMCR bit12 = 1
+  ```
+
+  注意：厂商的 **1G base-X 路径也把 PCS 的 2.5G 位（bit 2）打开**，
+  速率是由 XMAC 的速率类和 Uni SerDes 的图像决定的——这解释了为什么
+  「DIG_CTRL1 bit2」不能当作 2.5G 的判据。
+
+* 树里 `xpcs_1000base_x_conf` 注释写的「prepare_for_switch_mode 的第四个
+  参数：2 是 SGMII、0 是 1000BASE-X」是**反的**：反汇编里 1000BASE-X 路径
+  传的正是 2，2.5G 路径传 4。
+
+#### 96.13.6 近端与远端此刻的样子（04:41 采）
+
+近端：
+
+```
+XPCS SR-MII BMCR   0x1140      （加载器留下的）
+XPCS SR-MII 速率字 0x0020
+XPCS VR-MII DIG_CTRL1 0x2200    （bit9 = MAC auto switch）
+XPCS VR-MII AN_CTRL  0x0005    （bit0 = AN restart，mode 字段 = 2）
+XPCS 型别 (0x03/0x0007) 0x000e  （本轮写进去的）
+XPCS XS PCS DIG_STS (0x03/0x8010) 0x0050
+XPCS XS PCS XAUI_CTRL (0x03/0x8004) 0x0000
+XMAC0 tx = 0xc0010001（速率类 6 = 2.5G，本轮写进去的）
+Uni SerDes mode 字 0x409（image1），PLL 0x21000782，RX 0x01000706
+```
+
+远端（RTL8226，MMD 7 = AN 块）：
+
+```
+reg 0x00 BMCR    0x3000     reg 0x01 状态    0x00ad
+reg 0x02         0x001c     reg 0x10 通告    0x1de1
+reg 0x13 通告2   0xd1e1     reg 0x20 对端通告 0x00a1
+vendor: 0x697a = 0x0000   0x7580 = 0x9416   0x758d = 0x8018   0xa438 = 0x0002
+```
+
+#### 96.13.7 判决：N8 单独用已经不够，要加「远端收到的通告」
+
+远端 MMD 7 reg 0x20（link partner ability）是**远端收到的近端通告**。
+它现在读 0x00a1，而这已经是本轮写完型别 0x0e 和脉冲之后的状态（04:40 写，
+04:41 读）——也就是说近端通告出去的技术位仍与 2.5GBASE-R 不符。
+
+⇒ **新判据 N54**：在 run234 上写完 image2 + 型别 + 脉冲之后，远端 reg 0x20
+的通告位要跟着变（技术位从 0xa 一类变成 0xd 一类）；不变则说明近端 PCS
+压根没进 2.5G 通告模式，问题在近端 PCS 的模式而不是图像。
+**新判据 N55**：远端 reg 0x20 在近端每次改动后都不变 ⇒ 远端这一侧根本没在
+收近端的通告，那么近端无论怎么配都不会有反应，瓶颈在两端之间的物理层/
+SerDes 连通性上，而不是 PCS 配置。
+
+（N54/N55 的位域解释还没对照 RTL8226 的手册确认，所以只当「变/不变」用，
+不当「哪个位」用。）
+
+#### 96.13.8 判决 N55：远端的 MMD 7 不跟着近端走，N8 这个判据本身是错的
+
+04:45 这一轮做了一个判决性实验：**把近端的 PCS 打死**（型别退回 0x0000、
+再打一次脉冲），内核日志说：
+
+```
+[1054.970726] the lane's PCS lost its configuration (AN_CTRL = 0x0000);
+              the loader's values are written again
+[1054.970789] the lane's PCS does not take the loader's values (AN_CTRL = 0x0000, 0)
+```
+
+也就是说近端 PCS 这一块**已经写不进任何东西**了（AN_CTRL 读 0、复位失败）。
+三秒后读远端：
+
+```
+[1057.674163] outer phy 5 devad 0x7 reg 0x20 = 0x00a1     （近端通告，一个 bit 没变）
+[1057.679208] outer phy 5 devad 0x7 reg 0x01 = 0x00ad     （状态，一个 bit 没变）
+```
+
+**⇒ 近端死与不死，远端 MMD 7 的状态字和通告字完全一样。**
+
+⇒ **N8（远端 MMD 7 reg 1 的 0x40 位）不是这条 lane 的判据。** 它对近端十余种
+配置（加载器四字 / 厂商 2.5G 配方 / 型别 0x0e / 低速脉冲 / 图像 image1 /
+image0 / XMAC0 速率类 3 与 6）以及近端彻底死掉，全都回 0x00ad。
+
+#### 96.13.9 新判据：远端的 SerDes 链路状态 1e.0x758d
+
+远端还有一套 vendor 寄存器，厂商自己的驱动就是用它回答「SerDes 的链路通
+了没有」——`Rtl8226_serdes_link_get()` 读 `1e.0x758d` 与 `1e.0x758b`
+（docs/92 §84.3）。docs/92 §96.10 的三列对照里，它也是**唯一**在
+「U-Boot 通流态」与「mainline」之间差一位的远端寄存器：
+
+| 远端寄存器 | U-Boot 复位默认 | U-Boot 通流态 | mainline | 现在（run233） |
+|---|---|---|---|---|
+| `1e.0x758d` | 0x0010 | **0x801e** | 0x8018 | 0x8018 |
+| `1e.0x758b` | 0x0005 | 0x0005 | 0x0005 | 0x0005 |
+| `1e.0x7580` | 0x9412 | 0x9416 | 0x9416 | 0x9416 |
+| `1e.0x697a` | 0x0003 | 0x0000 | 0x0000 | 0x0000 |
+| `1e.0x6f10` | 0x084a | 0x086a | 0x086a | **0x086a**（已对齐） |
+| `1e.0x6f11` | 0x0021 | 0x0021 | 0x0021 | **0x0021**（已对齐） |
+| `1e.0x7588` | 0x00ce | 0x00ce | 0x00ce | 0x00ce（win126 改过，已改回） |
+| `1e.0x7589` | 0x035a | 0x035a | 0x035a | 0x035a（同上） |
+| `1f.0xa438` | 0x0002 | 0x0038 | 0x0038 | 0x0002（写入 0x0038 后读回 0x0100） |
+
+⇒ **新判据 N60/N61**：
+
+* N60：远端 `1e.0x758d` 的 bit 1 置上（0x801e 一类）＝ 远端的 SerDes 链路通了；
+* N61：它恒为 0x8018 一类 ＝ 远端的 SerDes 链路还没通。
+
+近端也有一个对应的字：**NPPT + 0x0090**（`ZX279133_NPPT_XPCS0_STATUS`）。
+docs/92 §15 量过：真正通流的那次开机里它读 **0x2c03**，而冷启动读 0x380b、
+驱动做完自己的工作后读 **0x280b**——docs/92 §96.10 的统计也是「通流的 12 次
+读 0x2c03，不通流的 311 次读 0x380b」。
+
+⇒ **近端判据 N62：NPPT+0x0090 读 0x2c03 一类 ＝ lane 通了。**
+
+#### 96.13.10 run233：速率档对了，lane 还是不通
+
+CI #233（run233.itb）的改动生效了：
+
+```
+[5.596442] the 2.5G jack's MAC (XMAC0) runs at 2.5G; the loader's TX_CTRL speed field was 6
+[6.674312] lane after: XMAC0 tx=0xc0010001 rx=0x3e8000c7 frame=0x80000001 mode=0x00000000 duplex=0x00000100 misc=0x00002000
+```
+
+（加载器交下来的是 tx=0xc0010000，速率字段 6 = 2.5G；驱动照抄成 0xc0010001。）
+
+但同一轮里：
+
+```
+远端 1e.0x758d  连采五次都是 0x8018（bit 1 清）
+远端 7.0x01      0x00ad
+lan5 收帧        0（发帧 3458）
+```
+
+⇒ **速率档不是这条 lane 的原因**（或者说不只是）。
+
+#### 96.13.11 「通流配方」：docs/92 §15 量到的那一组，和它与 mainline 的差
+
+docs/92 §15 记下了一次**真的通着帧**的开机，加载器交下来的原状：
+
+```
+tx=0x60010000  rx=0x3e8000c6  frame=0x80000001  mode=0x00000000  duplex=0x00000100  misc=0x00002000
+SOPC mac0 ready(0x190342a4)=0   SOPC mac1 ready(0x190342a8)=0
+Uni SerDes PLL(0x161000d0)=0xc880bb83   RX_STATUS(0x161000e4)=0x01000706
+XPCS0 status=0x2c03   xmac_link=0x0001
+```
+
+mainline 抄完之后又改了三处（docs/92 §15 的表）：
+
+| 字 | 通流的加载器 | mainline 编完 | 差 |
+|---|---|---|---|
+| `0x140000` TX_CTRL | 0x60010000 | 0x60010001 | bit 0 多置（使能） |
+| `0x140010` RX_CTRL | 0x3e8000c6 | 0x3e8000c7 | bit 0 多置（使能） |
+| `0x140020` FRAME_CFG | **0x80000001** | 0x80000000 | bit 0 **被清掉** |
+| `0x143400` MISC_CFG | **0x00002000** | 0x00002200 | bit 9 多置 |
+
+后两条正是厂商 `xamc_init_conf_by_speed()` 写的值（FRAME_CFG = 0x80000000、
+MISC_CFG |= 0x200）——**厂商 Linux 的 XMAC 编程与这条 lane 能通的状态相反**。
+树里现在已经改对了（`ZX279133_XMAC_UBOOT_FRAME_CFG = 0x80000001`，MISC_CFG
+干脆不写），所以这两条不再是要改的地方。
+
+**剩下真正没对齐的是两个复位：**
+
+1. **驱动对 XMAC0 的复位**。`zx279133_switch_xmac_configure(priv, true)`
+   的第二个参数就是 do_reset，而**这个函数自己的注释写着**：「这个板子上不该
+   复位：软复位字与 PCS 共享，而 PCS 是加载器带起来的，不能动」。调用处写的
+   却�� true。启动日志正好横跨这一步：
+
+   ```
+   lane pre-serdes: XPCS0 status=0x380b   （加载器交下来）
+   lane after:      XPCS0 status=0x280b   （驱动做完）
+   ```
+
+2. **Uni SerDes 驱动开机时无条件打的复位脉冲**（`phy-zx279133-uni-serdes.c`
+   的 power_on）。这个复位把 SerDes 域一起拉下水，而**lane 的 PCS 就在这个
+   域里**：驱动在 5.59 s 读到的 PCS 四字是 0x0000 / 0x2000 / 0x2140，即
+   **复位后的默认值**，而不是加载器留下的 0x1140 / 0x0020 / 0x2200 / 0x0005。
+
+   而这一次复位**根本不需要**：加载器留在 Uni SerDes（0x16100000）里的就是树
+   自己的 1G 图像（mode 字 0x101，**0/49 字有差异**），驱动自己那句
+   「Uni SerDes 1G profile written: mode 0x101 already, image differs in 0/49
+   word(s)」就是证据。（顺带查清：0x16000000 那个块是 **PON SerDes**，是
+   eth0 那侧，里面同样是树的 1G 图像、mode 0x101；它不是这条 lane 的。）
+
+**⇒ 判决 TT：这条 lane 只在「加载器把它带起来、而内核不动它」的时候通；
+内核只要复位 XMAC0 或复位 Uni SerDes，就把加载器留下的配置与链路状态一起
+抹掉，而写回寄存器救不回来。**
+
+实测（win130 / win131，run233 上）：
+
+* 厂商 2.5G 配方（型别 0x0e + 低速脉冲 + 四字）写进去：NPPT+0x0090 仍
+  0x280b、远端 0x758d 仍 0x8018、收帧仍 0；
+* 把「通流配方」原样写回去（tx=0x60010001 / rx=0x3e8000c7 /
+  frame=0x80000001 / mode=0 / duplex=0x100 / misc=0x2000 / 型别回 0x0001）：
+  同样 NPPT+0x0090 仍 0x280b、远端 0x758d 仍 0x8018、收帧仍 0。
+
+⇒ **寄存器写不回来；被抹掉的是 PCS 的内部状态。** 所以下一步必须先取消那两个
+复位，让加载器的配置活到内核手里。
+
+#### 96.13.12 这一轮改了什么
+
+1. `zx279133-switch.c`：
+   * `lane_watch` 改成只在 PCS 块被清空时才恢复，恢复的是驱动自己写的那份；
+   * **`zx279133_switch_xmac_configure(priv, false)`：不再复位 XMAC0**（判决 TT）。
+2. `phy-zx279133-uni-serdes.c`：**镜像已经在位且已使能时不再打复位脉冲**，
+   把加载器留下的 SerDes（和它背后的 PCS）原样留着（判决 TT）。
+3. `zx279133-np.c`：调试台注释写清两套映射，别再把 bank select 当 MMD。
+4. docs/92：本节。
+
+（待补：CI #234/#235 的镜像上的结果；以及「加载器真的把 lane 带起来」那一次
+开机——需要 PC 的网线插在面板 LAN1 上让 U-Boot 的 net init 走这条 lane。）
+

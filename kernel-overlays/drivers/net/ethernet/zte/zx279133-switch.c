@@ -571,7 +571,22 @@ static int zx279133_switch_xpcs_init(struct zx279133_switch *priv)
  *
  * So the four registers are written whole, and the read-back is printed.
  */
-static int zx279133_switch_xpcs_apply_sgmii_vend2(struct zx279133_switch *priv)
+/*
+ * The lane's configuration, written from scratch.
+ *
+ * The four words below are the ones the board's own U-Boot leaves in the
+ * lane's PCS, and they are the configuration this lane ran in while the
+ * loader moved 11,471,728 bytes across it:
+ *
+ *	BMCR		0x1140	the SR-MII control word
+ *	SR-MII speed	0x0020	the speed word
+ *	DIG_CTRL1	0x2200	the MAC auto-switch bit and bit 13
+ *	AN_CTRL		0x0005	the AN interrupt enable and the PCS mode field
+ *
+ * They are written whole, and the read-back is printed, because the whole
+ * point is what the block holds.
+ */
+static int zx279133_switch_xpcs_program_lane(struct zx279133_switch *priv)
 {
 	int val;
 	int ret;
@@ -632,6 +647,25 @@ static int zx279133_switch_xpcs_apply_sgmii_vend2(struct zx279133_switch *priv)
  *     the 2.5G jack gets its frames;
  *   - if it does not, the log says so, once per loss, and says whether the
  *     re-apply took.
+ *
+ * What it must not do is police the lane's configuration.  It used to
+ * compare VR_MII AN_CTRL with the loader's value and rewrite the loader's
+ * four words whenever the two differed, which meant that any other
+ * configuration of this lane was overwritten two seconds after it was
+ * written - the vendor's own base-X recipe included.  Measured on
+ * 2026-10-29 (win125): the log said
+ *
+ *	the lane's PCS lost its configuration (AN_CTRL = 0x0004);
+ *	the loader's values are written again
+ *	the lane's PCS took the loader's values again (AN_CTRL = 0x0005)
+ *
+ * right after a runtime write of 0x0004 into that word, and every sample
+ * of the far end taken afterwards was worthless, because the word it was
+ * testing had been put back before the sample was taken.
+ *
+ * So the watch looks for one thing only: an empty block.  That is what the
+ * SerDes domain's reset leaves behind, and it is the one case where
+ * writing the lane's configuration again is the right thing to do.
  */
 static void zx279133_switch_lane_watch(struct work_struct *work);
 static void zx279133_switch_lane_work_cleanup(void *data);
@@ -641,34 +675,44 @@ static void zx279133_switch_lane_watch(struct work_struct *work)
 	struct zx279133_switch *priv =
 		container_of(to_delayed_work(work), struct zx279133_switch,
 			     lane_work);
-	int val;
+	int an_ctrl;
+	int bmcr;
 	int ret;
 
-	val = zx279133_switch_xpcs_read(priv, MDIO_MMD_VEND2,
-					ZX279133_XPCS_VR_MII_AN_CTRL);
-	if (val == ZX279133_XPCS_UBOOT_AN_CTRL) {
+	an_ctrl = zx279133_switch_xpcs_read(priv, MDIO_MMD_VEND2,
+					     ZX279133_XPCS_VR_MII_AN_CTRL);
+	bmcr = zx279133_switch_xpcs_read(priv, MDIO_MMD_VEND2, MII_BMCR);
+
+	/*
+	 * An empty block is the SerDes domain's reset: both words read
+	 * zero.  Anything else is a configuration, and the watch's business
+	 * ends there.
+	 */
+	if (an_ctrl != 0 || bmcr != 0) {
 		if (priv->lane_lost) {
 			dev_info(priv->dev,
-				 "the lane's PCS is configured again\n");
+				 "the lane's PCS is configured again (AN_CTRL = 0x%04x, BMCR = 0x%04x)\n",
+				 an_ctrl < 0 ? 0xffff : (an_ctrl & 0xffff),
+				 bmcr < 0 ? 0xffff : (bmcr & 0xffff));
 			priv->lane_lost = false;
 		}
 		goto rearm;
 	}
 
 	if (!priv->lane_lost) {
-		if (val < 0)
+		if (an_ctrl < 0)
 			dev_warn(priv->dev,
-				 "the lane's PCS cannot be read (%d); the loader's values are written again\n",
-				 val);
+				 "the lane's PCS cannot be read (%d); the lane is programmed again\n",
+				 an_ctrl);
 		else
 			dev_warn(priv->dev,
-				 "the lane's PCS lost its configuration (AN_CTRL = 0x%04x); the loader's values are written again\n",
-				 val & 0xffff);
+				 "the lane's PCS was reset (AN_CTRL = 0x%04x, BMCR = 0x%04x); the lane is programmed again\n",
+				 an_ctrl & 0xffff, bmcr & 0xffff);
 		priv->lane_lost = true;
 		priv->lane_tries = 0;
 	}
 
-	ret = zx279133_switch_xpcs_apply_sgmii_vend2(priv);
+	ret = zx279133_switch_xpcs_program_lane(priv);
 	priv->lane_tries++;
 
 	/*
@@ -679,16 +723,16 @@ static void zx279133_switch_lane_watch(struct work_struct *work)
 	 * SerDes domain was reset under it) or it may be there and simply
 	 * refuse the writes.
 	 */
-	val = zx279133_switch_xpcs_read(priv, MDIO_MMD_VEND2,
-					ZX279133_XPCS_VR_MII_AN_CTRL);
-	if (val == ZX279133_XPCS_UBOOT_AN_CTRL) {
+	an_ctrl = zx279133_switch_xpcs_read(priv, MDIO_MMD_VEND2,
+					     ZX279133_XPCS_VR_MII_AN_CTRL);
+	if (an_ctrl == ZX279133_XPCS_UBOOT_AN_CTRL) {
 		dev_info(priv->dev,
-			 "the lane's PCS took the loader's values again (AN_CTRL = 0x%04x)\n",
-			 val & 0xffff);
+			 "the lane's PCS took the values again (AN_CTRL = 0x%04x)\n",
+			 an_ctrl & 0xffff);
 	} else if (ret || !((priv->lane_tries - 1) % 5)) {
 		dev_warn(priv->dev,
-			 "the lane's PCS does not take the loader's values (AN_CTRL = 0x%04x, %d)\n",
-			 val < 0 ? 0xffff : (val & 0xffff), ret);
+			 "the lane's PCS does not take the values (AN_CTRL = 0x%04x, %d)\n",
+			 an_ctrl < 0 ? 0xffff : (an_ctrl & 0xffff), ret);
 	}
 
 rearm:
@@ -706,7 +750,7 @@ rearm:
  *
  * What U-Boot leaves in this block is SGMII - AN_CTRL = 0x0005, whose mode
  * field (bits 2:1) is 2 - so the four registers are written with the values
- * U-Boot leaves, whole; see zx279133_switch_xpcs_apply_sgmii_vend2().
+ * U-Boot leaves, whole; see zx279133_switch_xpcs_program_lane().
  *
  * WHY THIS IS NOT THE 2.5G JACK'S PROBLEM (win102, 2026-10-28 12:01, one
  * boot, both sides dumped word by word):
@@ -821,7 +865,7 @@ static int zx279133_switch_xpcs_sgmii(struct zx279133_switch *priv)
 	/*
 	 * And now U-Boot's four registers, whole.
 	 */
-	ret = zx279133_switch_xpcs_apply_sgmii_vend2(priv);
+	ret = zx279133_switch_xpcs_program_lane(priv);
 	if (ret)
 		return ret;
 
@@ -2704,11 +2748,40 @@ static int zx279133_switch_probe(struct platform_device *pdev)
 		goto report;
 	}
 
-	zx279133_switch_xmac_configure(priv, true);
+	/*
+	 * No reset.
+	 *
+	 * zx279133_switch_xmac_configure()'s own comment says the reset is not
+	 * wanted on this board: the soft reset word is shared with the PCS, and
+	 * the PCS on this board was brought up by the bootloader and must not be
+	 * disturbed.  That was written when the function was written; the call
+	 * said otherwise, and the call is what runs.
+	 *
+	 * What the reset costs is measured.  docs/92 §15 wrote down a boot in
+	 * which this lane really carried frames - the loader had brought it up
+	 * and the kernel inherited it - and the near end's own PCS status word
+	 * (NPPT + 0x0090) read 0x2c03 in that boot and in every one of the
+	 * twelve such boots in the log, while the cold boots read 0x380b and the
+	 * boots in which the driver had done its own work read 0x280b:
+	 *
+	 *	lane pre-serdes: XPCS0 status=0x380b   (the loader's hand-over)
+	 *	lane after:      XPCS0 status=0x280b   (after the XMAC0 work)
+	 *
+	 * The XMAC0 reset is in the middle of that work, and the reset word is
+	 * the PCS's, so the lane's link state goes with it.  Writing the
+	 * loader's words back afterwards does not bring it back: the four PCS
+	 * registers read 0x1140 / 0x0020 / 0x2200 / 0x0005 either way, and the
+	 * status word stays 0x280b (measured on 2026-10-29, staging/ctl/
+	 * win131.log).
+	 *
+	 * The XMAC0 is programmed either way; it is at its reset state already,
+	 * every one of its control words reading zero.
+	 */
+	zx279133_switch_xmac_configure(priv, false);
 
 	if (!priv->usxgmii) {
 		/* Re-apply after the XMAC/SOPC work; the C45 AN bits are lost. */
-		ret = zx279133_switch_xpcs_apply_sgmii_vend2(priv);
+		ret = zx279133_switch_xpcs_program_lane(priv);
 		if (ret)
 			dev_err(dev,
 				"failed to re-apply the XPCS0 AN state: %d\n",

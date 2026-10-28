@@ -364,6 +364,46 @@ static int zx279133_uni_serdes_power_on(struct phy *phy)
 		 * problem - the 1G jacks go through it, and they work
 		 * (docs/92 §81, §82).
 		 */
+		/*
+		 * The reset is only needed when the image has to be written.
+		 *
+		 * In a boot where the loader's net init ran, this block already
+		 * holds the right image and is already enabled - the count below
+		 * says "0/49 word(s) differ" - and the lane behind it is the one
+		 * the loader had brought up.  The reset pulse takes the SerDes
+		 * domain down, and that domain holds the lane's PCS
+		 * configuration too: the PCS's AN_CTRL reads 0x0000 right after
+		 * this call, and the four registers the lane needs (the loader's
+		 * own 0x1140 / 0x0020 / 0x2200 / 0x0005) are gone.  What is lost
+		 * is the PCS's state, not its registers: writing the image and
+		 * the four words back afterwards does not bring the link back
+		 * (measured 2026-10-29, staging/ctl/win130.log and win131.log).
+		 *
+		 * So: when the block already holds the image and is enabled, do
+		 * not touch it.
+		 */
+		{
+			const u32 *profile = zx279133_uni_serdes_image(priv->image_sel);
+			bool inherited = true;
+
+			for (i = 0; i < ZX279133_UNI_SERDES_PROFILE_WORDS; i++)
+				if (readl(priv->serdes + i * 4) != profile[i]) {
+					inherited = false;
+					break;
+				}
+			status = readl(priv->serdes + ZX279133_UNI_SERDES_MODE_CTRL);
+			if (inherited && (status & ZX279133_UNI_SERDES_ENABLE)) {
+				dev_info(priv->dev,
+					 "Uni SerDes image inherited: mode %#x, image differs in 0/%d word(s), status %#x/%#x; the block is not reset\n",
+					 status, ZX279133_UNI_SERDES_PROFILE_WORDS,
+					 readl(priv->serdes + ZX279133_UNI_SERDES_PLL_STATUS),
+					 readl(priv->serdes + ZX279133_UNI_SERDES_RX_STATUS));
+				priv->powered = true;
+				ret = 0;
+				goto out_unlock;
+			}
+		}
+
 		ret = zx279133_uni_serdes_reset_pulse(priv);
 		if (ret)
 			goto err_disable_clocks;
