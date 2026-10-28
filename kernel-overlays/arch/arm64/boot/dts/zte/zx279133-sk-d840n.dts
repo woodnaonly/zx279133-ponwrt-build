@@ -770,12 +770,16 @@
 	 *    and wrote ZX279051 registers into it, docs/92 and this file's
 	 *    history.)
 	 *
-	 *  - That driver's config_init() is rtl822x_set_serdes_option_mode(),
-	 *    and it rewrites the RTL8226's SerDes option: devad 0x1e registers
-	 *    0x697a (mode), 0x6a04, 0x6f10 and 0x6f11.  The vendor's own values
-	 *    for those four are 0x0003, 0x0503, 0x084a and 0x0021 (docs/92
-	 *    §78.3); the tree writes 0 or 2 into 0x697a, 0x0503, 0xd455 and
-	 *    0x8020.
+	 *  - With the node gone, nothing binds to the chip at all, and that was
+	 *    confirmed on the running board on 2026-10-29 06:34 and 06:55:
+	 *    /sys/bus/mdio_bus/devices holds the four internal PHYs and the two
+	 *    dwxpcs and nothing else, and the boot log has no realtek probe
+	 *    message in it.  So the tree's rtl822x_set_serdes_option_mode() -
+	 *    which is what that driver's config_init() runs and which rewrites
+	 *    the RTL8226's SerDes option (devad 0x1e registers 0x697a, 0x6a04,
+	 *    0x6f10 and 0x6f11) - does not run.  The four registers still hold
+	 *    the loader's own values (0x697a = 0x0000, 0x6a04 = 0x0503,
+	 *    0x6f10 = 0x086a, 0x6f11 = 0x0021, measured 2026-10-29 06:47).
 	 *
 	 *  - The one register that says whether the base-X lane still delivers
 	 *    frames - devad 7 register 1, whose four good bits are link up,
@@ -783,6 +787,16 @@
 	 *    under the vendor's U-Boot and 0x00ad under mainline: exactly one of
 	 *    those four bits is missing.  Same board, same power cycle, same
 	 *    register, read the same way (mdiobus_c45_read, zx279133-switch.c).
+	 *    The loader's value was measured again on 2026-10-29 06:51-06:52,
+	 *    at the loader's prompt before and after its net init: 0x00e9 both
+	 *    times.
+	 *
+	 *  - The DSP patch window (devad 0x1f reg 0xa438) is a *streaming* one:
+	 *    every read advances it, so reading it twice gives two different
+	 *    values.  The "mainline reads 0x0038 against the loader's 0x0002"
+	 *    of docs/92 §94.2 is that artifact and nothing else (writing 0x0002
+	 *    and reading it twice gave 0x0002 and then 0x0100, 2026-10-29
+	 *    06:57).  Nothing had written it.
 	 *
 	 * Nothing else in the tree touches this chip and nothing needs to:
 	 * zx279133_switch_outerphy_link() reads its link straight out of the

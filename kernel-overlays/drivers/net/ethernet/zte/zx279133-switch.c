@@ -263,11 +263,14 @@
  * The lane's four PCS registers as the board's own U-Boot leaves them.
  *
  * Read out of the loader's prompt on 2026-10-28 at 0x1a7c0000 and
- * 0x1a7e0000, in the power cycle whose net bring-up had already brought the
- * 2.5G jack up and carried 11,471,728 bytes over it:
+ * 0x1a7e0000, in a power cycle whose net bring-up had already configured the
+ * outerphy port:
  *
  *	0x1a7c0000	0x1140 0x0139 0x7996 0xced0 0x0020 0xd000 0x0002 0x0000
  *	0x1a7e0000	0x2200 0x0005 0x001a 0x0000 0x0000 0x0000 0x0000 0x0000
+ *
+ * These are the 1G branch's words.  The 2.5G branch leaves BMCR 0x2140,
+ * DIG_CTRL1 0x2000 and AN_CTRL 0x0000 instead (docs/92 §96.15).
  *
  * The window is four bytes per register, so:
  *	0x1a7c0000		VEND2 0x0000, the BMCR
@@ -276,6 +279,15 @@
  *	0x1a7e0004		VEND2 0x8001, the AN_CTRL
  *
  * The AN_CTRL's mode field (bits 2:1) is 2, i.e. SGMII.
+ *
+ * One thing this comment used to say and must not say again: that the
+ * loader's net bring-up "carried 11,471,728 bytes over" this lane.  It did
+ * not.  The loader's own log says "Using eth0 device" before it starts the
+ * TFTP (docs/92 §96.18): the bytes went over eth0, that is the SoC's MAC
+ * through the PON SerDes to the 9132's CPU port and out of the LAN2 jack.
+ * The loader configured this lane, and the far end says it was up
+ * (1e.0x758d = 0x801e, 7.0x01 = 0x00e9, docs/92 §96.16), but it never
+ * moved a byte over it.
  */
 #define ZX279133_XPCS_VEND2_SR_MII_SPEED	0x0004
 #define ZX279133_XPCS_UBOOT_BMCR		0x1140
@@ -694,6 +706,15 @@ static int zx279133_switch_xpcs_program_lane(struct zx279133_switch *priv)
 static void zx279133_switch_lane_watch(struct work_struct *work);
 static void zx279133_switch_lane_work_cleanup(void *data);
 
+/*
+ * The far end's own view of this lane: forward declaration.
+ *
+ * The function itself is further down, with the rest of the outer PHY's code.
+ * It reads the RTL8226's AN status word (devad 7 reg 1), prints it whenever it
+ * changes, and prints the PHY's own configuration once per boot.
+ */
+static int zx279133_switch_outerphy_link(struct zx279133_switch *priv);
+
 static void zx279133_switch_lane_watch(struct work_struct *work)
 {
 	struct zx279133_switch *priv =
@@ -702,6 +723,26 @@ static void zx279133_switch_lane_watch(struct work_struct *work)
 	int an_ctrl;
 	int bmcr;
 	int ret;
+
+	/*
+	 * The far end's own word, every two seconds.
+	 *
+	 * Why this is in the watch and not only in the port's link state:
+	 * the word is 0x00e9 when the loader's configuration is in place and
+	 * 0x00ad under mainline, and the difference is one bit - the far end
+	 * is no longer receiving valid code (docs/92 §78.3, §94.3).  When this
+	 * driver inherits the lane's own words, the near side is the loader's,
+	 * word for word, and the far end still loses that bit - so nothing this
+	 * driver writes explains it, and the question is *when* it happens.
+	 *
+	 * The port's link state only asks once (the link is a fixed one, so
+	 * phylink never polls it again), which is why the boot log only ever
+	 * showed one sample, taken after the damage was done.  Reading it here
+	 * puts every change in the log with its timestamp, and the word is
+	 * printed only when it changes, so a boot where it never changes says
+	 * nothing at all.
+	 */
+	zx279133_switch_outerphy_link(priv);
 
 	an_ctrl = zx279133_switch_xpcs_read(priv, MDIO_MMD_VEND2,
 					     ZX279133_XPCS_VR_MII_AN_CTRL);
@@ -1274,7 +1315,7 @@ static void zx279133_switch_xmac_program(struct zx279133_switch *priv,
 	 * MISC_CFG is deliberately not written at all.  The vendor's
 	 * xamc_init_conf_by_speed() ORs the "IPC" bit 0x200 into it; the board's
 	 * own U-Boot does not (it leaves 0x00002000), and U-Boot is the
-	 * configuration that moved 11 MB through this jack (docs/92 §79).
+	 * configuration the far end of this lane agrees with (docs/92 §96.16).
 	 */
 }
 
@@ -1782,26 +1823,42 @@ static int zx279133_switch_outerphy_link(struct zx279133_switch *priv)
 /*
  * The outer PHY's own configuration, printed once per boot.
  *
- * This is the chip on the far end of the 2.5G jack, and the only thing that
- * has ever been different about it between the vendor's loader and mainline
- * is its SerDes configuration: the tree's generic Realtek driver rewrites
- * the SerDes option and the DSP patch window when phylib attaches to it
- * (docs/92 §94.3), and the LAN's own status word says the base-X lane is
- * not locked (§94.6's N3).
+ * This is the chip on the far end of the 2.5G jack.  Two things about it were
+ * said here that the measurements of 2026-10-29 06:30-07:00 took back:
+ *
+ *  - That "the tree's generic Realtek driver rewrites the SerDes option and
+ *    the DSP patch window when phylib attaches to it" (docs/92 §94.3).  It
+ *    does not: phylib has no device for this chip.  There is no phy_device at
+ *    address 5 on any bus (the four internal PHYs and the two dwxpcs are all
+ *    that /sys/bus/mdio_bus/devices has), the tree's realtek driver prints
+ *    nothing in the boot log, and the SerDes option word (1e.0x697a) still
+ *    holds the loader's own value (0x0000, written by the loader's net init).
+ *  - That the DSP patch window reads 0x0038 under mainline against the
+ *    loader's 0x0002.  That window is a *streaming* one: every read advances
+ *    it, so the second read of a value is the next one in the stream.  Writing
+ *    0x0002 into it and reading it twice gave 0x0002 and then 0x0100 (measured
+ *    2026-10-29 06:57), which is what a stream does.  So the 0x0038 was an
+ *    artifact of reading it twice, and nothing had written it.
+ *
+ * What the far end does say is in the AN status word (devad 7 reg 1): 0x00e9
+ * under the loader and 0x00ad under mainline, and the difference is one bit -
+ * the far end is no longer receiving valid code (§94.6's N3).
  *
  * The words printed here are the ones that decide which SerDes mode the chip
  * is in, and the vendor's own values for them, read out of the board's U-Boot
- * on 2026-10-29 00:47:
+ * on 2026-10-29 00:47, plus what the same boot measured at the loader's
+ * prompt after its net init on 2026-10-29 06:52:
  *
- *	1e.0x697a	0x0003	the SerDes option
+ *	1e.0x697a	0x0003	the SerDes option before the loader's net init,
+ *				0x0000 after it (the loader's own value)
  *	1e.0x7580	-	the SerDes mode (the tree reads 0x02 as SGMII and
  *				0x16 as 2500BASE-X; the vendor's value was never
  *				measured)
- *	1e.0x758d	0x0010	the SerDes control word; mainline reads
- *				0x8018, and bit 15 of it is set by the chip
- *				itself (writing 0x0010 leaves it set, measured
- *				2026-10-29 01:31)
- *	1f.0xa438	0x0002	the DSP patch window (mainline read 0x0038)
+ *	1e.0x758d	0x0010	the SerDes control word before the loader's net
+ *				init, 0x801e after it; bit 15 of it is set by
+ *				the chip itself (writing 0x0010 leaves it set,
+ *				measured 2026-10-29 01:31)
+ *	1f.0xa438	0x0002	the DSP patch window - a streaming one, see above
  *
  * The auto-negotiation block is printed with them, because the interesting
  * pair is there: the partner's advertisement (7.0x20) was 0x00a1 under the
@@ -2781,9 +2838,12 @@ static int zx279133_switch_probe(struct platform_device *pdev)
 	 *
 	 * When the loader left the lane up, this driver leaves the PCS
 	 * alone.  That is the whole of judgment TT.  The loader's
-	 * configuration is a working one - it moved twelve megabytes over
-	 * this lane in those boots, before the kernel even started - and
-	 * programming the PCS is what destroys it.  This driver's own image
+	 * configuration is a working one - the far end of this lane says the
+	 * link was up when the loader left it (1e.0x758d = 0x801e,
+	 * 7.0x01 = 0x00e9, docs/92 §96.16) - and programming the PCS is what
+	 * destroys it.  (The loader's own image download did not go over this
+	 * lane: its log says "Using eth0 device", docs/92 §96.18.)
+	 * This driver's own image
 	 * is a 1G one, and the far end of this lane is in 2500BASE-X
 	 * (1e.0x7580 = 0x9416, the mode field 0x16), so a 1G near end
 	 * against a 2.5G far end negotiates nothing: the far end's status
@@ -2926,6 +2986,15 @@ report:
 
 	/* And every word of the lane, after this driver's own work. */
 	zx279133_switch_lane_snapshot(priv, "after");
+
+	/*
+	 * The far end's own word, once, here: this is the first sample of the
+	 * series the lane watch keeps going (see the comment in the watch).
+	 * Under the loader it reads 0x00e9, so this line says whether the far
+	 * end was still carrying code at the moment this driver was done with
+	 * the lane - which is the question the next round asks.
+	 */
+	zx279133_switch_outerphy_link(priv);
 
 	/*
 	 * Watch the lane from now on.
