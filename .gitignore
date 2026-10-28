@@ -50,3 +50,7 @@ gate-rehearse/
 # Reachable without moving anything: mkrollback.sh and checkrollback.sh take LOCAL=<tree>.
 backups/
 restore_set/
+
+# Scratch commit messages written by the commit-message drafting step.  They are a
+# working aid, not source: one `git add -A` away from a public push otherwise.
+.commitmsg-*.txt
