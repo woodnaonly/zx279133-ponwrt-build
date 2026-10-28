@@ -13,8 +13,10 @@
 #include <linux/bitfield.h>
 #include <linux/clk.h>
 #include <linux/debugfs.h>
+#include <linux/device.h>
 #include <linux/io.h>
 #include <linux/iopoll.h>
+#include <linux/kernel.h>
 #include <linux/kstrtox.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
@@ -22,7 +24,10 @@
 #include <linux/phy.h>
 #include <linux/phy/phy.h>
 #include <linux/platform_device.h>
+#include <linux/printk.h>
 #include <linux/reset.h>
+#include <linux/string.h>
+#include <linux/uaccess.h>
 
 #define ZX279133_UNI_SERDES_PROFILE_WORDS	49
 #define ZX279133_UNI_SERDES_MODE_CTRL		0x54
@@ -511,6 +516,11 @@ static const struct file_operations zx279133_uni_serdes_console_fops = {
 	.write	= zx279133_uni_serdes_console,
 };
 
+static void zx279133_uni_serdes_debugfs_remove(void *data)
+{
+	debugfs_remove_recursive(data);
+}
+
 static int zx279133_uni_serdes_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
@@ -560,14 +570,39 @@ static int zx279133_uni_serdes_probe(struct platform_device *pdev)
 	if (IS_ERR(provider))
 		return PTR_ERR(provider);
 
-	dir = devm_debugfs_create_dir("zx279133-uni-serdes", dev);
-	if (IS_ERR(dir))
-		return PTR_ERR(dir);
+	/*
+	 * The console, and the reason it is built this way:
+	 *
+	 * The kernel has no devm_debugfs_create_file() and no
+	 * devm_debugfs_create_dir().  Those names do not exist upstream - the
+	 * only devm helpers of that shape are the devm_k*() ones - and
+	 * writing them down here is what broke the build in CI run #217.
+	 * debugfs_create_dir() and debugfs_create_file() take five arguments
+	 * (name, mode, parent, data, fops); the old "aux" argument is
+	 * gone, and there is a separate debugfs_create_file_aux() for the
+	 * rare caller that wants one.
+	 *
+	 * The directory is removed with the device, so the cleanup goes
+	 * through devm_add_action_or_reset() the way the NPPT console does.
+	 * debugfs_remove_recursive() takes the file with the directory.
+	 */
+	dir = debugfs_create_dir("zx279133-uni-serdes", NULL);
+	if (IS_ERR(dir)) {
+		/* No debugfs: the block still works, there is just no console. */
+		dev_info(dev, "debugfs is not available, no console for this block\n");
+		return 0;
+	}
+	ret = devm_add_action_or_reset(dev, zx279133_uni_serdes_debugfs_remove,
+				       dir);
+	if (ret)
+		return ret;
 
-	df = devm_debugfs_create_file("serdes", 0644, dir, priv,
-				      &zx279133_uni_serdes_console_fops, NULL);
-	if (IS_ERR(df))
-		return PTR_ERR(df);
+	df = debugfs_create_file("serdes", 0644, dir, priv,
+				 &zx279133_uni_serdes_console_fops);
+	if (IS_ERR(df)) {
+		dev_warn(dev, "no console file for this block\n");
+		return 0;
+	}
 
 	return 0;
 }

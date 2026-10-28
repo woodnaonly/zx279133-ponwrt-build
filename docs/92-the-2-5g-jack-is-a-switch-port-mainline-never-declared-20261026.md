@@ -7647,5 +7647,87 @@ win109 的 step 5 要读 NPPT 里的 per-port 块，写成了 `0x19004000`、
 （0x16000000）、Uni SerDes（0x16100000）、NPPT+0x200、NPPT+0x400、
 0x8c0000、0x8e0000 那几组数据都是对的。
 
+## 88. CI #217 为什么挂：内核里没有 devm_debugfs_create_file() 这个名字
+
+2026-10-28 15:20 - 15:50。#217 一失败就去查它，但查不出来：run 页面上的日志
+端点从这台机器过去一律 404，"Upload logs on failure" 那个 artifact 下载要 token
+（401）。最后是靠一个没试过的匿名 API 端点拿到"挂在哪一步"，再用上游源码把
+原因钉死。
+
+### 88.1 没有 token 也能看出"挂在哪一步"
+
+普通 API 是能匿名访问的：
+
+```
+GET /repos/woodnaonly/zx279133-ponwrt-build/actions/runs/<run_id>/jobs
+```
+
+它给出每个 job 里**每个 step 的结论**。新工具 `devtools/runjobs.py` 封装了它
+（`python devtools/runjobs.py 217`；`devtools/getartifact.py` 仍然去试 artifact，
+等哪天真有 token 就能把完整日志拖下来）。
+
+⇒ **#217 的两个 job（flash / initramfs）都挂在 `Compile` 这一步**：前面 15 个
+步骤全绿，其中包括 "Gate: every header the 9132 driver includes exists" 和
+"Check the overlay for what a compiler would have caught"。⇒ 这不是树的问题、
+不是门禁的问题，是 **C 代码编不过**。
+
+⇒ 而 #218、#219 里含同一份代码，所以它们也会照样挂 —— 那一轮已经跑起来的
+CI 是白跑的。
+
+### 88.2 判决 H：根因是 `devm_debugfs_create_file()` 这个名字上游根本没有
+
+引入控制台的那次提交在 `phy-zx279133-uni-serdes.c` 里写了：
+
+```c
+dir = devm_debugfs_create_dir("zx279133-uni-serdes", dev);
+df  = devm_debugfs_create_file("serdes", 0644, dir, priv, &fops, NULL);
+```
+
+**这两个函数在上游内核里不存在**：
+
+- sourcegraph 在 `torvalds/linux` 上搜 `devm_debugfs` 是 **0 命中**；同一个搜
+  `debugfs_create_file_full` 正常命中 `fs/debugfs/inode.c`、`include/linux/debugfs.h`
+  ⇒ 索引是好的，符号是真的没有。
+- v6.18 的 `include/linux/debugfs.h` 里 `debugfs_create_file` 是**5 个参数的宏**
+  （name, mode, parent, data, fops），旧的 `aux` 参数已经被去掉，另有一个
+  `debugfs_create_file_aux()` 给少数确实要 aux 的调用者。
+- `include/linux/devres.h` 在 6.18 已经不在那个路径上了（搬到了
+  `include/linux/device/devres.h`），而那个头文件里同样没有任何 `devm_debugfs_*`。
+
+⇒ 两个名字都是照着 `devm_kzalloc()` 的样子**凭空编出来的**，编译必然失败。
+这和板上任何东西都无关 —— #217 之后的每个镜像都出不来。
+
+### 88.3 改法：照抄 NPPT 控制台那套已经编过的形状
+
+`np.c` 的控制台用的是 `debugfs_create_file()`（5 参数）+ `devm_add_action_or_reset()`
+做清理，这套形状在 #216 是**编过的**，所以直接照抄：
+
+- 目录：`debugfs_create_dir("zx279133-uni-serdes", NULL)`；
+- 文件：`debugfs_create_file("serdes", 0644, dir, priv, &fops)`；
+- 清理：`devm_add_action_or_reset(dev, zx279133_uni_serdes_debugfs_remove, dir)`，
+  里面 `debugfs_remove_recursive()`（6.18 里它就是 `debugfs_remove` 的宏别名）。
+
+另外把 `uaccess.h` / `string.h` / `printk.h` / `kernel.h` / `device.h` 显式
+include 进来：控制台用 `copy_from_user`、`strncmp`、`pr_info`，不该指望它们
+从别的头文件里间接冒出来（`fs.h` 不带 `uaccess.h`，`rgmii.c` 能编过是因为它
+另外 include 了 `seq_file.h`）。
+
+⇒ 顺带把"没有 debugfs"这件事变成**不致命**：`debugfs_create_dir()` 失败就
+只打一条 `dev_info`，probe 照样成功 —— 控制台是调试工具，不该决定这个口通不通。
+
+### 88.4 顺带记一笔：历史被改写过，但**不是**失败的原因
+
+`7b36488` 是一个**根提交**（没有父提交），而最后一个编过的提交是 `2b3f267`
+（#216）。两棵树只差 3 个文件（`docs/92`、`np.c`、PHY 驱动）⇒ 改写本身不是
+编译失败的原因，原因就是代码。
+
+但要注意两件操作上的事：
+
+- 以后 `git show <那个提交>` 会把**整个仓库**当成新增文件打印出来（几千行），
+  看改动要用 `git diff 2b3f267 7b36488`；
+- 这次能定位到 Compile 步骤，靠的是 88.1 那个 API 端点 —— 值得记住，
+  下次再遇到"CI 挂了但看不到日志"，先打这一步，别急着猜。
+
+
 
 
