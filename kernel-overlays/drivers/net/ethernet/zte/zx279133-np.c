@@ -1601,7 +1601,18 @@ static ssize_t zx279133_9132_write(struct file *file, const char __user *ubuf,
 		if (!tok || kstrtou32(tok, 0, &which) || which > 1)
 			return -EINVAL;
 		tok = zx279133_9132_next_token(&p);
-		if (!tok || kstrtou32(tok, 0, &devad) || devad > 31)
+		/*
+		 * devad up to 63, not 31: this block has to be able to reach
+		 * MMD 0x2f (MDIO_MMD_PCS), which is where the PCS's own
+		 * registers live - the PCS type (register 7), the PCS's BMCR
+		 * and status, and the XAUI control word.  The tree's own
+		 * drivers address that MMD through mdiodev_c45_read(), so the
+		 * bus underneath takes it; only this console's own check was
+		 * in the way, and it made the PCS unreachable at runtime
+		 * (measured 2026-10-29: "xpcs 1 0x2f 0x7" answered
+		 * "Invalid argument").
+		 */
+		if (!tok || kstrtou32(tok, 0, &devad) || devad > 63)
 			return -EINVAL;
 		tok = zx279133_9132_next_token(&p);
 		if (!tok || kstrtou32(tok, 0, &reg) || reg > 0xffff)

@@ -1233,10 +1233,21 @@ static void zx279133_switch_lane_snapshot(struct zx279133_switch *priv,
 					 ZX279133_XMAC0_BASE +
 					 ZX279133_XMAC_MISC_CFG);
 
+	/*
+	 * The raw word and its bits, and no "up" or "down" next to it.
+	 *
+	 * This driver used to print link=up when bits 11..13 of this word were
+	 * all set and link=down otherwise, and that label was wrong: on
+	 * 2026-10-29 the lane was read 0x280b (bit 12 clear, so "down") while
+	 * the lane was carrying frames - lan-cpu0 had 795 bytes and 9 packets
+	 * received and 4460 bytes and 36 packets sent, and the bench PC's ping
+	 * to 192.168.9.1 was answered in 1 ms (docs/92 §95.1).  The word is
+	 * printed as it is, and the bits are printed with it, so that the next
+	 * reader does not take a bit of it for a link indicator.
+	 */
 	dev_info(dev,
-		 "lane %s: XPCS0 status=0x%04x link=%s XMAC link=0x%04x\n",
-		 tag, status,
-		 ((status & 0x3800) == 0x3800) ? "up" : "down", link);
+		 "lane %s: XPCS0 status=0x%04x (bits 11..13 = 0x%03x) XMAC link=0x%04x\n",
+		 tag, status, (status >> 11) & 0x7, link);
 	dev_info(dev,
 		 "lane %s: XMAC0 tx=0x%08x rx=0x%08x frame=0x%08x mode=0x%08x duplex=0x%08x misc=0x%08x\n",
 		 tag, tx, rx, frame, mode, duplex, misc);
@@ -2564,9 +2575,9 @@ report:
 		}
 	}
 	dev_info(dev,
-		 "XMAC0 datapath enabled; XPCS0 status=0x%04x link=%s xmac_link=0x%04x; 9132 UNI ports %u..%u\n",
+		 "XMAC0 datapath enabled; XPCS0 status=0x%04x (bits 11..13 = 0x%03x) xmac_link=0x%04x; 9132 UNI ports %u..%u\n",
 		 status,
-		 ((status & 0x3800) == 0x3800) ? "up" : "down",
+		 (status >> 11) & 0x7,
 		 zx279133_switch_nppt_read(priv, ZX279133_NPPT_XMAC_LINK),
 		 ZX279133_SWITCH_UNI_PORT_MIN, ZX279133_SWITCH_UNI_PORT_MAX);
 
