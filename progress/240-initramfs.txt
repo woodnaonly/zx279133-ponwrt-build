@@ -1,7 +1,6 @@
-=== 23:50:35 beat 21 log=3355 frozen=0 wrote=yes ===
---- signals: quiet=0s writes=1800s newproc=900s hard=5400s cmp=-cnewer proc=2s ---
+=== 23:56:40 beat 24 log=3388 frozen=4 wrote=yes ===
+--- signals: quiet=240s writes=1800s newproc=900s hard=5400s cmp=-cnewer proc=0s ---
 --- the last 30 lines of the build's own log ---
- make[3] -C tools/flex compile
  make[3] -C tools/gengetopt compile
  make[3] -C tools/fakeroot compile
  make[3] -C tools/mklibs compile
@@ -31,31 +30,37 @@
  make[3] -C toolchain/musl compile
  make[3] -C toolchain/gcc/final compile
  make[2] target/compile
+ make[3] -C target/linux compile
 --- the build's own processes ---
-   3152 Ss   /usr/bin/python3 /usr/bin/networkd-dispatcher --run-startup-triggers
-   3152 Ss   /usr/bin/python3 -u /usr/sbin/waagent -daemon
-   3151 Sl   /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
-   2437 S    timeout --kill-after=60s 280m bash -c echo $$ > ../compile-make.pid; exec make -j"$(nproc)"
-   2437 S    tee ../compile-parallel.log
-   2437 S    make -j4
-   2426 S    /bin/sh -c _limit=`ulimit -n`; [ "$_limit" = "unlimited" -o "$_limit" -ge 1024 ] || ulimit -n 1024; umask 022; cmd() { >/dev/null 2>&1 make -s "$@" < /dev/null || { echo "make $*: build failed. Please re-run make with -j1 V=s or V=sc for a higher verbosity level to see what's going on"; false; } } 8>&1 9>&2; cmd -r world 
-   2426 S    make -s -r world
-      3 R    make --no-print-directory target/compile
+   3516 Ss   /usr/bin/python3 /usr/bin/networkd-dispatcher --run-startup-triggers
+   3516 Ss   /usr/bin/python3 -u /usr/sbin/waagent -daemon
+   3515 Sl   /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
+   2801 S    timeout --kill-after=60s 280m bash -c echo $$ > ../compile-make.pid; exec make -j"$(nproc)"
+   2801 S    tee ../compile-parallel.log
+   2801 S    make -j4
+   2790 S    /bin/sh -c _limit=`ulimit -n`; [ "$_limit" = "unlimited" -o "$_limit" -ge 1024 ] || ulimit -n 1024; umask 022; cmd() { >/dev/null 2>&1 make -s "$@" < /dev/null || { echo "make $*: build failed. Please re-run make with -j1 V=s or V=sc for a higher verbosity level to see what's going on"; false; } } 8>&1 9>&2; cmd -r world 
+   2790 S    make -s -r world
+    367 S    make --no-print-directory target/compile
+    364 S    bash -c /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/time.pl "time: target/linux/compile" make  -r -C target/linux BUILD_SUBDIR="target/linux" BUILD_VARIANT="" ALL_VARIANTS="" compile  || ?(?{ printf "%s\n" "    ERROR: target/linux failed to build." >&8 || printf "%s\n" "    ERROR: target/linux failed to build."; } 2>/dev/null;   exit 1;) 
+    364 S    perl /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/time.pl time: target/linux/compile make -r -C target/linux BUILD_SUBDIR=target/linux BUILD_VARIANT= ALL_VARIANTS= compile
+    364 S    make -r -C target/linux BUILD_SUBDIR=target/linux BUILD_VARIANT= ALL_VARIANTS= compile
+    364 S    make V=s -C zte compile
+    363 S    make -C /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/build_dir/target-aarch64_cortex-a53_musl/linux-zte_zx279133/linux-6.18.38 KCFLAGS=-fmacro-prefix-map=/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/build_dir/target-aarch64_cortex-a53_musl=target-aarch64_cortex-a53_musl -fno-caller-saves  HOSTCFLAGS=-O2 -I/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/host/include -Wall -Wmissing-prototypes -Wstrict-prototypes CROSS_COMPILE=aarch64-openwrt-linux-musl- ARCH=arm64 KBUILD_HAVE_NLS=no KBUILD_BUILD_USER= KBUILD_BUILD_HOST= KBUILD_BUILD_TIMESTAMP=Mon Oct 26 04:58:01 2026 KBUILD_BUILD_VERSION=0 KBUILD_HOSTLDFLAGS=-L/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/host/lib CONFIG_SHELL=bash V= cmd_syscalls= CC=aarch64-openwrt-linux-musl-gcc Image dtbs modules
 --- the oldest processes that are not kernel threads ---
-   3161 Ss   /sbin/init
-   3160 S<s  /lib/systemd/systemd-journald
-   3159 SLsl /sbin/multipathd -d -s
-   3159 Ss   /lib/systemd/systemd-udevd
-   3159 Ss   /usr/lib/linux-tools/6.8.0-1070-azure/hv_kvp_daemon -n
-   3158 Ss   /usr/sbin/haveged --Foreground --verbose=1
-   3157 Ss   /lib/systemd/systemd-networkd
-   3157 Ss   /lib/systemd/systemd-resolved
+   3525 Ss   /sbin/init
+   3524 S<s  /lib/systemd/systemd-journald
+   3523 SLsl /sbin/multipathd -d -s
+   3523 Ss   /lib/systemd/systemd-udevd
+   3523 Ss   /usr/lib/linux-tools/6.8.0-1070-azure/hv_kvp_daemon -n
+   3522 Ss   /usr/sbin/haveged --Foreground --verbose=1
+   3521 Ss   /lib/systemd/systemd-networkd
+   3521 Ss   /lib/systemd/systemd-resolved
 --- what is running under the build ---
 --- the directories the build touched lately ---
+target-aarch64_cortex-a53_musl
 toolchain-aarch64_cortex-a53_gcc-14.3.0_musl
 host
-target-aarch64_cortex-a53_musl
 --- how big the root filesystem is getting ---
 --- memory and load ---
-Mem:           15988         873        1364          51       13750       14716
- 07:50:35 up 52 min,  0 users,  load average: 3.57, 4.60, 5.07
+Mem:           15988        1243         715          51       14029       14346
+ 07:56:40 up 58 min,  0 users,  load average: 5.21, 5.06, 5.10
