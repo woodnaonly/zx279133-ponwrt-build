@@ -1313,9 +1313,17 @@ struct zx279133_eth {
 	atomic64_t idm_local_irq_count;
 	/*
 	 * Frames that arrived on the 2.5G jack's lane (the IDM's source port
-	 * 5).  They are counted and dropped, not bridged: there is no DSA
-	 * user port for that lane yet, and bridging them sends them back out
-	 * of XMAC0 - which is the same lane they came in on (docs/92 §72).
+	 * 5).  They used to be counted and dropped: there was no DSA user
+	 * port for that lane yet, and bridging them sent them back out of
+	 * XMAC0 - which is the same lane they came in on (docs/92 §72).  The
+	 * jack has a DSA user port now (lan5, DSA port 8, transport VID 63),
+	 * so they are counted here and handed to the conduit (docs/92 §90 and
+	 * §91).
+	 *
+	 * rx_jack_dropped only moves when the DSA path is *not* there, so it
+	 * is the counter that says whether the RX path hands the frames over
+	 * or throws them away: a "dropped" that stands still while "frames"
+	 * moves is the result the RX path is supposed to give.
 	 */
 	atomic64_t rx_jack_frames;
 	atomic64_t rx_jack_dropped;

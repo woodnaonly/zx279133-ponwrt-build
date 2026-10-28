@@ -8515,3 +8515,62 @@ win111 在 21:27:37 起跑，结果是：**21:11 和 21:31 两次上电，板子
 本轮按 §90/§92 把那三处改掉，顺手把 `lan5` 补进 netdev 清单。**注释自相矛盾不是小事**：
 这个文件是这个仓库里唯一决定「板子用哪个地址应答」的地方，读它的人会照着 61-64 行去
 把 eth0 当成 2.5G 口接线，然后发现它不通。
+
+### 93.9 判决：面板 LAN1 现在是一条真的 DSA 口（win111 + win113，21:52 与 22:00）
+
+改了中继之后，21:52 那次上电倒计时被拦住了，run226.itb 进 RAM 跑起来。判据（写在
+staging/ctl/win111.sh 的开头，先写死再看数）与结果：
+
+| 判据 | 期望 | 实测 | |
+|---|---|---|---|
+| K1 lan5 存在、carrier=1 | 存在且 up | `8: lan5@lan-cpu0: <BROADCAST,MULTICAST,UP,LOWER_UP> state UP`，`/sys/class/net/lan5/carrier` = 1 | **成立** |
+| K3 驱动自己说它服务哪些口 | 含 outerphy | `the 9132 is serving: the jacks are the 9132's UNI ports 1..4 (DSA ports 4..7), the 2.5G jack is the outerphy port 5 (DSA port 8), the CPU port is 9 and the transport VIDs are 59..63` / `registered the 9132 as a DSA switch: ports 4..8 carry the transport VIDs 59..63` | **成立** |
+| K4 桥里带着 lan5 | 是 | `bridge ports lan1 lan2 lan3 lan4 lan5 lan-cpu0` | **成立** |
+| K5 outerphy 的 AN 状态 | 读得出来 | `outer phy 5 devad 0x7 reg 0x01 = 0x00ad`；驱动的判据是 `val & 0xc`，`0x00ad & 0xc = 0xc` | **成立** |
+| K6 lane 计数（判决那一对） | frames 涨、dropped 不涨 | 两次采样都是 `frames 0  dropped 0` | **不成立**（见下） |
+
+⇒ **2.5G 口作为 DSA 口这件事，做成了**：面板 LAN1 是一条 DSA 口（lan5，DSA 口 8，
+transport VID 63），它在桥里，链路由驱动自己读 RTL8226 的 AN 状态给出，TX 方向也真的
+走了 16 个帧（1992 字节）。
+
+**K6 为什么不算成立**：判据是「frames 涨」。frames 是 0 —— 面板 LAN1 上没有活对端，
+一个帧都没进来。dropped 也是 0，所以「RX 路径不再往外丢帧」这句话在**逻辑上成立、
+在证据上是空的**：没有帧进来，就没什么可丢。代码那一侧是对的（`rx_jack_dropped` 只在
+`lan_source && !lan_dsa_active` 时才加，而 DSA 通路现在是在的），但要拿到非空的证据，
+LAN1 上得有东西在发帧。
+
+顺带：厂商引导程序在同一颗 PHY 上打印的是 `mac 4 phy status changed: 2.5G
+full-duplex`，而我们的 DSA 口 port@8 现在是 `phy-mode = "1000base-x"` + fixed-link
+1G，上线时打印的也是 `Link is Up - 1Gbps/Full`。**交换机这一侧说 1G、lane 那一侧是
+2.5G**，这是一处说不通的地方，可能是下一个真缺口（也可能只是那句打印讲的是 PHY 的
+能力而不是协商结果——没有对端时无法区分，这正是 win112 要量的东西）。
+
+### 93.10 判决 BB：我们的内核确实没碰那颗 RTL8226（win113，22:00）
+
+win113 只读三个寄存器，不写不启：
+
+| 判据 | 期望 | 实测 | |
+|---|---|---|---|
+| M1 MMD 7 寄存器 1 满足 `val & 0xc` | 链路 up | `0x00ad` → `& 0xc = 0xc` | **成立** |
+| M2 PHY 的两个私有寄存器 | 与 win110 逐字相同 | `0x1e 0x758b = 0x0005`、`0x1e 0x758d = 0x8018`，与 win110 的 before/after 两次采样**完全一致** | **成立** |
+| M3 MMD 7 寄存器 1 等于一个已知状态 | 0x00ad | `0x00ad` 正是 win110 **复位 lane 之后**读到的那个值（它的 before 是 `0x00e9`，厂商 U-Boot 是 `0x0069`） | **成立** |
+
+⇒ 这颗 PHY 的状态和上一轮在**同一块板子上**量到的逐字相同，也就是说：厂商引导程序
+配好它之后，我们的内核一个字节都没改（`port_enable` 故意不碰这颗 PHY，§92.6），
+链路状态确实是驱动自己读出来的，不是继承来的。
+
+顺带记一笔：`0x00e9` / `0x00ad` / `0x0069` 三个值都满足驱动的 `val & 0xc`，所以
+这个判据区分不出「链路真的在」和「PHY 内部状态碰巧是这样」——**能区分的只有一个东西：
+LAN1 上有对端，而且帧在动。**
+
+### 93.11 下一轮预登记（判据先写死）
+
+1. **win112（流量）**：面板 LAN1 上接一个活对端（PC 的网线挪过去，或挂一台 2.5G
+   设备），然后量：lan5 的 rx 涨、lan-cpu0 的 rx 同步涨、lane 的 `frames` 涨而
+   `dropped` 不涨、ping 通。这四条里**最后一条是空的**（没有帧就没有证据），所以这轮
+   的判据必须写成「frames 涨而 dropped 不涨」。
+2. **速率**：port@8 现在按 1G 上线而厂商引导程序同一条 PHY 是 2.5G。对端接上以后，
+   先读 PHY 的协商结果，再决定 fixed-link 写 1000 还是 2500。**判据**：PHY 的协商速率
+   与 DTS 声明的 fixed-link 一致；不一致就是这一轮的缺口。
+3. **对端接上之前不要动 lane**：没有对端时 lane 上的一切都量不出来，写寄存器只会把
+   状态搅乱。

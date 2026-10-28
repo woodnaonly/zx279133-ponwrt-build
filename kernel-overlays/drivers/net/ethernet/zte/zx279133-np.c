@@ -1084,11 +1084,16 @@ static int zx279133_9132_show(struct seq_file *s, void *unused)
 			 ZX279133_XMAC_STAT_TX_GOOD));
 
 	/*
-	 * The 2.5G jack's lane, counted on the way in and dropped there
-	 * (docs/92 §72).  A count that moves is the proof that the jack's
-	 * frames reach the SoC at all; a count of zero says the frame never
-	 * got that far, and the place to look then is the PHY and the
-	 * SerDes, not the switch.
+	 * The 2.5G jack's lane, counted on the way in.  A count that moves is
+	 * the proof that the jack's frames reach the SoC at all; a count of
+	 * zero says the frame never got that far, and the place to look then
+	 * is the PHY and the SerDes, not the switch.
+	 *
+	 * The second number is the one that says what happens to them: they
+	 * used to be dropped here (docs/92 §72), and they are handed to the
+	 * conduit now that the jack has a DSA user port (docs/92 §90 and
+	 * §91), so a "dropped" that stands still while "frames" moves is the
+	 * result the RX path is supposed to give.
 	 */
 	seq_printf(s, "\n2.5G jack's lane: frames %lld  dropped %lld\n",
 		   (long long)atomic64_read(&eth->rx_jack_frames),
