@@ -95,20 +95,41 @@
 #define ZX279133_XMAC_ENABLE		BIT(0)
 #define ZX279133_XMAC_SPEED_MASK	GENMASK(31, 29)
 /*
- * The vendor's own values for the XMAC0 on this lane.
+ * The XMAC0's own words on this lane.
  *
- * RX_CTRL and FRAME_CFG are xamc_init_conf_by_speed()'s (np_133.ko
- * 0x1a240 and 0x1a258) literals, and the "IPC" bit 0x200 is the one
- * xamc_init_conf_by_speed() puts into MISC_CFG (0x1a288) - not into
- * RX_CTRL, where the tree's RTL8372N driver has it.  That driver drives
- * the same MAC towards a different far side, and its two values were
- * wrong for the 9132's CPU port: RX_CTRL bit 6 is set by the vendor and
- * cleared here, and FRAME_CFG bit 0 is cleared by the vendor and set
- * here.
+ * RX_CTRL is xamc_init_conf_by_speed()'s (np_133.ko 0x1a240) literal, and the
+ * "IPC" bit 0x200 is the one xamc_init_conf_by_speed() puts into MISC_CFG
+ * (0x1a288) - not into RX_CTRL, where the tree's RTL8372N driver has it.
+ *
+ * FRAME_CFG and MISC_CFG are the values the *board's own* U-Boot leaves behind
+ * when it moves traffic through this jack, and they are NOT the vendor Linux's
+ * (docs/92 §79).  Measured 2026-10-28 08:22, from run210's "lane pre-serdes"
+ * snapshot - that snapshot is the state U-Boot's net bring-up left, because
+ * mainline had not touched the MAC yet at that point:
+ *
+ *	tx_ctrl = 0x60010000   rx_ctrl = 0x3e8000c6
+ *	frame_cfg = 0x80000001   mode = 0x00000000
+ *	duplex = 0x00000100   misc_cfg = 0x00002000
+ *
+ * The vendor Linux's xamc_init_conf_by_speed() differs in exactly two of those
+ * words: FRAME_CFG 0x80000000 (bit 0 cleared) and MISC_CFG with the IPC bit
+ * 0x200 set.  Both are the values this driver used until now.
+ *
+ * Why U-Boot's are the ones to copy: **U-Boot moved 11 471 728 bytes through
+ * this jack** (2026-10-28 03:45:57, "tftpboot ... Bytes transferred =
+ * 12162040"), and **the vendor's own Linux moved none** - its 2.5G port never
+ * received a byte (docs/07 补九十四).  Its XMAC0 configuration therefore comes
+ * with a known-broken history, while U-Boot's comes with a known-working one.
+ *
+ * FRAME_CFG bit 0 is the one the tree's RTL8372N driver also sets (its
+ * XMAC0 image is 0x80000001), so this is not U-Boot against the tree: it is
+ * U-Boot and the tree against the vendor Linux.
+ *
+ * MISC_CFG's IPC bit is left alone for the same reason: on this lane the far
+ * side is a SerDes, not an internal copper PHY, and U-Boot left it clear.
  */
 #define ZX279133_XMAC_VENDOR_RX_CTRL	0x3e8000c6
-#define ZX279133_XMAC_VENDOR_FRAME_CFG	0x80000000
-#define ZX279133_XMAC_MISC_IPC		BIT(9)
+#define ZX279133_XMAC_UBOOT_FRAME_CFG	0x80000001
 /*
  * xmac_set_speed_sel(): 3 = 1G SGMII, 6 = 2.5G, 4 = 100M, 7 = 10M.
  * The USXGMII image the tree's RTL8372N driver writes leaves the field at
@@ -978,12 +999,15 @@ static void zx279133_switch_xmac_program(struct zx279133_switch *priv,
 	zx279133_switch_nppt_write(priv, xmac + ZX279133_XMAC_RX_CTRL,
 				    ZX279133_XMAC_VENDOR_RX_CTRL);
 	zx279133_switch_nppt_write(priv, xmac + ZX279133_XMAC_FRAME_CFG,
-				    ZX279133_XMAC_VENDOR_FRAME_CFG);
+				    ZX279133_XMAC_UBOOT_FRAME_CFG);
 	zx279133_switch_nppt_write(priv, xmac + ZX279133_XMAC_MODE_CFG, 2);
 
-	value = zx279133_switch_nppt_read(priv, xmac + ZX279133_XMAC_MISC_CFG);
-	zx279133_switch_nppt_write(priv, xmac + ZX279133_XMAC_MISC_CFG,
-				    value | ZX279133_XMAC_MISC_IPC);
+	/*
+	 * MISC_CFG is deliberately not written at all.  The vendor's
+	 * xamc_init_conf_by_speed() ORs the "IPC" bit 0x200 into it; the board's
+	 * own U-Boot does not (it leaves 0x00002000), and U-Boot is the
+	 * configuration that moved 11 MB through this jack (docs/92 §79).
+	 */
 }
 
 /*

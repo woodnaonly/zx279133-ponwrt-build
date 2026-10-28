@@ -6514,3 +6514,352 @@ owner 已经拍板：**2.5G 口的 netdev 叫 `lan1`，与 LAN2/3/4 一样进 `b
    不是 tagger。
 
 **两条都等 Q5 的结果**：Q5 说明 lane 到底通不通，通了才有资格谈把它挂进 `br-lan`。
+
+## 78. 2026-10-28 07:12 的实测：正常启动时，这条 lane 从头到尾没有人配过
+
+§77 把厂商的 base-X 序列挖出来了，§78 把「引导程序到底留了什么」这件事用板上
+读数钉死，并且回答一个更要紧的问题：**除了 PCS 侧和 Uni SerDes 侧，第三个缺件
+（RTL8226 自己的 SerDes 侧）到底是不是缺件。**
+
+### 78.1 Uni SerDes 在正常启动后停在复位默认
+
+板子正常上电、停在 U-Boot 提示符时（07:12 那一次），读它的 49 个字：
+
+```
+md 0x16100000 0x40
+c0000004 50a840a7 012e064f 1fd0c093 ...   （前 4 个字）
+```
+
+* 前四个字是 `c0000004 50a840a7 012e064f 1fd0c093`，
+* 模式字（index 21，也就是基址 + 0x54）读 **0x01**。
+
+对照 §76 的两张表：**base-X 那份 image 的模式字是 0x101，另一份是 0x01**，而这
+49 个字正是「另一份」的形状。也就是说，**正常启动之后，这个块从头到尾没有人动
+过**，它还是上电复位的样子。
+
+### 78.2 正常启动的 U-Boot banner 只做 PON 侧
+
+同一轮里把串口日志从头翻了一遍，正常启动的 banner 只有 PON 侧那几行：
+
+```
+pon serdes init succeed..
+eth0..
+```
+
+**没有** `mode_eth_1gbase_x_cfg`、**没有** `uni serdes init succeed`、**没有**
+`xmac 0 speed set 2 in sgmii`。
+
+日志里那 51 次这三条字样，全部来自更早那些**手动跑过 net init** 的会话
+（那些会话里 U-Boot 真的把这条 lane 配成了 base-X，也是真的用 tftp 从 2.5G 口
+搬过 11 MB）。**正常开机路径不经过它们。**
+
+⇒ **「继承引导程序」这条路从根上就不成立**：引导程序在正常启动里根本没配过这条
+lane，kernel 进来时它只有复位默认值可继承。§77 的 `c4a4fc1` 删掉继承分支是对的，
+`88140a0` 把 base-X image 直接写进去也是对的。
+
+### 78.3 RTL8226 的基线读数（MDIO #1，addr 0x05）
+
+用 U-Boot 的 `mii` 读出来的：
+
+| 寄存器 | 值 | 含义 |
+|---|---|---|
+| MMD 7 reg 0x00（PCS BMCR） | 0x3000 | speed = 1000BASE-X，AN 使能 |
+| MMD 7 reg 0x01（PCS status） | 0x0069 | link up + block lock + block sync + RX valid |
+| MMD 0 reg 0x00（BMCR） | 0x2058 | —— |
+| MMD 0x1e reg 0x7588 | 0x00CE | 厂商序列要写成 **2** |
+| MMD 0x1e reg 0x7589 | 0x035A | 厂商序列要写成 **0x70d0**（AN 开） |
+| MMD 0x1e reg 0x7587 | 0x0002 | 厂商序列要写成 **3** |
+| MMD 0x1e reg 0x75f3 | 0x030D | `Rtl8226_serdes_option_set()` 写过 |
+| MMD 0x1e reg 0x697a | 0x0003 | 同上（bits 6:5 = mode） |
+| MMD 0x1e reg 0x6a04 | 0x0503 | 同上 |
+| MMD 0x1e reg 0x6f10 | 0x084A | 同上（厂商写 0x8020） |
+| MMD 0x1e reg 0x6f11 | 0x0021 | 同上 |
+
+（存证在 `staging/ctl/ubphy-state.txt`。）
+
+### 78.4 于是：**SerDes 物理层本来就是通的**，缺的在它上面
+
+这一条是 §78 最重要的一条。
+
+* SoC 侧 Uni SerDes = **复位默认**（模式字 0x01）；
+* RTL8226 侧 = **上电复位默认**（0x7588=0x00CE 那一套）；
+* 两边都在复位默认下，RTL8226 的 **PCS status 读 0x0069**：link up、block lock、
+  block sync、RX valid —— **四个位全置**。
+
+block lock + block sync + RX valid 意味着这条 lane 上真的有合法的 1000BASE-X
+码流在对端解出来。**也就是说，物理层本来就是通的，U-Boot 那 11 MB 也是这么搬的。**
+
+⇒ **「第三块缺件」要重新定性**：
+
+* 厂商 Linux 自己的 Linux 里，`Rtl8226_serdes_autoNego_set()`（0x7588 / 0x7589）
+  和 `Rtl8226_serdes_option_set()`（0x75f3 / 0x697a / 0x6a04 / 0x6f10 / 0x6f11）
+  **在 np_133.ko 和其它厂商模块里都没有调用点**（§77 之前那轮 grep 的结果）。
+  也就是说**厂商 Linux 从来没跑过这套序列**，而厂商 Linux 的 2.5G 口同样一个字节
+  都收不到（docs/07 补九十四）。
+* 既然厂商 Linux 不跑它、照样拿不到帧，那这套序列**不是「让这个口通」的必要
+  条件**，最多是「把这个口配成某个特定模式」的可选项。
+
+⇒ **第三块的定性改为：候选，不是已证实的缺件。** 现在最该先试的是把前两块的
+效果做出来（PCS 侧 + Uni SerDes 侧），看帧到底通不通；PHY 侧那套序列留到
+「前两块都对了、帧仍然不来」的时候再单独成一笔。
+
+### 78.5 这条 lane 的三侧各由谁管（今天把代码重读了一遍）
+
+mainline 里这条 lane（XMAC0 + XPCS0 + Uni SerDes → RTL8226 → 2.5G 口）的三侧：
+
+| 侧 | 谁管 | 现在是什么状态 |
+|---|---|---|
+| PMD（Uni SerDes，0x16100000） | `phy-zx279133-uni-serdes.c` | `88140a0`：复位脉冲 → 写 49 字 base-X image → 置 enable → 等 PLL / CDR（两个等待都不致命） |
+| PCS（XPCS0，0x1a000000） | `zx279133-switch.c` | `c4a4fc1`：每次都按厂商序列编成 1000BASE-X（不再继承） |
+| MAC（XMAC0，0x140000） | `zx279133-switch.c` 的 `zx279133_switch_xmac_configure()` | **一直都在编**（tx_ctrl / rx_ctrl / frame_cfg / mode_cfg / duplex / misc） |
+
+**probe 的顺序**（`zx279133_switch_probe()`，今天复读）：
+
+```
+pre-serdes 快照
+  → devm_of_phy_get(parent_np, "lan-serdes")        （uni_serdes PHY）
+  → phy_set_mode_ext(SGMII)
+  → phy_power_on()                                   ← run211 在这里写 image
+pre-pcs 快照
+  → 按厂商序列把 XPCS0 编成 1000BASE-X
+lane after 快照
+  → zx279133_switch_xmac_configure()                ← 编 XMAC0
+```
+
+**厂商的顺序是反的。** 把厂商 `xmac_1gbase_x_conf()`（np_133.ko 0x1a6ec）整个拆开
+（`staging/ctl/adisx.py`，今天 08:0x）：
+
+```
+xmac_tx_disable(xmac)
+xmac_rx_disable(xmac)
+xpcs_1000base_x_conf(xmac, speed=2, duplex=1)     ← PCS 先
+xamc_init_conf_by_speed(xmac, 3)                   ← 再编 XMAC 自己（速度码 3 = 1G）
+byPassEnableSet(xmac, 1)                           ← 再开 PCS bypass
+__const_udelay(...)
+uni_serdes_init(xmac, 7)                           ← SerDes 最后
+```
+
+mainline 现在的顺序是 **PMD 先、PCS 后**（`phy_power_on()` 在
+`zx279133_switch_probe()` 里比 XPCS 编程靠前）。
+
+**内容上已经对得上了**（今天逐条比过）：
+
+* XMAC 的寄存器值和厂商 `xamc_init_conf_by_speed()` 一样：`MODE_CFG = 2`、
+  `TX_CTRL` 速度码 **3**（mainline 的 `ZX279133_XMAC_SPEED_1G = 3`）、
+  `RX_CTRL = 0x3e8000c6`、`FRAME_CFG = 0x80000000`、`MISC_CFG |= 0x200`；
+* **PCS bypass 也已经有了**：`zx279133-switch.c:2188` 的
+  `zx279133_switch_xpcs_bypass(priv, true)` 就是厂商 `byPassEnableSet(xmac, 1)`；
+* 差别只剩**顺序**：厂商是 PCS → XMAC → bypass → SerDes，mainline 是
+  SerDes → PCS → bypass → XMAC。
+
+这条顺序差记在这里，是因为它是一个**没有被实验隔离的变量**：run211 里两样东西
+一起动了（PCS 编程 + SerDes 写 image），如果帧还是不来，没法立刻知道是
+「image 写错了」还是「顺序反了」。等这一轮的数据回来，如果 lane 还不通，下一步
+就是把顺序换成厂商的（PCS 先、SerDes 后），单独一笔。
+
+### 78.6 一个还没解释的旧问题
+早前用 U-Boot 读 RTL8226 的 serdes mode，**两次得到两个不同的值**：0xd 和 0x1e。
+今天读 `MMD 0x1e reg 0x7588` 得到 0x00CE，和那两个都对不上。
+
+可能性有三个（都还没排除）：读的是不同的寄存器（0x75xx 那一段有 8 个 0x1e 私有
+寄存器，读错一个很平常）；U-Boot 那两次读的时候 PHY 的状态和现在不同；或者
+U-Boot 的 `mii` 命令对 devad 0x1e 的处理有偏差。**这个不阻塞**，但下次在活板上
+用驱动的 `m45` 读一遍就能定。
+
+### 78.7 这一轮的三个 commit 与两轮判据
+
+| commit | 改什么 | CI |
+|---|---|---|
+| `a24faf9` | 撤掉开时钟前读 Uni SerDes 那 49 个字的诊断 | run209 |
+| `c4a4fc1` | lane 不再继承引导程序；SR-MII 速度值 0x20 → 0x40，掩码改用厂商的 0x2061 | run210 |
+| `88140a0` | Uni SerDes 按厂商的 base-X image 写进去（不再「继承」） | run211 |
+
+两个窗口的判据都先写在脚本头（`staging/ctl/win77.sh` 是 run210 的，
+`staging/ctl/win78.sh` 是 run211 的），这里只记 run211 相对 run210 变的那几条：
+
+* **Q4** 日志里必须是 `Uni SerDes 1G profile written: mode 0x101 ... image differs
+  in 0/49 word(s)`。**0/49** 是因为驱动自己写的 49 个字、自己比的；
+  **mode 0x101** 是 base-X image 的模式字（0x01 是复位默认，见 §78.1）。
+* **Q4'** 两种失败要分得开：
+  * 看到 `Uni SerDes 1G inherited` ⇒ 还是 run210 的代码，image 根本没写；
+  * 看到 `failed to power on Uni SerDes: -110` ⇒ image 写了，但 PLL 在 2 秒内没锁，
+    驱动于是把块禁用了 ⇒ 这条 lane 是死的，下一轮要查复位脉冲，不是查 PCS。
+* **Q8** PHY 的 0x1e 六个寄存器，如果读出来和 §78.3 的 U-Boot 基线**一样**，那就
+  说明 mainline 的 PHY 驱动没碰对端（本来如此），而 §78.4 的结论也就成立：
+  对端不需要我们配，它在复位默认下就已经把 link 拉起来了。
+
+### 78.8 U-Boot 那次成功的 ping 把这条线的两端说清楚了
+
+docs/92 §68 存着 U-Boot 在 2026-10-28 04:09:10 那次 `ping 192.168.9.25` 的完整
+输出。按行读（只取相关的）：
+
+```
+enter smac_init
+smac_init: smac_pkt_filter = 0x80000001, mac = 0x0
+...
+smac_init: smac_pkt_filter = 0x80000001, mac = 0x3
+enter outerphy info init!
+get board_info_id by fdt,the phy_id is 0x5
+--->phy identifier is [0xc849]            <- RTL8226 的 Clause 45 ID
+5 serdes option is 0
+xmac0 is used.
+enter outerphy info init!
+get board_info_id by fdt,the phy_id is 0x5
+can't find this index!
+[outerphy_phy_init]Warning: No outerphy on this port<5>
+...
+pon serdes init succeed
+np init ok
+mac 0 link down / mac 1 link down / mac 2 link down / mac 3 link down
+phy_id:0x5;  port:0x4;
+PHY_RLT8226_MDIO_READ_EXTENDED(0x2) in RTL_8226
+test:cur 0 phy sereds mode : 0x6, last mode0 : 0xc, last mode1 : 0xc
+mode_eth_1gbase_x_cfg
+com_pll_lock_ready
+rx los =0 rx data in
+cdr_lock_ready
+uni serdes init succeed
+xmac 0 speed set 2 in sgmii(xmac speed 3)
+mac 4 phy status changed: 1000M full-duplex
+host 192.168.9.25 is alive
+```
+
+三件事：
+
+1. **`mac 0..3 link down`** —— 9132 的四个 SMAC（四个 1G 口）全 down，因为线不在
+   它们上面；唯一 up 的是 `mac 4`。
+2. **RTL8226（phy_id 0x5）在 `port:0x4`**，而且它的 **SerDes 模式被读了又写**
+   （`PHY_RLT8226_MDIO_READ_EXTENDED(0x2)`、`test:cur 0 phy sereds mode : 0x6,
+   last mode0 : 0xc, last mode1 : 0xc`），**紧挨着** SoC 自己这一侧的
+   `mode_eth_1gbase_x_cfg` / `uni serdes init succeed`。
+3. **`xmac0 is used`** —— 厂商把这颗外置 PHY 归到 XMAC0 这条路上；端口 5 明确报
+   `No outerphy on this port<5>`（**RTL8226 不在端口 5 上**）。
+
+⇒ **这条线的两端是：SoC 的 Uni SerDes ↔ RTL8226。** 厂商的顺序是「先把对端 PHY 的
+SerDes 模式调好，再配自己这一侧的 base-X」，两边接上，`mac 4` 报 1G，ping 通。
+
+⇒ 这与 §78.4 的读数互相印证：两边都在**复位默认**下 PCS 就报 link up（block lock /
+block sync / RX valid）—— **这套寄存器出厂就是能对上的**，缺的既不是「PHY 没被厂商
+配」，也不是「SerDes 没被配」，而是**内核里那条 lane 压根没人按 base-X 配**
+（§78.1、§78.2）。
+
+⇒ 顺带记一条还没查清的：extend port 的编号在两份资料里对不上 —— 厂商代码里是
+`port_attr_def_src_is_extend_port_flag_set(5, 1)`（`xmac0_to_extend` 分支），而活板
+实测带 extend 位（attr 19 的 bit 19）的是 **PPU 6**（§71.6）。**这条不影响上面的结论**
+（IDM 描述符里的 source 就是 5），但「PPU 5 到底是什么」这件事仍然悬着。
+
+### 78.9 一条影响 netdev 形状的事实：mainline 的 DSA CPU 口就占着 XMAC0 这条 lane
+
+* `zx279133-switch.c` 的 DSA 端口表：4 个 UNI 用户口（DSA 4..7 = PPU 1..4）+
+  **CPU 口 DSA 8**；CPU 口的 phylink 能力里写的是「The CPU port is the SoC's own
+  SGMII lane at 1G」—— **它就是 XMAC0 + Uni SerDes 这条 lane**，它的 netdev 是 conduit
+  `lan-cpu0`（br-lan 的第 5 个口）。
+* §72 实测到的环路正是这么来的：2.5G 口的帧（source=5）被错标成 VID 62 → 桥把它
+  发给 `lan-cpu0` → 从 XMAC0 出去 → 回到 2.5G 口。
+
+⇒ 所以「把 2.5G 口做成第 5 个 DSA 用户口」这条路，先决条件是**把 DSA 的 CPU 口从
+XMAC0 上挪走**（挪到 9132 的 trap 口 / RGMII1；而 mainline 那个 RGMII MAC 窗口
+0x15900000 在这块板子上读出来全是 0，`zx279133-rgmii.c` 只映射不写）。
+
+⇒ **owner 已拍板走另一条：独立 netdev** —— IDM 收到 source=5 的帧直接交给 `lan1`，
+`lan1` 发出的帧在 IDM 描述符里写 outport=5 走 XMAC0，`lan1` 作为普通成员进 br-lan。
+这条不需要动 9132 的 VLAN 表，也不需要动 DSA 的端口表。
+
+## 79. run210 上板：PCS 侧编程逐位正确，但帧一步没动；U-Boot 那份能工作的 lane 状态被量出来了
+
+### 79.1 八条判据的结果
+
+| 判据 | 结果 |
+|---|---|
+| Q1 有 shell | ✔ 3 次探测后有 shell（run207 的 0.38 秒死确实是自己那笔诊断，已回退） |
+| Q2 lane 是被编程的 | ✔ `the NPPT PCS status word is 0x2c03; the lane is programmed here, not inherited` |
+| Q3 XPCS 读回 | ✔ **AN_CTRL 0x0000 / DIG_CTRL1 0x2000 / BMCR 0x0140**，与厂商 base-X 那一列逐位相同（改之前是 0x0005 / 0x2200 / 0x1140） |
+| Q4 Uni SerDes | ⚠ `Uni SerDes 1G inherited: mode 0x101 already, image differs in 1/49 word(s)` —— 不是 0/49，原因见 §79.2 |
+| Q5 2.5G 口的帧 | ✘ **flood 之后 `2.5G jack's lane: frames 0 dropped 0` 一动不动** |
+| Q6 XMAC0 计数 | ✘ `tx frames 00002062` 前后不变（那 8290 帧全是 U-Boot tftp 留下的） |
+| Q7 板子活着 | ✔ |
+| Q8 PHY 的 SerDes 寄存器 | 见 §79.3：**U-Boot 写过其中三个，mainline 从来不碰** |
+
+⇒ **「PCS 侧按厂商序列编程」这一项验完了：写对了，帧不来。**
+
+### 79.2 一个把判据本身改掉的事实：**U-Boot 的 tftpboot 自己就配了这条 lane**
+
+run210 的窗口先 tftpboot 再 bootm，于是 U-Boot 在下包之前跑了它自己的 net init。
+串口里看得见（时间戳前没有方括号的那两行就是 U-Boot 的）：
+
+```
+xmac0 is used.
+uni serdes init succeed
+```
+
+⇒ 内核起来时，Uni SerDes 里躺的**不是复位默认**，而是 U-Boot 刚写进去的 base-X image
+（mode 0x101，PLL 与 CDR 都锁着：`status 0xc880bb83 / 0x1000706`）。
+
+⇒ **§78.1/§78.2 的「正常启动没人配过这条 lane」对普通开机仍然成立，但测量窗口自己的
+tftpboot 就把 lane 配了。** 于是：
+
+* 「继承」这条路在窗口里不是「继承复位默认」，而是「继承 U-Boot 刚配好的状态」；
+* run210 的 Q4 因此不是 0/49 而是 **1/49** —— U-Boot 的 net init 写的 image 与我们的
+  参考文件（从 U-Boot 的 `xmac_test xmac_work_mode_set 0 2` 路径量的）**差一个字**。
+
+顺带把厂商 `.ko` 里那份 image 也抠出来比了（`staging/ctl/vendorprofile.py`：
+`uni_mode_eth_1gbase_x_cfg()` @ np_133.ko 0x9574 写的就是那 49 个字）：
+
+| 字 | 偏移 | 厂商 np_133.ko | U-Boot（= 驱动里的参考文件） |
+|---|---|---|---|
+| 0 | 0x00 | 0xe0000004 | 0xe0001004 |
+| 6 | 0x18 | 0x0b016100 | 0x00ff8000 |
+| 21 | 0x54 | 0x00000100 | 0x00000101（多一个 enable 位；厂商在 `uni_serdes_init()` 里另外置上） |
+| 40 | 0xa0 | 0x55555500 | 0x55555555 |
+
+⇒ **厂商 Linux 的 image 与 U-Boot 的 image 不是一回事**（差 4 个字，0x18 和 0xa0 是速率/
+均衡一类的设置）。厂商 Linux 的 2.5G 口一个字节都收不到，U-Boot 的搬了 11 MB ——
+**所以留 U-Boot 那份是对的**，驱动里的参考文件不改。
+
+### 79.3 Q8：U-Boot 确实配了 RTL8226 的 SerDes 侧，而 mainline 从来不碰
+
+两条读数并排：
+
+| devad 0x1e | 复位默认（07:12，U-Boot 还没跑网） | U-Boot 跑完 net init（今天 08:24，mainline attach **之后**） | 变了吗 |
+|---|---|---|---|
+| 0x7588 | 0x00CE | 0x00CE | — |
+| 0x7589 | 0x035A | 0x035A | — |
+| 0x7587 | 0x0002 | 0x0002 | — |
+| 0x75f3 | 0x030D | **0x0002** | **变了** |
+| 0x697a | 0x0003 | **0x0000** | **变了** |
+| 0x6a04 | 0x0503 | **0x0403** | **变了** |
+
+（0x6f10 / 0x6f11 这次没读，下一轮补。）
+
+⇒ **U-Boot 写了 RTL8226 的 SerDes 侧**（0x75f3、0x697a 的 bits 6:5、0x6a04），而
+**mainline 的 PHY 驱动从来不碰这三个**（厂商 Linux 也不碰：那两个导出函数在 np_133.ko
+里没有调用点）。
+
+⇒ 同时注意：**这三行读数是 mainline 的 PHY 驱动 attach 之后读的**，所以也说明
+mainline 的 realtek 驱动那次 soft-reset + config_init **没有破坏** U-Boot 写在 SerDes
+侧的东西（§78 末尾那个悬着的担心，可以划掉一半）。
+
+### 79.4 于是下一轮该问什么
+
+run210 把「PCS 侧编程」验完了。窗口里同时量到的、和 U-Boot 那次成功（11 MB）**不一样**
+的东西，只剩这些：
+
+1. **XPCS**：mainline 写了 DIG_CTRL1 = 0x2000、BMCR = 0x0140，还开了 PCS bypass；
+   而 U-Boot 那次成功里 **XPCS 一个寄存器都没动**（它在复位态：三个都读 0x0000，
+   §77 已记过这件事，当时把它当成「没什么可继承」的证据）。
+2. **XMAC0**：mainline 的 `frame = 0x80000000`、`misc = 0x2200`；U-Boot 留下的是
+   **`frame = 0x80000001`、`misc = 0x00002000`**（run210 的 `lane pre-serdes` 快照就是
+   U-Boot 留下的状态）。**差 2 个 bit。**
+3. **Uni SerDes 的 image**：U-Boot 的 net init 写的与我们参考文件差 1 个字（run211 会用
+   我们的参考文件覆盖它）。
+
+⇒ 下一笔（`staging/ctl/win79.sh`）不再看内核，而是**在 U-Boot 提示符上把 U-Boot 自己
+那条能工作的 lane 状态全部读出来**：
+
+* `md 0x16100000 0x31` —— U-Boot 自己写的 SerDes image（49 个字）；
+* `md 0x1a7c0000 0x8` / `md 0x1a7e0000 0x8` —— XPCS 的 SR-MII 块与 VR_MII 块
+  （BMCR / DIG_CTRL1 / AN_CTRL）；
+* `mii 45read 5 1e <reg>` × 8 —— RTL8226 的 SerDes 侧。
+
+读完之后，下一笔代码改动就有了一个确切的靶子：**让内核里的 lane 状态和 U-Boot 那份
+一模一样**（XPCS 别动、XMAC0 用 U-Boot 的两个词、SerDes image 用 U-Boot 写的那份）。
