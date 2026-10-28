@@ -216,9 +216,14 @@
 			label = "skyworth:green:pon";
 		};
 
-		led-los {
+		los_led: led-los {
 			color = <LED_COLOR_ID_RED>;
-			default-state = "keep";
+			/* "on" is the fail-safe, not the final state: with no fiber the
+			 * panel has to be red before the NPPT driver's first poll.  The
+			 * NPPT owns opsd-gpio (the optical RX signal detect, gpio2 pin 1)
+			 * and turns this lamp off when that line reports light.
+			 */
+			default-state = "on";
 			function = LED_FUNCTION_WAN;
 			gpios = <&gpio0 9 GPIO_ACTIVE_LOW>;
 			label = "skyworth:red:los";
@@ -285,7 +290,7 @@
 	 * then answers a ping from the test PC, which is plugged into that
 	 * jack.
 	 *
-	 * The vendor's own device tree declares the same node the same way
+	 * The vendor's own device tree declares the node the same way
 	 * (decompiled/sk-d840n-community-4.19.dts):
 	 *
 	 *	rgmii@15900000 {
@@ -363,6 +368,16 @@
 	phy-mode = "sgmii";
 	phys = <&pon_serdes>, <&uni_serdes>;
 	phy-names = "serdes", "lan-serdes";
+	/*
+	 * The panel's red LOS lamp follows the optical RX signal detect, not
+	 * the PON SerDes.  On this board the vendor's pon_plat puts the
+	 * optical RX_SD on gpio2 pin 1, and its PON thread treats a low level
+	 * as loss of signal.  The NPPT driver polls it and drives los_led;
+	 * see docs/91.
+	 */
+	leds = <&los_led>;
+	led-names = "los";
+	opsd-gpios = <&gpio2 1 GPIO_ACTIVE_HIGH>;
 	pcs-handle = <&xpcs1>;
 	/* The NP's own memory. Not a guess and not a leftover: in the one U-Boot session
 	 * that carried 11,471,728 bytes across this jack while this PC counted +469,482 of

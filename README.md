@@ -20,6 +20,7 @@ from a real board exists yet**.
 | [`docs/HANDOFF.md`](docs/HANDOFF.md) | the handover: current state, flash order, rollback, and the verified/unverified split |
 | [`docs/07-sk-d840n-status-20261014.md`](docs/07-sk-d840n-status-20261014.md) | the full work log with the measurements behind every claim |
 | `docs/01`–`docs/06` | flash offset map, recovery probes, and flashing procedure |
+| `docs/93-the-photos-and-what-they-say-20261028.md` | board photos, silk-screen inventory, and a full parse of the vendor `board.dtb` — physical reference only, no new datapath claims |
 | `pon/` | what the vendor 4.19 PON modules actually contain |
 
 ## Upstreams

@@ -59,6 +59,14 @@ echo "$out" | grep -A3 '/leds/led-power' | grep -q 'default-state    on' \
 	|| bad "led-power does not default to on - the panel would be dark until something writes sysfs"
 ok "led-power default-state=on"
 
+echo "=== the LOS lamp is fail-safe on ==="
+# The red LOS lamp follows opsd-gpio once the NPPT driver polls it, but a
+# board with no fiber must already be red before that poll.  "keep" here is
+# what kept it dark; "on" is the state this suite now requires.
+echo "$out" | grep -A4 '/leds/led-los' | grep -q 'default-state    on' \
+	|| bad "led-los does not default to on - a board with no fiber would stay dark"
+ok "led-los default-state=on"
+
 echo
 echo "=== the scripts really drive that path ==="
 # Not flash-round.sh: that is the PC-side driver, and the beacon code is not its job. The code
