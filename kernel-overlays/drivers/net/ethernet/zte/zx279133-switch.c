@@ -2758,19 +2758,26 @@ static int zx279133_switch_probe(struct platform_device *pdev)
 	/*
 	 * Did the loader bring this lane up?
 	 *
-	 * Two words say so, and they are the only two that do.
+	 * One word says so, and it is the only one that does: the XMAC
+	 * link word (NPPT + 0x0084), which the loader's own net bring-up
+	 * sets when it configures the outerphy port.  Counted over the
+	 * 1163 boots in the serial log (docs/92 §96.14): in the 68 boots
+	 * where the loader took that port it reads 1, and in the 373 boots
+	 * where it did not it reads 0.  Measured again by hand on
+	 * 2026-10-29 05:11 at the loader's own prompt, before and after
+	 * its net init in one boot:
 	 *
-	 * The XMAC link word (NPPT + 0x0084) is the one the loader's own
-	 * net bring-up sets when it configures the outerphy port.  Counted
-	 * over the 1163 boots in the serial log (docs/92 §96.14): in the 68
-	 * boots where the loader took that port it reads 1, and in the 373
-	 * boots where it did not it reads 0.  Nothing in this driver has
-	 * touched it at this point - the snapshot above is taken before the
-	 * first write of this driver.
+	 *	before:  0x19000084 = 0x00000000
+	 *	after:   0x19000084 = 0x00000001
 	 *
-	 * The PCS's own AN_CTRL says the same thing from the other side:
-	 * zero means the PCS is at its reset value and nobody configured
-	 * it, anything else means somebody did.
+	 * and the PCS's own status word (NPPT + 0x0090) reads 0x380b in
+	 * both - it says which work mode the lane is in, not whether it is
+	 * up (docs/92 §96.14, judgment VV).
+	 *
+	 * The PCS's AN_CTRL is NOT the criterion.  The loader's 2.5G
+	 * recipe leaves it at 0x0000 - that branch runs the lane at a
+	 * fixed rate with the auto-negotiation off - while its 1G recipe
+	 * leaves it at 0x0005 (docs/92 §96.15).
 	 *
 	 * When the loader left the lane up, this driver leaves the PCS
 	 * alone.  That is the whole of judgment TT.  The loader's
@@ -2784,7 +2791,7 @@ static int zx279133_switch_probe(struct platform_device *pdev)
 	 * driver programmed the near end, and at 0x00ad (restarting) the
 	 * next time it was read.
 	 */
-	if (link && an_ctrl > 0) {
+	if (link) {
 		static const struct {
 			int reg;
 			const char *name;
