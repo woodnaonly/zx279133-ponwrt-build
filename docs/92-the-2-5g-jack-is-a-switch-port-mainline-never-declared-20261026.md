@@ -6863,3 +6863,171 @@ run210 把「PCS 侧编程」验完了。窗口里同时量到的、和 U-Boot �
 
 读完之后，下一笔代码改动就有了一个确切的靶子：**让内核里的 lane 状态和 U-Boot 那份
 一模一样**（XPCS 别动、XMAC0 用 U-Boot 的两个词、SerDes image 用 U-Boot 写的那份）。
+
+## 80. run211 上板：image 写进去了（0/49、mode 0x101、PLL/CDR 都锁着），帧还是 0
+
+### 80.1 run211 的结果
+
+```
+[    1.662115] zx279133-switch 19000000.ethernet:switch: Uni SerDes lane set to SGMII mode
+[    1.677454] zx279133-uni-serdes 16100000.phy: Uni SerDes 1G profile written: mode 0x101 already,
+              image differs in 0/49 word(s), status 0xc8b7bb83/0x1000706
+```
+
+* ✔ **profile written** —— 这不是继承，是驱动自己写进去的；
+* ✔ **0/49** —— 写进去的 49 个字与自己写的一致；
+* ✔ **mode 0x101** —— base-X image 的模式字；
+* ✔ **status 0xc8b7bb83 / 0x1000706** —— PLL 锁（bit0）、CDR 锁（bit1）；
+* ✔ 没有 `failed to power on Uni SerDes`（PLL 没锁的话驱动会禁用这个块）。
+
+XPCS 侧与 run210 完全一样（`lane after:` AN_CTRL 0x0000 / DIG_CTRL1 0x2000 /
+BMCR 0x0140），板子活着。
+
+**⇒ 但 flood 之后 `2.5G jack's lane: frames 0 dropped 0` 仍然一动不动，
+XMAC0 的 tx 计数（0x2061）也不动。**
+
+⇒ **「把厂商的 base-X image 写进 Uni SerDes」这一项也排除了**：写对了（0/49、模式字对、
+PLL/CDR 都锁着），帧不来。
+
+### 80.2 于是剩下的差异只有三处，而且都已经量出来了
+
+| # | 块 | mainline 现在 | U-Boot 那次能工作的状态 |
+|---|---|---|---|
+| 1 | **XPCS0** | 编程成 base-X（0x0000 / 0x2000 / 0x0140）+ 开 bypass | **一个寄存器都没动**（U-Boot 没有 XPCS 驱动，厂商自己的 DT 里 `xpcs@1a000000` 是 disabled）—— 具体数值由 `win79.sh` 的 A2/A3 在板子上读 |
+| 2 | **XMAC0** | FRAME_CFG 0x80000000、MISC_CFG 0x2200（厂商 Linux 那份） | FRAME_CFG **0x80000001**、MISC_CFG **0x00002000** ⇒ **已在 `7b66653`（run212）改掉** |
+| 3 | **Uni SerDes 的 image** | 我们的参考文件（写进去 0/49） | U-Boot 的 net init 写的那份，**与我们的差 1 个字** —— 由 `win79.sh` 的 A1 读出并定位 |
+
+⇒ 三个里已经改掉一个（#2，run212 在编译），#1 和 #3 的确切数值等 `win79.sh` 在 U-Boot
+提示符上读回来。
+
+**这一步的意义**：到这一刻，内核里这条 lane 的每一个寄存器都有了一个**已知能工作的
+参照**（U-Boot 搬过 11 471 728 字节的那份），不用再靠反汇编厂商代码去猜 —— 厂商自己的
+Linux 在这个口上一个字节都没收到过，它那套配置带着「已知不工作」的历史。
+
+## 81. 找到了：1G 口通 ⇒ lane 是活的；U-Boot 那条 lane 是 SGMII，不是 base-X
+
+§80.2 那张表里的 #1 现在有答案了，而且答案不是「再读一个寄存器」，是换一条路。
+
+### 81.1 win83（09:11）：同一个内核、同一个板子，插 1G 口 ping 全通
+
+PC 的网线插到「面板从左往右第 2 个 1G 口」，内核还是 run211：
+
+```
+C:\>ping -n 6 -w 1000 192.168.9.1
+Reply from 192.168.9.1: bytes=32 time<1ms TTL=64
+Reply from 192.168.9.1: bytes=32 time<1ms TTL=64
+Reply from 192.168.9.1: bytes=32 time<1ms TTL=64
+Reply from 192.168.9.1: bytes=32 time<1ms TTL=64
+Reply from 192.168.9.1: bytes=32 time<1ms TTL=64
+Reply from 192.168.9.1: bytes=32 time<1ms TTL=64
+```
+
+板子侧同一时刻：
+
+```
+eth0       UP
+lan-cpu0   UP
+lan1       NO-CARRIER
+lan2       UP        (11 个 tx 包)
+lan3       NO-CARRIER
+lan4       NO-CARRIER
+br-lan     UP
+2.5G jack's lane: frames 0 dropped 0
+```
+
+⇒ 面板从左往右第 2 个 1G 口 = netdev **lan2** = DSA port 5 = 内部 PHY 0x0b。
+
+**这一条把范围砍掉一大半**：同一个内核、同一个 SoC、同一条 Uni SerDes lane、同一个
+9132 交换机、同一套 IDM/DSA 桥，插 1G 口时帧是通的。⇒ **SoC 侧没有坏**。「帧一动不动」
+不是 lane 编程失败、不是 IDM 没配、不是 DSA 桥没建起来 —— 那些东西都是好的。
+
+剩下的只能是 **2.5G 铜口那一段**：2.5G 口 → RTL8226 → 这条 lane → 9132 的 outerphy
+（PPU 5）→ IDM → DSA。
+
+### 81.2 win86（09:38）：U-Boot 那条能工作的 lane，是 SGMII
+
+在 U-Boot 提示符上读 PCS 窗口：
+
+```
+=> md 0x1a7c0000 0x8
+0x1a7c0000: 1140 0139 7996 ced0 0020 d000 0002 0000
+=> md 0x1a7e0000 0x8
+0x1a7e0000: 2200 0005 001a 0000 0000 0000 0000 0000
+```
+
+窗口是 4 字节一个寄存器 ⇒：
+
+| 地址 | VEND2 寄存器 | 值 | 含义 |
+|---|---|---|---|
+| 0x1a7c0000 | 0x0000 | **0x1140** | BMCR |
+| 0x1a7c0010 | 0x0004 | **0x0020** | SR-MII 速度字 |
+| 0x1a7e0000 | 0x8000 | **0x2200** | DIG_CTRL1 |
+| 0x1a7e0004 | 0x8001 | **0x0005** | AN_CTRL —— **mode 字段 (bits 2:1) = 2 ⇒ SGMII** |
+
+同一块板、同一个窗口，内核 boot 日志里有前后两份：
+
+```
+lane pre-pcs:  XPCS vend2 AN_CTRL = 0x0005 / DIG_CTRL1 = 0x2200 / BMCR = 0x1140
+lane after:    XPCS vend2 AN_CTRL = 0x0000 / DIG_CTRL1 = 0x2000 / BMCR = 0x0140
+```
+
+**`pre-pcs` 是 U-Boot 留下的活状态，`after` 是我们自己的 base-X 序列写完的。**
+差三处：
+
+1. mode 字段 2 → 0（**SGMII 变成 base-X**）；
+2. BMCR 0x1140 → 0x0140（BIT(12) 被清）；
+3. DIG_CTRL1 0x2200 → 0x2000（丢了 SGMII 的 link status 位与 MAC auto-switch 位）。
+
+### 81.3 为什么 SGMII 才对：远端是 RTL8226，它在等 SGMII
+
+* `phy-zx279133-uni-serdes.c` 的注释原话：「**the far end of this lane - the RTL8226
+  on the 2.5G jack**」。
+* RTL8226（MDIO #1，PHY 地址 5）在 U-Boot 里：`devad 0x07:0x00 = 0x3000`（1000BASE-X PCS
+  的 BMCR）、`devad 0x07:0x01 = 0x0069`（link up、block lock、block sync 都置上）。
+* 同一个 PHY 在内核里（win85）：`devad 0x01:0x01`（BMSR）= **0x0006 ⇒ 铜口链路 UP**；
+  但 `devad 0x07:0x01`（PCS 状态）= **0x002d ⇒ 链路 DOWN**。
+* win85 还试过 `trapall 5`（把 9132 port 5 的所有协议全 trap 到 CPU），lane 计数仍然是 0
+  ⇒ 不是 trap/转发配置的问题。
+
+⇒ **对端在等 SGMII，我们给它发的是 base-X。**
+
+RTL8226 侧剩下的唯一差异是 `devad 0x1e:0x758d`：U-Boot 0x801E，内核 0x8018，差一个 bit；
+而 `0x697a` / `0x7588` / `0x75f3` / `0x6a04` 与 U-Boot **逐位相同** ⇒ RTL8226 的配置不是根因。
+
+### 81.4 还有一件事：13 s 那次 prepare 会复位这块 lane
+
+`zx279133_np_reset_prepare()`（`zx279133-tm.c:10`）在 eth0 打开时把 `SDET_RESET_N` 和
+`PON_RESET_N` 一起清掉再放回。switch 驱动只在 probe（1.66 s）里编程过一次 lane，
+之后没有任何人再动它。⇒ 内核 19 s 起读这个窗口全是 0、写进去也读不回来（win86）。
+
+⇒ **就算 probe 期把 lane 配对了，13 s 那次 prepare 也会把它抹掉。**
+
+时钟不是原因：`clk_summary` 显示 `uni_serdes_pclk` 的 `enable_count = 2`、
+`prepare_count = 2`（时钟是开的）。而 `/dev/mem` 在这块板子上不可用（win87），
+所以分不清「块被复位」和「Uni SerDes 的 enable 位被清导致 CSR 不响应」—— 这个留给
+看门狗的日志去回答。
+
+### 81.5 run213：两件事一起推
+
+1. **按 SGMII 编**：`zx279133_switch_xpcs_1000base_x()` → `zx279133_switch_xpcs_sgmii()`。
+   保留树里 1G profile 的标准 PCS 初始化步骤，把 VEND2 的四个寄存器**整字**写成 U-Boot
+   那份（BMCR 0x1140 / SR-MII 0x0020 / DIG_CTRL1 0x2200 / AN_CTRL 0x0005），
+   并删掉那两个把速度写进 BMCR、把 duplex 也写进 BMCR 的 modify
+   （前一个把速度位写错了寄存器，后一个把 U-Boot 的 0x1140 改成 0x0140）。
+2. **lane 看门狗**：每 2 s 读一次 AN_CTRL，发现不是 0x0005 就把 U-Boot 那四个值重写一遍，
+   并把「重写有没有被接受」打进日志。
+
+两个变量故意放进同一笔，看门狗的日志正好把它们分开：
+
+| 日志 | 结论 |
+|---|---|
+| `lane after: AN_CTRL = 0x0005` | SGMII 编程生效了 |
+| `the lane's PCS took the loader's values again` | 重写被接受 ⇒ 就是 13 s 那次 prepare 抹掉的，lane 能自己活 |
+| `the lane's PCS does not take the loader's values` | 块被复位后不响应 ⇒ 复位的是 SerDes 域本身，得去查 mode 字 / enable 位 |
+| `the lane's PCS lost its configuration (AN_CTRL = 0x0000)` | 读不到就是读不到，不是配置问题 |
+
+### 81.6 win88 的判据
+
+* PC 网线插 **2.5G 口**，`ping -n 6 -w 1000 192.168.9.1` ⇒ 6/6 全通 = 成；
+* 板子 `2.5G jack's lane: frames 0 dropped 0` ⇒ 帧开始走；
+* 若仍不通，以上四条日志至少要给出一条，用来决定下一笔改哪里。

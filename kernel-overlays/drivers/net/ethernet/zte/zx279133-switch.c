@@ -74,6 +74,7 @@
 #include <linux/pm_runtime.h>
 #include <linux/rtnetlink.h>
 #include <linux/slab.h>
+#include <linux/workqueue.h>
 
 #include <net/dsa.h>
 #include <net/dsa_zx279133_rtl8372n.h>
@@ -254,6 +255,29 @@
  * 0x1140 instead of the 0x0140 the base-X state has to be.
  */
 #define ZX279133_XPCS_SR_MII_SPEED_1000BASE_X	BIT(6)
+/*
+ * The lane's four PCS registers as the board's own U-Boot leaves them.
+ *
+ * Read out of the loader's prompt on 2026-10-28 at 0x1a7c0000 and
+ * 0x1a7e0000, in the power cycle whose net bring-up had already brought the
+ * 2.5G jack up and carried 11,471,728 bytes over it:
+ *
+ *	0x1a7c0000	0x1140 0x0139 0x7996 0xced0 0x0020 0xd000 0x0002 0x0000
+ *	0x1a7e0000	0x2200 0x0005 0x001a 0x0000 0x0000 0x0000 0x0000 0x0000
+ *
+ * The window is four bytes per register, so:
+ *	0x1a7c0000		VEND2 0x0000, the BMCR
+ *	0x1a7c0010		VEND2 0x0004, the SR-MII speed word
+ *	0x1a7e0000		VEND2 0x8000, the DIG_CTRL1
+ *	0x1a7e0004		VEND2 0x8001, the AN_CTRL
+ *
+ * The AN_CTRL's mode field (bits 2:1) is 2, i.e. SGMII.
+ */
+#define ZX279133_XPCS_VEND2_SR_MII_SPEED	0x0004
+#define ZX279133_XPCS_UBOOT_BMCR		0x1140
+#define ZX279133_XPCS_UBOOT_SR_MII_SPEED	0x0020
+#define ZX279133_XPCS_UBOOT_DIG_CTRL1		0x2200
+#define ZX279133_XPCS_UBOOT_AN_CTRL		0x0005
 #define ZX279133_XPCS_DUPLEX		BIT(8)
 #define ZX279133_XPCS_PSEQ_MASK		GENMASK(4, 2)
 #define ZX279133_XPCS_PSEQ_IDLE		0x4
@@ -362,6 +386,21 @@ struct zx279133_switch {
 	bool usxgmii;
 	bool dsa_registered;
 	bool datapath_ready;
+	/*
+	 * The lane's PCS, watched.
+	 *
+	 * The lane's configuration lives in the SerDes domain, and the NPPT's
+	 * prepare - which runs when eth0 is opened, thirteen seconds into the
+	 * boot - resets that domain: the switch driver has programmed the lane
+	 * once, at probe, and nothing has programmed it since.  Measured on
+	 * 2026-10-28: the PCS's registers read 0x0000 from the nineteenth
+	 * second on, and a write into them does not stick.
+	 *
+	 * So the lane is watched, and put back when it is found empty.
+	 */
+	struct delayed_work lane_work;
+	bool lane_lost;
+	u32 lane_tries;
 	u16 saved_vend2_bmcr;
 	u16 saved_vend2_an_ctrl;
 	u16 saved_xpcs_bypass;
@@ -448,46 +487,187 @@ static int zx279133_switch_xpcs_init(struct zx279133_switch *priv)
 }
 
 /*
- * The vendor's AN-disabled 1G path.  Re-applied after the XMAC has been
- * programmed.
+ * The lane's PCS, as the board's own U-Boot leaves it.
  *
- * In 1000BASE-X the block reads 0x0000 and 0x2000 on this board
- * (U-Boot, 2026-10-28): no AN interrupt enable, no SGMII link status,
- * PCS mode 0 and no MAC auto-switch.  In SGMII the same two registers
- * read 0x0005 and 0x2200.
+ * Read out of the loader's prompt on 2026-10-28, in the same power cycle
+ * whose net bring-up had already brought the 2.5G jack up and carried
+ * 11,471,728 bytes over it:
+ *
+ *	0x1a7c0000	0x1140 0x0139 0x7996 0xced0 0x0020 0xd000 0x0002 0x0000
+ *	0x1a7e0000	0x2200 0x0005 0x001a 0x0000 0x0000 0x0000 0x0000 0x0000
+ *
+ * The four registers that matter, with their VEND2 addresses (the window
+ * is four bytes per register):
+ *
+ *	VEND2 0x0000	0x1140	the BMCR
+ *	VEND2 0x0004	0x0020	the SR-MII speed word
+ *	VEND2 0x8000	0x2200	the DIG_CTRL1: the MAC auto-switch bit and bit 13
+ *	VEND2 0x8001	0x0005	the AN_CTRL: the PCS mode field (bits 2:1) is 2,
+ *				i.e. SGMII, and the AN interrupt enable is on
+ *
+ * Two of these are what the 1000BASE-X profile this driver used to program
+ * got wrong, and both of them cost the lane:
+ *
+ *   - the PCS mode: 1000BASE-X puts 0 in the mode field, U-Boot has 2
+ *     (SGMII).  The far end of this lane is the RTL8226 on the 2.5G jack
+ *     (phy-zx279133-uni-serdes.c says so), and it answers Clause 45 with a
+ *     1000BASE-X PCS BMCR of 0x3000 and a PCS status of 0x0069 - link up,
+ *     block lock and block sync all set - while U-Boot has the lane up.
+ *     In the kernel the same register reads 0x002d: the link is down.
+ *   - the BMCR: the profile's modify(VEND2 BMCR, 0x2061, BIT(6)) takes
+ *     U-Boot's 0x1140 to 0x0140, i.e. it clears bit 12; and the SR-MII speed
+ *     word, which U-Boot has at 0x0020, is not written at all - the profile
+ *     puts the speed bits into the BMCR instead.
+ *
+ * So the four registers are written whole, and the read-back is printed.
  */
-static int zx279133_switch_xpcs_apply_1000base_x_vend2(struct zx279133_switch *priv)
+static int zx279133_switch_xpcs_apply_sgmii_vend2(struct zx279133_switch *priv)
 {
+	int val;
 	int ret;
 
-	ret = zx279133_switch_xpcs_write(priv, MDIO_MMD_VEND2,
-					  ZX279133_XPCS_VR_MII_AN_CTRL, 0);
+	ret = zx279133_switch_xpcs_write(priv, MDIO_MMD_VEND2, MII_BMCR,
+					  ZX279133_XPCS_UBOOT_BMCR);
 	if (ret)
 		return ret;
 
 	ret = zx279133_switch_xpcs_write(priv, MDIO_MMD_VEND2,
-					  ZX279133_XPCS_VR_MII_DIG_CTRL1, 0x2000);
+					  ZX279133_XPCS_VEND2_SR_MII_SPEED,
+					  ZX279133_XPCS_UBOOT_SR_MII_SPEED);
 	if (ret)
 		return ret;
 
-	/* The duplex bit only; see the note in the profile above. */
-	return zx279133_switch_xpcs_modify(priv, MDIO_MMD_VEND2, MII_BMCR,
-					   ZX279133_XPCS_DUPLEX,
-					   ZX279133_XPCS_DUPLEX);
+	ret = zx279133_switch_xpcs_write(priv, MDIO_MMD_VEND2,
+					  ZX279133_XPCS_VR_MII_DIG_CTRL1,
+					  ZX279133_XPCS_UBOOT_DIG_CTRL1);
+	if (ret)
+		return ret;
+
+	ret = zx279133_switch_xpcs_write(priv, MDIO_MMD_VEND2,
+					  ZX279133_XPCS_VR_MII_AN_CTRL,
+					  ZX279133_XPCS_UBOOT_AN_CTRL);
+	if (ret)
+		return ret;
+
+	/* Read them back: the whole point is what the block holds. */
+	val = zx279133_switch_xpcs_read(priv, MDIO_MMD_VEND2,
+					ZX279133_XPCS_VR_MII_AN_CTRL);
+	dev_dbg(priv->dev,
+		"XPCS0 AN_CTRL = %d, DIG_CTRL1 = %d, BMCR = %d, SR-MII = %d\n",
+		val,
+		zx279133_switch_xpcs_read(priv, MDIO_MMD_VEND2,
+					   ZX279133_XPCS_VR_MII_DIG_CTRL1),
+		zx279133_switch_xpcs_read(priv, MDIO_MMD_VEND2,
+					   MII_BMCR),
+		zx279133_switch_xpcs_read(priv, MDIO_MMD_VEND2,
+					   ZX279133_XPCS_VEND2_SR_MII_SPEED));
+
+	return 0;
 }
 
 /*
- * The 1G profile, from zx279133_xpcs_sgmii_quirk() in
- * drivers/net/ethernet/zte/zx279133-mac.c, with one value changed.
+ * The lane, watched.
  *
- * That quirk programs this PCS as SGMII, i.e. PCS mode 2.  This lane's far
- * end is a 1000BASE-X device, so the PCS mode is 0 here - the one value the
- * vendor's own xpcs_sgmii_mode_conf() and xpcs_1000base_x_conf() differ in
- * (see ZX279133_XPCS_PCS_MODE_1000BASE_X).  Everything else is left exactly
- * as the quirk had it, so a lane that comes up says which of the two was
- * wrong, and a lane that does not says the mode was not the only thing.
+ * The switch driver programs the lane once, at probe.  The NPPT's prepare
+ * then runs - it is what opens eth0, and it is thirteen seconds into the
+ * boot - and it resets the SerDes domain the lane's PCS lives in: measured
+ * on 2026-10-28, the PCS's AN_CTRL reads 0x0005 two and three quarters
+ * seconds into the boot and 0x0000 from the nineteenth second on, and a
+ * write into the block does not stick.
+ *
+ * So the lane is read every two seconds, and put back when it is found
+ * empty.  What this buys, whichever way the next round goes:
+ *
+ *   - if the block takes the writes again, the lane comes up by itself and
+ *     the 2.5G jack gets its frames;
+ *   - if it does not, the log says so, once per loss, and says whether the
+ *     re-apply took.
  */
-static int zx279133_switch_xpcs_1000base_x(struct zx279133_switch *priv)
+static void zx279133_switch_lane_watch(struct work_struct *work);
+static void zx279133_switch_lane_work_cleanup(void *data);
+
+static void zx279133_switch_lane_watch(struct work_struct *work)
+{
+	struct zx279133_switch *priv =
+		container_of(to_delayed_work(work), struct zx279133_switch,
+			     lane_work);
+	int val;
+	int ret;
+
+	val = zx279133_switch_xpcs_read(priv, MDIO_MMD_VEND2,
+					ZX279133_XPCS_VR_MII_AN_CTRL);
+	if (val == ZX279133_XPCS_UBOOT_AN_CTRL) {
+		if (priv->lane_lost) {
+			dev_info(priv->dev,
+				 "the lane's PCS is configured again\n");
+			priv->lane_lost = false;
+		}
+		goto rearm;
+	}
+
+	if (!priv->lane_lost) {
+		if (val < 0)
+			dev_warn(priv->dev,
+				 "the lane's PCS cannot be read (%d); the loader's values are written again\n",
+				 val);
+		else
+			dev_warn(priv->dev,
+				 "the lane's PCS lost its configuration (AN_CTRL = 0x%04x); the loader's values are written again\n",
+				 val & 0xffff);
+		priv->lane_lost = true;
+		priv->lane_tries = 0;
+	}
+
+	ret = zx279133_switch_xpcs_apply_sgmii_vend2(priv);
+	priv->lane_tries++;
+
+	/*
+	 * Did the writes take?
+	 *
+	 * This is the question the next round is about, so it is answered in
+	 * the log and not left to be inferred: the block may be gone (the
+	 * SerDes domain was reset under it) or it may be there and simply
+	 * refuse the writes.
+	 */
+	val = zx279133_switch_xpcs_read(priv, MDIO_MMD_VEND2,
+					ZX279133_XPCS_VR_MII_AN_CTRL);
+	if (val == ZX279133_XPCS_UBOOT_AN_CTRL) {
+		dev_info(priv->dev,
+			 "the lane's PCS took the loader's values again (AN_CTRL = 0x%04x)\n",
+			 val & 0xffff);
+	} else if (ret || !((priv->lane_tries - 1) % 5)) {
+		dev_warn(priv->dev,
+			 "the lane's PCS does not take the loader's values (AN_CTRL = 0x%04x, %d)\n",
+			 val < 0 ? 0xffff : (val & 0xffff), ret);
+	}
+
+rearm:
+	schedule_delayed_work(&priv->lane_work, msecs_to_jiffies(2000));
+}
+
+/*
+ * The lane's PCS, programmed as SGMII.
+ *
+ * The steps below are the tree's own 1G profile (from
+ * zx279133_xpcs_sgmii_quirk() in drivers/net/ethernet/zte/zx279133-mac.c),
+ * which programs this block as SGMII, i.e. PCS mode 2.  What this driver used
+ * to do instead was the 1000BASE-X variant of it, with the mode field and the
+ * BMCR changed - and that is what cost the 2.5G jack its frames:
+ *
+ *   - the lane's far end is the RTL8226 on the 2.5G jack.  phy-zx279133-
+ *     uni-serdes.c says so in as many words ("the far end of this lane - the
+ *     RTL8226 on the 2.5G jack"), and the PHY agrees: in U-Boot it answers
+ *     Clause 45 with a 1000BASE-X PCS BMCR of 0x3000 and a PCS status of
+ *     0x0069 - link up, block lock and block sync all set - while the kernel
+ *     reads 0x002d, i.e. the link is down.
+ *   - U-Boot's lane works, and U-Boot's lane is in SGMII: AN_CTRL = 0x0005,
+ *     whose mode field (bits 2:1) is 2.  The 1000BASE-X profile writes 0
+ *     there.
+ *
+ * So the mode is SGMII, and the four registers are written with the values
+ * U-Boot leaves, whole - see zx279133_switch_xpcs_apply_sgmii_vend2().
+ */
+static int zx279133_switch_xpcs_sgmii(struct zx279133_switch *priv)
 {
 	int val;
 	int ret;
@@ -548,28 +728,12 @@ static int zx279133_switch_xpcs_1000base_x(struct zx279133_switch *priv)
 	if (ret)
 		return ret;
 	/*
-	 * SGMII SerDes stays 1.25G; 10/100/1000 are in-band.  Vendor
-	 * xpcs_sgmii_mode_conf() always programs SR-MII speed 3 / full.
-	 *
-	 * The value here is the one the vendor's 1000BASE-X path uses: its
-	 * xpcs_set_sr_mii_ctrl_speed() (np_133.ko 0x1b910) takes a speed
-	 * number and turns it into exactly one of these bits - 0 -> 0x2000,
-	 * 1 -> 0x40, 2 -> 0x20, 3 -> 0x2020, 4 -> 0x2040, 5 -> 0 - and
-	 * xpcs_1000base_x_conf() calls it with speed 2, i.e. 0x20.
-	 * Read back off the board in U-Boot on 2026-10-28: with XMAC0 set
-	 * to "work in 1000BASE-X mode", the SR-MII speed word at
-	 * 0x1a7c0010 read 0x00000020.  This driver wrote BIT(6) there.
+	 * The BMCR and the SR-MII speed word are written whole, with U-Boot's
+	 * values, after this sequence - so the two modifies that used to be
+	 * here (the SR-MII speed into the BMCR, and the duplex bit into the
+	 * BMCR) are gone: the first of them put the speed bits in the wrong
+	 * register, and the second took U-Boot's BMCR from 0x1140 to 0x0140.
 	 */
-	ret = zx279133_switch_xpcs_modify(priv, MDIO_MMD_VEND2, MII_BMCR,
-					   ZX279133_XPCS_SR_MII_SPEED_MASK,
-					   ZX279133_XPCS_SR_MII_SPEED_1000BASE_X);
-	if (ret)
-		return ret;
-	ret = zx279133_switch_xpcs_modify(priv, MDIO_MMD_VEND2, MII_BMCR,
-					   ZX279133_XPCS_DUPLEX,
-					   ZX279133_XPCS_DUPLEX);
-	if (ret)
-		return ret;
 	ret = zx279133_switch_xpcs_modify(priv, MDIO_MMD_PCS, MII_BMCR,
 					   ZX279133_XPCS_LOW_POWER,
 					   ZX279133_XPCS_LOW_POWER);
@@ -591,53 +755,13 @@ static int zx279133_switch_xpcs_1000base_x(struct zx279133_switch *priv)
 					   ZX279133_XPCS_LOW_POWER, 0);
 	if (ret)
 		return ret;
-	ret = zx279133_switch_xpcs_modify(priv, MDIO_MMD_VEND2,
-					   ZX279133_XPCS_VR_MII_AN_CTRL,
-					   ZX279133_XPCS_PCS_MODE_MASK,
-					   FIELD_PREP(ZX279133_XPCS_PCS_MODE_MASK,
-						     ZX279133_XPCS_PCS_MODE_1000BASE_X));
-	if (ret)
-		return ret;
 
 	/*
-	 * The vendor's 1000BASE-X state on this block, read out of the
-	 * board's own U-Boot on 2026-10-28 with XMAC0 set to "work in
-	 * 1000BASE-X mode":  VR_MII_AN_CTRL = 0x0000 and VR_MII_DIG_CTRL1 =
-	 * 0x2000.  In SGMII mode the same two registers read 0x0005 and
-	 * 0x2200 - so the difference from SGMII is not the PCS mode field
-	 * alone: the SGMII link status bit and the MAC auto-switch bit
-	 * belong to SGMII and have to go as well.
+	 * And now U-Boot's four registers, whole.
 	 */
-	ret = zx279133_switch_xpcs_write(priv, MDIO_MMD_VEND2,
-					  ZX279133_XPCS_VR_MII_AN_CTRL, 0);
+	ret = zx279133_switch_xpcs_apply_sgmii_vend2(priv);
 	if (ret)
 		return ret;
-	ret = zx279133_switch_xpcs_write(priv, MDIO_MMD_VEND2,
-					  ZX279133_XPCS_VR_MII_DIG_CTRL1, 0x2000);
-	if (ret)
-		return ret;
-
-	/*
-	 * Only the duplex bit.  This word is written whole elsewhere, and
-	 * a whole-word write here would clear the SR-MII speed bits this
-	 * profile has just programmed.
-	 */
-	ret = zx279133_switch_xpcs_modify(priv, MDIO_MMD_VEND2, MII_BMCR,
-					   ZX279133_XPCS_DUPLEX,
-					   ZX279133_XPCS_DUPLEX);
-	if (ret)
-		return ret;
-
-	/*
-	 * Read the mode back, so the next round can tell "the mode was set
-	 * and the lane still did not come up" from "the mode never took".
-	 */
-	val = zx279133_switch_xpcs_read(priv, MDIO_MMD_VEND2,
-					ZX279133_XPCS_VR_MII_AN_CTRL);
-	if (val < 0)
-		return val;
-	dev_info(priv->dev, "XPCS0 configured as 1000BASE-X: AN_CTRL = 0x%04x, mode = %u\n",
-		 val, FIELD_GET(ZX279133_XPCS_PCS_MODE_MASK, val));
 
 	return 0;
 }
@@ -1979,6 +2103,17 @@ static int zx279133_switch_probe(struct platform_device *pdev)
 		return -ENOMEM;
 
 	priv->dev = dev;
+	dev_set_drvdata(dev, priv);
+	INIT_DELAYED_WORK(&priv->lane_work, zx279133_switch_lane_watch);
+	/*
+	 * The watcher reads the lane's PCS, so it has to be stopped before
+	 * the driver goes away.  A device action does that without depending
+	 * on the platform driver's remove callback.
+	 */
+	if (devm_add_action_or_reset(dev, zx279133_switch_lane_work_cleanup,
+				      priv))
+		return dev_err_probe(dev, -ENOMEM,
+				     "the lane watcher could not be armed\n");
 
 	priv->service = dev_get_drvdata(dev->parent);
 	if (!priv->service)
@@ -2195,7 +2330,7 @@ static int zx279133_switch_probe(struct platform_device *pdev)
 		 status);
 
 	ret = priv->usxgmii ? zx279133_switch_xpcs_usxgmii(priv) :
-			      zx279133_switch_xpcs_1000base_x(priv);
+			      zx279133_switch_xpcs_sgmii(priv);
 	if (ret) {
 		/*
 		 * Do not give up here.  The read-back below is the evidence
@@ -2205,7 +2340,7 @@ static int zx279133_switch_probe(struct platform_device *pdev)
 		 * status word can be read at all.
 		 */
 		dev_err(dev, "failed to configure XPCS0 for %s mode: %d\n",
-			priv->usxgmii ? "USXGMII" : "1000BASE-X", ret);
+			priv->usxgmii ? "USXGMII" : "SGMII", ret);
 		goto report;
 	}
 
@@ -2219,7 +2354,7 @@ static int zx279133_switch_probe(struct platform_device *pdev)
 
 	if (!priv->usxgmii) {
 		/* Re-apply after the XMAC/SOPC work; the C45 AN bits are lost. */
-		ret = zx279133_switch_xpcs_apply_1000base_x_vend2(priv);
+		ret = zx279133_switch_xpcs_apply_sgmii_vend2(priv);
 		if (ret)
 			dev_err(dev,
 				"failed to re-apply the XPCS0 AN state: %d\n",
@@ -2259,6 +2394,17 @@ report:
 
 	/* And every word of the lane, after this driver's own work. */
 	zx279133_switch_lane_snapshot(priv, "after");
+
+	/*
+	 * Watch the lane from now on.
+	 *
+	 * The NPPT's prepare - which runs when eth0 is opened, thirteen
+	 * seconds into the boot - resets the SerDes domain this lane lives in,
+	 * and nothing has programmed the lane since this probe.  The watcher
+	 * puts the loader's values back when it finds the block empty.
+	 */
+	if (!priv->usxgmii)
+		schedule_delayed_work(&priv->lane_work, msecs_to_jiffies(2000));
 
 	/*
 	 * The four jacks as DSA ports.  The conduit has to be there first: a
@@ -2332,6 +2478,14 @@ err_datapath_put:
 		priv->datapath_held = false;
 	}
 	return ret;
+}
+
+static void zx279133_switch_lane_work_cleanup(void *data)
+{
+	struct zx279133_switch *priv = data;
+
+	/* The watcher reads the lane's PCS; it must not outlive the driver. */
+	cancel_delayed_work_sync(&priv->lane_work);
 }
 
 static const struct of_device_id zx279133_switch_of_match[] = {
