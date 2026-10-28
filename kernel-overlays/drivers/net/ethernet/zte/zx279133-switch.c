@@ -135,8 +135,12 @@
  * xmac_set_speed_sel(): 3 = 1G SGMII, 6 = 2.5G, 4 = 100M, 7 = 10M.
  * The USXGMII image the tree's RTL8372N driver writes leaves the field at
  * 0, which is what that lane runs at, so the two profiles differ here.
+ *
+ * 6 is the rate this port needs when the peer on the jack negotiates 2.5G;
+ * see zx279133_switch_xmac0_speed() for the measurement.
  */
 #define ZX279133_XMAC_SPEED_1G		3
+#define ZX279133_XMAC_SPEED_2P5G	6
 #define ZX279133_XMAC_SPEED_USXGMII	0
 #define ZX279133_SYS_SOFT_RESET		0x2c0004
 #define ZX279133_XMAC0_RESET		BIT(10)
@@ -1193,6 +1197,70 @@ static void zx279133_switch_xmac_program(struct zx279133_switch *priv,
 }
 
 /*
+ * The rate XMAC0 has to run at.
+ *
+ * XMAC0 is the 9132's outerphy port - chip port 5, the one the vendor's own
+ * port table calls "5 = XMAC0" (docs/92 §83.4) - and it faces the RTL8226 on
+ * the panel's 2.5G jack over base-X.  The two ends of that lane have to agree
+ * on the rate, and the loader is the one that knows it: it negotiates with
+ * the peer on the copper side and then programs this MAC to the rate the peer
+ * gave it.
+ *
+ * Measured on this board, two power cycles, the loader's own console and its
+ * TX_CTRL in the same boot (staging/ctl/win119.log, docs/92 §96):
+ *
+ *   peer at 1G    the loader prints "mode_eth_1gbase_x_cfg" and
+ *		  "mac 4 phy status changed: 1000M full-duplex", and leaves
+ *		  TX_CTRL (nppt+0x140000) = 0x60010000
+ *		  -> speed field 31:29 = 3 = 1G
+ *   peer at 2.5G  the loader prints "mode_eth_2p5gbase_x_cfg" and
+ *		  "mac 4 phy status changed: 2.5G full-duplex", and leaves
+ *		  TX_CTRL = 0xc0010000
+ *		  -> speed field 31:29 = 6 = 2.5G
+ *
+ * and the PHY, which mainline never writes, publishes the mode it ended up
+ * in: devad 0x1e reg 0x7580 = 0x9416, whose mode field (bits 5:0) is 0x16 =
+ * 2500BASE-X.
+ *
+ * This driver used to write 1G here whatever the peer had negotiated, so the
+ * 9132 ran a 1G MAC against a 2.5G SerDes.  The PHY's auto-negotiation then
+ * sat in "restart in progress" forever - devad 7 reg 1 = 0x00ad, with the
+ * 0x40 "block lock" bit clear, against the loader's 0x00e9 - and the lane
+ * carried no frame at all (docs/92 §94.6's N3, §95).
+ *
+ * So the rate is taken from the loader's own TX_CTRL: it negotiated it, and
+ * it is the only thing here that knows the peer's rate.  The driver's own
+ * value is used only when the loader left nothing usable there.
+ */
+static u32 zx279133_switch_xmac0_speed(struct zx279133_switch *priv)
+{
+	u32 speed = (priv->saved_xmac_tx & ZX279133_XMAC_SPEED_MASK) >> 29;
+
+	switch (speed) {
+	case ZX279133_XMAC_SPEED_1G:
+	case ZX279133_XMAC_SPEED_2P5G:
+		break;
+	default:
+		/*
+		 * Nothing usable in the loader's word: 0 is the USXGMII value,
+		 * which belongs to the other lane, and the rest are rates this
+		 * port cannot run at.  1G is what this port ran at before, and
+		 * it is the rate the loader itself used when the peer offered
+		 * 1G.
+		 */
+		speed = ZX279133_XMAC_SPEED_1G;
+		break;
+	}
+
+	dev_info(priv->dev,
+		 "the 2.5G jack's MAC (XMAC0) runs at %s; the loader's TX_CTRL speed field was %u\n",
+		 speed == ZX279133_XMAC_SPEED_2P5G ? "2.5G" : "1G",
+		 (priv->saved_xmac_tx & ZX279133_XMAC_SPEED_MASK) >> 29);
+
+	return speed;
+}
+
+/*
  * The lane's own words, read and printed.
  *
  * Every number here is a number the lane itself reports: the NPPT's two
@@ -1380,7 +1448,7 @@ static void zx279133_switch_xmac_configure(struct zx279133_switch *priv,
 
 	zx279133_switch_xmac_program(priv, priv->usxgmii ?
 					     ZX279133_XMAC_SPEED_USXGMII :
-					     ZX279133_XMAC_SPEED_1G);
+					     zx279133_switch_xmac0_speed(priv));
 
 	priv->saved_sopc_duplex =
 		zx279133_switch_nppt_read(priv, ZX279133_XMAC_SOPC_DUPLEX);
