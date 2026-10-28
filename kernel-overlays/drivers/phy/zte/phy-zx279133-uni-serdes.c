@@ -176,11 +176,74 @@ static const u32 zx279133_uni_1gbase_x_profile[] = {
 static_assert(ARRAY_SIZE(zx279133_uni_1gbase_x_profile) ==
 	      ZX279133_UNI_SERDES_PROFILE_WORDS);
 
+/*
+ * The vendor's own 2.5G base-X image, word for word.
+ *
+ * Provenance: np_133.ko's uni_mode_eth_2p5gbase_x_cfg(), read out of the
+ * module with devtools/np133.py image (docs/92 §96.12).  The vendor picks
+ * this image with uni_serdes_init(port, 5) - modes 5 and 6 - and the 1G one
+ * with uni_serdes_init(port, 7) - modes 7 and 8 - so the two are two rate
+ * classes of the same lane and not two variants of one.
+ *
+ * The array above - the one this file used to call "the loader's measured
+ * base-X image" - is this image with two words changed: word 6
+ * (0x00ff8000 here, 0x0b080000 in the vendor's copy) and word 21, the mode
+ * word at 0x16100054 (0x409 here, 0x408 in the vendor's copy; bit 0 is the
+ * enable bit and the driver sets it anyway).
+ *
+ * The mode word is what tells the two apart at runtime: 0x101 is the 1G
+ * image, 0x409 is the 2.5G one.  On 2026-10-29 the driver was seen putting
+ * 0x101 into this block on every boot while the peer at the far end of the
+ * lane - the RTL8226 on the 2.5G jack - was in 2500BASE-X (MMD 0x1e reg
+ * 0x7580 = 0x9416).  Which image is right for which rate is the question
+ * docs/92 §96.12 asks, and this console can answer it by hand:
+ *
+ *	"write 2"	writes the vendor's 2.5G image
+ *
+ * The word 6 difference is not cosmetic: the vendor's 1G image has
+ * 0x0b016100 there and its 2.5G image 0x0b080000, so that word is part of
+ * the rate class, and the board's own measurement (0x00ff8000) is neither.
+ */
+static const u32 zx279133_uni_2p5gbase_x_profile[] = {
+	0xe0000004, 0x4fa8c0a2, 0x013e8604, 0x1f51c8f3,
+	0x00000044, 0x00194000, 0x0b080000, 0x00238220,
+	0x80000100, 0x00050000, 0x0c633830, 0x00000000,
+	0x00000020, 0x00002000, 0x00000000, 0x00ff0000,
+	0x05a85100, 0x00000000, 0x04005b6a, 0x60002220,
+	0x34000003, 0x00000408, 0x00000080, 0x00000000,
+	0x200574a8, 0x00649052, 0x01000000, 0x40007700,
+	0xa9004000, 0x01108002, 0x000000da, 0x800000c8,
+	0x10371037, 0x01000200, 0x00020001, 0x10000000,
+	0x0000001c, 0x802dc000, 0x000000ff, 0x55555500,
+	0x55555555, 0x00555555, 0x30000818, 0x40002000,
+	0x0000000c, 0x01000000, 0x00000080, 0x00010000,
+	0x00000000,
+};
+
+static_assert(ARRAY_SIZE(zx279133_uni_2p5gbase_x_profile) ==
+	      ZX279133_UNI_SERDES_PROFILE_WORDS);
+
+/*
+ * The three images this block can hold, in the order the console numbers
+ * them: 0 = the tree's own 1G image, 1 = the board's measured one, 2 = the
+ * vendor's 2.5G image.
+ */
+static const u32 *zx279133_uni_serdes_image(int sel)
+{
+	switch (sel) {
+	case 1:
+		return zx279133_uni_1gbase_x_profile;
+	case 2:
+		return zx279133_uni_2p5gbase_x_profile;
+	default:
+		return zx279133_uni_1g_profile;
+	}
+}
+
 static void zx279133_uni_serdes_write_profile(struct zx279133_uni_serdes *priv)
 {
 	const u32 *profile = priv->submode == PHY_INTERFACE_MODE_SGMII ?
-		(priv->image_sel ? zx279133_uni_1gbase_x_profile :
-				   zx279133_uni_1g_profile) :
+		zx279133_uni_serdes_image(priv->image_sel) :
 		zx279133_uni_10g_profile;
 	unsigned int i;
 
@@ -448,10 +511,13 @@ static int zx279133_uni_serdes_console_open(struct inode *inode,
  * difference (word 0 was 0xe0001004 here and 0xe0000004 in the loader).
  *
  *	"dump"		print the first 256 words and the two status words,
- *			and the words in which the two 1G images differ
+ *			and the words in which image 0 and the selected image
+ *			differ
  *	"write"		write the image the tree uses again, and set the
  *			enable bit
- *	"write 1"	write the loader's measured base-X image instead
+ *	"write 1"	write the board's measured image (the mode word
+ *			0x409)
+ *	"write 2"	write the vendor's own 2.5G base-X image
  *	"reset"	pulse the rx/tx resets
  */
 static ssize_t zx279133_uni_serdes_console(struct file *file,
@@ -469,6 +535,7 @@ static ssize_t zx279133_uni_serdes_console(struct file *file,
 	buf[count] = '\0';
 
 	if (!strncmp(buf, "dump", 4)) {
+		const u32 *other = zx279133_uni_serdes_image(priv->image_sel);
 		unsigned int diff = 0;
 
 		for (i = 0; i < 256; i++)
@@ -480,15 +547,14 @@ static ssize_t zx279133_uni_serdes_console(struct file *file,
 			readl(priv->serdes + ZX279133_UNI_SERDES_RX_STATUS));
 		pr_info("uni serdes: image %d\n", priv->image_sel);
 		for (i = 0; i < ZX279133_UNI_SERDES_PROFILE_WORDS; i++)
-			if (zx279133_uni_1g_profile[i] !=
-			    zx279133_uni_1gbase_x_profile[i]) {
-				pr_info("uni serdes: word %u differs: own 0x%08x, loader's 0x%08x\n",
-					i, zx279133_uni_1g_profile[i],
-					zx279133_uni_1gbase_x_profile[i]);
+			if (zx279133_uni_1g_profile[i] != other[i]) {
+				pr_info("uni serdes: word %u differs: own 0x%08x, image %d 0x%08x\n",
+					i, zx279133_uni_1g_profile[i], priv->image_sel,
+					other[i]);
 				diff++;
 			}
-		pr_info("uni serdes: %u of %d word(s) differ between the two images\n",
-			diff, ZX279133_UNI_SERDES_PROFILE_WORDS);
+		pr_info("uni serdes: %u of %d word(s) differ between image 0 and image %d\n",
+			diff, ZX279133_UNI_SERDES_PROFILE_WORDS, priv->image_sel);
 		return count;
 	}
 
@@ -499,7 +565,7 @@ static ssize_t zx279133_uni_serdes_console(struct file *file,
 			if (kstrtoint(buf + 6, 0, &which))
 				return -EINVAL;
 		}
-		if (which != 0 && which != 1)
+		if (which < 0 || which > 2)
 			return -EINVAL;
 
 		mutex_lock(&priv->lock);

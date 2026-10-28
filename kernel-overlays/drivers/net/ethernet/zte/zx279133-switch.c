@@ -1285,6 +1285,28 @@ static void zx279133_switch_lane_snapshot(struct zx279133_switch *priv,
 		  "vend2 DIG_CTRL1" },
 		{ MDIO_MMD_VEND2, MII_BMCR, "vend2 BMCR" },
 		{ MDIO_MMD_PCS, MII_BMCR, "pcs BMCR" },
+		/*
+		 * The same four registers on the other MMD.
+		 *
+		 * Which MMD carries this lane's four registers is not a
+		 * question this tree has answered, and the two readings
+		 * disagree: on 2026-10-29 (docs/92 §96.13) the raw words
+		 * at 0x1a7c0000 / 0x1a7c0010 / 0x1a7e0000 / 0x1a7e0004
+		 * were 0x1140 / 0x0020 / 0x2200 / 0x0005 - the loader's
+		 * own values - while a Clause-45 read of MMD 0x1f gave
+		 * exactly those four numbers for the same four register
+		 * numbers, and MMD 0x1e gave 0x0000 for three of them.
+		 *
+		 * So both are printed, from now on, with the register
+		 * numbers: the lane's own numbers are then settled by the
+		 * log of whichever round is next, and not by an argument.
+		 */
+		{ MDIO_MMD_PCS, ZX279133_XPCS_VR_MII_AN_CTRL,
+		  "pcs AN_CTRL" },
+		{ MDIO_MMD_PCS, ZX279133_XPCS_VR_MII_DIG_CTRL1,
+		  "pcs DIG_CTRL1" },
+		{ MDIO_MMD_PCS, ZX279133_XPCS_VEND2_SR_MII_SPEED,
+		  "pcs SR-MII speed" },
 	};
 	struct device *dev = priv->dev;
 	u32 status, link, tx, rx, frame, mode, duplex, misc;

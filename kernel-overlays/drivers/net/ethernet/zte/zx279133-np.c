@@ -1685,6 +1685,43 @@ static ssize_t zx279133_9132_write(struct file *file, const char __user *ubuf,
 	}
 
 	/*
+	 * The same blocks, written.
+	 *
+	 *	"socw 0x1a0c001c 0x0000000e"	write one word, then read it back
+	 *
+	 * Why this is needed: the vendor's own 2.5G recipe for this lane
+	 * (np_133.ko's xpcs_2p5gbase_x_conf()) writes two registers of the
+	 * XPCS0 block - +0x0c001c and +0x040000 - and no Clause-45 read
+	 * reaches either of them yet.  The read-back says whether the write
+	 * took, which is the only thing this round needs to know.
+	 *
+	 * The same whitelist as the reads, and one word at a time: the
+	 * loader's prompt hangs when it walks this block, and the read
+	 * command above is no safer than it looks.
+	 */
+	if (!strcmp(tok, "socw")) {
+		u32 addr, val;
+		void __iomem *map;
+
+		tok = zx279133_9132_next_token(&p);
+		if (!tok || kstrtou32(tok, 0, &addr))
+			return -EINVAL;
+		tok = zx279133_9132_next_token(&p);
+		if (!tok || kstrtou32(tok, 0, &val))
+			return -EINVAL;
+		if (!zx279133_soc_block_ok(addr, 4))
+			return -EINVAL;
+
+		map = devm_ioremap(eth->dev, addr, 4);
+		if (!map)
+			return -ENOMEM;
+		writel(val, map);
+		pr_info("socw reg 0x%08x = 0x%08x\n", addr, readl(map));
+		devm_iounmap(eth->dev, map);
+		return count;
+	}
+
+	/*
 	 * The VLAN action table, which is where the 9132 decides which
 	 * ports a VID belongs to and which of them see it untagged.  It is
 	 * in the NPPT's ERAM, not in the SPA window, so it gets its own
