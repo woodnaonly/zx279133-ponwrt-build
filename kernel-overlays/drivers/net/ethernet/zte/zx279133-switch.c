@@ -400,6 +400,15 @@ struct zx279133_switch {
 	 */
 	struct mii_bus *outer_mdio;
 	/*
+	 * The last raw value of the outerphy's auto-negotiation status, so the
+	 * driver can say when the lane's state changed and what it changed from.
+	 * The word is read with mdiobus_c45_read(), i.e. a real Clause-45
+	 * transaction - the same one the vendor's U-Boot makes with
+	 * "mii 45read 5 7 0x01" - and it is the only register that says whether
+	 * the base-X lane still delivers frames at all.
+	 */
+	u32 outerphy_an_status;
+	/*
 	 * The bus of the switch's own, which the four user ports' PHYs are
 	 * on: DSA port N is at MDIO address N on it, and it translates to
 	 * the SoC's controller #0 address 0x0a..0x0d.
@@ -1545,6 +1554,32 @@ static int zx279133_switch_outerphy_link(struct zx279133_switch *priv)
 			       ZX279133_SWITCH_OUTERPHY_AN_STATUS);
 	if (val < 0)
 		return -1;
+
+	/*
+	 * The raw word, and the four bits that say the lane carries code.
+	 *
+	 * Why this is worth a line in the log: the word reads 0x00e9 under the
+	 * vendor's U-Boot and 0x00ad under mainline, and the difference is
+	 * exactly one of the four bits (docs/92 §78.3, §94.3).  The driver only
+	 * asks for `val & 0xc`, so the difference is invisible in the carrier:
+	 * the port reports "up" either way, which is why this lane could look
+	 * healthy while it carried nothing.  Printing the raw word whenever it
+	 * changes puts that difference in every boot's log, and the change is
+	 * printed because the value is otherwise stable.
+	 *
+	 * Which of the four bits is which has never been decoded, so the
+	 * message does not name them: it prints the mask (0x01 0x08 0x20 0x40)
+	 * and says how many of them are set.
+	 */
+	if (val != (int)priv->outerphy_an_status) {
+		priv->outerphy_an_status = val;
+
+		dev_info(priv->dev,
+			 "the 2.5G jack's PHY: AN status 0x%04x, the lane's four bits (0x01 0x08 0x20 0x40) are 0x%04x%s\n",
+			 val, val & 0x69,
+			 (val & 0x69) == 0x69 ? "" :
+			 " - at least one of them is missing, the lane carries no code");
+	}
 
 	return !!(val & 0xc);
 }

@@ -1851,7 +1851,8 @@ jobs:
               而那个驱动的 `config_init()` 会改写 RTL8226 的 SerDes 选项（devad 0x1e 的
               0x697a / 0x6a04 / 0x6f10 / 0x6f11；厂商的值是 0x0003 / 0x0503 / 0x084a / 0x0021）。
               后果是 devad 7 reg 1 里「block lock / RX valid」那一位掉了：同一块板、同一次上电，
-              厂商 U-Boot 读 0x00e9、mainline 读 0x00ad —— 这条 base-X lane 从此不送帧。
+              厂商 U-Boot 读 0x00e9、mainline 读 0x00ad。**已证的是 phylib 确实动了这颗芯片；
+              它是不是闸门，由下一轮的 N3 判**（docs/92 §94.6–§94.7）。
               这颗 PHY 现在**既不 attach 也不配置**：`ethernet@19000000` 里是
               `fixed-link { speed = <1000>; full-duplex; }`、没有 `phy-handle`，
               端口的链路由驱动自己用 `mdiobus_c45_read(bus, 5, 7, 1)` 从芯片里读；
