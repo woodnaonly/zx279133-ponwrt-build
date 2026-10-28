@@ -1844,22 +1844,23 @@ jobs:
             - `flash-sysupgrade.bin`：同一套 kernel/dtb/root 打成的 sysupgrade tar，可在运行中的系统里用
               LuCI 或 `sysupgrade -n` 刷入（设备侧 `platform.sh` 按分区标签写入，仍然 kernel 最后）。
               注意：换了 kernel 的 sysupgrade 若内核起不来，没有串口就只能上编程器 —— 先用 kexec 试驾
-            - LAN 口走 SR1010 的 NPPT 路径，PHY 是 **RTL8226B**（Realtek）。板级 dts 里那个节点
-              就叫 `rtl8226b: ethernet-phy@5`，`max-speed = <2500>`，并且**故意不给 `compatible`**。
-              原因在 dts 的注释里：SR1010 那个节点写的是
-              `zx279051: ethernet-phy@1 { compatible = "ethernet-phy-id0000.84b9"; }`，
-              而** PHY 节点上的 compatible 会覆盖按 ID 的匹配**——第一次主线试车就是这么把
-              ZX279051 的驱动绑到了一颗 Realtek 芯片上，还往里面写了 ZX279051 的寄存器。
-              不给 compatible 时，phylib 才会拿芯片自己报的 ID 去匹配 `CONFIG_REALTEK_PHY`。
+            - LAN 口走 SR1010 的 NPPT 路径，PHY 是 **RTL8226B**（Realtek），在 MDIO controller #1 的地址 5 上。
+              **板级 dts 里现在没有这颗 PHY 的节点**（2026-10-29 删掉），这是实测的结果，不是偏好：
+              节点在的时候 of_mdiobus 会造出 `14f02000.mdio:05` 这个 phy_device，phylib 按芯片自己报的
+              ID（0x001cc849）匹配到 `CONFIG_REALTEK_PHY`，把**树里的通用 realtek 驱动**绑上去，
+              而那个驱动的 `config_init()` 会改写 RTL8226 的 SerDes 选项（devad 0x1e 的
+              0x697a / 0x6a04 / 0x6f10 / 0x6f11；厂商的值是 0x0003 / 0x0503 / 0x084a / 0x0021）。
+              后果是 devad 7 reg 1 里「block lock / RX valid」那一位掉了：同一块板、同一次上电，
+              厂商 U-Boot 读 0x00e9、mainline 读 0x00ad —— 这条 base-X lane 从此不送帧。
+              这颗 PHY 现在**既不 attach 也不配置**：`ethernet@19000000` 里是
+              `fixed-link { speed = <1000>; full-duplex; }`、没有 `phy-handle`，
+              端口的链路由驱动自己用 `mdiobus_c45_read(bus, 5, 7, 1)` 从芯片里读；
+              铜线侧的自协商由 PHY 自己做（同一颗芯片、同一根线，U-Boot 用它拉过 11 MB）。
+              调试台 `m45`/`m45w` 同样改走 `mdiobus_c45_read/write`（真 Clause-45），
+              因为 phylib 的 C22 间接访问读这颗芯片的私有块 devad 0x1e 只会回 0xdead。
               内核里编进的是 **`CONFIG_REALTEK_PHY=y`**（CI 的 PHY 门查的就是这个），
               **不是** `CONFIG_ZX279051_PHY`：已构建内核里没有任何独立的 `zx279051` token，
               只有 `tzx279051` 这种内核字符串表 tail-merge 的残渣。
-              这一版**并不 attach 那颗 PHY**：`ethernet@19000000` 里放的是
-              `fixed-link { speed = <1000>; full-duplex; }`，并且 `/delete-property/ phy-handle`。
-              依据是 run 53 的实测：SoC 侧的 SerDes 已经逐字继承（`image differs in 0/49 word(s)`），
-              而 phylib 一 attach 就走 `phy_init_hw()`——软复位 RTL8226B 并重跑 realtek 的
-              config_init——之后 `ethtool` 只报 `10baseT`、`Link detected: no`，收发计数全是 0。
-              铜线侧的自协商由 PHY 自己做：同一颗芯片、同一根线，U-Boot 用它拉过 11 MB。
               `02_network` 把 lan 绑在 eth0 上，地址固定 192.168.9.1。
               **关于 PON，修正一句旧说法**：内核不是上游 torvalds/linux，而是
               `CONFIG_EXTERNAL_KERNEL_TREE` 指向的 prepared ZX279133 树

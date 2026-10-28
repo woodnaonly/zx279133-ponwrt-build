@@ -1504,16 +1504,40 @@ static ssize_t zx279133_9132_write(struct file *file, const char __user *ubuf,
 	 *	"m45 5 0x1e 0x758d"		read one register
 	 *	"m45w 5 0x1e 0x7581 0x10"	write one and read it back
 	 *
-	 * phy_read_mmd()/phy_write_mmd() go through the phy_device phylib already
-	 * made for this chip, so whichever Clause-45 access method the bound
-	 * driver declares is the one used here; that is the point - this console
-	 * has to agree with what the PHY's own driver does, not invent a second
-	 * way to address the same registers.
+	 * This console addresses the chip with mdiobus_c45_read()/mdiobus_c45_write(),
+	 * i.e. a real Clause-45 transaction on the bus, and not through phylib's
+	 * phy_device.  Two reasons, and the second one is the reason this verb was
+	 * changed at all:
+	 *
+	 *  1. The device tree no longer has an "ethernet-phy@5" node for this chip,
+	 *     and that is deliberate: with the node there, phylib matched the chip's
+	 *     ID (0x001cc849) against CONFIG_REALTEK_PHY and bound the tree's generic
+	 *     Realtek driver to it, whose config_init() rewrites the RTL8226's SerDes
+	 *     option - devad 0x1e reg 0x697a, 0x6a04, 0x6f10, 0x6f11.  The vendor's
+	 *     own values for those four are 0x0003, 0x0503, 0x084a and 0x0021
+	 *     (docs/92 §78.3), and the lane's "block lock / RX valid" bit in devad 7
+	 *     register 1 was 0x00e9 under the vendor's U-Boot and 0x00ad under
+	 *     mainline, with exactly one of the four good bits missing - the bit that
+	 *     says the base-X lane still delivers frames.  Nothing else in the tree
+	 *     touches this PHY, and the port reads its link straight out of the chip
+	 *     (mdiobus_c45_read(bus, 5, 7, 1), zx279133-switch.c), so no phy_device
+	 *     is needed for anything.
+	 *
+	 *  2. The phylib path cannot read this chip's registers anyway.  The chip
+	 *     registers as a C22 device, so phy_read_mmd() reaches devad 0x1e through
+	 *     the C22 indirect access, and that answers 0xdead for every register in
+	 *     the Realtek-private block - measured 2026-10-29 00:29, all six of
+	 *     0x1e.0x6f10, 0x6f11, 0x6a04, 0x7588, 0x75f3, 0x697a came back 0xdead,
+	 *     while the same boot read devad 0x7 and devad 0x1f perfectly well and
+	 *     the vendor's own U-Boot read the same registers over true Clause-45
+	 *     ("mii 45read 5 1e 0x7588" -> 0x00ce) without trouble.  A true Clause-45
+	 *     transaction is what the vendor's U-Boot does and what this driver's own
+	 *     link read does, so it is what this console does too - one way to address
+	 *     these registers, not two.
 	 */
 	if (!strcmp(tok, "m45") || !strcmp(tok, "m45w")) {
 		bool is_write = tok[3] == 'w';
 		struct device_node *bnp;
-		struct phy_device *pd;
 		struct mii_bus *bus;
 		u32 devad, reg;
 		int ret2;
@@ -1537,19 +1561,16 @@ static ssize_t zx279133_9132_write(struct file *file, const char __user *ubuf,
 		if (!bus)
 			return -ENODEV;
 
-		pd = mdiobus_get_phy(bus, (int)mem);
-		if (!pd)
-			return -ENXIO;
-
 		if (is_write) {
 			tok = zx279133_9132_next_token(&p);
 			if (!tok || kstrtou32(tok, 0, &val))
 				return -EINVAL;
-			ret2 = phy_write_mmd(pd, (int)devad, reg, (u16)val);
+			ret2 = mdiobus_c45_write(bus, (int)mem,
+						 (int)devad, reg, (u16)val);
 			if (ret2)
 				return ret2;
 		}
-		ret2 = phy_read_mmd(pd, (int)devad, reg);
+		ret2 = mdiobus_c45_read(bus, (int)mem, (int)devad, reg);
 		if (ret2 < 0)
 			return ret2;
 		pr_info("outer phy %u devad %#02x reg %#04x = 0x%04x\n",

@@ -427,12 +427,14 @@
 	 * *write* reaches the chip - no soft reset, no config_init replay - and it keeps
 	 * exactly what U-Boot left, including the copper-side auto-negotiation with the
 	 * peer, which is what the 11 MB download already proved works. Reads are a
-	 * different matter and this sentence used to deny them: of_mdiobus still
-	 * instantiates 14f02000.mdio:05, binds RTL8221B-VB-CG, and phy_probe() calls
-	 * .probe and .get_features on that bus, which is how the line above at
-	 * 4.258513s could name the driver at all. phy-handle must NOT come back beside
-	 * this node: the rtl8226b node stays in &mdio1 as the record of what is at
-	 * address 5, and of_mdiobus still reads its ID, but nothing may attach it.
+	 * different matter, and on 2026-10-29 this turned out to be the whole
+	 * defect: of_mdiobus instantiated 14f02000.mdio:05, bound RTL8221B-VB-CG,
+	 * and phy_probe() called .probe and .get_features on that bus - and that
+	 * driver's config_init() rewrites the RTL8226's SerDes option.  So the
+	 * node itself was the problem, not phy-handle: it is gone now (see the
+	 * &mdio1 block below).  Nothing attaches this PHY and nothing configures
+	 * it; the chip keeps exactly what the bootloader left, and the lane's
+	 * "block lock / RX valid" bit comes back.
 	 *
 	 * What still runs is mainline's own zx279133_xmac_sgmii_init() and
 	 * zx279133_wan_port_bringup() from mac_link_up(), so this round separates the
@@ -756,28 +758,39 @@
 	 *    dmesg labels 14f02000.mdio "MDIO id = 1" -> this bus, address 5
 	 *    (SR1010 has its PHY at address 1 on the same bus).
 	 *
-	 * Deliberately **no compatible**: SR1010's node says
-	 * "ethernet-phy-id0000.84b9", which is the ZX279051's ID, and a compatible
-	 * on a PHY node overrides ID matching - the first mainline trial therefore
-	 * bound the ZX279051 driver to a Realtek chip and wrote ZX279051 registers
-	 * into it, which is the plainest explanation for a board that otherwise
-	 * clearly ran (its 9132 ports went down, so mainline had re-initialised the
-	 * SoC) while the one cable that matters stayed dead. Without a compatible,
-	 * phylib matches the ID the chip actually reports against CONFIG_REALTEK_PHY
-	 * ("Currently supports RTL821x/RTL822x"), which is enabled for that reason
-	 * in scripts/configure-sk-d840n.sh, and genphy remains the fallback.
+	 * There is deliberately **no node for it**.  It was there until
+	 * 2026-10-29, and it was the reason this lane never carried a frame:
 	 *
-	 * Also deliberately **no reset-gpios**: derived from the stock bdinfo
-	 * "phy-reset = <0x28>" (global GPIO 40 = &gpio2 8) it is the one number here
-	 * that was never confirmed, and phylib *asserts* a reset GPIO it is told
-	 * about - wrong pin, and the PHY is held in the wrong state instead of
-	 * simply being configured. The PHY is already out of reset when the kernel
-	 * starts on this unit, because the vendor bootloader configured it.
+	 *  - With a node, of_mdiobus makes a phy_device for address 5.  The node
+	 *    carried no compatible, so phylib matched the chip's own ID
+	 *    (0x001cc849) against CONFIG_REALTEK_PHY and bound the tree's generic
+	 *    Realtek driver to it - "RTL8221B-VB-CG 2.5Gbps PHY (C22)", confirmed
+	 *    on the running board.  (A compatible would have been worse: the
+	 *    first mainline trial bound the ZX279051 driver to this Realtek chip
+	 *    and wrote ZX279051 registers into it, docs/92 and this file's
+	 *    history.)
+	 *
+	 *  - That driver's config_init() is rtl822x_set_serdes_option_mode(),
+	 *    and it rewrites the RTL8226's SerDes option: devad 0x1e registers
+	 *    0x697a (mode), 0x6a04, 0x6f10 and 0x6f11.  The vendor's own values
+	 *    for those four are 0x0003, 0x0503, 0x084a and 0x0021 (docs/92
+	 *    §78.3); the tree writes 0 or 2 into 0x697a, 0x0503, 0xd455 and
+	 *    0x8020.
+	 *
+	 *  - The one register that says whether the base-X lane still delivers
+	 *    frames - devad 7 register 1, whose four good bits are link up,
+	 *    block lock, block sync and RX valid (docs/92 §78.3) - reads 0x00e9
+	 *    under the vendor's U-Boot and 0x00ad under mainline: exactly one of
+	 *    those four bits is missing.  Same board, same power cycle, same
+	 *    register, read the same way (mdiobus_c45_read, zx279133-switch.c).
+	 *
+	 * Nothing else in the tree touches this chip and nothing needs to:
+	 * zx279133_switch_outerphy_link() reads its link straight out of the
+	 * chip with mdiobus_c45_read(bus, 5, 7, 1), the port is fixed-link, and
+	 * the chip is already out of reset and configured when the kernel starts,
+	 * because the vendor bootloader configured it (see the note on
+	 * reset-gpios below, which is now moot for the same reason).
 	 */
-	rtl8226b: ethernet-phy@5 {
-		reg = <5>;
-		max-speed = <2500>;
-	};
 };
 
 &xpcs0 {
