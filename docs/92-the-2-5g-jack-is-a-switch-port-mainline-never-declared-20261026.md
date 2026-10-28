@@ -1515,7 +1515,8 @@ RAM kit。顺序做对了一半、错了一半，错的这条正是下一个会�
 
 1. `sh tools/gettrial.sh` → `sh tools/pushtrial.sh`（它打印 `kexec_loaded=` 就是装载证据；**之后不要再碰 pushctl**）
 2. `ssh root@192.168.9.1 "DELAY=240 setsid sh /tmp/trial/arm-exec.sh & echo armed"` ← **`/tmp/trial/arm-exec.sh`**
-3. 等 jump 落地，串口认镜像：`sh tools/concmd.sh 'echo P=$(ls /sys/module/zx279133/parameters | tr "\n" " ")'`
+3. 等 jump 落地，串口认镜像：`sh tools/concmd.sh 'echo P=$(ls /sys/module/zx279133/parameters | tr "
+" " ")'`
    ⇒ 必须看到 `zx279133_eth0_xmac`
 4. `sh tools/xmacswitch.sh 1` 复现今天行为；在 LAN2 上跑 PC↔`192.168.9.1` 与 `tools/g4verify.sh`
    （**回归门**：`eth0` 换窗口不许动 SMAC 那条路）
@@ -2168,7 +2169,8 @@ dtb 里含 `zte,lan-pcs-handle`（run 192 `c38b287` 那对 XPCS0 的配对**在�
    板子上表现为 `ash: write error: Invalid argument`。正确写法是 **`reg 0x142070`**。
    `np.c` 里那段注释（`"reg 140010"`）是错的，照抄必踩。
 2. **`tools/lan1direct.sh` 的判决行会报错方向。** `pc_replies=$(grep -ac 'TTL=' f || echo 0)`
-   在 0 命中时**同时**打印 grep 的 `0` 和兜底的 `0`，于是变量是 `"0\n0"`，`!= 0` 成立，
+   在 0 命中时**同时**打印 grep 的 `0` 和兜底的 `0`，于是变量是 `"0
+0"`，`!= 0` 成立，
    脚本走了"双向都通"那一支。本轮真实结果是 `PC ping replies 0/20`、**RX 为 0**，
    而脚本打印的是 `VERDICT: LAN1 carries both ways`——**判决行不可信，以数字行为准**。
 
@@ -6440,7 +6442,8 @@ mainline 还多做了几件 SGMII 味的动作（`xpcs_exit_sgmii_mode()` 那一
 ```c
 	status = zx279133_switch_nppt_read(priv, ZX279133_NPPT_XPCS0_STATUS);
 	if ((status & 0x3800) == 0x3800) {
-		dev_info(dev, "the bootloader left the PCS link up (0x%04x); inheriting it\n", status);
+		dev_info(dev, "the bootloader left the PCS link up (0x%04x); inheriting it
+", status);
 		zx279133_switch_sopc_publish(priv);
 		zx279133_switch_xmac_configure(priv, true);
 		goto report;
@@ -7850,4 +7853,59 @@ serdes 侧**。
 
 
 
+
+
+
+### 89.2 lan1 的灯永远不亮 —— 第三条独立证据
+
+owner 2026-10-28 16:03 说的：**lan1 的灯从 U-Boot 起就一直是灭的**，插线、换线、
+换到 lan3 再换回来都一样。
+
+这一条比前面两条更硬，因为灯是**交换机自己驱动**的（四个 LAN 灯不走 GPIO，走
+SoC 的 LED 引擎，`led_lan0..lan3` 在厂商的 `/sys/class/leds` 里没有 GPIO，见
+dts 里 leds 节点那段注释）⇒ **端口不上链路，灯就不会亮**。所以"灯不亮"就是
+"这个端口从来没上过链路"，而厂商固件自己也报 `mac 0 link down` ⇒ 两边对上了。
+
+⇒ lan1 硬件不通，现在有三条互相独立的证据：
+
+1. PHY `0x0a` 活着但插线后能力通告寄存器整组为零（reg5 = 0x0000）；
+2. 厂商固件的端口扫描也报 `mac 0 link down`（§89 的判决 J）；
+3. 面板上的 lan1 灯从厂商固件到 mainline 一直不亮。
+
+⇒ 后面不要再在 lan1 上花时间了。
+
+### 89.3 PON 红灯为什么"进系统就灭"
+
+owner 同一句话里还有一条：**U-Boot 时 PON 灯是红的，进系统就灭了**。量过了，
+原因是两件事叠在一起。
+
+**第一，flash 里那份旧镜像根本没有 LOS 驱动。** 板上现在跑的是 flash 里的
+`OpenWrt mainline 6.18.38 sk-d840`（内核时间戳 Oct 23 22:18:27，和 run213 同一
+份），而 LOS 驱动是 10-26 才有的（docs/91）。证据在板上：
+
+```
+$ cat /sys/kernel/debug/gpio | grep -E "gpio-3[0-9]|los"
+gpiochip2: 16 GPIOs, parent: platform/10d10080.gpio, 10d10080.gpio:
+ gpio-3   (                    |skyworth:green:phone) out hi ACTIVE LOW
+```
+
+⇒ **gpio2 pin 1（global gpio-33，厂商 DTS 里的 `opsd-gpio`）根本没人申请** ——
+旧镜像里没有那个驱动。红灯是 `gpio-9`（`skyworth:red:los`，低有效），实测
+`LED=0`、gpio-9 是 `out hi`（=灭）。
+
+**第二，红灯被试跑镜像的信标服务抢去驱动。** `trial-files/usr/libexec/trial-blink`
+的 phase 2 和 phase 4 会把**所有** LED 设备一起开、一起关（所以日志里每 28 秒
+一次 `trial-blink: led skyworth:red:los`），于是这盏"无光=红"的灯在闪。
+
+⇒ 改法（`trial-files/usr/libexec/trial-blink`）：phase 2/4 跳过名字里带 `los`
+的灯。信标的意义是"用户态活着"，绿灯足够；红灯的语义是"没有光"，让信标去闪
+它就是撒谎。**红灯留给 PON 驱动**（docs/91：gpio2 pin 1 为 0 = 无光 = 亮红）。
+
+⇒ **还差一个数：gpio2 pin 1 在 CI 镜像里的真实电平。** 旧镜像里没人申请它，
+量不到；win110 加了一步（读 `/sys/kernel/debug/gpio` 里的 `gpio-33`，再读红灯
+的 brightness）：
+
+- 读到 **0** ⇒ 极性对（无光=红），面板上应该常亮红；
+- 读到 **1** ⇒ 极性反了，dts 里 `opsd-gpios = <&gpio2 1 GPIO_ACTIVE_HIGH>` 要
+  改成 `GPIO_ACTIVE_LOW`。
 

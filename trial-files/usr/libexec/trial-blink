@@ -103,18 +103,31 @@ sleep 1
 
 # 2) all LEDs at once, three times - the signal that does not need the observer to
 #    notice one small green dot.
+#
+#    Except the red LOS lamp.  It is not a beacon: it means "no optical
+#    signal".  The NPPT driver owns it (docs/91) and the owner reads the panel
+#    for the PON state, so a beacon that blinks it turns that statement into a
+#    lie - and the owner reported exactly that: the red lamp dark in the
+#    kernel, lit in the loader, with nothing wrong in between.  The green
+#    lamps still blink, so "userspace is alive" stays readable.
 if [ -n "$leds" ]; then
 	i=0
 	while [ $i -lt 3 ]; do
 		i=$((i + 1))
 		set -- $leds
 		while [ $# -gt 0 ]; do
+			case "$2" in
+			*los*) shift 2; continue ;;
+			esac
 			led_on "$1"
 			shift 2
 		done
 		sleep 0.8
 		set -- $leds
 		while [ $# -gt 0 ]; do
+			case "$2" in
+			*los*) shift 2; continue ;;
+			esac
 			led_off "$1"
 			shift 2
 		done
@@ -156,6 +169,10 @@ fi
 # statement - "the lamp that flashed is not the one you said" - rather than an absence.
 set -- $leds
 while [ $# -gt 0 ]; do
+	# The LOS lamp is skipped here too, for the reason given in phase 2.
+	case "$2" in
+	*los*) shift 2; continue ;;
+	esac
 	kmsg "led $2"
 	i=0
 	while [ $i -lt 3 ]; do
