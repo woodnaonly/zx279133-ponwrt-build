@@ -159,14 +159,13 @@ extern u16 zx279133_tx_port;
  *     the 9132's **CPU port** - the DSA conduit, the lane every 1G jack
  *     reaches the SoC through, and the lane the switch driver programs.
  *
- * So the 2.5G jack needs a DSA port on the 9132 with the RTL8226 as that
- * port's PHY (docs/92 §82.5), and the RTL8226's own SerDes side has to be
- * brought up - the vendor's outerphy sequence, which nothing in this tree
- * runs (zx279133-np.c:1319).
+ * The port has a DSA user port of its own now: it is DSA port 8, it carries
+ * the transport VID 63, and the tagger dispatches on that VID (docs/92 §90).
  *
  * The IDM reports the source port of a frame in the descriptor's word 1, so
- * a frame that came in on this port is the one with source 5 - and there is
- * no DSA user port for it yet (docs/92 §72).
+ * a frame that came in on this port is the one with source 5 - and it is
+ * handed to the conduit with the transport VID 63, which is what the tagger
+ * reads to say which port it came in on.
  */
 #define ZX279133_9132_OUTERPHY_PPU	5
 #define ZX279133_TX_RECLAIM_DELAY_MS	10

@@ -1843,6 +1843,10 @@ static void zx279133_lan_strip_transport_vlan(struct sk_buff *skb, u8 *out_port)
 	 * offset by the same amount: 59 is smac_0, 62 is smac_3.  Measured on
 	 * this bench: with the cable in the jack the driver calls lan4, only
 	 * "txp 4" answers, and 1, 2 and 3 lose 4/4 in both directions.
+	 *
+	 * The 2.5G jack is the fifth user port now: it is the 9132's PPU 5 and
+	 * the DSA port 8, so it carries the VID 63 and the output port the
+	 * frame names is 5 (docs/92 §90).
 	 */
 	*out_port = vid - (ZX279133_LAN_TRANSPORT_VID_MIN -
 			   ZX279133_9132_UNI_PPU_FIRST);

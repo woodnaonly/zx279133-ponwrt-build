@@ -340,11 +340,15 @@ static void zx279133_idm_rx_put_vlan(struct sk_buff *skb, u16 vid)
  *     put on the frame (59..62), and the entry program (PC 10) has removed
  *     the tag itself;
  *   - with the 9132 - a transparent MAC-learning bridge with no VLANs at
- *     all, see docs/16 §2.2 - it is the chip's own port number, 1..4 for
- *     the four UNI jacks.
+ *     all, see docs/16 §2.2 - it is the chip's own port number: 1..4 for
+ *     the four UNI jacks and 5 for the 2.5G jack's port on the 9132, the
+ *     one the vendor calls the outerphy (docs/92 §90).
  *
  * Both mean the same thing, so both are understood here, and both are turned
- * into the transport VID the DSA tagger dispatches on.
+ * into the transport VID the DSA tagger dispatches on.  That VID is 55 + the
+ * DSA user port's number, and the 9132's port p is the DSA port p + 3, so
+ * the chip's port p carries the VID 59 + (p - 1): the four jacks carry 59..62
+ * and the 2.5G jack carries 63.
  */
 static u16 zx279133_idm_rx_lan_vport(u32 word1)
 {
@@ -354,7 +358,7 @@ static u16 zx279133_idm_rx_lan_vport(u32 word1)
 	    port <= ZX279133_LAN_TRANSPORT_VID_MAX)
 		return port;
 	if (port >= ZX279133_9132_UNI_PPU_FIRST &&
-	    port <= ZX279133_9132_UNI_PPU_LAST)
+	    port <= ZX279133_9132_OUTERPHY_PPU)
 		return ZX279133_LAN_TRANSPORT_VID_MIN +
 		       (port - ZX279133_9132_UNI_PPU_FIRST);
 
@@ -362,21 +366,23 @@ static u16 zx279133_idm_rx_lan_vport(u32 word1)
 }
 
 /*
- * Whether the descriptor names the 2.5G jack's lane as the source.
+ * Whether the descriptor names the 2.5G jack's port on the 9132 as the source.
  *
- * The lane is the SoC's XMAC0 (the 9132's SPA memory id 5, the port the
- * vendor calls spa_port_attr_xmac_0), and the IDM reports the source port in
- * the descriptor's word 1, so a frame that arrived on it is the one with
- * source 5 - the number the 9132's chip port 5 also has, which is why the
- * two are the same number and not a coincidence.
+ * That port is the 9132's SPA memory id 5, the one the vendor calls
+ * spa_port_attr_xmac_0, and the IDM reports the source port in the
+ * descriptor's word 1, so a frame that arrived on it is the one with
+ * source 5.
  *
- * There is no DSA user port for this lane yet, and there cannot be one until
- * the question of which MAC is behind it is settled (docs/92 §70.5).  What
- * has to happen to these frames in the meantime is decided in the receive
- * path: bridging them hands them to the tagger as if they had come in on a
- * 1G jack, and the bridge then sends them out of XMAC0 - which is the very
- * lane they came in on.  That loop is what the frame storm was (docs/92
- * §72), so these frames are counted and dropped instead.
+ * These frames are counted, because the count is the evidence that the lane
+ * carries anything at all (docs/92 §72), and they are handed to the conduit
+ * with the transport VID 63, which is what the tagger dispatches on: 55 + the
+ * DSA user port's number, and this port is DSA port 8.
+ *
+ * They used to be dropped instead, because there was no DSA user port for this
+ * lane (docs/92 §70.5), and before that they were bridged as if they had come
+ * in on a 1G jack - the bridge then sent them back out of XMAC0, the very lane
+ * they came in on.  That loop is what the frame storm was (docs/92 §72).  The
+ * DSA port exists now (docs/92 §90), so the frames go where they belong.
  */
 static bool zx279133_idm_rx_is_jack(u32 word1)
 {
@@ -1174,25 +1180,18 @@ deliver_skb:
 				len += zx279133_idm_rx_restore_lan_l2(
 					skb, le32_to_cpu(READ_ONCE(desc->metadata[0])));
 			/*
-			 * A frame from the 2.5G jack's lane.  It has no DSA
-			 * user port yet, and it must not be bridged: the
-			 * bridge would hand it to the tagger as if it had
-			 * come in on a 1G jack, and the bridge would then
-			 * send it back out of XMAC0 - the very lane it came
-			 * in on.  That loop is the frame storm that killed
-			 * the board on run196 (docs/92 §72), so these frames
-			 * are counted - which is also the evidence that the
-			 * lane carries anything at all - and dropped.
+			 * A frame from the 2.5G jack's port on the 9132.
+			 * It has a DSA user port now (docs/92 §90), so it
+			 * is counted here and handed to the conduit with
+			 * the transport VID the tagger dispatches on: 63,
+			 * which is 55 + the DSA port 8 this jack is.
 			 */
-			if (jack_source) {
+			if (jack_source)
 				atomic64_inc(&eth->rx_jack_frames);
-				atomic64_inc(&eth->rx_jack_dropped);
-				zx279133_stats_rx_dropped(eth, ndev);
-				dev_kfree_skb_any(skb);
-				goto release_desc;
-			}
 
 			if (lan_source && !lan_dsa_active) {
+				if (jack_source)
+					atomic64_inc(&eth->rx_jack_dropped);
 				if (eth->lan_ndev)
 					zx279133_stats_rx_dropped(eth, eth->lan_ndev);
 				dev_kfree_skb_any(skb);

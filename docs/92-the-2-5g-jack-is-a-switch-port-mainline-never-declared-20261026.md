@@ -8087,3 +8087,109 @@ DSA 口，这次就把它补上：
    LAN1，看帧能不能到 CPU 口（`/proc/net/dev` 的 lan-cpu0 收包数）。能到，就说明
    交换机侧本来就是通的，缺的确实只是那条 DSA 口；不能到，就把 PPU 5 的 SVID 与
    flood word 在运行期读回来对着看。
+
+## 91. 一条 DSA 口还不够：RX 路径与基树 tagger 的两处硬限制（2026-10-28 18:14 起）
+
+### 91.1 为什么要复查
+
+§90.6 把 outerphy 声明成了 DSA 口 8。推上去（12b6a2c，CI #224）之后没有等镜像，
+而是先把「PC 的帧 → 2.5G 口 → 9132 → CPU → tagger → 桥 → PC」这条链从 RX 到 TX
+整个读了一遍 —— 因为**「口存在」和「帧能过」是两件事**，而上一轮（§72）栽的正是
+后者。
+
+读下来发现三处：**光声明口，帧到不了 CPU。**
+
+### 91.2 判决 Q：IDM 的 RX 路径还在把 2.5G 口的帧丢掉
+
+`zx279133-idm.c` 里认「源端口」的两段：
+
+- `zx279133_idm_rx_lan_vport(word1)`：把描述符 word 1 里的源端口翻成 transport
+  VID。原来只认 transport VID 59..62 和 **PPU 1..4**（四个千兆口）；**PPU 5 不在
+  里面**，于是源端口 5 拿不到 VID，返回 0。
+- `zx279133_idm_rx_is_jack(word1)`：源端口 5 → `jack_source` → 收下、计数、
+  **丢掉**。那段注释写得很直白：「There is no DSA user port for this lane yet」。
+
+这是 §72.4 第 3 条为了止住 run196 的帧风暴而加的（"计数后丢弃，不进桥"）。§90 把口
+补上之后，它就成了拦路虎：**帧根本走不到 conduit，tagger 无从分发。**
+
+顺带把 §72.2 那个环路的成因再说清楚，因为「去掉丢弃」为什么是安全的就写在这里：
+环路的每一圈都从**归属错误**开始 —— 源端口 5 拿不到 VID，就被兜底成
+`ZX279133_LAN_VID`（62），那是 **LAN4** 的 transport VID，于是帧被当成 LAN4 的帧
+交给桥，桥再从 br-lan 的 `lan-cpu0` 把它送回 XMAC0，帧又从 2.5G 口进来。**归属对了
+就没有环**：帧被交给 lan5，桥不会再把它当成自己发出的东西绕一圈。
+
+而现在这条 lane 的拓扑也和 §72 时不同了：§72 时 2.5G 口是**直接挂在 SoC 的
+XMAC0 上**的（模型 B），帧不进 9132，9132 的 FDB 学不到客户端的 MAC，所以回来的
+那份副本只能被泛洪，泛洪又把帧送回 CPU。判决 M 之后，帧是**从 9132 的 PPU 5 进
+来的**，9132 会把客户端的 MAC 学在 PPU 5 上，回送的那份是**已知单播**，只发往
+PPU 5，不会再被 trap 回 CPU。**⇒ 风暴的机制本身已经没有了，丢弃逻辑只是它留下
+的纪念品。**
+
+### 91.3 判决 R：基树的 tagger 有一个写死的端口上限
+
+基树（`cnjn/linux-mainline-zte-zxslc-sr1010` @ 96e5a2413524）里的
+`net/dsa/tag_zx279133_rtl8372n.c`：
+
+```c
+if (unlikely(vid < ZX279133_RTL8372N_TRANSPORT_VID_BASE + ZX279133_RTL8372N_USER_PORT_MIN ||
+             vid > ZX279133_RTL8372N_TRANSPORT_VID_BASE + ZX279133_RTL8372N_USER_PORT_MAX))
+        return NULL;
+port = vid - ZX279133_RTL8372N_TRANSPORT_VID_BASE;
+```
+
+而 `include/net/dsa_zx279133_rtl8372n.h` 里是 `USER_PORT_MIN 4` / `USER_PORT_MAX 7`
+—— 那是 SR1010 的四个用户口。**VID 63 落在范围外，tagger 会把每一帧都退掉**：帧带着
+正确的标签进来，空手出去。
+
+发送方向没有问题：`xmit` 那侧写的是 `BASE + dp->index`，是通用的，端口号从来不
+写死。**要改的只有接收方向那一个上限。**
+
+这是「基树源码读不到」留下的盲区：机器上没有那棵树，`USER_PORT_MAX` 写死成 7 这
+件事就没人知道，四个千兆口全在范围内也看不出问题。今天按 CI 钉的那个 SHA 把基树
+拉下来读了（新增 `devtools/fetchraw.py`，只走 raw.githubusercontent —— 那棵树的
+API contents 端点从这个网络答 404），才发现。**⇒ 以后凡是「树里替我们做了某个
+决定」的地方，都得去树里读一遍。**
+
+### 91.4 判决 S：发送方向本来就是对的
+
+`zx279133_lan_strip_transport_vlan()`：VID → 输出端口 =
+`vid - (VID_MIN - PPU_FIRST)` = `vid - 58`。§90 把
+`ZX279133_LAN_TRANSPORT_VID_MAX` 从 62 改成 63 之后，**VID 63 直接给出输出端口
+5**，也就是 9132 的 outerphy 口 —— 帧从 CPU 出去时描述符里的 outport 就是 5。
+这条路径不用改，只是它之前够不着。
+
+⇒ **三处合起来才是一条完整的路**：RX 认得出源端口 5（§91.2）、tagger 认得下
+VID 63（§91.3）、TX 送得到端口 5（§91.4）。缺任何一处，lan5 都只是一个存在但
+不通的网口名字。
+
+### 91.5 这一轮的改动
+
+| 文件 | 改了什么 |
+|---|---|
+| `zx279133-idm.c` | `zx279133_idm_rx_lan_vport()` 的 PPU 范围从 1..4 放到 1..5（5 → VID 63）；`jack_source` 不再丢弃，只计数，`rx_jack_dropped` 只在真的丢（没有 DSA 通路）时加 |
+| `include/net/dsa_zx279133_rtl8372n.h`（**新增 overlay**） | `ZX279133_RTL8372N_USER_PORT_MAX` 7 → 8。发送方向本来就是通用的，不用动；SR1010 的四个口一个没动 |
+| `zx279133.h` / `zx279133-netdev.c` | 只是把「还没有 DSA 用户口」这类过时的话改成现在的样子 |
+
+**为什么敢改基树的头文件**：CI 是 `cp -a kernel-overlays/. "$KT"/`，overlay 里多一个
+`include/net/dsa_zx279133_rtl8372n.h` 就把树里那一个盖掉，我们写的是树里那份加一个
+数字。改的是**接收方向的接受范围**，不是端口号的映射，所以 SR1010 的行为不变：它
+的四个口还是 4..7，tagger 遇到 VID 63 仍然找不到用户口、仍然退掉。
+
+### 91.6 下一轮量什么（win111 / win112）
+
+判据先写死：
+
+| 判据 | 期望 | 不成立时查哪一处 |
+|---|---|---|
+| `ip -o link show` 里有 `lan5` | 有 | dmesg 里 `the 9132 is serving: ...` 那行 + DSA 的注册错误 |
+| `cat /sys/class/net/lan5/carrier` | 1（前提是对端是活设备） | 驱动报的是 RTL8226 自己的 AN Status（MMD 7 寄存器 1），§90.3 那张表 |
+| `bridge link` / `uci get network.@device[0].ports` 里有 lan5 | 有 | `02_network` 的存在性过滤 |
+| `/sys/kernel/debug/zx279133-9132` 里 `2.5G jack's lane: frames N` | N 在涨 | 涨不了就是帧没到 SoC，去查 PHY 与 SerDes |
+| 同一行里的 `dropped M` | **M 不涨**（#224 那版会一直涨） | RX 路径还在丢 |
+| 把 PC 插到面板 LAN1，`/proc/net/dev` 的 lan5 收包 | 在涨 | tagger 的 VID 上限 / IDM 的源端口映射 |
+| **帧风暴有没有回来** | 没有 | §72.2 的环路；现在归属是对的，若仍有环，说明 9132 侧还有别的地方把帧送回 CPU |
+
+**⇒ #224（只有 DSA 口，RX 还在丢）本身也是一次有用的测量**：它应当量到
+「lan5 出现、carrier 是 1、但 `dropped` 一直涨」；这正好是本节三处改动的对照
+组。#225 才是完整的。
+
