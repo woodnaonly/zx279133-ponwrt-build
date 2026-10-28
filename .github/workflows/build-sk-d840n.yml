@@ -646,6 +646,7 @@ jobs:
             exit 1
           fi
           echo "every ZX279133_* name a driver file uses is reachable for it"
+          echo "and every member of the tree's own enums that a driver file names is in the tree"
 
       - name: Cache dl/
         if: steps.pick.outputs.run == 'true' && inputs.clean_cache != 'true'
@@ -916,7 +917,7 @@ jobs:
           # what a machine without a token reads, and the summary has no
           # ten-lines-per-step ceiling.
           {
-            grep -naE "fatal error:|\berror:|implicit declaration|undefined reference|No such file|not defined" \
+            grep -naE "fatal error:|\berror:|Error [0-9]+|implicit declaration|undefined reference|undefined symbol|No such file|not defined" \
               ../compile-parallel.log 2>/dev/null | head -n 12 || true
           } | while IFS= read -r line; do
             echo "::error::cc: $(printf '%s' "$line" | sed -e 's/%/%25/g' -e 's/#/%23/g' | tr -d '\r')"
@@ -925,7 +926,7 @@ jobs:
             echo "### the compiler's own message (the parallel pass's log)"
             echo
             echo '```'
-            grep -naE "fatal error:|\berror:|implicit declaration|undefined reference|No such file|not defined" \
+            grep -naE "fatal error:|\berror:|Error [0-9]+|implicit declaration|undefined reference|undefined symbol|No such file|not defined" \
               ../compile-parallel.log 2>/dev/null | head -n 20 || true
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
@@ -963,12 +964,36 @@ jobs:
             echo "::notice::the retry finished the build"
             exit 0
           fi
-          # The serial pass names the file that broke, so it is worth having
-          # - but it is bounded like the others, because a build that is
-          # stuck will sit in this pass exactly as long as it sat in the
-          # first one.
-          timeout --kill-after=60s 10m bash -c 'echo $$ > ../compile-make.pid; exec make -j1 V=s' 2>&1 | tee ../compile-v1.log || rc=$?
-          if [ "$rc" != 0 ]; then
+          # The build failed, and that is the answer this step gives: it ends
+          # with the build's own status, whatever the passes below it do.
+          BUILD_RC=$rc
+          # The diagnostic pass: the kernel, and only the kernel, with the
+          # sub-make's own output switched back on.
+          #
+          # Two things were stacked against this, and together they hid the
+          # reason for runs 224 and 225.  OpenWrt's include/verbose.mk sends
+          # a sub-make's stdout AND stderr to /dev/null unless V=s
+          # (SILENT:>/dev/null 2>&1), so the parallel pass's log held the
+          # make chain and none of the compiler's words - the grep over it
+          # could not find an error that was never written down.  And the
+          # serial pass that would have said it ran "make -j1 V=s" from the
+          # TOP of the tree, which walks the whole OpenWrt target order
+          # again; its ten-minute ceiling took it before it ever reached
+          # the kernel.
+          #
+          # So this pass asks for one target - target/linux/compile - and
+          # the kernel's objects from the first pass are still on the disk,
+          # so it goes straight to the file that broke and prints what the
+          # compiler said about it.
+          timeout --kill-after=60s 25m bash -c 'echo $$ > ../compile-make.pid; exec make -j1 V=s target/linux/compile' 2>&1 | tee ../compile-v1.log || DIAG_RC=$?
+          # A pass that says nothing about an error has not found one: the
+          # failure was somewhere else, and the whole tree gets the same
+          # treatment, with the ceiling it always had.
+          if ! grep -qaE "fatal error:|error:|Error [0-9]+|undefined symbol|implicit declaration" ../compile-v1.log; then
+            echo "::notice::the kernel pass named no error - looking at the whole tree"
+            timeout --kill-after=60s 15m bash -c 'echo $$ > ../compile-make.pid; exec make -j1 V=s' 2>&1 | tee -a ../compile-v1.log || DIAG_RC=$?
+          fi
+          {
             # The compiler's own message comes FIRST in the log and the make
             # chain comes LAST, so a `tail` keeps the chain and throws the
             # reason away.  That is how runs 88, 89, 91 and 92 all came back
@@ -976,34 +1001,36 @@ jobs:
             # nothing that said what was wrong with that file: the reason
             # was a missing include, on a line far above the chain.  Emit the
             # reason first and the chain after it.
-            {
-              grep -naE "fatal error:|\berror:|No such file|undefined reference|not defined|implicit declaration" \
-                ../compile-v1.log | head -n 10
-              echo "--- and the make chain ---"
-              grep -naE "Error [0-9]+\$|make.*\*\*\*" ../compile-v1.log | tail -n 8
-            } | while IFS= read -r line; do
-              echo "::error::$(printf '%s' "$line" | sed -e 's/%/%25/g' -e 's/#/%23/g' | tr -d '\r')"
-            done
-            echo "::error::compile rc=$rc; last 6 lines: $(tail -n 6 ../compile-v1.log | tr '\n' ' ' | sed -e 's/%/%25/g' -e 's/#/%23/g')"
-            # And the parallel pass's own last words, which is the part
-            # that says WHERE a build that was killed was when it was
-            # killed.
             #
-            # This is the only channel out of a failed build that this
-            # machine can read: the job log is 403 without a token and
-            # the failure artifact needs a session to download, so a
-            # build that stops for three hours leaves nothing to read
-            # otherwise.  Runs 168 and 169 both ended that way.
-            if [ -s ../compile-parallel.log ]; then
-              {
-                echo "--- the parallel pass, its last 12 lines ---"
-                tail -n 12 ../compile-parallel.log
-              } | while IFS= read -r line; do
-                echo "::error::parallel: $(printf '%s' "$line" | sed -e 's/%/%25/g' -e 's/#/%23/g' | tr -d '\r')"
-              done
-            fi
+            # The pattern carries the capital "Error:" too: the compiler
+            # says "error:" and make says "Error 1", and a pattern that
+            # only knows the lower case misses half of what is in there.
+            grep -naE "fatal error:|\berror:|Error [0-9]+|No such file|undefined reference|undefined symbol|not defined|implicit declaration" \
+              ../compile-v1.log | head -n 10
+            echo "--- and the make chain ---"
+            grep -naE "Error [0-9]+\$|make.*\*\*\*" ../compile-v1.log | tail -n 8
+          } | while IFS= read -r line; do
+            echo "::error::$(printf '%s' "$line" | sed -e 's/%/%25/g' -e 's/#/%23/g' | tr -d '\r')"
+          done
+          echo "::error::compile rc=$BUILD_RC; last 6 lines: $(tail -n 6 ../compile-v1.log | tr '\n' ' ' | sed -e 's/%/%25/g' -e 's/#/%23/g')"
+          # And the parallel pass's own last words, which is the part
+          # that says WHERE a build that was killed was when it was
+          # killed.
+          #
+          # This is the only channel out of a failed build that this
+          # machine can read: the job log is 403 without a token and
+          # the failure artifact needs a session to download, so a
+          # build that stops for three hours leaves nothing to read
+          # otherwise.  Runs 168 and 169 both ended that way.
+          if [ -s ../compile-parallel.log ]; then
+            {
+              echo "--- the parallel pass, its last 12 lines ---"
+              tail -n 12 ../compile-parallel.log
+            } | while IFS= read -r line; do
+              echo "::error::parallel: $(printf '%s' "$line" | sed -e 's/%/%25/g' -e 's/#/%23/g' | tr -d '\r')"
+            done
           fi
-          exit "$rc"
+          exit "$BUILD_RC"
 
       # What the build was doing when it stopped.
       #

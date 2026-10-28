@@ -25,6 +25,7 @@ Run it against the kernel tree *after* the overlay has been copied into it,
 because that is where the two sets have to meet.
 """
 
+import difflib
 import os
 import re
 import sys
@@ -54,6 +55,24 @@ ENUM_BLOCK = re.compile(r'\benum\b[^{]*\{(.*?)\}', re.S)
 ENUM_MEMBER = re.compile(r'\b(ZX279133_[A-Z0-9_]+)\s*(?:=[^,}]*)?\s*(?:,|$)', re.M)
 # An #include, quoted or angled.
 INCLUDE = re.compile(r'^\s*#\s*include\s+([<"])([^>"]+)[>"]', re.M)
+
+# The kernel's own enumerations, and the members a driver file may name.
+#
+# These are the names the tree owns, and a member that does not exist is an
+# undefined identifier: only the compiler can say so, and here that costs a
+# build and a round.  Run 226's lesson: the 2.5G jack's port was declared
+# with PHY_INTERFACE_MODE_1000BASE_X, while the tree spells that member
+# PHY_INTERFACE_MODE_1000BASEX (include/linux/phy.h).  The build failed with
+# an undefined identifier - and the failure was invisible, because OpenWrt's
+# silent sub-make had thrown the compiler's own words away before anybody
+# could read them.
+#
+# The member names are read out of the tree the gate is pointed at, so the
+# check follows the tree rather than a list of names kept here.
+KERNEL_ENUMS = (
+    # (name prefix, the header under the tree root, the enum's name)
+    ('PHY_INTERFACE_MODE_', 'include/linux/phy.h', 'phy_interface_t'),
+)
 
 # Where a header can live, relative to the tree root.
 HEADER_ROOTS = (
@@ -89,6 +108,29 @@ def defines_in(text):
     for block in ENUM_BLOCK.findall(text):
         names.update(ENUM_MEMBER.findall(block))
     return names
+
+
+def enum_members(text, enum_name):
+    """The member names of one named enum in a header.
+
+    None when the header has no such enum - which is not the same as an
+    enum without members, and the gate has to tell the two apart.
+
+    Both shapes count: "enum foo { ... };" and the typedef form the kernel
+    uses for the PHY interface enum, "typedef enum { ... } foo;" - the
+    second one has no name of its own at the opening brace, so the name is
+    looked for after the closing one.
+    """
+    text = strip_comments(text)
+    patterns = (
+        r'\benum\s+' + re.escape(enum_name) + r'\s*\{(.*?)\}',
+        r'\benum\b[^{]*\{(.*?)\}\s*(?:__\w+\s*)*' + re.escape(enum_name) + r'\s*;',
+    )
+    for pattern in patterns:
+        body = re.search(pattern, text, re.S)
+        if body:
+            return set(re.findall(r'\b([A-Z][A-Z0-9_]*)\b', body.group(1)))
+    return None
 
 
 class Tree:
@@ -182,11 +224,13 @@ def main():
     problems = []
     warnings = []
     nsources = 0
+    sources = []
     for fn in sorted(os.listdir(drvdir)):
         if not fn.endswith('.c'):
             continue
         nsources += 1
         path = os.path.join(drvdir, fn)
+        sources.append((fn, path))
         text = strip_comments(tree.text(path))
         used = set(NAME.findall(text))
         visible = tree.reachable_defines(path) | tree.local_defines(path)
@@ -206,6 +250,30 @@ def main():
                 warnings.append('%s: %s is used but not reachable from any '
                                 'header this file includes (it is defined in '
                                 '%s)' % (fn, name, where))
+
+    # The members of the kernel's own enumerations that the driver files
+    # name.  A member that is not in the tree is an undefined identifier.
+    for prefix, header, enum_name in KERNEL_ENUMS:
+        hpath = os.path.join(root, header)
+        if not os.path.isfile(hpath):
+            # No tree to check against: the CI's gate always has one, and
+            # the pre-push check runs against the overlay alone.
+            continue
+        members = enum_members(tree.text(hpath), enum_name)
+        if members is None:
+            warnings.append('%s: the tree has no enum %s - the check on the '
+                            'members of that enum did not run'
+                            % (header, enum_name))
+            continue
+        pattern = re.compile(r'\b(' + re.escape(prefix) + r'[A-Z0-9_]+)\b')
+        for fn, path in sources:
+            used = set(pattern.findall(strip_comments(tree.text(path))))
+            for name in sorted(used - members):
+                near = difflib.get_close_matches(name, sorted(members), n=1)
+                hint = (' - the tree spells it %s' % near[0]) if near else ''
+                problems.append('%s: %s is not a member of the tree\'s enum %s '
+                                '(%s)%s'
+                                % (fn, name, enum_name, header, hint))
 
     print('macrocheck: %d sources, %d headers indexed' % (nsources, len(tree.index)))
     for w in warnings:

@@ -376,6 +376,9 @@
  * in the 0x0a..0x0d run above.
  */
 #define ZX279133_SWITCH_OUTERPHY_ADDR	5
+/* The auto-negotiation block of a Clause 45 PHY, and its status register. */
+#define ZX279133_SWITCH_OUTERPHY_AN_DEVAD	7
+#define ZX279133_SWITCH_OUTERPHY_AN_STATUS	1
 
 struct zx279133_switch {
 	/* The device this driver was probed on.  Two of the helpers below
@@ -1508,11 +1511,19 @@ static int zx279133_switch_uni_link(struct zx279133_switch *priv, int port)
  * The bus is looked up when it is needed rather than at the probe, because
  * the MDIO controller is a separate device and the two are not probed in a
  * fixed order.
+ *
+ * The register is read with mdiobus_c45_read() and not through phylib: the
+ * read is a plain Clause 45 transaction to a device address, and phylib is
+ * not needed for one.  It is also the safer way round: this PHY is not one
+ * of the switch's own, nothing is supposed to configure it (see
+ * port_enable() below), and asking phylib for it would mean asking for a
+ * phy_device that this board has no reason to have - the device tree's
+ * ethernet-phy node is a description, not a promise that phylib made a
+ * device out of it.
  */
 static int zx279133_switch_outerphy_link(struct zx279133_switch *priv)
 {
 	struct device_node *np;
-	struct phy_device *pd;
 	struct mii_bus *bus;
 	int val;
 
@@ -1528,11 +1539,10 @@ static int zx279133_switch_outerphy_link(struct zx279133_switch *priv)
 		priv->outer_mdio = bus;
 	}
 
-	pd = mdiobus_get_phy(priv->outer_mdio, ZX279133_SWITCH_OUTERPHY_ADDR);
-	if (!pd)
-		return -1;
-
-	val = phy_read_mmd(pd, 7, 1);
+	val = mdiobus_c45_read(priv->outer_mdio,
+			       ZX279133_SWITCH_OUTERPHY_ADDR,
+			       ZX279133_SWITCH_OUTERPHY_AN_DEVAD,
+			       ZX279133_SWITCH_OUTERPHY_AN_STATUS);
 	if (val < 0)
 		return -1;
 
@@ -1600,7 +1610,7 @@ static void zx279133_switch_phylink_get_caps(struct dsa_switch *ds, int port,
 		 * which is 1G - the CPU port this board reaches the switch
 		 * through is a 1G SGMII lane.
 		 */
-		__set_bit(PHY_INTERFACE_MODE_1000BASE_X,
+		__set_bit(PHY_INTERFACE_MODE_1000BASEX,
 			  config->supported_interfaces);
 		config->mac_capabilities = MAC_1000FD;
 		return;

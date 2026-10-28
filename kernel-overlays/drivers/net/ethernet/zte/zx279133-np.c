@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
 #include <linux/bitfield.h>
+#include <linux/build_bug.h>
 #include <linux/crc32.h>
 #include <linux/debugfs.h>
 #include <linux/delay.h>
@@ -4145,7 +4146,30 @@ static const u32 zx279133_lan_vport_mf[][ZX279133_SMMU0_WORDS] = {
 	{ 0x1c8c2800, 0x2fc36000, 0x00000a60, 0 },	/* VID 60, lan3 */
 	{ 0x1c8c2800, 0x30636a00, 0x00000a88, 0 },	/* VID 61, lan2 */
 	{ 0x1c8c2800, 0x31037400, 0x00000ab0, 0 },	/* VID 62, lan1 */
+	/*
+	 * VID 63 is the 2.5G jack's, and this entry is the one number in this
+	 * file that is not a measurement.  The factory system has four LAN
+	 * ports and no fifth, so there is nothing on this board to read the
+	 * fifth entry from.  What the four measured entries do is hand out the
+	 * per-port areas in a run: word 1 steps by 0x00a00a00 and word 2 by
+	 * 0x28 from one port to the next, and word 0 - the port attribute word
+	 * - is the same for all four.  This entry continues both runs, which
+	 * is what the factory system would have written had it had a fifth
+	 * port.  If the jack's traffic turns out to be dropped on the way
+	 * out, this entry is the first thing to look at.
+	 */
+	{ 0x1c8c2800, 0x31a37e00, 0x00000ad8, 0 },	/* VID 63, lan5 */
 };
+
+/*
+ * The table is indexed by the transport VID, and a logical port that has no
+ * entry here reads past the end of the array and writes whatever follows it
+ * into the switch's table.  The fifth user port came with the fifth VID and
+ * the entry had to come with it; this makes the second one impossible to
+ * forget.
+ */
+static_assert(ARRAY_SIZE(zx279133_lan_vport_mf) ==
+	      ZX279133_LAN_VPORT_LAST - ZX279133_LAN_VPORT_FIRST + 1);
 
 /* SDT 6: one entry per logical port; bit 31 of word 3 marks a LAN port. */
 #define ZX279133_PORT_TYPE_LAN			BIT(31)

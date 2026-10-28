@@ -4,7 +4,7 @@
     python3 tools/test-macrocheck.py
 
 The gate is the one thing in this pipeline that can say "no" to a build, so
-it has to be right itself - and for three runs it was not, in three
+it has to be right itself - and for four runs it was not, in four
 different ways, each of which cost an hour of CI:
 
   run 124: the gate did not exist, and zx279133-switch.c used a macro it
@@ -13,6 +13,10 @@ different ways, each of which cost an hour of CI:
   run 126: the gate called seventy-one enum members undefined, because it
            only knew about #define, and failed a build over a driver that
            compiles.
+  run 226: the gate did not know about the tree's own enums, so
+           PHY_INTERFACE_MODE_1000BASE_X - a name the tree does not have,
+           the tree spells it PHY_INTERFACE_MODE_1000BASEX - went through
+           the gate and killed the build forty minutes into it.
 
 Each of those is a case below.  The fixture is a throw-away tree in a
 temporary directory; nothing outside it is touched.
@@ -80,6 +84,37 @@ int fixture_local_enum(void)
 }
 """
 
+# The tree's own PHY interface enum, and a driver file that names its
+# members.  Run 226's case: a member that the tree does not have is an
+# undefined identifier, and only the compiler can say so.
+PHY_HEADER = """\
+#ifndef FIXTURE_PHY_H
+#define FIXTURE_PHY_H
+
+enum phy_interface_t {
+	PHY_INTERFACE_MODE_NA,
+	PHY_INTERFACE_MODE_1000BASEX,
+	PHY_INTERFACE_MODE_INTERNAL,
+};
+
+#endif
+"""
+
+USES_PHY_OK = """\
+int fixture_uses_phy_ok(void)
+{
+	return PHY_INTERFACE_MODE_1000BASEX;
+}
+"""
+
+USES_PHY_BAD = """\
+/* The tree spells this one PHY_INTERFACE_MODE_1000BASEX: run 226's mistake. */
+int fixture_uses_phy_bad(void)
+{
+	return PHY_INTERFACE_MODE_1000BASE_X;
+}
+"""
+
 
 def build(root):
     drv = os.path.join(root, "drivers", "net", "ethernet", "zte")
@@ -94,6 +129,14 @@ def build(root):
         fh.write(USES_ENUM_NO_HEADER)
     with open(os.path.join(drv, "local-enum.c"), "w") as fh:
         fh.write(LOCAL_ENUM)
+    inc = os.path.join(root, "include", "linux")
+    os.makedirs(inc)
+    with open(os.path.join(inc, "phy.h"), "w") as fh:
+        fh.write(PHY_HEADER)
+    with open(os.path.join(drv, "uses-phy-ok.c"), "w") as fh:
+        fh.write(USES_PHY_OK)
+    with open(os.path.join(drv, "uses-phy-bad.c"), "w") as fh:
+        fh.write(USES_PHY_BAD)
     return drv
 
 
@@ -108,7 +151,8 @@ def main():
         build(tmp)
         rc, out = run(tmp)
         problems = [l.strip() for l in out.splitlines()
-                    if " is used but " in l or " is defined in " in l]
+                    if " is used but " in l or " is defined in " in l
+                    or " is not a member of " in l]
         names = [l.split(":")[1].strip() for l in problems if ":" in l]
 
         failures = []
@@ -133,6 +177,15 @@ def main():
         want(not any("ZX279133_FIXTURE_ENUM" in n and "uses-no-header" in p
                      for p in problems for n in [p.split(":")[1].strip()]),
              "the macro case must not be confused with the enum case")
+        want(any("uses-phy-bad.c" in p and "PHY_INTERFACE_MODE_1000BASE_X" in p
+                 for p in problems),
+             "a member of the tree's own enum that the tree does not have "
+             "must be reported: this is run 226's case")
+        want(any("PHY_INTERFACE_MODE_1000BASEX" in p and "uses-phy-bad.c" in p
+                 for p in problems),
+             "the report must name the member the tree does have")
+        want(not any("uses-phy-ok.c" in p for p in problems),
+             "a member of the tree's own enum that the tree has must be clean")
 
         for f in failures:
             print("FAIL: %s" % f)

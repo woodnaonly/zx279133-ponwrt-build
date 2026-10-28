@@ -8193,3 +8193,216 @@ VID 63（§91.3）、TX 送得到端口 5（§91.4）。缺任何一处，lan5 �
 「lan5 出现、carrier 是 1、但 `dropped` 一直涨」；这正好是本节三处改动的对照
 组。#225 才是完整的。
 
+
+### 92. 这一轮：把 #224/#225 的编译失败修掉，并且让下一次失败看得见
+
+前面的判决 M/N/O/P/Q/R/S 把 2.5G 口这条 DSA 口补完了（§90、§91），两个提交
+（12b6a2c、cf54f5b）推上去之后，CI #224 和 #225 都挂在 Compile 这一步。**这一节
+记的是：那两个失败到底是什么、为什么看不见、以及这一轮改了什么。**
+
+### 92.1 判决 T：#224/#225 挂在 Compile，但不是超时
+
+量到的：#224 的 initramfs 作业（job 122755684166）、#225 的 initramfs 作业
+（122764588662）和 flash 作业（122764588938），**三个作业的日志都停在第 3388 行，
+而且停在同一句**：
+
+```
+make[3] -C target/linux compile
+```
+
+**推出的**：三个作业在不同机器、不同时刻、同一个地方停下 ⇒ 这不是超时，也不是
+网络抖动，**是一个确定性的编译错误**。内核在编译，`make` 递归进了
+`target/linux/compile`，然后就没有然后了。
+
+### 92.2 判决 U：错误看不见，是两层遮蔽叠在一起
+
+**第一层（OpenWrt 自己）**：CI 用的 ImmortalWrt 分支
+`cnjn/ImmortalWrt@sr1010-zx279133` 的 `include/verbose.mk`：
+
+```make
+    SILENT:=>/dev/null $(if $(findstring w,$(OPENWRT_VERBOSE)),,2>&1)
+    export QUIET:=1
+    SUBMAKE=cmd() { $(SILENT) $(MAKE) -s "$$@" < /dev/null || { ... } } 8>&1 9>&2; cmd
+```
+
+**⇒ 子 make 的 stdout 和 stderr 整个被丢进 /dev/null。** 编译器的话一句都没有写进
+`compile-parallel.log`；日志里只有 make 自己那几行链。所以工作流里那条
+`grep -naE "fatal error:|\berror:|..."` **注定是 0 条** —— 它要找的话从来没被写下来。
+（那个模式还漏了大写的 `Error:`，make 自己喊的是 `Error 1`。）
+
+**第二层（工作流自己）**：本来还有一道保险 —— 失败后跑 `make -j1 V=s` 的串行 pass。
+`V=s` 确实会关掉上面的静默（`verbose.mk` 里 `findstring s,$(OPENWRT_VERBOSE)` 不为空
+时走 `SUBMAKE=$(MAKE) -w`）。但那个 pass 是**从 OpenWrt 的树顶**跑的，要再走一遍
+整个 target 顺序，而它有 10 分钟的上限 —— **它在走到内核之前就被掐了**。
+
+⇒ **#224/#225 的报错从头到尾没有到过任何人的眼前。** 这不是运气问题，是机制问题：
+一个失败既看不见原因，也就没有下一轮可以照着改。
+
+### 92.3 判决 V：真正的编译错是 `PHY_INTERFACE_MODE_1000BASE_X`
+
+基树（`cnjn/linux-mainline-zte-zxslc-sr1010` @ 96e5a2413524）的
+`include/linux/phy.h`：
+
+| 位置 | 内容 |
+|---|---|
+| `phy.h:137` | `PHY_INTERFACE_MODE_1000BASEX,` ← **树里的拼法，没有下划线** |
+| `phy.h:255` | `case PHY_INTERFACE_MODE_1000BASEX:` —— `phy_interface_str()` 把 `"1000base-x"` 映到它 |
+| `phy.h:1792` | `phy_interface_mode_is_8023z()` 用的也是它 |
+| `phylink.h:83` | `MAC_1000FD = BIT(7)` —— 这个名字没问题 |
+
+#224 写的是 `PHY_INTERFACE_MODE_1000BASE_X`（多一个下划线）⇒ **未定义标识符，编译
+必败**。
+
+**DTS 侧不用改**：`phy-mode = "1000base-x"` 是字符串，基树由
+`of_mdiobus_phy_...`/phylink 那条路把它解析成上面那个成员，解析是对的。**错的只有
+C 代码里的枚举拼写。**
+
+### 92.4 判决 W：基树源码落地到本地，以后这类事不用再猜
+
+今天起 `staging/ktree-git/` 里有一棵按 CI 钉住的 SHA 检出的基树
+（`git clone --filter=blob:none --sparse`），sparse 路径包含
+`drivers/net/ethernet/zte`、`drivers/net/dsa`、`drivers/net/phy`、`drivers/net/mdio`、
+`net/dsa`、`include/net`、`include/linux`、`arch/arm64/boot/dts/zte`。
+
+按这棵树逐个核对了 #224/#225 新引入的符号：
+
+| 符号 | 树里的位置 | 结论 |
+|---|---|---|
+| `PHY_INTERFACE_MODE_1000BASEX` | `include/linux/phy.h:137` | ✓（就是 §92.3 那个拼写） |
+| `MAC_1000FD` | `include/linux/phylink.h:83` | ✓ |
+| `mdiobus_get_phy` | `drivers/net/phy/mdio_bus.c:116`，`EXPORT_SYMBOL` @129 | ✓ |
+| `of_mdio_find_bus` | `drivers/net/phy/mdio_bus.c:403`，`EXPORT_SYMBOL` @413 | ✓ |
+| `phy_read_mmd` | `drivers/net/phy/phy-core.c:480`，`EXPORT_SYMBOL` @490 | ✓ |
+| `mdiobus_c45_read` | `drivers/net/phy/mdio_bus.c:688`，`EXPORT_SYMBOL` @698 | ✓（这一轮才用上，见 §92.6） |
+
+**⇒ 这一轮没有第二个未定义符号。** 换句话说，把树读一遍这件事，是这一轮唯一真正
+花在「避免再烧 80 分钟」上的功夫。
+
+### 92.5 判决 X：MF 表的第 5 项本来是越界读，现在补上了，而且绑死了
+
+`zx279133_lan_vport_mf[]`（`zx279133-np.c`）是**按 transport VID 索引**的定长数组，
+索引 = `vport - ZX279133_LAN_VPORT_FIRST` = `vport - 59`。#224 把
+`ZX279133_LAN_TRANSPORT_VID_MAX` 从 62 放到了 63，**而这张表只有 4 项**：
+
+```c
+	{ 0x1c8c2800, 0x2f235600, 0x00000a38, 0 },	/* VID 59, lan4 */
+	{ 0x1c8c2800, 0x2fc36000, 0x00000a60, 0 },	/* VID 60, lan3 */
+	{ 0x1c8c2800, 0x30636a00, 0x00000a88, 0 },	/* VID 61, lan2 */
+	{ 0x1c8c2800, 0x31037400, 0x00000ab0, 0 },	/* VID 62, lan1 */
+```
+
+`zx279133_lan_vport_bringup()` 的循环已经跑到 63 ⇒ **`memcpy` 会读 `mf[4]`**，读到的是
+数组后面紧邻的只读数据，然后把它当成 VID 63 的属性写进 9132 的 MF 扩展表（SDT
+0x7d）。**这一条在编译期不报错，在运行期也只是一次静默的越界读** —— 但它写的正是
+「CPU 发往这个口的帧能不能放行」的那个属性字。
+
+**第 5 项的值是推出来的，不是量到的**：原厂系统只有四个 LAN 逻辑口（59..62），板上
+没有第五个可以读。四个已量到的项是两条等差数列：word 1 每口 +0x00a00a00，word 2
+每口 +0x28，word 0 四个口都一样。所以：
+
+| | word 0 | word 1 | word 2 | word 3 |
+|---|---|---|---|---|
+| VID 59 | 0x1c8c2800 | 0x2f235600 | 0x00000a38 | 0 |
+| VID 60 | 0x1c8c2800 | 0x2fc36000 | 0x00000a60 | 0 |
+| VID 61 | 0x1c8c2800 | 0x30636a00 | 0x00000a88 | 0 |
+| VID 62 | 0x1c8c2800 | 0x31037400 | 0x00000ab0 | 0 |
+| **VID 63（本轮推的）** | 0x1c8c2800 | **0x31a37e00** | **0x00000ad8** | 0 |
+
+**⇒ 如果 lan5 的帧进得来、出不去，第一个要查的就是这张表的第 5 项。**
+
+另外加了一条 `static_assert`，把数组长度和 VID 范围绑在一起：
+
+```c
+static_assert(ARRAY_SIZE(zx279133_lan_vport_mf) ==
+	      ZX279133_LAN_VPORT_LAST - ZX279133_LAN_VPORT_FIRST + 1);
+```
+
+**⇒ 以后再加一个逻辑口却忘了加表项，会在编译期就停下来**，而不是等到运行期写坏
+硬件表。
+
+### 92.6 判决 Y：2.5G 口的链路状态不该经过 phylib
+
+#224 的 `zx279133_switch_outerphy_link()` 是这样读 RTL8226 的：
+
+```c
+	pd = mdiobus_get_phy(priv->outer_mdio, ZX279133_SWITCH_OUTERPHY_ADDR);
+	if (!pd)
+		return -1;
+	val = phy_read_mmd(pd, 7, 1);
+```
+
+**问题**：`mdiobus_get_phy()` 要求地址 5 上**真的有一个 phy_device**。这块板没有理由
+有 —— RTL8226 不是这个交换机的 PHY，DTS 里那个 `ethernet-phy@5` 节点只是一份描述，
+不保证 phylib 真的据此造出一个设备；就算造出来了，让 phylib 去管这颗 PHY 也正好是
+我们不要的（`port_enable()` 里明确写了：那串配置是厂商序列给的，phylib 从零配一遍会
+把能用的状态扔掉）。
+
+**本轮改成直接发 Clause 45 事务**：
+
+```c
+	val = mdiobus_c45_read(priv->outer_mdio, ZX279133_SWITCH_OUTERPHY_ADDR,
+			       ZX279133_SWITCH_OUTERPHY_AN_DEVAD,   /* 7 */
+			       ZX279133_SWITCH_OUTERPHY_AN_STATUS); /* 1 */
+```
+
+树里的 SoC MDIO 驱动实现了 C45：`drivers/net/mdio/mdio-zx279133.c:219-222` 设了
+`bus->read_c45 = zx279133_mdio_read_c45`，而 `mdiobus_c45_read()`（`mdio_bus.c:688`）
+就是它的对外口。**⇒ 不需要 phy_device，不需要 CONFIG_OF_MDIO，也不会碰这颗 PHY 的
+配置。**
+
+### 92.7 这一轮的改动
+
+| 文件 | 改了什么 |
+|---|---|
+| `zx279133-switch.c` | `PHY_INTERFACE_MODE_1000BASE_X` → `PHY_INTERFACE_MODE_1000BASEX`（**修编译错**）；链路状态改用 `mdiobus_c45_read()`，不再经 phylib |
+| `zx279133-np.c` | MF 表补第 5 项（VID 63）；加 `static_assert` 把表长和 VID 范围绑死 |
+| `.github/workflows/build-sk-d840n.yml` | 诊断 pass 改成只打 `target/linux/compile` 的 `V=s` pass（25 分钟），失败在树顶之外再兜底整树（15 分钟）；grep 模式补上大写 `Error` 和 `undefined symbol`；**修了一个潜伏的绿灯 bug**（见 §92.8） |
+| `tools/macrocheck.py` | 门禁扩到**基树自己的枚举成员**：driver 里用到的 `PHY_INTERFACE_MODE_*` 必须在树的 `phy_interface_t` 里存在 |
+| `tools/test-macrocheck.py` | 给上面这条门禁补了自测用例（造一棵假树，把 run 226 那个错放回去，门禁必须报出来） |
+
+### 92.8 CI 侧：让下一次失败看得见
+
+**（一）诊断 pass 改成只打内核。** 原来那个 `make -j1 V=s` 从树顶跑，10 分钟到不了
+内核。现在改成：
+
+```sh
+make -j1 V=s target/linux/compile
+```
+
+**理由**：第一遍并行编译留下的 .o 还在盘上，所以这一遍是增量的，会直接走到那个编译
+不过的文件并把编译器的话打印出来（`V=s` 关掉 `verbose.mk` 的静默）。上限从 10 分钟
+放到 25 分钟；如果这一遍里找不到任何错误，再兜底跑一遍整树（15 分钟），应付失败不
+在内核里的情况。
+
+**（二）grep 模式补全**：加上大写的 `Error [0-9]+`（make 喊的是 `Error 1`）和
+`undefined symbol`（链接期）。
+
+**（三）修了一个潜伏的绿灯 bug。** 原来的写法是诊断 pass 覆盖 `rc`，然后
+`if [ "$rc" != 0 ]` 才打注解、最后 `exit "$rc"`。**⇒ 如果并行编译失败、而串行
+诊断 pass 恰好成功（增量构建里这种事会发生），`rc` 变成 0，这一步就 exit 0 变绿，
+CI 报成功而镜像是坏的。** 现在把构建本身的失败码单独存成 `BUILD_RC`，最后
+`exit "$BUILD_RC"`；诊断 pass 只负责提供文字，不负责决定成败。
+
+**（四）门禁扩到基树枚举。** `tools/macrocheck.py` 原来只管仓库自己的
+`ZX279133_*` 宏，管不到基树的枚举成员 —— 所以 §92.3 那个错**在门禁这一关是过得去
+的**。现在它会读基树 `include/linux/phy.h` 里 `phy_interface_t` 的成员表，逐个核对
+driver 里用到的 `PHY_INTERFACE_MODE_*`。验证方式很直接：造一棵临时树，把旧拼写放
+回去，门禁报：
+
+```
+zx279133-switch.c: PHY_INTERFACE_MODE_1000BASE_X is not a member of the tree's enum phy_interface_t (include/linux/phy.h) - the tree spells it PHY_INTERFACE_MODE_1000BASEX
+```
+
+**⇒ 这一类错从「40 分钟后编译失败、且看不出为什么」变成「几秒钟后门禁拦下」。**
+
+### 92.9 下一轮量什么
+
+判据还是 §91.6 那张表，不重抄；这一轮多两条：
+
+| 判据 | 期望 | 不成立时查哪一处 |
+|---|---|---|
+| dmesg 里有没有 `PHY_INTERFACE_MODE` 相关的抱怨 | 没有 | 门禁没有覆盖到的编译错 |
+| `lan5` 的 carrier 是不是 1 | 1 | `mdiobus_c45_read()` 读回来的值（§92.6）—— 把 RTL8226 的 MMD 7 寄存器 1 的原值读出来看 |
+
+**⇒ #224 那版仍然是这次改动的好对照组**：它应当量到「lan5 出现、carrier 是 1、但
+`dropped` 一直涨」；本轮这版才是三处（RX 归属、tagger 上限、MF 表）都补齐的。
