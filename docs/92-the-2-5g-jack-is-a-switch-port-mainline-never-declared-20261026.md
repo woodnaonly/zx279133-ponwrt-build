@@ -13272,3 +13272,64 @@ ERAM 表 0x1f（flood 组表）里，PPU 1..5 的三组（unknown-DA / broadcast
 
 
 
+
+### 96.39 判决 AD：端到端验收通过（PC 只设 DHCP → 192.168.1.141 → ping 192.168.1.1 五发五收），但路上有三个坑（2026-10-29 21:45 – 22:10）
+
+**结论先说**：方案本身是对的 —— 把 S28lablan 变成镜像脚本之后，PC **清掉所有静态地址、只设 DHCP**，拿到 **192.168.1.141/24**（ONT 的网段），**ping 192.168.1.1 五发五收，1–2 ms，TTL 63**。§96.38 的判决链一字不改。
+
+但从「手工跑通」到「脚本自动跑通」这一段路上，有**三个坑**，每一个都让验收失败，而**板子自己的日志说一切正常**。三个都是新镜像（#264）第一次真跑 S28lablan 时才暴露的。
+
+**坑一：S28lablan 不能自己拉 dnsmasq。**
+
+这个镜像的 dnsmasq 是 **procd 管的**（`/etc/rc.d/S19dnsmasq`，`USE_PROCD=1`）。S26nat 已经起了一个，S28lablan 再 `killall` + 自己 `setsid dnsmasq -C /tmp/dnsmasq-lablan.conf`，第二个抢不到 DHCP socket：
+
+```
+[   68.903922] failed to bind DHCP server socket: Address in use
+```
+
+而那个本该发现这一点的检查 —— `pidof dnsmasq` —— **看到的是还活着的旧进程**，于是报成功，日志接着写「dnsmasq serves 192.168.1.0/24 and 192.168.9.0/24」。**日志说它服务着，租约文件却是空的。**
+
+⇒ 改成**写 UCI + `/etc/init.d/dnsmasq restart`**：只有一个实例，配置也只有一处，procd 知道它是哪一个。
+
+**坑二：这个镜像的 DHCP 段有三个要求（2026-10-29 22:02–22:09 实测）**，少一个就静默地没有 range：
+
+| 要求 | 不满足时的现象 |
+| --- | --- |
+| `interface` 必须是**网络名**（`lan`），不是设备名（`br-lan`） | 段被静默跳过，生成的配置里**一个 dhcp-range 都没有** |
+| 必须 `force 1` | 脚本发现「这个接口上已经有 DHCP 服务器」（光猫就在同一个桥里答 DHCP）⇒ 拒绝出 range |
+| range 是从 **`network.lan` 的地址**算出来的 | 网段不在 ONT 的网段里 ⇒ range 落在错的网段 |
+
+第三条是关键：**板子自己的地址本来就该在 ONT 的网段里**（它是那个网段的网关），所以把 `network.lan.ipaddr` 改成 `$BASE.100/24` 既是 DHCP 需要的，也是方案本来就要的。
+
+改对之后，生成的配置长这样：
+
+```
+dhcp-leasefile=/tmp/dnsmasq.leases
+dhcp-range=set:lan,192.168.1.101,192.168.1.200,255.255.255.0,12h
+dhcp-option=lan,3,192.168.1.100
+dhcp-option=lan,6,192.168.1.100
+```
+
+**坑三：`/etc/labnowan` 的 `off` 读不到。**
+
+那个文件写着「off 就完全关掉上游搜索与 watcher」，值却写在**注释块的最后一行**，而 S26nat 读的是 `head -n 1` —— **读到的是注释**。于是 watcher 照常启动，每分钟去找上游，会把光猫所在的口抢成 WAN：
+
+```
+[   16.106027] trial: nat: br-lan is up; the test PC is in lan4
+```
+
+`lan4` 是**光猫**的口，不是测试 PC 的口 —— 这是 watcher 按「第一个在桥里学到的 MAC」猜的，而那个 MAC 是光猫的。⇒ 把 `off` 提到首行，并让 S26nat 读**第一个非注释行**。
+
+**验收记录**（镜像 #264，TFTP 引导，板子回到 U-Boot 后 `tftpboot 0x89000000 run264.itb` → `bootm`）：
+
+| 时刻 | 板上 | PC |
+| --- | --- | --- |
+| 22:02 | 找到 S28lablan 写配置的三个坑 | |
+| 22:08 | `network.lan.ipaddr=192.168.1.100/24`，`dhcp.lan` 用 `interface='lan'` + `force 1`，`dnsmasq restart` | |
+| 22:09 | 生成配置里出现 `dhcp-range=…192.168.1.101,…192.168.1.200,…` | `ipconfig /renew` → **192.168.1.141/24**（DHCP） |
+| 22:10 | 租约文件里有 `84:47:09:5b:bd:2c 192.168.1.141`；客户端 MAC 已钉在 lan5（PERMANENT）；`192.168.1.141/32 dev lan5` | `ping -n 5 192.168.1.1` → **5/5，1–2 ms，TTL 63** |
+
+**另一条纪律（补上一轮那条）**：**板上的日志说「服务着」不等于它真的在服务。** 这一轮里三个坑的共同形状是 —— 脚本报告成功、配置看起来对、而客户端一个租约都拿不到。判据必须是**从生成的配置里读回来**（`grep dhcp-range /var/etc/dnsmasq.conf.*`）以及**租约文件非空**，不是脚本自己那句 `say`。S28lablan 现在就是这么改的：range 是从 `/var/etc/dnsmasq.conf.*` 里 grep 回来的。
+
+**还有一条**：**这一轮的验收一开始是失败的，而原因是一次断电。** 智能开关在 21:52 把板子切了，板子回到 U-Boot，而 PC 侧刚切成 DHCP ⇒ **PC 丢了 192.168.9.25 ⇒ TFTP 服务器不可达 ⇒ `tftpboot` 只传了一部分就卡住**（`bootm` 报 "Wrong Image Format"）。判据是字节数：成功的传输是 `Bytes transferred = 12171964`，和本地镜像的长度一字不差；失败的那次**日志里根本没有这一行**。⇒ **引导前必须先确认 PC 上还有 192.168.9.25**，而它和「PC 只设 DHCP 的验收状态」是互斥的 —— 验收必须在引导完成之后才开始。
+
