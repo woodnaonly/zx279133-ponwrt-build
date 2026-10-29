@@ -1,0 +1,7 @@
+# The ONT that the trial image is to make reachable from every jack.
+#
+#	ont=192.168.1.1	the ONT's address
+#	ontport=lan4		the jack the ONT is in
+#	ontmac=			leave empty to learn it
+ont=192.168.1.1
+ontport=lan4

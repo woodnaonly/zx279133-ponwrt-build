@@ -78,7 +78,25 @@ dsa_ports() {
 }
 
 in_bridge() {
-	[ -e "/sys/class/net/$1/bridge" ]
+	# The kernel names the link "master" (the old "bridge" link is gone),
+	# and a port that is out of the bridge has neither.
+	[ -e "/sys/class/net/$1/master" ] || [ -e "/sys/class/net/$1/bridge" ]
+}
+
+# The device name of a bridge port number.  The bridge's forwarding
+# database speaks in the bridge's own numbers, and the kernel states the
+# mapping itself every time a port joins or leaves the bridge:
+# "br-lan: port 5(lan5) entered forwarding state".  The number belongs to
+# the port and survives its leaving and coming back.
+dev_of_port() {
+	p=$1
+	d=$(dmesg 2>/dev/null |
+		sed -n "s/.*br-lan: port $p(\([^)]*\)).*/\1/p" |
+		head -n 1)
+	if [ -z "$d" ] && [ -e "/sys/class/net/lan$p" ]; then
+		d="lan$p"
+	fi
+	echo "$d"
 }
 
 has_addr() {
@@ -91,14 +109,19 @@ has_addr() {
 # PHY 0x0b port, which is DSA port 5, which is lan2.
 find_pc_port() {
 	if command -v brctl >/dev/null 2>&1; then
-		# brctl showmacs prints "MAC address  VLAN  Port  Master  flags",
-		# so the port is the third field of a row whose first field is a
-		# MAC address.
+		# This image's brctl showmacs prints "port no  mac addr  is
+		# local?  ageing timer", so the port number is the FIRST
+		# field of a row whose SECOND field is a MAC address - and
+		# the port number is not a device name, it is the bridge's
+		# own number.
 		p=$(brctl showmacs br-lan 2>/dev/null |
-			awk '$1 ~ /^[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:/ {print $3; exit}')
+			awk '$2 ~ /^[0-9a-fA-F][0-9a-fA-F]:/ {print $1; exit}')
 		if [ -n "$p" ]; then
-			echo "$p"
-			return 0
+			d=$(dev_of_port "$p")
+			if [ -n "$d" ]; then
+				echo "$d"
+				return 0
+			fi
 		fi
 	fi
 	echo "lan2"
@@ -632,8 +655,8 @@ else
 	pc)
 		if command -v brctl >/dev/null 2>&1; then
 			p=$(brctl showmacs br-lan 2>/dev/null |
-				awk '$1 ~ /^[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:/ {print $3; exit}')
-			[ -n "$p" ] && WAN="$p"
+				awk '$2 ~ /^[0-9a-fA-F][0-9a-fA-F]:/ {print $1; exit}')
+			[ -n "$p" ] && WAN=$(dev_of_port "$p")
 		fi
 		;;
 	lan1|lan2|lan3|lan4|lan5) ;;

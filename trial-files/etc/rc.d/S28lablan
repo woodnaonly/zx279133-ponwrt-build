@@ -1,0 +1,226 @@
+#!/bin/sh
+# Trial-only: let a client in any jack reach the ONT behind another jack.
+#
+# WHY THIS SCRIPT EXISTS
+#
+# The 9132's switch engine does not carry a frame from one UNI port to
+# another.  That is not a guess - it was measured twice on 2026-10-29:
+#
+#   * a client in the 2.5G jack reaches a client inside the bridge's own
+#     veth port (so a broadcast does get in, and the board's CPU sees it),
+#     but the same client does not reach the ONT in another jack;
+#   * the same client, with a static ARP entry that points 192.168.1.1
+#     straight at the ONT's own MAC address, still loses every packet.
+#     Nothing of the board's is involved in that path, and it still fails,
+#     so the chip itself does not forward from one jack to another.
+#
+# So the board has to do the forwarding itself, and that takes four things:
+#
+#   1. an address in the ONT's subnet on the bridge, plus the kernel's
+#      proxy ARP, so that the board answers the client's "who has the ONT".
+#      The kernel's proxy ARP only answers when the route to the address
+#      it is asked about leaves through a device other than the one the
+#      request arrived on, which is why the route below is a /32 and not
+#      the subnet;
+#   2. that /32 route for the ONT, out of the ONT's own jack.  It has the
+#      same requirement, and it also stops the kernel from calling the
+#      packet a hairpin: it refuses to forward a packet out of the
+#      interface it came in on, and before this route the board's
+#      ForwDatagrams stayed at 0 while the client's packets were arriving
+#      (docs/92 §96.36);
+#   3. the ONT's MAC pinned on that jack.  The board cannot ARP for it
+#      there: a frame the DSA layer sends out of a user port carries the
+#      transport tag, and the ONT does not answer a tagged ARP - which is
+#      why the MAC is learned through the bridge instead, where the same
+#      question is asked with an untagged frame;
+#   4. a route for every client in the ONT's subnet, out of the jack it
+#      is in, or the ONT's reply cannot be handed back to it.  The reply
+#      comes back to the board (the ONT learned the client's address from
+#      the board's own MAC), and the board has to give it to the client
+#      through the client's own jack.
+#
+# WHICH JACK A CLIENT IS IN
+#
+# The bridge's forwarding database says which port learned a MAC, but that
+# port is the bridge's own number, not a device name.  The kernel states
+# the mapping itself, every time a port joins or leaves the bridge:
+#
+#	br-lan: port 5(lan5) entered forwarding state
+#
+# and that mapping survives a port leaving and coming back - the number
+# belongs to the port, and the port keeps it.  So the numbers are read
+# out of the kernel's own log, and the fallback - the DSA jack of the same
+# number, which is what the numbers are on this board - is only used when
+# the log does not say.
+#
+# The client gets its address in the ONT's subnet from the image's own
+# dnsmasq, so a client that asks for a lease gets one and needs no
+# setting at all.  That range has to come FIRST: dnsmasq hands out an
+# address from the first range that fits, and a client that arrives
+# without an address gets the first one, so a range that comes second is
+# a range that is never used.
+#
+# /etc/labont names the ONT.  Everything in it is optional:
+#
+#	ont=192.168.1.1	the ONT's address
+#	ontport=lan4		the jack the ONT is in
+#	ontmac=			leave empty to learn it
+#
+# The work is done by a script of its own, in the background: the init
+# system waits for this one, and a script that never returns is a script
+# that stops everything behind it from starting.  setsid gives that child
+# a session of its own, which is what nohup was standing in for - and
+# nohup is not in this image: the busybox here has no nohup applet.
+
+cat > /tmp/lablan.sh <<'LABEOF'
+#!/bin/sh
+ONT=192.168.1.1
+ONTPORT=lan4
+ONTMAC=""
+BRIDGE=br-lan
+
+if [ -f /etc/labont ]; then
+	. /etc/labont
+fi
+[ -n "$ONT" ] || exit 0
+
+BASE=${ONT%.*}
+
+say() {
+	echo "trial: lablan: $*" >/dev/kmsg
+}
+
+# The device name of a bridge port number, as the kernel states it.
+dev_of_port() {
+	p=$1
+	d=""
+	if command -v dmesg >/dev/null 2>&1; then
+		d=$(dmesg 2>/dev/null |
+			sed -n "s/.*br-lan: port $p(\([^)]*\)).*/\1/p" |
+			head -n 1)
+	fi
+	if [ -z "$d" ] && [ -e "/sys/class/net/lan$p" ]; then
+		d="lan$p"
+	fi
+	echo "$d"
+}
+
+# A route for every client in the ONT's subnet, out of the jack it is in.
+refresh_clients() {
+	# The MAC of every learned address, and the jack it was learned on.
+	brctl showmacs "$BRIDGE" 2>/dev/null |
+	while read port mac rest; do
+		case "$mac" in
+		??:??:??:??:??:??) ;;
+		*) continue ;;
+		esac
+		dev=$(dev_of_port "$port")
+		[ -n "$dev" ] || continue
+		echo "$mac $dev"
+	done > /tmp/lablan-fdb
+
+	ip neigh show dev "$BRIDGE" 2>/dev/null |
+	while read ip ll mac state rest; do
+		case "$ip" in
+		"$BASE".*) ;;
+		*) continue ;;
+		esac
+		[ -n "$mac" ] || continue
+		dev=$(awk -v mac="$mac" '$1 == mac {print $2; exit}' /tmp/lablan-fdb)
+		[ -n "$dev" ] || continue
+		ip route replace "$ip"/32 dev "$dev" 2>/dev/null
+		say "$ip is in $dev"
+	done
+}
+
+# netifd builds the bridge a moment after the network init returns.
+i=0
+while [ $i -lt 30 ]; do
+	[ -e "/sys/class/net/$BRIDGE" ] && break
+	i=$((i + 1))
+	sleep 1
+done
+[ -e "/sys/class/net/$BRIDGE" ] || {
+	say "there is no $BRIDGE"
+	exit 0
+}
+
+# The ONT's jack has to be in the bridge: a jack that is out of it is a
+# routed port, and the ONT behind it answers DHCP - which is how the
+# watcher in S26nat took this very jack for the WAN on 2026-10-29 and
+# left the board without a bridge at all.
+ip link set "$ONTPORT" master "$BRIDGE" 2>/dev/null
+ip link set "$ONTPORT" up 2>/dev/null
+
+# The board's own address in the ONT's subnet: the proxy ARP answers for
+# addresses in a subnet the board is in.
+ip addr replace "$BASE.100/24" dev "$BRIDGE" 2>/dev/null
+
+# The ONT's MAC, learned through the bridge.  This has to happen before
+# the /32 route below is in place: with that route the ARP would leave
+# through the ONT's own jack, and the DSA layer tags the frames it sends
+# out of a user port, and the ONT does not answer a tagged ARP.  Through
+# the bridge the same question is asked from the CPU port, which is
+# untagged, and the ONT answers.
+if [ -z "$ONTMAC" ]; then
+	ip neigh flush dev "$BRIDGE" 2>/dev/null
+	ping -c 1 -W 1 "$ONT" >/dev/null 2>&1
+	ONTMAC=$(ip neigh show dev "$BRIDGE" 2>/dev/null |
+		awk -v ip="$ONT" '$1 == ip {print $3}')
+fi
+if [ -n "$ONTMAC" ]; then
+	ip neigh replace "$ONT" lladdr "$ONTMAC" nud permanent dev "$ONTPORT" 2>/dev/null
+	say "the ONT is $ONT ($ONTMAC) on $ONTPORT"
+else
+	say "the ONT has no MAC yet; it will be learned"
+fi
+
+# The ONT's route, out of its own jack.  It is also what makes the proxy
+# ARP answer, and what stops the kernel from calling the packet a
+# hairpin.
+ip route replace "$ONT"/32 dev "$ONTPORT" 2>/dev/null
+
+# The proxy ARP itself, on the bridge and everywhere.
+echo 1 > "/proc/sys/net/ipv4/conf/$BRIDGE/proxy_arp" 2>/dev/null
+echo 1 > /proc/sys/net/ipv4/conf/all/proxy_arp 2>/dev/null
+
+# The image's own dnsmasq has to hand out an address in the ONT's subnet,
+# or a client that asks for a lease gets one in the board's subnet and
+# cannot reach the ONT at all.  S26nat wrote dnsmasq's configuration; it
+# is rewritten here with the ONT's range first.
+if command -v dnsmasq >/dev/null 2>&1; then
+	cat > /tmp/dnsmasq-lablan.conf <<EOF
+interface=$BRIDGE
+dhcp-range=$BASE.101,$BASE.200,255.255.255.0,12h
+dhcp-range=192.168.9.100,192.168.9.200,255.255.255.0,12h
+dhcp-option=3,$BASE.100
+dhcp-option=6,$BASE.100
+dhcp-leasefile=/tmp/dnsmasq.leases
+pid-file=/tmp/dnsmasq.pid
+EOF
+	killall dnsmasq 2>/dev/null
+	sleep 1
+	# setsid: the child is still attached to this shell's session, and
+	# a child that is attached is killed when the shell ends.
+	setsid dnsmasq -C /tmp/dnsmasq-lablan.conf >/dev/kmsg 2>&1 &
+	say "dnsmasq serves $BASE.0/24 and 192.168.9.0/24"
+fi
+
+# The bridge's own port numbers, as the kernel states them.  It is
+# printed so that the round's evidence says which jack is which.
+for p in 1 2 3 4 5 6 7 8; do
+	d=$(dev_of_port "$p")
+	[ -n "$d" ] && say "bridge port $p is $d"
+done
+
+refresh_clients
+while true; do
+	sleep 30
+	refresh_clients
+done
+LABEOF
+
+chmod 755 /tmp/lablan.sh
+setsid /tmp/lablan.sh >/dev/kmsg 2>&1 &
+
+exit 0
