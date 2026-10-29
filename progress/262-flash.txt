@@ -1,10 +1,6 @@
-=== 12:14:05 beat 6 log=2847 frozen=0 wrote=yes ===
---- signals: quiet=0s writes=1800s newproc=900s hard=5400s cmp=-cnewer proc=0s ---
+=== 12:20:09 beat 9 log=2982 frozen=4 wrote=yes ===
+--- signals: quiet=240s writes=1800s newproc=900s hard=5400s cmp=-cnewer proc=1s ---
 --- the last 30 lines of the build's own log ---
- make[3] -C tools/mtools compile
- make[3] -C tools/patch-image compile
- make[3] -C tools/squashfs4 compile
- make[3] -C tools/sstrip compile
  make[3] -C tools/zip compile
  make[3] -C tools/autoconf compile
  make[3] -C tools/meson compile
@@ -31,35 +27,39 @@
  make[3] -C tools/mtd-utils compile
  make[3] -C tools/mpfr compile
  make[3] -C tools/e2fsprogs compile
+ make[3] -C tools/erofs-utils compile
+ make[3] -C tools/padjffs2 compile
+ make[3] -C tools/quilt compile
+ make[3] -C tools/mpc compile
 --- the build's own processes ---
-   1435 Ss   /usr/bin/python3 /usr/bin/networkd-dispatcher --run-startup-triggers
-   1435 Ss   /usr/bin/python3 -u /usr/sbin/waagent -daemon
-   1434 Sl   /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
-    612 S    timeout --kill-after=60s 280m bash -c echo $$ > ../compile-make.pid; exec make -j"$(nproc)"
-    612 S    tee ../compile-parallel.log
-    612 S    make -j4
-    602 S    /bin/sh -c _limit=`ulimit -n`; [ "$_limit" = "unlimited" -o "$_limit" -ge 1024 ] || ulimit -n 1024; umask 022; cmd() { >/dev/null 2>&1 make -s "$@" < /dev/null || { echo "make $*: build failed. Please re-run make with -j1 V=s or V=sc for a higher verbosity level to see what's going on"; false; } } 8>&1 9>&2; cmd -r world 
-    602 S    make -s -r world
-    599 S    make --no-print-directory tools/compile
-    374 S    bash -c /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/time.pl "time: tools/cmake/compile" make  -r -C tools/cmake BUILD_SUBDIR="tools/cmake" BUILD_VARIANT="" ALL_VARIANTS="" compile  || ?(?{ printf "%s\n" "    ERROR: tools/cmake failed to build." >&8 || printf "%s\n" "    ERROR: tools/cmake failed to build."; } 2>/dev/null;   exit 1;) 
-    374 S    perl /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/time.pl time: tools/cmake/compile make -r -C tools/cmake BUILD_SUBDIR=tools/cmake BUILD_VARIANT= ALL_VARIANTS= compile
-    374 S    make -r -C tools/cmake BUILD_SUBDIR=tools/cmake BUILD_VARIANT= ALL_VARIANTS= compile
-    206 S    bash -c /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/time.pl "time: tools/elfutils/compile" make  -r -C tools/elfutils BUILD_SUBDIR="tools/elfutils" BUILD_VARIANT="" ALL_VARIANTS="" compile  || ?(?{ printf "%s\n" "    ERROR: tools/elfutils failed to build." >&8 || printf "%s\n" "    ERROR: tools/elfutils failed to build."; } 2>/dev/null;   exit 1;) 
-    206 S    perl /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/time.pl time: tools/elfutils/compile make -r -C tools/elfutils BUILD_SUBDIR=tools/elfutils BUILD_VARIANT= ALL_VARIANTS= compile
+   1799 Ss   /usr/bin/python3 /usr/bin/networkd-dispatcher --run-startup-triggers
+   1799 Ss   /usr/bin/python3 -u /usr/sbin/waagent -daemon
+   1798 Sl   /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
+    976 S    timeout --kill-after=60s 280m bash -c echo $$ > ../compile-make.pid; exec make -j"$(nproc)"
+    976 S    tee ../compile-parallel.log
+    976 S    make -j4
+    966 S    /bin/sh -c _limit=`ulimit -n`; [ "$_limit" = "unlimited" -o "$_limit" -ge 1024 ] || ulimit -n 1024; umask 022; cmd() { >/dev/null 2>&1 make -s "$@" < /dev/null || { echo "make $*: build failed. Please re-run make with -j1 V=s or V=sc for a higher verbosity level to see what's going on"; false; } } 8>&1 9>&2; cmd -r world 
+    966 S    make -s -r world
+    963 S    make --no-print-directory tools/compile
+    738 S    bash -c /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/time.pl "time: tools/cmake/compile" make  -r -C tools/cmake BUILD_SUBDIR="tools/cmake" BUILD_VARIANT="" ALL_VARIANTS="" compile  || ?(?{ printf "%s\n" "    ERROR: tools/cmake failed to build." >&8 || printf "%s\n" "    ERROR: tools/cmake failed to build."; } 2>/dev/null;   exit 1;) 
+    738 S    perl /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/time.pl time: tools/cmake/compile make -r -C tools/cmake BUILD_SUBDIR=tools/cmake BUILD_VARIANT= ALL_VARIANTS= compile
+    738 S    make -r -C tools/cmake BUILD_SUBDIR=tools/cmake BUILD_VARIANT= ALL_VARIANTS= compile
+    422 S    /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/host/bin/ninja -C /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/build_dir/host/cmake-4.2.0
+      2 S    /bin/sh -c : && /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/host/bin/g++ -O2 -I/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/host/include -O3 -DNDEBUG -L/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/host/lib Source/CursesDialog/CMakeFiles/ccmake.dir/ccmake.cxx.o Source/CursesDialog/CMakeFiles/ccmake.dir/cmCursesBoolWidget.cxx.o Source/CursesDialog/CMakeFiles/ccmake.dir/cmCursesCacheEntryComposite.cxx.o Source/CursesDialog/CMakeFiles/ccmake.dir/cmCursesColor.cxx.o Source/CursesDialog/CMakeFiles/ccmake.dir/cmCursesDummyWidget.cxx.o Source/CursesDialog/CMakeFiles/ccmake.dir/cmCursesFilePathWidget.cxx.o Source/CursesDialog/CMakeFiles/ccmake.dir/cmCursesForm.cxx.o Source/CursesDialog/CMakeFiles/ccmake.dir/cmCursesLabelWidget.cxx.o Source/CursesDialog/CMakeFiles/ccmake.dir/cmCursesLongMessageForm.cxx.o Source/CursesDialog/CMakeFiles/ccmake.dir/cmCursesMainForm.cxx.o Source/CursesDialog/CMakeFiles/ccmake.dir/cmCursesOptionsWidget.cxx.o Source/CursesDialog/CMakeFiles/ccmake.dir/cmCursesPathWidget.cxx.o Source/CursesDialog/CMakeFiles/ccmake.dir/cmCursesStringWidget.cxx.o Source/CursesDialog/CMakeFiles/ccmake.dir/cmCursesWidget.cxx.o -o bin/ccmake  Source/libCMakeLib.a  Source/CursesDialog/form/libcmForm.a  Utilities/std/libcmstd.a  Source/kwsys/libcmsys.a  Utilities/cmcurl/lib/libcmcurl.a  /usr/lib/x86_64-linux-gnu/libidn2.so  /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/host/lib/libssl.a  Utilities/cmnghttp2/libcmnghttp2.a  /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/host/lib/libexpat.a  Utilities/cmjsoncpp/libcmjsoncpp.a  Utilities/cmlibarchive/libarchive/libcmlibarchive.a  /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/host/lib/libcrypto.a  -lresolv  Utilities/cmbzip2/libcmbzip2.a  /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/host/lib/liblzma.a  /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/host/lib/libzstd.a  Utilities/cmlibrhash/libcmlibrhash.a  Utilities/cmlibuv/libcmlibuv.a  -ldl  -lrt  /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/host/lib/libz.a  Utilities/cmllpkgc/libcmllpkgc.a  -lncurses && :
 --- the oldest processes that are not kernel threads ---
-   1444 Ss   /sbin/init
-   1443 S<s  /lib/systemd/systemd-journald
-   1442 SLsl /sbin/multipathd -d -s
-   1442 Ss   /lib/systemd/systemd-udevd
-   1442 Ss   /usr/lib/linux-tools/6.8.0-1070-azure/hv_kvp_daemon -n
-   1441 Ss   /usr/sbin/haveged --Foreground --verbose=1
-   1440 Ss   /lib/systemd/systemd-networkd
-   1435 Ss   @dbus-daemon --system --address=systemd: --nofork --nopidfile --systemd-activation --syslog-only
+   1808 Ss   /sbin/init
+   1807 S<s  /lib/systemd/systemd-journald
+   1806 SLsl /sbin/multipathd -d -s
+   1806 Ss   /lib/systemd/systemd-udevd
+   1806 Ss   /usr/lib/linux-tools/6.8.0-1070-azure/hv_kvp_daemon -n
+   1805 Ss   /usr/sbin/haveged --Foreground --verbose=1
+   1804 Ss   /lib/systemd/systemd-networkd
+   1799 Ss   @dbus-daemon --system --address=systemd: --nofork --nopidfile --systemd-activation --syslog-only
 --- what is running under the build ---
 --- the directories the build touched lately ---
 host
 target-aarch64_cortex-a53_musl
 --- how big the root filesystem is getting ---
 --- memory and load ---
-Mem:           15988        1859        1805          51       12324       13731
- 20:14:06 up 24 min,  0 users,  load average: 9.00, 7.49, 4.15
+Mem:           15988        1754        1696          51       12538       13836
+ 20:20:09 up 30 min,  0 users,  load average: 8.34, 8.48, 5.80
