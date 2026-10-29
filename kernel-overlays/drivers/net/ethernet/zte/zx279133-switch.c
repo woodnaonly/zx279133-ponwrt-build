@@ -2071,6 +2071,36 @@ static void zx279133_switch_outerphy_dump(struct zx279133_switch *priv)
 		{ 0x1f, 0xa434, "PHY status" },
 		{ 0x1f, 0xa438, "DSP patch" },
 		{ 0x1f, 0xa616, "PMA speed" },
+		/*
+		 * The 10GBASE-T AN's own registers and the EEE half of the
+		 * same exchange, measured on the board on 2026-10-29 at
+		 * 12:49 in the lane's good state (right after the loader's
+		 * net init) and in its dead one, twenty seconds later:
+		 *
+		 *	1f.0xa5d0  AN EEE advertisement      0x0006  0x0006
+		 *	1f.0xa5d2  AN EEE partner ability    0x0006  0x0006
+		 *	1f.0xa5d4  AN 10GBT control          0x00a1  0x00a1
+		 *	1f.0xa5d6  AN 10GBT status           0x3428  0x3428
+		 *
+		 * They are identical in both states, so neither the EEE
+		 * exchange nor the partner's 10GBASE-T advertisement is what
+		 * breaks this lane (docs/92 §96.27).  They are in the log
+		 * because the partner's status word is the only place where
+		 * what the far end believes its copper partner said is
+		 * visible: 0x3428 decodes as "the partner is 2.5GBASE-T
+		 * capable, it is not 5G or 10G capable, it says Remote OK
+		 * and Local OK, and there is no master/slave fault".
+		 *
+		 * The BMSR is the standard link status, and it latches: two
+		 * reads in a row gave 0x0002 and then 0x0006 (the auto-
+		 * negotiation ability bit appearing), while the lane was
+		 * already dead.
+		 */
+		{ 0x01, 0x01, "BMSR" },
+		{ 0x1f, 0xa5d0, "AN EEE advertisement" },
+		{ 0x1f, 0xa5d2, "AN EEE partner ability" },
+		{ 0x1f, 0xa5d4, "AN 10GBT control" },
+		{ 0x1f, 0xa5d6, "AN 10GBT status" },
 	};
 	int i;
 
