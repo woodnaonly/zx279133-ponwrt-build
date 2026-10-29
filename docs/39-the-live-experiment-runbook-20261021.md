@@ -47,7 +47,7 @@ made.
 | XMAC0 MODE_CFG | `0x140280` | |
 | XMAC0 DUPLEX | `0x140500` | bit 24 is half duplex |
 | XMAC0 MISC_CFG | `0x143400` | bit 9 is the IPC bit |
-| XMAC0 TX frames | `0x142070` | **WITHDRAWN - this window is not the data path's counter (docs/92 §96.33.2)** |
+| XMAC0 TX frames | `0x142070` | **WITHDRAWN - this window is not the data path's counter (docs/92 §96.33.9)** |
 | XMAC0 TX good | `0x1420b0` | |
 | NPPT XMAC link | `0x0084` | |
 | NPPT XPCS0 status | `0x0090` | bits 11..13 are the PCS link |
@@ -95,7 +95,7 @@ program did not happen or something overwrote it.
 wire: if it stayed at zero while the netdev's own tx counter moved, the frame
 would never have reached the MAC.
 
-**That criterion is void** (docs/92 §96.33.2).  The window at `0x142000` is
+**That criterion is void** (docs/92 §96.33.9).  The window at `0x142000` is
 not the data path's counter - a run of full-length frames through the 2.5G
 jack moved it by an order of magnitude less than the frames that went by,
 and another window of the same block moved by more than lan5's own total.

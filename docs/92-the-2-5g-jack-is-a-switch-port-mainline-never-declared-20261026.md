@@ -12489,3 +12489,285 @@ RTNETLINK answers: Network unreachable
    （本轮用的是 carrier + `bridge_slave state` + veth 自己的 MAC）。
 3. **自己造成的流量不得算成世界的流量**：桥的 flooding 会让**每个**成员口的 TX 都动；
    要证明「帧走了某条路」，得让**这条路之外的计数器保持不动**。
+
+### 96.34 让板子真的开始路由，顺着计数器把回程断点一步步收窄
+
+§96.33 把「谁在哪个口」钉死了之后，剩下的真问题浮出来了：
+**「插上就能用」到底差在哪一步。** 这一节用四组实验把它拆成可执行的小题目。
+
+#### 96.34.1 摘要
+
+1. **判决 Z 成立**：板子的 `br-lan` 上同时挂着 `192.168.9.1/24` 和 `192.168.1.100/24`，
+   而 **Linux 不在同一个接口的两个直连网段之间转发**
+   （`ip route get 192.168.1.1 from 192.168.9.25` → `Network unreachable`）
+   ⇒ 这台板子当时**只能自己**访问对面，**LAN 客户端（PC）访问不了**。
+2. **修法验证**：把 `lan5` 从 `br-lan` 摘出来、单独建 `br-lan2`，
+   板子 ping 对面**依然 3/3 通**（拆桥没伤到 lane），路由表也对了。
+3. **nft 计数器证明板子的转发确实在工作**：forward 链 **8 包 / 11424 字节**
+   （8 个 1400 字节的满长帧），input 链 45 包。
+   ⇒ **板子把 PC 的帧转发出去了**，问题在**回程**。
+4. **判决 V′**：对端那台设备**每 ~30 秒重协商一次**
+   （远端 AN 状态在 `0x0008` ↔ `0x00ad` 之间跳，`nppt+0x0084` 在 0 和 1 之间跳），
+   断 ~4 秒。⇒ 这解释了此前所有「时好时坏」。
+
+#### 96.34.2 判决 Z：同一个接口上的两个直连网段之间**不路由**
+
+15:10:23，在板子上：
+
+```
+sysctl -w net.ipv4.ip_forward=1          →  net.ipv4.ip_forward = 1
+ip route get 192.168.1.1 from 192.168.9.25
+RTNETLINK answers: Network unreachable
+```
+
+路由表本身是对的：
+
+```
+192.168.1.0/24 dev br-lan proto kernel scope link src 192.168.1.100
+192.168.9.0/24 dev br-lan proto kernel scope link src 192.168.9.1
+```
+
+两条都是 **scope link** 的直连路由，而它们挂在**同一个接口**上
+⇒ Linux 的转发路径里没有这一跳（同一接口的两个直连网段之间不做转发）。
+⇒ **PC 用 192.168.9.25 去访问 192.168.1.1，100% 丢包**，而板子自己 ping .1 是通的。
+
+**这不是 bug，是配置形态的问题** ⇒ 修法是**把两个网段放到两个不同的接口上**。
+
+#### 96.34.3 修法：把 lan5 拆到自己的网桥（br-lan2）
+
+```
+ip link add name br-lan2 type bridge
+ip link set lan5 nomaster
+ip link set lan5 master br-lan2
+ip link set br-lan2 up
+ip addr del 192.168.1.100/24 dev br-lan
+ip addr add 192.168.1.100/24 dev br-lan2
+sysctl -w net.ipv4.ip_forward=1
+```
+
+内核日志：
+
+```
+br-lan: port 5(lan5) entered disabled state
+br-lan2: port 1(lan5) entered forwarding state
+```
+
+成员表变成：
+
+```
+bridge name	interfaces
+br-lan		lan4 lan2 lan3 lan1 labhost0
+br-lan2		lan5
+```
+
+**先验 lane 没被拆坏**（这一步必须先做，否则后面的实验没有意义）：
+
+```
+PING 192.168.1.1 (192.168.1.1): 56 data bytes
+64 bytes from 192.168.1.1: seq=0 ttl=64 time=0.976 ms
+... 3 packets transmitted, 3 packets received, 0% packet loss
+192.168.1.1 lladdr 0c:f0:7b:39:d9:91 REACHABLE
+```
+
+⇒ **拆桥之后，板子 ↔ 对面依然 3/3 通、亚毫秒。**
+
+#### 96.34.4 nft 计数器：板子的转发真的在工作
+
+板子上没有 tcpdump，但有 `nft`。建三条计数器链（**busybox 的 ash 不接受裸的 `{`，
+必须给整个 nft 命令体加引号**）：
+
+```
+nft add table inet t
+nft add chain inet t fw '{ type filter hook forward priority 0 ; }'
+nft add rule inet t fw ether saddr 84:47:09:5b:bd:2c counter
+nft add chain inet t in '{ type filter hook input priority 0 ; }'
+nft add rule inet t in ether saddr 84:47:09:5b:bd:2c counter
+```
+
+PC 侧（带一条只针对 .1 的主机路由，让下一跳走板子）：
+`New-NetRoute -DestinationPrefix 192.168.1.1/32 -InterfaceIndex 19 -NextHop 192.168.9.1 -RouteMetric 1`
+
+板子上的计数：
+
+```
+chain in :  ether saddr 84:47:09:5b:bd:2c counter packets 45 bytes 2869
+chain fw :  ether saddr 84:47:09:5b:bd:2c counter packets  8 bytes 11424
+```
+
+**8 包 / 11424 字节 = 8 × 1428 字节** —— 那正是 8 个满长帧
+（1400 字节 ICMP + 20 字节 IPv4 + 8 字节 ICMP + 4 字节 FCS）。
+⇒ **板子把 PC 的 8 个 1400 字节 ICMP 真的转发出去了**（forward 钩子过 ⇒ 路由和转发都工作）。
+⇒ 同期 `lan5` 的 tx 计数 +19，`br-lan2` 的 tx 计数在涨。
+
+⇒ **断点在回程，不在板子这一侧。**
+
+#### 96.34.5 判决 V′：对端每 ~30 秒重协商一次（把「时好时坏」量化了）
+
+15:28 那 10 次每秒一次的 ping：
+
+```
+08:03:36 FAIL   08:03:41 FAIL   08:03:46 FAIL   08:03:51 FAIL   08:03:56 FAIL
+08:04:01 FAIL   08:04:06 FAIL   08:04:11 FAIL   08:04:16 FAIL   08:04:21 OK
+```
+
+同期驱动日志（每 750 ms 一行）把原因写得清清楚楚：
+
+```
+far an=0x0008 758d=0x8018 7580=0x941f | nppt 84=0x00000000   ← 断
+far an=0x0089 758d=0x8018 7580=0x941f | nppt 84=0x00000000
+far an=0x00a9 758d=0x801e 7580=0x9416 | nppt 84=0x00000001   ← 通
+far an=0x00ad 758d=0x801e 7580=0x9416 | nppt 84=0x00000001
+...（同样的四行再来一遍，约 30 秒后）
+```
+
+**三个事实**：
+* `7580 = 0x9416`（2500BASE-X）**从头到尾没变过** ⇒ **lane 侧一直是对的**；
+* `nppt+0x0084` 在 **0 和 1** 之间跳 ⇒ 这是「链路此刻通不通」的精确指示器
+  （比 7.0x01 可靠，见 §96.29.2 / §96.33.9）；
+* 断的时候 `far an` 是 `0x0008`、通的时候是 `0x00ad` ⇒ **变的是对端铜口那一侧的协商**。
+
+⇒ **判决 V′：这条 lane 一直在 2500BASE-X 上；掉的是对端的重协商。**
+⇒ 「对端能不能稳定在 2.5G」这件事，**责任明确在对面那台设备**（那台发 DHCP 的路由器）。
+
+**顺带一条方法论**：那 9 次连续 FAIL **不是链路问题，是 ARP 问题**——
+短超时的 ping 每次都要先做 ARP 解析，而对端在重协商时 ARP 解析不回来。
+把邻居项固定成永久项之后：
+
+```
+ip neigh replace 192.168.1.1 lladdr 0c:f0:7b:39:d9:91 nud permanent dev br-lan
+ping -c 30 -i 1 -W 2 192.168.1.1
+--- 192.168.1.1 ping statistics ---
+30 packets transmitted, 30 packets received, 0% packet loss
+round-trip min/avg/max = 0.353/0.550/1.431 ms
+```
+
+⇒ **30/30 全通**。⇒ **判 lane 生死时，先把 ARP 从实验里拿掉。**
+
+#### 96.34.6 192.168.1.2 是 PC 自己那一侧的一台主机（不是 lane 上的）
+
+PC ping `.2` 时每次都收到：
+
+```
+Reply from 192.168.1.2: Destination host unreachable.
+```
+
+⇒ **.2 能收到 PC 的请求，并且自己回了 ICMP 不可达** ⇒ **.2 和 PC 在同一个二层域**，
+而它自己没有到 .1 的路由。
+⇒ 再加上：板子 ARP 不到 .2、板子的 FDB 里没有 .2 的 MAC、.2 的 ARP 时好时坏
+⇒ **.2 在面板 LAN3 那一侧（PC 自己插着的那个口后面还有台交换机/设备），不在 lane 上。**
+
+⇒ §96.33.8.2 的判断成立：**「两台外部主机之间的帧穿过 lane」至今没有干净证据。**
+
+#### 96.34.7 「PC 插上去能不能用」现在被拆成了两个独立的题目
+
+**题目 A：PC 的广播（PPU6 → PPU5）到不了对面。**
+PC 连 ARP 问 **192.168.1.100**（板子自己，拆桥后它在 br-lan2 上的地址）都失败：
+
+```
+Pinging 192.168.1.100 with 1400 bytes of data:
+Request timed out.
+Reply from 192.168.1.25: Destination host unreachable.
+--- 192.168.1.100 ping statistics ---
+Packets: Sent = 4, Received = 2, Lost = 2 (50% loss)
+```
+
+（arp -a 里仍然没有 192.168.1.100。）
+⇒ **从 PPU6 进来的广播，没有被 9132 转发到 PPU5（2.5G 口）。**
+⇒ 而**从 CPU 口出来的帧（带 transport VID 63）能过 PPU5** —— 这正是板子 ping .1 通、
+PC 什么都不通的原因。
+⇒ **这是 9132 的 VLAN 表问题**（见 §96.34.8）。
+
+**题目 B：板子转发出去的 ICMP，回不来。**
+- 板子自己 ping .1：**30/30 通**（同样的出口 lan5）。
+- 板子转发 PC 的 ICMP（源 MAC 是 PC 的 MAC、源 IP 是 192.168.9.25、TTL 63）：**不回**。
+- 板子 `br-lan2` 的 RX 计数在这期间 +10（确实有东西从 lane 回来），但**没有一个字节**
+  能证明是 `.1` 的。
+- PC 网卡的 `ReceivedBytes` 在同一时段 **+1868 字节** ⇒ **回包其实到了 PC**，
+  只是没被 Windows 认成有效的 echo reply。
+
+⚠ **这里有一处我自己的判据漏洞，必须写下来**：
+我用来判「.1 的回应有没有到板子」的 nft 规则挂在 **`inet` 表的 input 钩子**，
+而 **inet 家族的钩子只看 IP 包，不看 ARP**。
+⇒ **「.1 的 ARP 请求有没有到板子」这条判据是无效的**，
+必须改用 `br-lan2` 的 FDB（`.1` 的 MAC 的 ageing timer）或者 `arp` 家族的钩子。
+⇒ 记在这里，免得下一个人拿这个计数器下结论。
+
+#### 96.34.8 还没解决的两件事（下一步）
+
+1. **9132 的 VLAN 表**：ERAM 表 **0x00**（base block 25089，128 位/条目）
+   就是 VLAN 成员表（每个 VLAN 一个位图）。
+   要读的是 **VID 0（untagged 入口）** 和 **VID 59..63（transport VID）**
+   两个成员的位图，看 **PPU 5（2.5G 口）和 PPU 6（PC 所在口）是不是在同一个 VLAN 里**。
+   ⇒ 工具：`eram_read`（bench MCP）/ debugfs 的 `er <block> [n]`。
+2. **回程断点**：改用 `br-lan2` 的 FDB + `arp` 家族的 nft 钩子重做，
+   并在 PC 侧抓包（Windows 的 `pktmon`）确认那 1868 字节到底是什么。
+
+#### 96.34.9 方法论（新增一条）
+
+**「帧走到哪一环」的最省事工具是 nft 计数器，不是寄存器、不是 FDB、不是 ping。**
+一次实验就能把「板子收没收到」「板子转没转发」「对端回没回」分成三段，
+每一段一个独立的数字。本节四个断点全靠它定位。
+（注册器和 FDB 只能告诉你「状态」，nft 计数器能告诉你「流量走到哪一步」。）
+
+#### 96.34.10 2.5G 口径落地（CI #249）—— lan5 现在报 2.5Gbps/Full
+
+CI **#249**（`dc17a4a`，含 §96.31 的 2.5G 口径改动）成功，
+镜像 `staging/trial/run249.itb`（12167360 字节，sha256 `d99398490dc91f835536ff1fc82ba812591497d844a2bd867f61c7f4b1ab7cd7`），
+15:43:25 引导成功（`boot245.sh` 之外第一次用 `traffic.sh` 直接引导）。
+
+**口径生效了**：
+
+```
+[   11.261826] zx279133-switch ...:switch lan5: Link is Up - 2.5Gbps/Full - flow control off
+[   14.870813] zx279133-switch ...:switch lan5: Link is Up - 2.5Gbps/Full - flow control off
+```
+
+（同一位置，run246 报的是 `Link is Up - 1Gbps/Full`。）
+`ethtool lan5` 也跟着变成：
+
+```
+Supported link modes:   2500baseT/Full
+```
+
+**流量仍然通**（口径改了不影响承载）：
+
+```
+6 packets transmitted, 6 packets received, 0% packet loss
+lan5_tx=18 labhost0_rx=9 ping=192.168.1.1
+```
+
+远端那一侧依旧：`7580 = 0x9416`（2500BASE-X）、`a616 = 0x2070`、`a434 = 0x131c`
+（master 位掉 ⇒ 对端又降档了，见 §96.34.5）。
+
+**PC 联测**（PC 下一跳走板子、板子路由出去）：
+
+```
+LAN5TX0=60 → LAN5TX1=71      ⇒ +11
+CPU0RX0=455 → CPU0RX1=489    ⇒ +34
+Packets: Sent = 10, Received = 0, Lost = 10 (100% loss)
+```
+
+⇒ **PC 的帧确实被板子转发出 2.5G 口了（+11）**，但回包仍然没有到 PC（§96.34.7 的题目 B）。
+
+**顺便把端口映射钉死了**（这次 dmesg 里驱动自己打了这一行）：
+
+```
+the 9132 is serving: the jacks are the 9132's UNI ports 1..4 (DSA ports 4..7),
+the 2.5G jack is the outerphy port 5 (DSA port 8), the CPU port is 9
+and the transport VIDs are 59..63
+```
+
+⇒ 与今天实测的 `lan3 = portname p6` 完全一致（UNI 3 = DSA 6 = lan3）。
+配合 docs/90 §5（「面板 LAN3 → PPU 1 或 PPU 3」），
+**PC 插的那根线对应面板 LAN3**（UNI 3），仍需一次拔线终验。
+
+**这一轮还有两条自纠，是脚本自己的判据写错了，不是实验错了**：
+
+* **T2 判据**用 `^[[:space:]]*5` 行首锚定，而脚本给每行加了 `k ` 前缀 ⇒ 永远匹配不上
+  （FDB 里那条 `5 0c:f0:7b:39:d9:91` 其实在）。已改成不锚定行首。
+* **T4x 判据**把「labhost0 的 RX 动了」当成「回包来自 fixture」⇒ 误报。
+  实际上 fixture 和真设备在**同一个广播域**里，板子的 ARP 广播会被 flooding 到
+  labhost0，它的回应自然也会从 labhost0 进来 ⇒ **labhost0 的 RX 增长是广播的副作用**。
+  已降级成提示。**真正能分辨的判据是「对端 MAC 是不是 fixture 的那个」**，
+  那已经由 T2（FDB 的 port_no）覆盖。
+
