@@ -281,6 +281,13 @@ if command -v uci >/dev/null 2>&1; then
 fi
 ip addr replace "$BASE.100/24" dev "$BRIDGE" 2>/dev/null
 
+# The reload rebuilt the bridge, so the ONT's jack is put back into it.
+# It normally comes back on its own - the configuration's port list has
+# it - but the whole scheme depends on it being there, and it costs
+# nothing to be sure.
+ip link set "$ONTPORT" master "$BRIDGE" 2>/dev/null
+ip link set "$ONTPORT" up 2>/dev/null
+
 # The ONT's MAC, learned through the bridge.  This has to happen before
 # the /32 route below is in place: with that route the ARP would leave
 # through the ONT's own jack, and the DSA layer tags the frames it sends
