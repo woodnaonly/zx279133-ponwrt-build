@@ -2022,7 +2022,25 @@ static void zx279133_switch_outerphy_dump(struct zx279133_switch *priv)
 		u32 reg;
 		const char *name;
 	} regs[] = {
-		{ 7, 0x00, "AN BMCR" },
+		/*
+		 * The AN block's BMCR (7.0x00) is NOT read here, and it must not
+		 * be: reading it makes this chip restart its auto-negotiation,
+		 * and the lane loses its block lock when it does (docs/92
+		 * §96.22, judgment N99).
+		 *
+		 * Measured on the vendor's own U-Boot, at its prompt, in one
+		 * boot, with nothing else touched:
+		 *
+		 *	mii 45read 5 0x07 0x01   -> 0x00e9   (locked)
+		 *	mii 45read 5 0x07 0x00   -> 0x3000
+		 *	mii 45read 5 0x07 0x01   -> 0x00ad   (restarting, unlocked)
+		 *
+		 * One read of one register, and the lane is dead - which is
+		 * exactly what this driver used to do at every boot, in the
+		 * middle of the dump below.  The word itself can still be
+		 * written (the next round works out what to write), but it
+		 * must not be read.
+		 */
 		{ 7, 0x01, "AN status" },
 		{ 7, 0x10, "AN capabilities" },
 		{ 7, 0x13, "AN capabilities 2" },
