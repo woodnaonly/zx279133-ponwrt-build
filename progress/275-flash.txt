@@ -1,20 +1,6 @@
-=== 15:51:25 beat 2 log=2092 frozen=0 wrote=unknown ===
---- signals: quiet=0s writes=1800s newproc=900s hard=5400s cmp=-cnewer proc=unknowns ---
+=== 15:53:29 beat 3 log=2573 frozen=0 wrote=yes ===
+--- signals: quiet=0s writes=1800s newproc=900s hard=5400s cmp=-cnewer proc=1s ---
 --- the last 30 lines of the build's own log ---
-make[2]: Entering directory '/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/config'
-make[2]: 'conf' is up to date.
-make[2]: Leaving directory '/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/config'
- make[1] world
- make[2] tools/compile
- make[2] package/cleanup
- make[3] -C tools/libdeflate compile
- make[3] -C tools/flock compile
- make[3] -C tools/zstd compile
- make[3] -C tools/sed compile
- make[3] -C tools/patch compile
- make[3] -C tools/tar compile
- make[3] -C tools/m4 compile
- make[3] -C tools/ninja compile
  make[3] -C tools/autoconf-archive compile
  make[3] -C tools/xz compile
  make[3] -C tools/gnulib compile
@@ -31,35 +17,49 @@ make[2]: Leaving directory '/home/runner/work/zx279133-ponwrt-build/zx279133-pon
  make[3] -C tools/meson compile
  make[3] -C tools/pkgconf compile
  make[3] -C tools/lz4 compile
+ make[3] -C tools/autoconf compile
+ make[3] -C tools/libressl compile
+ make[3] -C tools/automake compile
+ make[3] -C tools/missing-macros compile
+ make[3] -C tools/libtool compile
+ make[3] -C tools/dosfstools compile
+ make[3] -C tools/flex compile
+ make[3] -C tools/fakeroot compile
+ make[3] -C tools/gengetopt compile
+ make[3] -C tools/mklibs compile
+ make[3] -C tools/patchelf compile
+ make[3] -C tools/gmp compile
+ make[3] -C tools/cmake compile
+ make[3] -C tools/bison compile
 --- the build's own processes ---
-    646 Ss   /usr/bin/python3 /usr/bin/networkd-dispatcher --run-startup-triggers
-    646 Ss   /usr/bin/python3 -u /usr/sbin/waagent -daemon
-    645 Sl   /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
-    121 S    timeout --kill-after=60s 280m bash -c echo $$ > ../compile-make.pid; exec make -j"$(nproc)"
-    121 S    tee ../compile-parallel.log
-    121 S    make -j4
-    113 S    /bin/sh -c _limit=`ulimit -n`; [ "$_limit" = "unlimited" -o "$_limit" -ge 1024 ] || ulimit -n 1024; umask 022; cmd() { >/dev/null 2>&1 make -s "$@" < /dev/null || { echo "make $*: build failed. Please re-run make with -j1 V=s or V=sc for a higher verbosity level to see what's going on"; false; } } 8>&1 9>&2; cmd -r world 
-    113 S    make -s -r world
-    111 S    make --no-print-directory tools/compile
-     54 S    bash -c /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/time.pl "time: tools/m4/compile" make  -r -C tools/m4 BUILD_SUBDIR="tools/m4" BUILD_VARIANT="" ALL_VARIANTS="" compile  || ?(?{ printf "%s\n" "    ERROR: tools/m4 failed to build." >&8 || printf "%s\n" "    ERROR: tools/m4 failed to build."; } 2>/dev/null;   exit 1;) 
-     54 S    perl /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/time.pl time: tools/m4/compile make -r -C tools/m4 BUILD_SUBDIR=tools/m4 BUILD_VARIANT= ALL_VARIANTS= compile
-     54 S    make -r -C tools/m4 BUILD_SUBDIR=tools/m4 BUILD_VARIANT= ALL_VARIANTS= compile
-     34 S    bash -c /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/time.pl "time: tools/cpio/compile" make  -r -C tools/cpio BUILD_SUBDIR="tools/cpio" BUILD_VARIANT="" ALL_VARIANTS="" compile  || ?(?{ printf "%s\n" "    ERROR: tools/cpio failed to build." >&8 || printf "%s\n" "    ERROR: tools/cpio failed to build."; } 2>/dev/null;   exit 1;) 
-     34 S    perl /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/time.pl time: tools/cpio/compile make -r -C tools/cpio BUILD_SUBDIR=tools/cpio BUILD_VARIANT= ALL_VARIANTS= compile
+    771 Ss   /usr/bin/python3 /usr/bin/networkd-dispatcher --run-startup-triggers
+    771 Ss   /usr/bin/python3 -u /usr/sbin/waagent -daemon
+    770 Sl   /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
+    246 S    timeout --kill-after=60s 280m bash -c echo $$ > ../compile-make.pid; exec make -j"$(nproc)"
+    246 S    tee ../compile-parallel.log
+    246 S    make -j4
+    238 S    /bin/sh -c _limit=`ulimit -n`; [ "$_limit" = "unlimited" -o "$_limit" -ge 1024 ] || ulimit -n 1024; umask 022; cmd() { >/dev/null 2>&1 make -s "$@" < /dev/null || { echo "make $*: build failed. Please re-run make with -j1 V=s or V=sc for a higher verbosity level to see what's going on"; false; } } 8>&1 9>&2; cmd -r world 
+    238 S    make -s -r world
+    236 S    make --no-print-directory tools/compile
+     73 S    bash -c /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/time.pl "time: tools/gengetopt/compile" make  -r -C tools/gengetopt BUILD_SUBDIR="tools/gengetopt" BUILD_VARIANT="" ALL_VARIANTS="" compile  || ?(?{ printf "%s\n" "    ERROR: tools/gengetopt failed to build." >&8 || printf "%s\n" "    ERROR: tools/gengetopt failed to build."; } 2>/dev/null;   exit 1;) 
+     73 S    perl /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/time.pl time: tools/gengetopt/compile make -r -C tools/gengetopt BUILD_SUBDIR=tools/gengetopt BUILD_VARIANT= ALL_VARIANTS= compile
+     73 S    make -r -C tools/gengetopt BUILD_SUBDIR=tools/gengetopt BUILD_VARIANT= ALL_VARIANTS= compile
+     64 S    make --jobserver-auth=3,4 -C /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/build_dir/host/gengetopt-2.23/. SUBDIRS=$(foreach dir,gl src skels,$(wildcard $(dir)) )
+     64 S    make all-recursive
 --- the oldest processes that are not kernel threads ---
-    657 Ss   /sbin/init
-    656 S<s  /lib/systemd/systemd-journald
-    656 SLsl /sbin/multipathd -d -s
-    655 Ss   /lib/systemd/systemd-udevd
-    655 Ss   /usr/lib/linux-tools/6.8.0-1070-azure/hv_kvp_daemon -n
-    654 Ss   /usr/sbin/haveged --Foreground --verbose=1
-    653 Ss   /lib/systemd/systemd-networkd
-    652 Ss   /lib/systemd/systemd-resolved
+    781 Ss   /sbin/init
+    780 S<s  /lib/systemd/systemd-journald
+    780 SLsl /sbin/multipathd -d -s
+    779 Ss   /lib/systemd/systemd-udevd
+    779 Ss   /usr/lib/linux-tools/6.8.0-1070-azure/hv_kvp_daemon -n
+    778 Ss   /usr/sbin/haveged --Foreground --verbose=1
+    777 Ss   /lib/systemd/systemd-networkd
+    776 Ss   /lib/systemd/systemd-resolved
 --- what is running under the build ---
 --- the directories the build touched lately ---
 host
 target-aarch64_cortex-a53_musl
 --- how big the root filesystem is getting ---
 --- memory and load ---
-Mem:           15988         831        3359          51       11797       14759
- 23:51:25 up 10 min,  0 users,  load average: 4.38, 2.37, 1.09
+Mem:           15988        2200        1289          51       12498       13390
+ 23:53:29 up 13 min,  0 users,  load average: 8.37, 4.11, 1.87
