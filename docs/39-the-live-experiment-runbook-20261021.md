@@ -235,6 +235,45 @@ What to look at when it fails:
 | the PC's neighbour is the board's MAC but nothing answers | the client's own pin is missing - the board has not worked out which jack the client is in |
 | the board logs "the ONT has no MAC yet" | the ONT's MAC could not be learned through the bridge |
 
+**The three traps that this setup has (measured on 2026-10-29 22:02-22:09,
+docs/92 §96.39).** All three make the acceptance fail while the board's own
+log says everything is fine, so they are worth knowing before the first
+attempt rather than after it:
+
+1. **A second dnsmasq cannot have the DHCP socket.** The image's dnsmasq is
+   run by procd (`S19dnsmasq`), and S26nat has already started one. A second
+   one dies with `failed to bind DHCP server socket: Address in use`, and the
+   check that is supposed to notice (`pidof dnsmasq`) sees the *old* process,
+   which is still alive. The range has to be written through UCI and applied
+   with `/etc/init.d/dnsmasq restart`, so that there is one server and one
+   configuration.
+2. **The DHCP section in this image needs three things** and misses any one of
+   them silently: `interface` is a *network* name (`lan`), not a device name
+   (`br-lan`); `force 1` is needed, because the ONT answers DHCP on a jack of
+   the same bridge and the script would otherwise refuse to serve the range;
+   and the range is computed from `network.lan`'s address, so that address has
+   to be in the ONT's subnet - which is where the board's own address belongs
+   anyway.
+3. **`/etc/labnowan`'s "off" has to be the first line** (or the first line
+   that is not a comment). Otherwise S26nat reads the comment, the upstream
+   watcher runs anyway, and it takes the jack with the ONT behind it for the
+   WAN - the kernel log then says "the test PC is in lan4", and lan4 is the
+   ONT's jack.
+
+**The judgement is not the script's own message.** `dnsmasq serves ...` is
+written by the script whether or not it is true. The two things that are true
+are: the generated configuration carries the range
+(`grep dhcp-range /var/etc/dnsmasq.conf.*`), and the lease file is not empty
+(`/tmp/dnsmasq.leases`).
+
+**TFTP and the acceptance state are mutually exclusive.** The board fetches
+the image from the PC at 192.168.9.25, and the acceptance wants the PC on
+DHCP with no static address at all. So: give the PC 192.168.9.25, boot the
+board, and only then start the acceptance. A `tftpboot` that stops halfway
+leaves the loader saying `Wrong Image Format for bootm command`; the log
+then has no `Bytes transferred = ...` line at all, and that is the sign that
+the server was unreachable.
+
 Two things must NOT be done: the traffic towards the ONT must not be
 masqueraded (the reply then reaches the client's card with a checksum the
 client's stack rejects - docs/92 §96.38), and no chip register needs to be
