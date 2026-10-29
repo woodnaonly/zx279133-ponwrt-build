@@ -2040,15 +2040,37 @@ static void zx279133_switch_outerphy_dump(struct zx279133_switch *priv)
 		 * middle of the dump below.  The word itself can still be
 		 * written (the next round works out what to write), but it
 		 * must not be read.
+		 *
+		 * 2026-10-29 (docs/92 §96.24): this is still a hard rule, but
+		 * it is NOT what kills the lane.  A control round measured the
+		 * lane dying on its own: 78 seconds after the loader's net
+		 * init, with nothing sent to the board at all, the far end's
+		 * status word went 0x00e9 -> 0x00ad.  So this table's other
+		 * reads are harmless, and the lane's fate does not depend on
+		 * them either way.
 		 */
 		{ 7, 0x01, "AN status" },
+		/*
+		 * The two halves of the negotiation's capability exchange
+		 * (Clause 73 registers 2 and 3).  Measured on the board on
+		 * 2026-10-29, in the lane's good state and in its dead one,
+		 * they read 0x001c and 0xc849 in both - the far end's own
+		 * advertisement, and the link partner ability it has
+		 * collected.  They are worth having in the log because they
+		 * are the only place where what the far end believes its
+		 * partner offered is visible (docs/92 §96.24.2).
+		 */
+		{ 7, 0x02, "AN advertisement" },
+		{ 7, 0x03, "AN partner ability" },
 		{ 7, 0x10, "AN capabilities" },
 		{ 7, 0x13, "AN capabilities 2" },
 		{ 7, 0x20, "AN partner" },
 		{ 0x1e, 0x697a, "SerDes option" },
 		{ 0x1e, 0x7580, "SerDes mode" },
 		{ 0x1e, 0x758d, "SerDes ctrl" },
+		{ 0x1f, 0xa434, "PHY status" },
 		{ 0x1f, 0xa438, "DSP patch" },
+		{ 0x1f, 0xa616, "PMA speed" },
 	};
 	int i;
 
