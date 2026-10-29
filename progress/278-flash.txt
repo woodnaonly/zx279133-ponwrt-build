@@ -1,13 +1,6 @@
-=== 16:45:10 beat 2 log=2479 frozen=0 wrote=unknown ===
---- signals: quiet=0s writes=1800s newproc=900s hard=5400s cmp=-cnewer proc=unknowns ---
+=== 16:47:14 beat 3 log=2710 frozen=0 wrote=yes ===
+--- signals: quiet=0s writes=1800s newproc=900s hard=5400s cmp=-cnewer proc=1s ---
 --- the last 30 lines of the build's own log ---
- make[3] -C tools/tar compile
- make[3] -C tools/m4 compile
- make[3] -C tools/autoconf-archive compile
- make[3] -C tools/ninja compile
- make[3] -C tools/xz compile
- make[3] -C tools/gnulib compile
- make[3] -C tools/expat compile
  make[3] -C tools/zlib compile
  make[3] -C tools/cpio compile
  make[3] -C tools/lzma compile
@@ -31,37 +24,42 @@
  make[3] -C tools/gengetopt compile
  make[3] -C tools/mklibs compile
  make[3] -C tools/patchelf compile
+ make[3] -C tools/gmp compile
+ make[3] -C tools/cmake compile
+ make[3] -C tools/bison compile
+ make[3] -C tools/bc compile
+ make[3] -C tools/util-linux compile
+ make[3] -C tools/elfutils compile
+ make[3] -C tools/findutils compile
 --- the build's own processes ---
-    549 Ss   /usr/bin/python3 /usr/bin/networkd-dispatcher --run-startup-triggers
-    549 Ss   /usr/bin/python3 -u /usr/sbin/waagent -daemon
-    548 Sl   /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
-    121 S    timeout --kill-after=60s 280m bash -c echo $$ > ../compile-make.pid; exec make -j"$(nproc)"
-    121 S    tee ../compile-parallel.log
-    121 S    make -j4
-    116 S    /bin/sh -c _limit=`ulimit -n`; [ "$_limit" = "unlimited" -o "$_limit" -ge 1024 ] || ulimit -n 1024; umask 022; cmd() { >/dev/null 2>&1 make -s "$@" < /dev/null || { echo "make $*: build failed. Please re-run make with -j1 V=s or V=sc for a higher verbosity level to see what's going on"; false; } } 8>&1 9>&2; cmd -r world 
-    116 S    make -s -r world
-    115 S    make --no-print-directory tools/compile
-     10 S    bash -c /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/time.pl "time: tools/flex/compile" make  -r -C tools/flex BUILD_SUBDIR="tools/flex" BUILD_VARIANT="" ALL_VARIANTS="" compile  || ?(?{ printf "%s\n" "    ERROR: tools/flex failed to build." >&8 || printf "%s\n" "    ERROR: tools/flex failed to build."; } 2>/dev/null;   exit 1;) 
-     10 S    perl /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/time.pl time: tools/flex/compile make -r -C tools/flex BUILD_SUBDIR=tools/flex BUILD_VARIANT= ALL_VARIANTS= compile
-     10 S    bash -c /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/time.pl "time: tools/fakeroot/compile" make  -r -C tools/fakeroot BUILD_SUBDIR="tools/fakeroot" BUILD_VARIANT="" ALL_VARIANTS="" compile  || ?(?{ printf "%s\n" "    ERROR: tools/fakeroot failed to build." >&8 || printf "%s\n" "    ERROR: tools/fakeroot failed to build."; } 2>/dev/null;   exit 1;) 
-     10 S    perl /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/time.pl time: tools/fakeroot/compile make -r -C tools/fakeroot BUILD_SUBDIR=tools/fakeroot BUILD_VARIANT= ALL_VARIANTS= compile
-     10 S    bash -c /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/time.pl "time: tools/gengetopt/compile" make  -r -C tools/gengetopt BUILD_SUBDIR="tools/gengetopt" BUILD_VARIANT="" ALL_VARIANTS="" compile  || ?(?{ printf "%s\n" "    ERROR: tools/gengetopt failed to build." >&8 || printf "%s\n" "    ERROR: tools/gengetopt failed to build."; } 2>/dev/null;   exit 1;) 
+    673 Ss   /usr/bin/python3 /usr/bin/networkd-dispatcher --run-startup-triggers
+    673 Ss   /usr/bin/python3 -u /usr/sbin/waagent -daemon
+    672 Sl   /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
+    245 S    timeout --kill-after=60s 280m bash -c echo $$ > ../compile-make.pid; exec make -j"$(nproc)"
+    245 S    tee ../compile-parallel.log
+    245 S    make -j4
+    240 S    /bin/sh -c _limit=`ulimit -n`; [ "$_limit" = "unlimited" -o "$_limit" -ge 1024 ] || ulimit -n 1024; umask 022; cmd() { >/dev/null 2>&1 make -s "$@" < /dev/null || { echo "make $*: build failed. Please re-run make with -j1 V=s or V=sc for a higher verbosity level to see what's going on"; false; } } 8>&1 9>&2; cmd -r world 
+    240 S    make -s -r world
+    239 S    make --no-print-directory tools/compile
+    116 S    bash -c /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/time.pl "time: tools/gmp/compile" make  -r -C tools/gmp BUILD_SUBDIR="tools/gmp" BUILD_VARIANT="" ALL_VARIANTS="" compile  || ?(?{ printf "%s\n" "    ERROR: tools/gmp failed to build." >&8 || printf "%s\n" "    ERROR: tools/gmp failed to build."; } 2>/dev/null;   exit 1;) 
+    116 S    perl /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/time.pl time: tools/gmp/compile make -r -C tools/gmp BUILD_SUBDIR=tools/gmp BUILD_VARIANT= ALL_VARIANTS= compile
+    116 S    make -r -C tools/gmp BUILD_SUBDIR=tools/gmp BUILD_VARIANT= ALL_VARIANTS= compile
+    115 S    bash -c /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/time.pl "time: tools/cmake/compile" make  -r -C tools/cmake BUILD_SUBDIR="tools/cmake" BUILD_VARIANT="" ALL_VARIANTS="" compile  || ?(?{ printf "%s\n" "    ERROR: tools/cmake failed to build." >&8 || printf "%s\n" "    ERROR: tools/cmake failed to build."; } 2>/dev/null;   exit 1;) 
+    115 S    perl /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/time.pl time: tools/cmake/compile make -r -C tools/cmake BUILD_SUBDIR=tools/cmake BUILD_VARIANT= ALL_VARIANTS= compile
 --- the oldest processes that are not kernel threads ---
-    555 Ss   /sbin/init
-    554 S<s  /lib/systemd/systemd-journald
-    554 SLsl /sbin/multipathd -d -s
-    554 Ss   /lib/systemd/systemd-udevd
-    554 Ss   /usr/lib/linux-tools/6.8.0-1070-azure/hv_kvp_daemon -n
-    553 Ss   /usr/sbin/haveged --Foreground --verbose=1
-    553 Ss   /lib/systemd/systemd-networkd
-    553 Ss   /lib/systemd/systemd-resolved
+    679 Ss   /sbin/init
+    678 S<s  /lib/systemd/systemd-journald
+    678 SLsl /sbin/multipathd -d -s
+    678 Ss   /lib/systemd/systemd-udevd
+    678 Ss   /usr/lib/linux-tools/6.8.0-1070-azure/hv_kvp_daemon -n
+    677 Ss   /usr/sbin/haveged --Foreground --verbose=1
+    677 Ss   /lib/systemd/systemd-networkd
+    677 Ss   /lib/systemd/systemd-resolved
 --- what is running under the build ---
-     10 S    bash -c (cd /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/build_dir/host/fakeroot-1.37.1.2; rm -f aclocal.m4; if [ -f ./configure.ac ] || [ -f ./configure.in ]; then [ -d ./autom4te.cache ] && rm -rf ./autom4te.cache; [ -e ./config.rpath ] || ln -s /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/config.rpath ./config.rpath; touch NEWS AUTHORS COPYING ABOUT-NLS ChangeLog; AUTOM4TE=/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/host/bin/autom4te AUTOCONF=/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/host/bin/autoconf AUTOMAKE=/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/host/bin/automake ACLOCAL=/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/host/bin/aclocal AUTOHEADER=/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/host/bin/autoheader LIBTOOLIZE=/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/host/bin/libtoolize LIBTOOL=/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/host/bin/libtool M4=/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/host/bin/m4 AUTOPOINT=true GTKDOCIZE=true LIBTOOLIZE='/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/host/bin/libtoolize --install' /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/host/bin/autoreconf -v -f -i -B /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/host/share/aclocal -I m4 -I . . || true; fi; );
-     10 S    bash -c (cd /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/build_dir/host/fakeroot-1.37.1.2; rm -f aclocal.m4; if [ -f ./configure.ac ] || [ -f ./configure.in ]; then [ -d ./autom4te.cache ] && rm -rf ./autom4te.cache; [ -e ./config.rpath ] || ln -s /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/config.rpath ./config.rpath; touch NEWS AUTHORS COPYING ABOUT-NLS ChangeLog; AUTOM4TE=/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/host/bin/autom4te AUTOCONF=/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/host/bin/autoconf AUTOMAKE=/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/host/bin/automake ACLOCAL=/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/host/bin/aclocal AUTOHEADER=/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/host/bin/autoheader LIBTOOLIZE=/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/host/bin/libtoolize LIBTOOL=/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/host/bin/libtool M4=/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/host/bin/m4 AUTOPOINT=true GTKDOCIZE=true LIBTOOLIZE='/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/host/bin/libtoolize --install' /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/host/bin/autoreconf -v -f -i -B /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/host/share/aclocal -I m4 -I . . || true; fi; );
 --- the directories the build touched lately ---
 host
 target-aarch64_cortex-a53_musl
 --- how big the root filesystem is getting ---
 --- memory and load ---
-Mem:           15988         984        3026          49       11977       14607
- 00:45:11 up 9 min,  0 users,  load average: 4.69, 2.26, 0.94
+Mem:           15988        2174        1135          49       12678       13417
+ 00:47:14 up 11 min,  0 users,  load average: 10.23, 5.11, 2.14
