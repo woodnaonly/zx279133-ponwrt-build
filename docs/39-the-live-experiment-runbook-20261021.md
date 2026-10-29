@@ -279,3 +279,93 @@ masqueraded (the reply then reaches the client's card with a checksum the
 client's stack rejects - docs/92 §96.38), and no chip register needs to be
 touched (the untag SVID and the LAN TX output port are back at their
 defaults, and the traffic still goes through).
+
+## Testing a script change without waiting for CI (2026-10-29 23:15 - 23:42)
+
+A CI run takes 50-80 minutes and the smart plug cuts the power every 10-30
+minutes, so "push, wait, boot, hope" does not fit in a window.  The script
+can be changed and tested on the board inside one window, using an older
+image as the carrier:
+
+```
+# on the PC: the scripts live in staging/trial, and the TFTP server
+# already serves that directory - a second server on another port does
+# not collide with it
+python -m http.server 8000 --directory C:\UGit\openwrt\SK-D840N\staging\trial
+
+# on the board (after the kernel is up and the PC has 192.168.9.25 again):
+wget -O /tmp/lablan8.sh http://192.168.9.25:8000/lablan8.sh
+chmod 755 /tmp/lablan8.sh
+setsid /tmp/lablan8.sh >/dev/kmsg 2>&1 &
+```
+
+The inner script is the part between `cat > /tmp/lablan.sh <<'LABEOF'` and
+`LABEOF` in `trial-files/etc/rc.d/S28lablan`; `staging/ctl/extract-lablan.py`
+pulls it out of the file, so the thing on the board is the thing in the
+repository.
+
+Two things to do on the board first: the older image's own `S28lablan` has
+to be stopped (`ps w | grep lablan` gives the pid), or two scripts fight
+over the same dnsmasq and the same bridge; and the masquerade the old
+image's `S26nat` puts on the ONT's jack has to go (`nft delete table ip
+nat`), because a masqueraded reply does not survive the client's stack.
+
+**Seven traps, all of them "the log says it works and it does not"**
+(docs/92 §96.40):
+
+1. `network reload` rebuilds the bridge asynchronously.  The address put on
+   the bridge before the rebuild is on a bridge that is about to be thrown
+   away, and `proxy_arp` - which belongs to the device - goes with it.
+   Everything that has to survive the reload is put back afterwards, and
+   every round of five seconds looks at it again.
+2. The kernel numbers the bridge's ports again on every rebuild, and the
+   old numbering is still in the log.  The mapping is read out of the log,
+   and the *last* line for a port number is the current one.
+3. The image runs dnsmasq under a ujail wrapper, and the wrapper's own
+   line carries the name too - so a count of "dnsmasq" processes is one
+   too high.
+4. This image's `ip` is busybox's.  `ip neigh show` prints
+   `192.168.1.141 dev lan5 lladdr 84:47:09:5b:bd:2c PERMANENT`, so the
+   MAC is behind `lladdr` and the device behind `dev`.  Reading the third
+   field as the MAC takes the device name instead, and reading the second
+   field as the device takes the word `dev`.
+5. The question "who is 192.168.1.1" is an ARP request, and it leaves
+   through whichever device the route to 192.168.1.1 says.  The frames
+   the DSA layer sends out of a user port are tagged and the ONT does not
+   answer a tagged ARP, so the route has to be pointed at the *bridge* for
+   the length of the question - and put back on the ONT's own jack
+   afterwards.  Watch out for another route to the same subnet: the
+   image's own network service takes the ONT's jack for the WAN when the
+   upstream search runs, and the lease it takes puts
+   `192.168.1.0/24 dev lan4` in the table.
+6. A neighbour entry that is left anywhere for the ONT's address is used
+   as it is - the kernel does not ask again, so the question is never
+   asked.  The entry is deleted on every device that has one, before
+   every attempt.
+7. A shell function that reads `$1` and is called in a pipeline reads
+   nothing at all.  The helpers that pick the MAC and the device out of a
+   line of `ip neigh show` read the standard input.
+
+**A failure has to leave a picture.** "the ONT has no MAC yet" is the
+script's own message, and it was wrong: the neighbour table had the
+entry, REACHABLE, with the MAC in it.  So the script writes what it saw
+when it gives up - the route, the bridge's ports and the neighbour table
+- into the kernel log, and the two lines that contradict each other are
+the ones to read:
+
+```
+trial: lablan: learn: the table is 192.168.1.1 dev br-lan lladdr 0c:f0:7b:39:d9:91 REACHABLE
+trial: lablan: the ONT has no MAC yet; it will be learned
+```
+
+**What "it works" looks like in the log** (measured on 2026-10-29 23:41):
+
+```
+trial: lablan: the ONT is 192.168.1.1 (0c:f0:7b:39:d9:91) on lan4
+trial: lablan: dnsmasq serves 192.168.1.101-192.168.1.200
+trial: lablan: dnsmasq servers: 1
+```
+
+and the judgement on the PC: `staging/ctl/accept-lablan.ps1` prints
+`PASS: 5 个回答`, with the lease in 192.168.1.0/24 and the neighbour for
+192.168.1.1 being the board's own MAC.
