@@ -252,12 +252,61 @@ done
 	exit 0
 }
 
+# The three things that have to be in place for the traffic to pass: the
+# ONT's jack in the bridge, the board's own address in the ONT's subnet,
+# and the ONT's MAC pinned on that jack.
+#
+# They are put in place by one function, and the function is called more
+# than once.  The reason is the network service: it rebuilds the bridge
+# underneath all of it, and a bridge that is rebuilt takes the jack out of
+# it, the board's own address with it, and the proxy ARP setting with it
+# - that setting belongs to the device, not to the kernel, so it goes
+# when the device goes.
+#
+# The race was measured on 2026-10-29: the reload and the putting of the
+# address into the bridge ran at the same time, and the address ended up
+# on a bridge that was about to be thrown away.  The hand-made run of the
+# same sequence had a "sleep 8" in it, and the script had not - so the
+# script was one boot away from doing what the hand-made run did not do.
+setup_lan() {
+	ip link set "$ONTPORT" master "$BRIDGE" 2>/dev/null
+	ip link set "$ONTPORT" up 2>/dev/null
+	ip addr replace "$BASE.100/24" dev "$BRIDGE" 2>/dev/null
+}
+
+# The ONT's MAC, learned through the bridge.  This has to happen before
+# the /32 route below is in place: with that route the ARP would leave
+# through the ONT's own jack, and the DSA layer tags the frames it sends
+# out of a user port, and the ONT does not answer a tagged ARP.  Through
+# the bridge the same question is asked from the CPU port, which is
+# untagged, and the ONT answers.
+learn_ont() {
+	if [ -z "$ONTMAC" ]; then
+		ip neigh flush dev "$BRIDGE" 2>/dev/null
+		ping -c 1 -W 1 "$ONT" >/dev/null 2>&1
+		ONTMAC=$(ip neigh show dev "$BRIDGE" 2>/dev/null |
+			awk -v ip="$ONT" '$1 == ip {print $3}')
+	fi
+	if [ -n "$ONTMAC" ]; then
+		ip neigh replace "$ONT" lladdr "$ONTMAC" nud permanent dev "$ONTPORT" 2>/dev/null
+		say "the ONT is $ONT ($ONTMAC) on $ONTPORT"
+	else
+		say "the ONT has no MAC yet; it will be learned"
+	fi
+	# The ONT's route, out of its own jack.  It is also what makes the
+	# proxy ARP answer, and what stops the kernel from calling the
+	# packet a hairpin.
+	ip route replace "$ONT"/32 dev "$ONTPORT" 2>/dev/null
+	# The proxy ARP itself, on the bridge and everywhere.
+	echo 1 > "/proc/sys/net/ipv4/conf/$BRIDGE/proxy_arp" 2>/dev/null
+	echo 1 > /proc/sys/net/ipv4/conf/all/proxy_arp 2>/dev/null
+}
+
 # The ONT's jack has to be in the bridge: a jack that is out of it is a
 # routed port, and the ONT behind it answers DHCP - which is how the
 # watcher in S26nat took this very jack for the WAN on 2026-10-29 and
 # left the board without a bridge at all.
-ip link set "$ONTPORT" master "$BRIDGE" 2>/dev/null
-ip link set "$ONTPORT" up 2>/dev/null
+setup_lan
 
 # The board's own address in the ONT's subnet: the proxy ARP answers for
 # addresses in a subnet the board is in.
@@ -271,50 +320,26 @@ if command -v uci >/dev/null 2>&1; then
 	uci set network.lan.ipaddr="$BASE.100/24" 2>/dev/null
 	uci commit network 2>/dev/null
 	/etc/init.d/network reload >/dev/kmsg 2>&1
-	# The reload takes a moment, and the bridge is rebuilt in it.
+	# The reload takes a moment, and the bridge is rebuilt in it.  The
+	# rebuilt bridge is the one the ONT's jack is in, so that is what is
+	# waited for - and the wait is capped, because the jack does not have
+	# to be in the configuration at all.
 	i=0
 	while [ $i -lt 20 ]; do
-		[ -e "/sys/class/net/$BRIDGE" ] && break
+		[ -e "/sys/class/net/$BRIDGE/brif/$ONTPORT" ] && break
 		i=$((i + 1))
 		sleep 1
 	done
 fi
-ip addr replace "$BASE.100/24" dev "$BRIDGE" 2>/dev/null
 
-# The reload rebuilt the bridge, so the ONT's jack is put back into it.
-# It normally comes back on its own - the configuration's port list has
-# it - but the whole scheme depends on it being there, and it costs
-# nothing to be sure.
-ip link set "$ONTPORT" master "$BRIDGE" 2>/dev/null
-ip link set "$ONTPORT" up 2>/dev/null
+# The reload rebuilt the bridge, so everything that was on it is put back.
+# The last call is the one that counts: an earlier one can still have been
+# working on the bridge that was about to be thrown away.
+setup_lan
+sleep 5
+setup_lan
 
-# The ONT's MAC, learned through the bridge.  This has to happen before
-# the /32 route below is in place: with that route the ARP would leave
-# through the ONT's own jack, and the DSA layer tags the frames it sends
-# out of a user port, and the ONT does not answer a tagged ARP.  Through
-# the bridge the same question is asked from the CPU port, which is
-# untagged, and the ONT answers.
-if [ -z "$ONTMAC" ]; then
-	ip neigh flush dev "$BRIDGE" 2>/dev/null
-	ping -c 1 -W 1 "$ONT" >/dev/null 2>&1
-	ONTMAC=$(ip neigh show dev "$BRIDGE" 2>/dev/null |
-		awk -v ip="$ONT" '$1 == ip {print $3}')
-fi
-if [ -n "$ONTMAC" ]; then
-	ip neigh replace "$ONT" lladdr "$ONTMAC" nud permanent dev "$ONTPORT" 2>/dev/null
-	say "the ONT is $ONT ($ONTMAC) on $ONTPORT"
-else
-	say "the ONT has no MAC yet; it will be learned"
-fi
-
-# The ONT's route, out of its own jack.  It is also what makes the proxy
-# ARP answer, and what stops the kernel from calling the packet a
-# hairpin.
-ip route replace "$ONT"/32 dev "$ONTPORT" 2>/dev/null
-
-# The proxy ARP itself, on the bridge and everywhere.
-echo 1 > "/proc/sys/net/ipv4/conf/$BRIDGE/proxy_arp" 2>/dev/null
-echo 1 > /proc/sys/net/ipv4/conf/all/proxy_arp 2>/dev/null
+learn_ont
 
 # The image's own dnsmasq has to hand out an address in the ONT's subnet,
 # or a client that asks for a lease gets one in the board's subnet and
@@ -375,6 +400,17 @@ if command -v uci >/dev/null 2>&1; then
 	uci set dhcp.@dnsmasq[0].leasefile="/tmp/dnsmasq.leases" 2>/dev/null
 	uci commit dhcp 2>/dev/null
 
+	# The bench's own dnsmasq - the one S26nat starts with a
+	# configuration of its own - holds the DHCP socket, and the image's
+	# dnsmasq cannot bind it while it does: it dies with "failed to bind
+	# DHCP server socket: Address in use".  It is stopped first, so that
+	# the one that serves is the one whose configuration is written down.
+	for p in $(ps w 2>/dev/null | grep dnsmasq | grep -v grep |
+		grep -e dnsmasq-trial.conf -e dnsmasq-lablan.conf |
+		awk '{print $1}'); do
+		kill "$p" 2>/dev/null
+	done
+	sleep 1
 	# The server is restarted through the image's own init script, so
 	# there is exactly one dnsmasq and procd knows which one it is.
 	/etc/init.d/dnsmasq restart >/dev/kmsg 2>&1
@@ -388,6 +424,12 @@ if command -v uci >/dev/null 2>&1; then
 	else
 		say "dnsmasq does not serve $BASE.0/24; the clients will get no lease"
 	fi
+	# The configuration that is really in force, and how many servers are
+	# running.  Two servers means that one of them could not bind the
+	# socket, and the one that did is not necessarily the one whose
+	# configuration is written down.
+	grep -h -E 'dhcp-range|dhcp-option|leasefile' /var/etc/dnsmasq.conf.* 2>/dev/null >/dev/kmsg
+	say "dnsmasq processes: $(ps w 2>/dev/null | grep -c '[d]nsmasq')"
 fi
 
 # The bridge's own port numbers, as the kernel states them.  It is
@@ -407,8 +449,29 @@ refresh_clients
 # Every five seconds, not every minute: a client that has just taken a
 # lease asks for the ONT at once, and the answer cannot reach it until
 # its MAC is pinned - so the pin has to keep up with the client.
+#
+# The bridge is looked at in the same round: the network service can
+# rebuild it at any time, and then the ONT's jack is out of it, the
+# board's own address is gone and the proxy ARP setting is gone with it.
+# None of that can be left to chance, and the round is five seconds long,
+# so it is cheap to look.
 while true; do
 	sleep 5
+	if [ ! -e "/sys/class/net/$BRIDGE/brif/$ONTPORT" ]; then
+		say "the ONT's jack is out of the bridge; it goes back in"
+		setup_lan
+	fi
+	if ! ip addr show dev "$BRIDGE" 2>/dev/null |
+		grep -q "inet $BASE.100/"; then
+		say "the board's address is not on $BRIDGE; it goes back"
+		ip addr replace "$BASE.100/24" dev "$BRIDGE" 2>/dev/null
+	fi
+	# The ONT's pin and its route, and the proxy ARP.
+	if [ -n "$ONTMAC" ]; then
+		ip neigh replace "$ONT" lladdr "$ONTMAC" nud permanent dev "$ONTPORT" 2>/dev/null
+	fi
+	ip route replace "$ONT"/32 dev "$ONTPORT" 2>/dev/null
+	echo 1 > "/proc/sys/net/ipv4/conf/$BRIDGE/proxy_arp" 2>/dev/null
 	refresh_clients
 done
 LABEOF
