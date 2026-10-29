@@ -131,6 +131,21 @@ dev_of_port() {
 	echo "$d"
 }
 
+# The route and the pin for one client in the ONT's subnet.
+pin_client() {
+	ip=$1
+	mac=$2
+	dev=$(awk -v mac="$mac" '$1 == mac {print $2; exit}' /tmp/lablan-fdb)
+	[ -n "$dev" ] || return 0
+	# The pin comes first: the board must not have to ask for the MAC,
+	# because the frames it sends out of a user port are tagged and the
+	# client does not answer a tagged ARP.
+	ip neigh replace "$ip" lladdr "$mac" nud permanent dev "$dev" 2>/dev/null
+	ip route replace "$ip"/32 dev "$dev" 2>/dev/null
+	echo "$ip" >> /tmp/lablan-clients
+	say "$ip ($mac) is in $dev"
+}
+
 # A route for every client in the ONT's subnet, out of the jack it is in,
 # and the client's MAC pinned on that same jack.
 refresh_clients() {
@@ -147,6 +162,24 @@ refresh_clients() {
 		echo "$mac $dev"
 	done > /tmp/lablan-fdb
 
+	# The clients the DHCP server has handed an address to.  The lease
+	# file is the reliable source: it has both the address and the MAC
+	# in it, while the bridge's neighbour table only knows an address
+	# once somebody has asked for it - and nobody has, unless the ONT
+	# has.
+	if [ -s /tmp/dnsmasq.leases ]; then
+		awk '{print $3, $2}' /tmp/dnsmasq.leases |
+		while read ip mac; do
+			case "$ip" in
+			"$BASE".*) ;;
+			*) continue ;;
+			esac
+			[ -n "$mac" ] || continue
+			pin_client "$ip" "$mac"
+		done
+	fi
+
+	# And the clients that have an address of their own.
 	ip neigh show dev "$BRIDGE" 2>/dev/null |
 	while read ip ll mac state rest; do
 		case "$ip" in
@@ -154,15 +187,7 @@ refresh_clients() {
 		*) continue ;;
 		esac
 		[ -n "$mac" ] || continue
-		dev=$(awk -v mac="$mac" '$1 == mac {print $2; exit}' /tmp/lablan-fdb)
-		[ -n "$dev" ] || continue
-		# The pin comes first: the board must not have to ask for
-		# the MAC, because the frames it sends out of a user port
-		# are tagged and the client does not answer a tagged ARP.
-		ip neigh replace "$ip" lladdr "$mac" nud permanent dev "$dev" 2>/dev/null
-		ip route replace "$ip"/32 dev "$dev" 2>/dev/null
-		say "$ip is in $dev"
-		echo "$ip" >> /tmp/lablan-clients
+		pin_client "$ip" "$mac"
 	done
 
 	# The pins of clients that are gone are of no use to anybody and
