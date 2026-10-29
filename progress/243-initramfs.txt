@@ -1,27 +1,6 @@
-=== 01:19:18 beat 2 log=1826 frozen=0 wrote=unknown ===
---- signals: quiet=0s writes=1800s newproc=900s hard=5400s cmp=-cnewer proc=unknowns ---
+=== 01:21:21 beat 3 log=2541 frozen=0 wrote=yes ===
+--- signals: quiet=0s writes=1800s newproc=900s hard=5400s cmp=-cnewer proc=0s ---
 --- the last 30 lines of the build's own log ---
-WARNING: Makefile 'package/network/services/dnsmasq/Makefile' has a dependency on 'nftables-json', which does not exist
-WARNING: Makefile 'package/network/config/firewall4/Makefile' has a dependency on 'nftables-json', which does not exist
-WARNING: Makefile 'package/feeds/packages/gst1-plugins-base/Makefile' has a dependency on 'libmesa', which does not exist
-WARNING: Makefile 'package/feeds/packages/gst1-plugins-base/Makefile' has a dependency on 'libwayland', which does not exist
-WARNING: Makefile 'package/feeds/packages/gst1-plugins-base/Makefile' has a dependency on 'libgraphene', which does not exist
-WARNING: Makefile 'package/feeds/packages/pbr/Makefile' has a dependency on 'nftables-json', which does not exist
-WARNING: Makefile 'package/feeds/packages/prometheus-node-exporter-lua/Makefile' has a dependency on 'nftables-json', which does not exist
-WARNING: Makefile 'package/feeds/packages/uspot/Makefile' has a dependency on 'nftables-json', which does not exist
-make[2]: Entering directory '/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/config'
-make[2]: 'conf' is up to date.
-make[2]: Leaving directory '/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/config'
- make[1] world
- make[2] tools/compile
- make[2] package/cleanup
- make[3] -C tools/libdeflate compile
- make[3] -C tools/flock compile
- make[3] -C tools/zstd compile
- make[3] -C tools/sed compile
- make[3] -C tools/patch compile
- make[3] -C tools/tar compile
- make[3] -C tools/m4 compile
  make[3] -C tools/autoconf-archive compile
  make[3] -C tools/ninja compile
  make[3] -C tools/xz compile
@@ -31,35 +10,56 @@ make[2]: Leaving directory '/home/runner/work/zx279133-ponwrt-build/zx279133-pon
  make[3] -C tools/cpio compile
  make[3] -C tools/lzma compile
  make[3] -C tools/make-ext4fs compile
+ make[3] -C tools/mtools compile
+ make[3] -C tools/patch-image compile
+ make[3] -C tools/squashfs4 compile
+ make[3] -C tools/sstrip compile
+ make[3] -C tools/zip compile
+ make[3] -C tools/autoconf compile
+ make[3] -C tools/meson compile
+ make[3] -C tools/pkgconf compile
+ make[3] -C tools/lz4 compile
+ make[3] -C tools/missing-macros compile
+ make[3] -C tools/automake compile
+ make[3] -C tools/libressl compile
+ make[3] -C tools/libtool compile
+ make[3] -C tools/dosfstools compile
+ make[3] -C tools/flex compile
+ make[3] -C tools/fakeroot compile
+ make[3] -C tools/gengetopt compile
+ make[3] -C tools/mklibs compile
+ make[3] -C tools/patchelf compile
+ make[3] -C tools/gmp compile
+ make[3] -C tools/cmake compile
 --- the build's own processes ---
-   1028 Ss   /usr/bin/python3 /usr/bin/networkd-dispatcher --run-startup-triggers
-   1028 Ss   /usr/bin/python3 -u /usr/sbin/waagent -daemon
-   1027 Sl   /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
-    121 S    timeout --kill-after=60s 280m bash -c echo $$ > ../compile-make.pid; exec make -j"$(nproc)"
-    121 S    tee ../compile-parallel.log
-    121 S    make -j4
-    111 S    /bin/sh -c _limit=`ulimit -n`; [ "$_limit" = "unlimited" -o "$_limit" -ge 1024 ] || ulimit -n 1024; umask 022; cmd() { >/dev/null 2>&1 make -s "$@" < /dev/null || { echo "make $*: build failed. Please re-run make with -j1 V=s or V=sc for a higher verbosity level to see what's going on"; false; } } 8>&1 9>&2; cmd -r world 
-    111 S    make -s -r world
-    109 S    make --no-print-directory tools/compile
-     50 S    bash -c /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/time.pl "time: tools/m4/compile" make  -r -C tools/m4 BUILD_SUBDIR="tools/m4" BUILD_VARIANT="" ALL_VARIANTS="" compile  || ?(?{ printf "%s\n" "    ERROR: tools/m4 failed to build." >&8 || printf "%s\n" "    ERROR: tools/m4 failed to build."; } 2>/dev/null;   exit 1;) 
-     50 S    bash -c /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/time.pl "time: tools/ninja/compile" make  -r -C tools/ninja BUILD_SUBDIR="tools/ninja" BUILD_VARIANT="" ALL_VARIANTS="" compile  || ?(?{ printf "%s\n" "    ERROR: tools/ninja failed to build." >&8 || printf "%s\n" "    ERROR: tools/ninja failed to build."; } 2>/dev/null;   exit 1;) 
-     50 S    perl /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/time.pl time: tools/m4/compile make -r -C tools/m4 BUILD_SUBDIR=tools/m4 BUILD_VARIANT= ALL_VARIANTS= compile
-     50 S    perl /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/time.pl time: tools/ninja/compile make -r -C tools/ninja BUILD_SUBDIR=tools/ninja BUILD_VARIANT= ALL_VARIANTS= compile
-     50 S    make -r -C tools/m4 BUILD_SUBDIR=tools/m4 BUILD_VARIANT= ALL_VARIANTS= compile
+   1151 Ss   /usr/bin/python3 /usr/bin/networkd-dispatcher --run-startup-triggers
+   1151 Ss   /usr/bin/python3 -u /usr/sbin/waagent -daemon
+   1150 Sl   /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
+    244 S    timeout --kill-after=60s 280m bash -c echo $$ > ../compile-make.pid; exec make -j"$(nproc)"
+    244 S    tee ../compile-parallel.log
+    244 S    make -j4
+    234 S    /bin/sh -c _limit=`ulimit -n`; [ "$_limit" = "unlimited" -o "$_limit" -ge 1024 ] || ulimit -n 1024; umask 022; cmd() { >/dev/null 2>&1 make -s "$@" < /dev/null || { echo "make $*: build failed. Please re-run make with -j1 V=s or V=sc for a higher verbosity level to see what's going on"; false; } } 8>&1 9>&2; cmd -r world 
+    234 S    make -s -r world
+    232 S    make --no-print-directory tools/compile
+     38 S    bash -c /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/time.pl "time: tools/flex/compile" make  -r -C tools/flex BUILD_SUBDIR="tools/flex" BUILD_VARIANT="" ALL_VARIANTS="" compile  || ?(?{ printf "%s\n" "    ERROR: tools/flex failed to build." >&8 || printf "%s\n" "    ERROR: tools/flex failed to build."; } 2>/dev/null;   exit 1;) 
+     38 S    perl /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/time.pl time: tools/flex/compile make -r -C tools/flex BUILD_SUBDIR=tools/flex BUILD_VARIANT= ALL_VARIANTS= compile
+     38 S    bash -c /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/time.pl "time: tools/gengetopt/compile" make  -r -C tools/gengetopt BUILD_SUBDIR="tools/gengetopt" BUILD_VARIANT="" ALL_VARIANTS="" compile  || ?(?{ printf "%s\n" "    ERROR: tools/gengetopt failed to build." >&8 || printf "%s\n" "    ERROR: tools/gengetopt failed to build."; } 2>/dev/null;   exit 1;) 
+     38 S    perl /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/time.pl time: tools/gengetopt/compile make -r -C tools/gengetopt BUILD_SUBDIR=tools/gengetopt BUILD_VARIANT= ALL_VARIANTS= compile
+     38 S    make -r -C tools/flex BUILD_SUBDIR=tools/flex BUILD_VARIANT= ALL_VARIANTS= compile
 --- the oldest processes that are not kernel threads ---
-   1037 Ss   /sbin/init
-   1036 S<s  /lib/systemd/systemd-journald
-   1035 SLsl /sbin/multipathd -d -s
-   1035 Ss   /lib/systemd/systemd-udevd
-   1035 Ss   /usr/lib/linux-tools/6.8.0-1070-azure/hv_kvp_daemon -n
-   1033 Ss   /usr/sbin/haveged --Foreground --verbose=1
-   1032 Ss   /lib/systemd/systemd-networkd
-   1032 Ss   /lib/systemd/systemd-resolved
+   1160 Ss   /sbin/init
+   1159 S<s  /lib/systemd/systemd-journald
+   1158 SLsl /sbin/multipathd -d -s
+   1158 Ss   /lib/systemd/systemd-udevd
+   1158 Ss   /usr/lib/linux-tools/6.8.0-1070-azure/hv_kvp_daemon -n
+   1156 Ss   /usr/sbin/haveged --Foreground --verbose=1
+   1155 Ss   /lib/systemd/systemd-networkd
+   1155 Ss   /lib/systemd/systemd-resolved
 --- what is running under the build ---
 --- the directories the build touched lately ---
 host
 target-aarch64_cortex-a53_musl
 --- how big the root filesystem is getting ---
 --- memory and load ---
-Mem:           15988        1206        4176          50       10605       14384
- 09:19:18 up 17 min,  0 users,  load average: 5.11, 2.34, 1.04
+Mem:           15988         907        3925          51       11155       14682
+ 09:21:21 up 19 min,  0 users,  load average: 5.10, 3.21, 1.53
