@@ -326,18 +326,24 @@ setup_lan() {
 # untagged, and the ONT answers.
 learn_ont() {
 	if [ -z "$ONTMAC" ]; then
-		# The route to the ONT and the pin on it have to go before the
-		# question is asked.  With them in place the ARP leaves through
-		# the ONT's own jack, and the DSA layer tags the frames it sends
-		# out of a user port - and the ONT does not answer a tagged ARP.
+		# The question has to be asked out of the bridge.  The frames
+		# the DSA layer sends out of a user port are tagged, and the ONT
+		# does not answer a tagged ARP - so the route to the ONT is
+		# pointed at the bridge for the length of the question.
 		#
-		# Measured on 2026-10-29 23:17: an earlier run of this script had
-		# left the route behind, the question went through it, and the
-		# ONT's MAC was not learned at all - the whole run then depended
-		# on the pin that the client's own round puts in.
-		ip route del "$ONT"/32 dev "$ONTPORT" 2>/dev/null
+		# It has to be pointed there and not merely left alone, because
+		# something else may be routed to the same subnet.  Measured on
+		# 2026-10-29 23:26: the image's own network service had taken
+		# the ONT's jack for the WAN and had a lease on it, so the route
+		# to 192.168.1.0/24 was out of that jack - and the question went
+		# out of it, tagged, and was never answered.
+		#
+		# The pin on the ONT has to go as well: with a permanent entry
+		# the kernel does not ask at all, it sends the packet straight
+		# out of that jack.
 		ip neigh del "$ONT" dev "$ONTPORT" 2>/dev/null
 		ip neigh flush dev "$BRIDGE" 2>/dev/null
+		ip route replace "$ONT"/32 dev "$BRIDGE" 2>/dev/null
 		# The ONT needs a moment after the bridge has been rebuilt, so
 		# the question is asked a few times before it is given up on.
 		i=0
@@ -348,6 +354,10 @@ learn_ont() {
 		done
 		ONTMAC=$(ip neigh show dev "$BRIDGE" 2>/dev/null |
 			awk -v ip="$ONT" '$1 == ip {print; exit}' | mac_of_line)
+		# The route to the ONT goes back to the ONT's own jack: the
+		# traffic to it has to leave that way, and it is also what makes
+		# the proxy ARP answer.
+		ip route replace "$ONT"/32 dev "$ONTPORT" 2>/dev/null
 	fi
 	if [ -n "$ONTMAC" ]; then
 		ip neigh replace "$ONT" lladdr "$ONTMAC" nud permanent dev "$ONTPORT" 2>/dev/null
