@@ -130,6 +130,10 @@ dev_of_port() {
 pin_client() {
 	ip=$1
 	mac=$2
+	case "$mac" in
+	??:??:??:??:??:??) ;;
+	*) return 0 ;;
+	esac
 	dev=$(awk -v mac="$mac" '$1 == mac {print $2; exit}' /tmp/lablan-fdb)
 	[ -n "$dev" ] || return 0
 	# The pin comes first: the board must not have to ask for the MAC,
@@ -137,8 +141,12 @@ pin_client() {
 	# client does not answer a tagged ARP.
 	ip neigh replace "$ip" lladdr "$mac" nud permanent dev "$dev" 2>/dev/null
 	ip route replace "$ip"/32 dev "$dev" 2>/dev/null
-	echo "$ip" >> /tmp/lablan-clients
-	say "$ip ($mac) is in $dev"
+	# The log is where the round's evidence lives, so it is written to
+	# when something changes and not on every round.
+	line="$ip $mac $dev"
+	grep -q "^$line$" /tmp/lablan-clients.old 2>/dev/null ||
+		say "$ip ($mac) is in $dev"
+	echo "$line" >> /tmp/lablan-clients
 }
 
 # A route for every client in the ONT's subnet, out of the jack it is in,
@@ -199,18 +207,24 @@ refresh_clients() {
 	done
 
 	# The pins of clients that are gone are of no use to anybody and
-	# would keep a stale address on a jack for ever.
+	# would keep a stale address on a jack for ever.  Only the pins on
+	# a jack are touched: the ones on the bridge are the kernel's own
+	# business, and they are there for the proxy ARP to work.
 	ip neigh show nud permanent 2>/dev/null |
-	while read ip ll mac state rest; do
+	while read ip dev ll mac state rest; do
 		case "$ip" in
 		"$BASE".*) ;;
 		*) continue ;;
 		esac
 		[ "$ip" = "$ONT" ] && continue
-		grep -q "^$ip$" /tmp/lablan-clients 2>/dev/null && continue
-		ip neigh del "$ip" nud permanent 2>/dev/null
+		[ "$dev" = "$BRIDGE" ] && continue
+		grep -q "^$ip " /tmp/lablan-clients 2>/dev/null && continue
+		ip neigh del "$ip" dev "$dev" nud permanent 2>/dev/null
 		say "the pin of $ip is gone"
 	done
+
+	# This round's list becomes the next round's reference.
+	cp /tmp/lablan-clients /tmp/lablan-clients.old 2>/dev/null
 }
 
 # netifd builds the bridge a moment after the network init returns.
