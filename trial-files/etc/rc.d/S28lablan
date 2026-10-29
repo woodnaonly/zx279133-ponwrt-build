@@ -160,15 +160,20 @@ dev_of_port() {
 #
 # The two helpers below ask for the word, so they do not care whether the
 # line says "PERMANENT" or "nud permanent".
+#
+# Both read the standard input.  A helper that reads an argument and is
+# called in a pipeline reads nothing at all - the pipeline gives it no
+# argument - and that is how the MAC came out empty while the neighbour
+# table had it (measured on 2026-10-29 23:39).
 mac_of_line() {
-	echo "$1" | awk '{
+	awk '{
 		for (i = 1; i <= NF; i++)
 			if ($i == "lladdr") { print $(i + 1); exit }
 	}'
 }
 
 dev_of_line() {
-	echo "$1" | awk '{
+	awk '{
 		for (i = 1; i <= NF; i++)
 			if ($i == "dev") { print $(i + 1); exit }
 	}'
@@ -251,7 +256,7 @@ refresh_clients() {
 		"$BASE".*) ;;
 		*) continue ;;
 		esac
-		mac=$(mac_of_line "$line")
+		mac=$(echo "$line" | mac_of_line)
 		[ -n "$mac" ] || continue
 		pin_client "$ip" "$mac"
 	done
@@ -272,7 +277,7 @@ refresh_clients() {
 		*) continue ;;
 		esac
 		[ "$ip" = "$ONT" ] && continue
-		dev=$(dev_of_line "$line")
+		dev=$(echo "$line" | dev_of_line)
 		[ -n "$dev" ] || continue
 		[ "$dev" = "$BRIDGE" ] && continue
 		grep -q "^$ip " /tmp/lablan-clients 2>/dev/null && continue
