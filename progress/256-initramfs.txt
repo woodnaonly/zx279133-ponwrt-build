@@ -1,61 +1,63 @@
-=== 10:26:55 beat 30 log=4959 frozen=0 wrote=yes ===
+=== 10:33:05 beat 33 log=7359 frozen=0 wrote=yes ===
 --- signals: quiet=0s writes=1800s newproc=900s hard=5400s cmp=-cnewer proc=0s ---
 --- the last 30 lines of the build's own log ---
- make[4] scripts/config/conf
- make[3] -C package/system/usign host-compile
- make[3] -C feeds/luci/modules/luci-base host-compile
- make[3] -C feeds/luci/contrib/package/csstidy host-compile
- make[3] -C package/system/apk host-compile
- make[3] -C package/libs/libubox host-compile
- make[3] -C package/system/ucert host-compile
- make[3] -C package/libs/toolchain compile
- make[3] -C package/kernel/gpio-button-hotplug compile
- make[3] -C package/libs/libnl-tiny compile
- make[3] -C package/libs/libjson-c compile
- make[3] -C package/utils/lua compile
- make[3] -C package/libs/libmd compile
- make[3] -C package/libs/zlib compile
- make[3] -C package/firmware/linux-firmware compile
- make[3] -C package/system/fwtool compile
- make[3] -C package/libs/libsepol compile
- make[3] -C package/libs/pcre2 compile
- make[3] -C package/libs/musl-fts compile
- make[3] -C package/system/openwrt-keyring compile
- make[3] -C feeds/luci/libs/luci-lib-uqr compile
- make[3] -C feeds/packages/libs/libcbor compile
- make[3] -C feeds/packages/libs/libevdev compile
- make[3] -C package/libs/openssl compile
- make[3] -C feeds/packages/libs/libpam compile
- make[3] -C package/utils/bzip2 compile
- make[3] -C package/libs/argp-standalone compile
- make[3] -C package/libs/libmnl compile
- make[3] -C package/libs/mbedtls compile
- make[3] -C package/network/services/dropbear compile
+ make[3] -C package/utils/busybox compile
+ make[3] -C package/network/utils/iwinfo compile
+ make[3] -C feeds/packages/net/cgi-io compile
+ make[3] -C package/network/services/dnsmasq compile
+ make[3] -C package/network/utils/iptables compile
+ make[3] -C package/network/utils/nftables compile
+ make[3] -C package/utils/ucode compile
+ make[3] -C package/libs/libbpf compile
+ make[3] -C package/libs/udebug compile
+ make[3] -C feeds/luci/contrib/package/lucihttp compile
+ make[3] -C package/system/rpcd compile
+ make[3] -C feeds/luci/contrib/package/ucode-mod-html compile
+ make[3] -C package/libs/uclient compile
+ make[3] -C package/network/services/uhttpd compile
+ make[3] -C package/network/config/netifd compile
+ make[3] -C package/system/ubox compile
+ make[3] -C feeds/luci/libs/rpcd-mod-luci compile
+ make[3] -C package/system/urandom-seed compile
+ make[3] -C package/system/fstools compile
+ make[3] -C feeds/luci/modules/luci-base compile
+ make[3] -C package/network/utils/iproute2 compile
+ make[3] -C package/system/procd compile
+ make[3] -C feeds/luci/modules/luci-mod-network compile
+ make[3] -C feeds/luci/modules/luci-mod-status compile
+ make[3] -C feeds/luci/modules/luci-mod-system compile
+ make[3] -C feeds/luci/themes/luci-theme-bootstrap compile
+ make[3] -C package/base-files compile
+ make[3] -C feeds/luci/modules/luci-mod-admin-full compile
+ make[3] -C feeds/packages/libs/libfido2 compile
+ make[3] -C package/system/apk compile
 --- the build's own processes ---
-   4387 Ss   /usr/bin/python3 /usr/bin/networkd-dispatcher --run-startup-triggers
-   4387 Ss   /usr/bin/python3 -u /usr/sbin/waagent -daemon
-   4386 Sl   /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
-   3540 S    timeout --kill-after=60s 280m bash -c echo $$ > ../compile-make.pid; exec make -j"$(nproc)"
-   3540 S    tee ../compile-parallel.log
-   3540 S    make -j4
-   3530 S    /bin/sh -c _limit=`ulimit -n`; [ "$_limit" = "unlimited" -o "$_limit" -ge 1024 ] || ulimit -n 1024; umask 022; cmd() { >/dev/null 2>&1 make -s "$@" < /dev/null || { echo "make $*: build failed. Please re-run make with -j1 V=s or V=sc for a higher verbosity level to see what's going on"; false; } } 8>&1 9>&2; cmd -r world 
-   3530 S    make -s -r world
-    135 S    make --no-print-directory package/compile
-     63 S    bash -c /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/time.pl "time: package/libs/openssl/compile" make  -r -C package/libs/openssl BUILD_SUBDIR="package/libs/openssl" BUILD_VARIANT="" ALL_VARIANTS="" compile  || ?(?{ printf "%s\n" "    ERROR: package/libs/openssl failed to build." >&8 || printf "%s\n" "    ERROR: package/libs/openssl failed to build."; } 2>/dev/null;   exit 1;) 
-     63 S    perl /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/time.pl time: package/libs/openssl/compile make -r -C package/libs/openssl BUILD_SUBDIR=package/libs/openssl BUILD_VARIANT= ALL_VARIANTS= compile
-     63 S    make -r -C package/libs/openssl BUILD_SUBDIR=package/libs/openssl BUILD_VARIANT= ALL_VARIANTS= compile
-     55 S    make --jobserver-auth=3,4 -C /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/build_dir/target-aarch64_cortex-a53_musl/openssl-3.5.7 CC=aarch64-openwrt-linux-musl-gcc SOURCE_DATE_EPOCH=1792990681 all
-     48 S    /bin/sh -c "make" depend && "make" _build_sw
+   4756 Ss   /usr/bin/python3 /usr/bin/networkd-dispatcher --run-startup-triggers
+   4756 Ss   /usr/bin/python3 -u /usr/sbin/waagent -daemon
+   4755 Sl   /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
+   3909 S    timeout --kill-after=60s 280m bash -c echo $$ > ../compile-make.pid; exec make -j"$(nproc)"
+   3909 S    tee ../compile-parallel.log
+   3909 S    make -j4
+   3899 S    /bin/sh -c _limit=`ulimit -n`; [ "$_limit" = "unlimited" -o "$_limit" -ge 1024 ] || ulimit -n 1024; umask 022; cmd() { >/dev/null 2>&1 make -s "$@" < /dev/null || { echo "make $*: build failed. Please re-run make with -j1 V=s or V=sc for a higher verbosity level to see what's going on"; false; } } 8>&1 9>&2; cmd -r world 
+   3899 S    make -s -r world
+    504 S    make --no-print-directory package/compile
+      8 S    bash -c /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/time.pl "time: package/feeds/packages/libfido2/compile" make  -r -C package/feeds/packages/libfido2 BUILD_SUBDIR="package/feeds/packages/libfido2" BUILD_VARIANT="" ALL_VARIANTS="" compile  || ?(?{ printf "%s\n" "    ERROR: package/feeds/packages/libfido2 failed to build." >&8 || printf "%s\n" "    ERROR: package/feeds/packages/libfido2 failed to build."; } 2>/dev/null;   exit 1;) 
+      8 S    bash -c /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/time.pl "time: package/system/apk/mbedtls/compile" make  -r -C package/system/apk BUILD_SUBDIR="package/system/apk" BUILD_VARIANT="mbedtls" ALL_VARIANTS="mbedtls " compile  || ?(?{ printf "%s\n" "    ERROR: package/system/apk failed to build (build variant: mbedtls)." >&8 || printf "%s\n" "    ERROR: package/system/apk failed to build (build variant: mbedtls)."; } 2>/dev/null;   exit 1;) 
+      8 S    perl /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/time.pl time: package/feeds/packages/libfido2/compile make -r -C package/feeds/packages/libfido2 BUILD_SUBDIR=package/feeds/packages/libfido2 BUILD_VARIANT= ALL_VARIANTS= compile
+      8 S    perl /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/time.pl time: package/system/apk/mbedtls/compile make -r -C package/system/apk BUILD_SUBDIR=package/system/apk BUILD_VARIANT=mbedtls ALL_VARIANTS=mbedtls  compile
+      8 R    make -r -C package/feeds/packages/libfido2 BUILD_SUBDIR=package/feeds/packages/libfido2 BUILD_VARIANT= ALL_VARIANTS= compile
 --- the oldest processes that are not kernel threads ---
-   4396 Ss   /sbin/init
-   4395 S<s  /lib/systemd/systemd-journald
-   4394 SLsl /sbin/multipathd -d -s
-   4394 Ss   /lib/systemd/systemd-udevd
-   4394 Ss   /usr/lib/linux-tools/6.8.0-1070-azure/hv_kvp_daemon -n
-   4393 Ss   /usr/sbin/haveged --Foreground --verbose=1
-   4392 Ss   /lib/systemd/systemd-networkd
-   4392 Ss   /lib/systemd/systemd-resolved
+   4765 Ss   /sbin/init
+   4764 S<s  /lib/systemd/systemd-journald
+   4763 SLsl /sbin/multipathd -d -s
+   4763 Ss   /lib/systemd/systemd-udevd
+   4763 Ss   /usr/lib/linux-tools/6.8.0-1070-azure/hv_kvp_daemon -n
+   4762 Ss   /usr/sbin/haveged --Foreground --verbose=1
+   4761 Ss   /lib/systemd/systemd-networkd
+   4761 Ss   /lib/systemd/systemd-resolved
 --- what is running under the build ---
+      8 S    bash -c /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/time.pl "time: package/system/apk/mbedtls/compile" make  -r -C package/system/apk BUILD_SUBDIR="package/system/apk" BUILD_VARIANT="mbedtls" ALL_VARIANTS="mbedtls " compile  || ?(?{ printf "%s\n" "    ERROR: package/system/apk failed to build (build variant: mbedtls)." >&8 || printf "%s\n" "    ERROR: package/system/apk failed to build (build variant: mbedtls)."; } 2>/dev/null;   exit 1;) 
+      8 S    perl /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/time.pl time: package/system/apk/mbedtls/compile make -r -C package/system/apk BUILD_SUBDIR=package/system/apk BUILD_VARIANT=mbedtls ALL_VARIANTS=mbedtls  compile
 --- the directories the build touched lately ---
 target-aarch64_cortex-a53_musl
 hostpkg
@@ -63,5 +65,5 @@ toolchain-aarch64_cortex-a53_gcc-14.3.0_musl
 host
 --- how big the root filesystem is getting ---
 --- memory and load ---
-Mem:           15988        1085         258          52       14644       14503
- 18:26:56 up  1:13,  0 users,  load average: 9.23, 6.43, 5.65
+Mem:           15988        1017         232          52       14738       14571
+ 18:33:05 up  1:19,  0 users,  load average: 7.15, 7.01, 6.20
