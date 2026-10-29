@@ -397,3 +397,45 @@ right**".  The judgement is therefore not "dnsmasq is running" - `pidof
 dnsmasq` sees the one that is alive, which is the one that won - but
 "**the one that is alive has the right range**", which means looking at the
 process's own command line and at the range in the generated configuration.
+
+**The acceptance, with nothing done by hand on the board** (measured on
+2026-10-30 00:28-00:36 on image #270):
+
+1. give the PC 192.168.9.25 (the boot needs it);
+2. boot the board: `tftpboot 0x89000000 run270.itb` - the log must show
+   `Bytes transferred = 12175420`, the length of the local file, and no
+   `Wrong Image Format`;
+3. wait 70-90 seconds and **do not touch the board** - the image's own
+   `S28lablan` does the whole thing;
+4. on the PC: `pwsh -NoProfile -File staging/ctl/accept-lablan.ps1 -IfIndex 19`.
+
+The pass looks like this - DHCP gives the client an address in the ONT's
+subnet, and the client can reach the ONT:
+
+```
+== 拿到租约 192.168.1.141/24 ==
+== ping 192.168.1.1 ==
+LinkLayerAddress : D0-45-8D-84-09-00
+PASS: 5 个回答
+```
+
+and on the board:
+
+```
+trial: lablan: the ONT is 192.168.1.1 (0c:f0:7b:39:d9:91) on lan4
+trial: lablan: dnsmasq serves 192.168.1.101-192.168.1.200
+192.168.1.141 dev lan5 lladdr 84:47:09:5b:bd:2c PERMANENT
+192.168.1.1 dev lan4 lladdr 0c:f0:7b:39:d9:91 PERMANENT
+192.168.1.1 dev lan4 scope link
+192.168.1.141 dev lan5 scope link
+```
+
+**The dnsmasq that is alive has to be the one whose configuration is
+right.**  On image #269 this acceptance failed with the client taking
+`192.168.9.179` - the bench's own dnsmasq was holding the DHCP socket, the
+image's dnsmasq had died on `failed to bind DHCP server socket: Address in
+use`, and the generated configuration (with the right range) belonged to
+the one that was dead.  So after the acceptance, check
+`ps w | grep dnsmasq`: there must be a `/usr/sbin/dnsmasq -C
+/var/etc/dnsmasq.conf.*`, and there must **not** be a
+`dnsmasq -C /tmp/dnsmasq-trial.conf`.
