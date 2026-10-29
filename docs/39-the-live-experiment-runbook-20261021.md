@@ -47,7 +47,7 @@ made.
 | XMAC0 MODE_CFG | `0x140280` | |
 | XMAC0 DUPLEX | `0x140500` | bit 24 is half duplex |
 | XMAC0 MISC_CFG | `0x143400` | bit 9 is the IPC bit |
-| XMAC0 TX frames | `0x142070` | **the counter that says whether a frame moved** |
+| XMAC0 TX frames | `0x142070` | **WITHDRAWN - this window is not the data path's counter (docs/92 §96.33.2)** |
 | XMAC0 TX good | `0x1420b0` | |
 | NPPT XMAC link | `0x0084` | |
 | NPPT XPCS0 status | `0x0090` | bits 11..13 are the PCS link |
@@ -78,7 +78,9 @@ Read it:
 ```
 echo "reg 0x140000" > /sys/kernel/debug/zx279133-9132
 echo "reg 0x140010" > /sys/kernel/debug/zx279133-9132
-echo "reg 0x142070" > /sys/kernel/debug/zx279133-9132
+echo "reg 0x140020" > /sys/kernel/debug/zx279133-9132
+echo "reg 0x140280" > /sys/kernel/debug/zx279133-9132
+echo "reg 0x143400" > /sys/kernel/debug/zx279133-9132
 ```
 
 The values the vendor's own `xamc_init_conf_by_speed()` writes are TX_CTRL
@@ -87,11 +89,32 @@ The values the vendor's own `xamc_init_conf_by_speed()` writes are TX_CTRL
 of TX_CTRL and of RX_CTRL.  If the words read back as anything else, the
 program did not happen or something overwrote it.
 
-### E2 - did the frame get out of the MAC?
+### E2 - did the frame get out of the MAC?  (the old counter is void)
 
-`reg 0x142070` is the counter of frames the XMAC put on the wire.  If it
-stays at zero while the netdev's own tx counter moves, the frame never
-reached the MAC.
+`reg 0x142070` was believed to be the counter of frames the XMAC put on the
+wire: if it stayed at zero while the netdev's own tx counter moved, the frame
+would never have reached the MAC.
+
+**That criterion is void** (docs/92 §96.33.2).  The window at `0x142000` is
+not the data path's counter - a run of full-length frames through the 2.5G
+jack moved it by an order of magnitude less than the frames that went by,
+and another window of the same block moved by more than lan5's own total.
+It measures something else, and what it measures does not track the lane.
+
+Two readings do work, and neither of them lives in the switch:
+
+* **`/sys/class/net/<port>/statistics/tx_packets`** - the DSA port's own
+  transmit counter.  Six echo requests to the host behind the 2.5G jack move
+  lan5's counter by exactly six, while the trial image's own veth
+  (`labhost0`) does not move at all.  That pair is the proof, and the second
+  half of the pair is what keeps the fixture from passing for the lane.
+* **`bridge fdb show br br-lan`** - prints the DEVICE name for every entry,
+  where `brctl showmacs` prints a bare number.  Read that number wrong and
+  the whole topology comes out wrong (docs/92 §96.33.3).
+
+The DSA per-port RX counters cannot be used either: the frames the driver
+collects are counted on `lan-cpu0`, so the user ports' RX counters stay at
+zero (docs/92 §96.32.5).
 
 ### E3 - did the frame get into the IDM?
 
