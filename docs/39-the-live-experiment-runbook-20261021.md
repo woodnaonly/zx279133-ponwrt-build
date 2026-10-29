@@ -369,3 +369,31 @@ trial: lablan: dnsmasq servers: 1
 and the judgement on the PC: `staging/ctl/accept-lablan.ps1` prints
 `PASS: 5 个回答`, with the lease in 192.168.1.0/24 and the neighbour for
 192.168.1.1 being the board's own MAC.
+
+**The second dnsmasq, and why "it started" is the wrong judgement.**
+`/etc/init.d/dnsmasq restart` does not kill the bench's own dnsmasq: that one
+was started outside procd, and the init script's stop only kills the
+instance procd knows about.  The DHCP socket therefore stays with the bench
+one, the image's dnsmasq dies with `failed to bind DHCP server socket:
+Address in use`, and the clients get an address from the *wrong* range.
+
+Measured on 2026-10-30 00:05 on image #269, with no manual intervention on
+the board at all:
+
+```
+dhcp-range=set:lan,192.168.1.101,192.168.1.200,255.255.255.0,12h   <- the generated config is right
+ 2379 nobody    1340 S    dnsmasq -C /tmp/dnsmasq-trial.conf         <- but this is the one that is alive
+```
+
+The client then took **192.168.9.179** (the bench dnsmasq's range) and the
+acceptance failed, while the board's log said "dnsmasq serves
+192.168.1.101-192.168.1.200".  After `kill 2379` and one more
+`/etc/init.d/dnsmasq restart`, the image's own dnsmasq was alive and the
+same board passed: `192.168.1.141/24`, five answers.
+
+So the trap is not "two dnsmasq fight over the socket" but "**whoever gets
+the socket serves, and it is not necessarily the one whose configuration is
+right**".  The judgement is therefore not "dnsmasq is running" - `pidof
+dnsmasq` sees the one that is alive, which is the one that won - but
+"**the one that is alive has the right range**", which means looking at the
+process's own command line and at the range in the generated configuration.

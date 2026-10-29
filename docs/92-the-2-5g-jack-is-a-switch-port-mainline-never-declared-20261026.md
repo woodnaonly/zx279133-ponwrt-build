@@ -13444,6 +13444,36 @@ chmod 755 /tmp/lablan8.sh; setsid /tmp/lablan8.sh >/dev/kmsg 2>&1 &
 | 23:41 | `the ONT is 192.168.1.1 (0c:f0:7b:39:d9:91) on lan4` —— 学 MAC 成功 | |
 | 23:42 | | **PASS**（修好之后重跑）：DHCP → 192.168.1.141/24，ping 192.168.1.1 **5/5**，邻居 `Reachable` |
 
+**更正 §96.39 的坑一：`dnsmasq restart` 本身不够。**
+
+§96.39 坑一给的改法是「写 UCI + `/etc/init.d/dnsmasq restart`」。**那不够。**
+这个镜像的 dnsmasq init 脚本的 stop 只杀**它自己（procd 知道的那一个）**实例，
+而 S26nat 起的那个 **trial dnsmasq（procd 不知道它）活得好好的** —— DHCP socket
+还在它手里，procd 那个起来时抢不到，自己死了。
+
+实测（2026-10-30 00:05，镜像 #269，TFTP 引导后**不加任何手工干预**）：
+
+```
+dhcp-range=set:lan,192.168.1.101,192.168.1.200,255.255.255.0,12h   ← 生成的配置是对的
+ 2379 nobody    1340 S    dnsmasq -C /tmp/dnsmasq-trial.conf          ← 但活着的只有它
+```
+
+⇒ 客户端拿到的是 **192.168.9.179**（trial 那个的 range），验收 FAIL。而板上的
+日志说得漂漂亮亮：「dnsmasq serves 192.168.1.101-192.168.1.200」。
+
+手工 `kill 2379` + `/etc/init.d/dnsmasq restart` 之后，procd 那个起来了
+（`/usr/sbin/dnsmasq -C /var/etc/dnsmasq.conf.cfg01411c`），同一个板上再跑验收：
+**PASS**（DHCP → 192.168.1.141/24，ping 192.168.1.1 **5/5**，邻居是板子 MAC）。
+
+⇒ 脚本现在**先按命令行把 trial 那个停掉**（`ps w | grep dnsmasq-trial.conf`），
+再 restart。
+
+⇒ 这也把「坑一」的性质说清楚了：**它不是「两个 dnsmasq 抢 socket」，而是「谁抢到
+socket 谁服务」** —— 抢到的那个不一定是配置对的那个，而配置对的那个反而会死掉
+（`failed to bind DHCP server socket: Address in use`）。所以判据不能是
+「dnsmasq 起来了」（`pidof dnsmasq` 看到的是**活着的那一个**），而是
+**「活着的那个的 range 是对的」**。
+
 **新的一条纪律：失败要留下画面。** §96.39 那条纪律是「板上的日志说服务着不等于它真的在服务」。这一轮补上它的下半句：**日志说「失败了」也不等于它真的失败了** —— 坑七里脚本说「没有 MAC」，而邻居表里明明有。所以失败的时候要把**当时看到的路由、桥里的口、邻居表**一起打进 kmsg：没有画面的失败是没有理由的失败。
 
 **还有一条：这一轮里板子被插座断了三次**（23:34、23:57，以及更早的一次），每一次断电都让板上的一切运行时配置归零，回到 U-Boot。**实验窗口是 10–20 分钟**，所以一轮实验（引导 + 等 S28lablan + 验收）必须挤在同一个窗口里；窗口不够时的正确做法是**先问好，再动手**——这就是上面那条「不等 CI 的那条路」存在的理由。
