@@ -1959,6 +1959,80 @@ static ssize_t zx279133_9132_write(struct file *file, const char __user *ubuf,
 	}
 
 	/*
+	 * The flood group table, read the way the switch engine reads it, with
+	 * the PPU numbers spelled out.
+	 *
+	 * A group holds one destination port id in bits 0..5, and the groups a
+	 * port carries are p<<6, (p+0x10)<<6 and (p+0x20)<<6 - the ids the
+	 * vendor's own flood words carry, and the ones
+	 * zx279133_9132_flood_cpu_port() writes (docs/92 §96.35).
+	 *
+	 * Reading a group by hand needs both of those, and getting the second
+	 * one wrong is how one ends up writing the groups of a port that does
+	 * not exist and reading the values of another one.
+	 *
+	 *	"fg"		print every group of the five jacks
+	 *	"et 0x1f 1216"	read one entry of a table by table id and
+	 *			index, the way the table is indexed
+	 */
+	if (!strcmp(tok, "fg")) {
+		static const char *const kinds[3] = {
+			"unknown-DA", "broadcast", "multicast"
+		};
+		u32 ppu, k;
+
+		pr_info("9132 PPU map: 0 = WAN (PON), 1..%u = the four 1G jacks, %u = the 2.5G jack, %u = the CPU trap\n",
+			ZX279133_9132_UNI_PPU_LAST,
+			ZX279133_9132_OUTERPHY_PPU,
+			ZX279133_9132_CONDUIT_PPU);
+
+		for (ppu = ZX279133_9132_UNI_PPU_FIRST;
+		     ppu <= ZX279133_9132_OUTERPHY_PPU; ppu++) {
+			for (k = 0; k < 3; k++) {
+				u32 id = (ppu + (k << 4)) << 6;
+				u32 value;
+
+				ret = zx279133_eram_table_get_bits(eth,
+						ZX279133_FLOOD_ERAM_SDT_ID,
+						id, 32, &value);
+				if (ret) {
+					pr_info("ppu %u %s group %u: read failed (%d)\n",
+						ppu, kinds[k], id, ret);
+					continue;
+				}
+				pr_info("ppu %u %-10s group id %5u = %08x -> destination port %u%s\n",
+					ppu, kinds[k], id, value, value & 0x3f,
+					(value & 0x3f) == ZX279133_9132_CONDUIT_PPU ?
+					" (the CPU trap)" : "");
+			}
+		}
+		return count;
+	}
+
+	if (!strcmp(tok, "et")) {
+		u32 sdt_id, index, width, value;
+
+		tok = zx279133_9132_next_token(&p);
+		if (!tok || kstrtou32(tok, 0, &sdt_id))
+			return -EINVAL;
+		tok = zx279133_9132_next_token(&p);
+		if (!tok || kstrtou32(tok, 0, &index))
+			return -EINVAL;
+		width = zx279133_eram_bit_len_of(sdt_id);
+		if (!width)
+			return -EINVAL;
+		if (width > 32)
+			width = 32;
+		ret = zx279133_eram_table_get_bits(eth, sdt_id, index,
+						   width, &value);
+		if (ret)
+			return ret;
+		pr_info("eram table 0x%02x entry %u width %u = 0x%08x\n",
+			sdt_id, index, width, value);
+		return count;
+	}
+
+	/*
 	 * The two knobs for the two questions that are still open about the
 	 * way a frame leaves the board, both of them settled by experiment
 	 * rather than by reading:
