@@ -338,22 +338,30 @@ learn_ont() {
 		# to 192.168.1.0/24 was out of that jack - and the question went
 		# out of it, tagged, and was never answered.
 		#
-		# The pin on the ONT has to go as well: with a permanent entry
-		# the kernel does not ask at all, it sends the packet straight
-		# out of that jack.
-		ip neigh del "$ONT" dev "$ONTPORT" 2>/dev/null
-		ip neigh flush dev "$BRIDGE" 2>/dev/null
-		ip route replace "$ONT"/32 dev "$BRIDGE" 2>/dev/null
-		# The ONT needs a moment after the bridge has been rebuilt, so
-		# the question is asked a few times before it is given up on.
+		# And no neighbour entry for that address may be left anywhere:
+		# an entry that is left on another device is used as it is, the
+		# kernel does not ask again, and the question is never asked.
+		# Measured on 2026-10-29 23:31: the script's own attempt failed
+		# while the same commands by hand worked, and the difference was
+		# an entry left on the ONT's own jack.
 		i=0
 		while [ $i -lt 5 ]; do
-			ping -c 1 -W 1 "$ONT" >/dev/null 2>&1 && break
+			for d in $(ip neigh show 2>/dev/null |
+				awk -v ip="$ONT" '$1 == ip {
+					for (j = 1; j <= NF; j++)
+						if ($j == "dev") print $(j + 1)
+				}'); do
+				ip neigh del "$ONT" dev "$d" 2>/dev/null
+			done
+			ip neigh flush dev "$BRIDGE" 2>/dev/null
+			ip route replace "$ONT"/32 dev "$BRIDGE" 2>/dev/null
+			ping -c 1 -W 1 "$ONT" >/dev/null 2>&1
+			ONTMAC=$(ip neigh show dev "$BRIDGE" 2>/dev/null |
+				awk -v ip="$ONT" '$1 == ip {print; exit}' | mac_of_line)
+			[ -n "$ONTMAC" ] && break
 			i=$((i + 1))
 			sleep 1
 		done
-		ONTMAC=$(ip neigh show dev "$BRIDGE" 2>/dev/null |
-			awk -v ip="$ONT" '$1 == ip {print; exit}' | mac_of_line)
 		# The route to the ONT goes back to the ONT's own jack: the
 		# traffic to it has to leave that way, and it is also what makes
 		# the proxy ARP answer.
