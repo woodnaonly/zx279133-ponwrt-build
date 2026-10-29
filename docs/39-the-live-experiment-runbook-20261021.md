@@ -198,3 +198,45 @@ runs at.
 | XMAC0 TX frames does not move, the netdev's tx does | the frame never reached the MAC - the IDM or the XMAC's programming |
 | lan-cpu0 rx moves, the PC sees nothing | the frame arrived and the reply did not go out - the reverse direction |
 | the IDM queue counters move, lan-cpu0 rx does not | the frame is in the IDM and nobody polled that queue |
+
+## Accepting the lablan setup (2026-10-29)
+
+The trial image carries a script, `S28lablan`, that makes the ONT behind one
+jack reachable from every other jack.  The 9132 does not carry a frame from
+one jack to another - not even one whose destination MAC is known
+(docs/92 §96.37) - so the board has to do the forwarding itself, and that
+takes three things: an address in the ONT's subnet on the bridge, a route
+for the ONT out of its own jack, and, for every client, a route and a pinned
+MAC out of the client's own jack.
+
+To accept it:
+
+1. plug the PC into the 2.5G jack (the panel's LAN1) and the ONT into
+   LAN4;
+2. put the image on the board and let it boot (TFTP `run249.itb` and
+   `bootm 0x89000000`, or whatever the latest run is called);
+3. on the PC: remove every static address, set the adapter to DHCP and
+   wait for a lease.  The lease has to be an address in 192.168.1.0/24 -
+   that is the range the image's dnsmasq hands out first, and a client in
+   another subnet cannot reach the ONT at all;
+4. ping 192.168.1.1.  Five answers are a pass.  The first answers can take
+   a few seconds: the client asks for the ONT at once, and the board cannot
+   hand the ONT's reply back until it has pinned the client's MAC, which it
+   does every five seconds.
+
+`staging/ctl/accept-lablan.ps1` does steps 3 and 4 and prints PASS or FAIL.
+
+What to look at when it fails:
+
+| observation | what it says |
+|---|---|
+| the PC has no 192.168.1.x lease | dnsmasq is not serving the ONT's range, or the ONT's jack is not in the bridge |
+| the PC's neighbour for 192.168.1.1 is not the board's MAC | the board's proxy ARP is not answering - the route for the ONT out of its own jack is missing |
+| the PC's neighbour is the board's MAC but nothing answers | the client's own pin is missing - the board has not worked out which jack the client is in |
+| the board logs "the ONT has no MAC yet" | the ONT's MAC could not be learned through the bridge |
+
+Two things must NOT be done: the traffic towards the ONT must not be
+masqueraded (the reply then reaches the client's card with a checksum the
+client's stack rejects - docs/92 §96.38), and no chip register needs to be
+touched (the untag SVID and the LAN TX output port are back at their
+defaults, and the traffic still goes through).

@@ -117,13 +117,8 @@ say() {
 dev_of_port() {
 	p=$1
 	d=""
-	if command -v dmesg >/dev/null 2>&1; then
-		for n in $(dmesg 2>/dev/null |
-			sed -n "s/.*br-lan: port $p(\([^)]*\)).*/\1/p"); do
-			[ -e "/sys/class/net/$BRIDGE/brif/$n" ] || continue
-			d="$n"
-			break
-		done
+	if [ -s /tmp/lablan-ports ]; then
+		d=$(awk -v p="$p" '$1 == p {print $2; exit}' /tmp/lablan-ports)
 	fi
 	if [ -z "$d" ] && [ -e "/sys/class/net/lan$p" ]; then
 		d="lan$p"
@@ -150,6 +145,19 @@ pin_client() {
 # and the client's MAC pinned on that same jack.
 refresh_clients() {
 	: > /tmp/lablan-clients
+	# The bridge's port numbers, as the kernel states them.  This is
+	# read once per round: the log is the only place the kernel says
+	# which number belongs to which jack, and reading it for every
+	# learned address would be a lot of reading for nothing.
+	: > /tmp/lablan-ports
+	if command -v dmesg >/dev/null 2>&1; then
+		dmesg 2>/dev/null |
+		sed -n 's/.*br-lan: port \([0-9][0-9]*\)(\([^)]*\)).*/\1 \2/p' |
+		while read p n; do
+			[ -e "/sys/class/net/$BRIDGE/brif/$n" ] || continue
+			echo "$p $n" >> /tmp/lablan-ports
+		done
+	fi
 	# The MAC of every learned address, and the jack it was learned on.
 	brctl showmacs "$BRIDGE" 2>/dev/null |
 	while read port mac rest; do
@@ -286,8 +294,11 @@ for p in 1 2 3 4 5 6 7 8; do
 done
 
 refresh_clients
+# Every five seconds, not every minute: a client that has just taken a
+# lease asks for the ONT at once, and the answer cannot reach it until
+# its MAC is pinned - so the pin has to keep up with the client.
 while true; do
-	sleep 30
+	sleep 5
 	refresh_clients
 done
 LABEOF
