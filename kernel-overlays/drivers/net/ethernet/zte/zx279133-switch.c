@@ -2126,6 +2126,19 @@ static void zx279133_switch_outerphy_dump(struct zx279133_switch *priv)
  * phylink asks again and again, and a cable that arrives after boot is
  * noticed without anything else having to be done.
  */
+/*
+ * The link state of a port the switch owns but has no PHY for.
+ *
+ * NOTE (docs/92 §96.31.6): for a switch's *own* user ports this callback
+ * is not consulted.  phylink_get_fixed_state() takes the device tree's
+ * fixed-link first and only then lets config->get_fixed_state override it,
+ * and the DSA core installs that callback for user devices only
+ * (net_dsa_user.c: dsa_user_phylink_setup()); dsa_port_phylink_create()
+ * does not install it.  So for lan5 the fixed-link in the device tree is
+ * what phylink uses - it always claims a carrier, and the rate it reports
+ * is the one written there.  The values below are the ones that would be
+ * right if the callback did run.
+ */
 static void zx279133_switch_phylink_fixed_state(struct dsa_switch *ds, int port,
 						 struct phylink_link_state *state)
 {
@@ -2144,7 +2157,7 @@ static void zx279133_switch_phylink_fixed_state(struct dsa_switch *ds, int port,
 		/* The 2.5G jack: the external RTL8226's own link state. */
 		link = zx279133_switch_outerphy_link(priv);
 		state->link = link == 1;
-		state->speed = SPEED_1000;
+		state->speed = SPEED_2500;
 		state->duplex = DUPLEX_FULL;
 		return;
 	}
@@ -2174,15 +2187,22 @@ static void zx279133_switch_phylink_get_caps(struct dsa_switch *ds, int port,
 
 	if (port == ZX279133_SWITCH_DSA_OUTER_PORT) {
 		/*
-		 * The 2.5G jack: the 9132's port runs 1000BASE-X to the
-		 * external RTL8226 (the vendor's mode_eth_2p5gbase_x_cfg), so
-		 * that is the mode this port has.  The rate is the fabric's,
-		 * which is 1G - the CPU port this board reaches the switch
-		 * through is a 1G SGMII lane.
+		 * The 2.5G jack: the 9132's port runs base-X to the external
+		 * RTL8226 (the vendor's mode_eth_2p5gbase_x_cfg), and the lane
+		 * is measured running 2500BASE-X - the far end's SerDes mode
+		 * word (devad 0x1e reg 0x7580) reads 0x9416, whose mode field
+		 * (bits 5:0) is 0x16 = 2500BASE-X, and a host behind this jack
+		 * is reached with no loss at all (docs/92 §96.31).
+		 *
+		 * Both rates are advertised because the device tree names the
+		 * mode the port is in ("phy-mode = \"2500base-x\"") and phylink
+		 * refuses a port whose mode is not in this set.
 		 */
 		__set_bit(PHY_INTERFACE_MODE_1000BASEX,
 			  config->supported_interfaces);
-		config->mac_capabilities = MAC_1000FD;
+		__set_bit(PHY_INTERFACE_MODE_2500BASEX,
+			  config->supported_interfaces);
+		config->mac_capabilities = MAC_1000FD | MAC_2500FD;
 		return;
 	}
 

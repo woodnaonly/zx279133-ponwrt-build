@@ -696,25 +696,52 @@
 			 * the SoC reaches it the same way it reaches them:
 			 * over the 9132's CPU port.
 			 *
-			 * The port runs 1000BASE-X to that PHY (the vendor's
-			 * mode_eth_2p5gbase_x_cfg) and carries the transport
-			 * VID 63, which is 55 + this port number - the same
-			 * scheme the four jacks use, and the untag SVID the
-			 * NPPT driver gives PPU 5.
+			 * The port runs base-X to that PHY (the vendor's
+			 * mode_eth_2p5gbase_x_cfg, measured at 2500BASE-X)
+			 * and carries the transport VID 63, which is 55 + this
+			 * port number - the same scheme the four jacks use,
+			 * and the untag SVID the NPPT driver gives PPU 5.
 			 *
 			 * It is a fixed-link port: the RTL8226 is not a PHY
 			 * of this switch's own bus, so the core must not go
-			 * looking for one there.  The driver reports the
-			 * jack's real link state from the RTL8226's own
-			 * auto-negotiation status instead.
+			 * looking for one there.
+			 *
+			 * The driver watches the RTL8226's own auto-negotiation
+			 * status and prints it on every change (docs/92 §96.31),
+			 * but that status does NOT decide the carrier: for a
+			 * switch's own user port the fixed-link below is what
+			 * phylink uses, so this port always claims a carrier
+			 * and the rate it reports is the one written here
+			 * (docs/92 §96.31.6).
 			 */
 			port@8 {
 				reg = <8>;
 				label = "lan5";
-				phy-mode = "1000base-x";
+				/*
+				 * The lane runs 2500BASE-X (docs/92 §96.31):
+				 * the far end's SerDes mode word reads 0x9416
+				 * (mode field 0x16 = 2500BASE-X) and the
+				 * board's own kernel reached a host behind
+				 * this jack with 0% loss.
+				 *
+				 * This is a fixed-link port, and for a switch's
+				 * own user port the fixed-link in the device
+				 * tree is the only thing phylink uses: the
+				 * driver's phylink_fixed_state() is installed
+				 * by the DSA core for user devices only, so
+				 * for this port it never runs
+				 * (docs/92 §96.31.6).  The rate declared here
+				 * is therefore the lane's ceiling - when the
+				 * peer only offers 1G the lane drops to 1G
+				 * base-X and the kernel still says 2.5G.  The
+				 * rate the far end really negotiated is in
+				 * the driver's own log (PHY status 1f.0xa434
+				 * and PMA speed 1f.0xa616).
+				 */
+				phy-mode = "2500base-x";
 
 				fixed-link {
-					speed = <1000>;
+					speed = <2500>;
 					full-duplex;
 				};
 			};
