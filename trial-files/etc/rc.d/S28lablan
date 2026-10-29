@@ -131,12 +131,47 @@ dev_of_port() {
 	p=$1
 	d=""
 	if [ -s /tmp/lablan-ports ]; then
-		d=$(awk -v p="$p" '$1 == p {print $2; exit}' /tmp/lablan-ports)
+		# The last line wins.  The kernel numbers the ports again every
+		# time the bridge is rebuilt, and the old numbering is still in
+		# the log - so the first line that matches is the old one.  (The
+		# bridge was rebuilt twice on 2026-10-29 23:17, and the jack
+		# with the ONT behind it was port 4 before and port 6 after.)
+		d=$(awk -v p="$p" '$1 == p {d=$2} END {print d}' /tmp/lablan-ports)
 	fi
 	if [ -z "$d" ] && [ -e "/sys/class/net/lan$p" ]; then
 		d="lan$p"
 	fi
 	echo "$d"
+}
+
+# One line of "ip neigh show", read the way this image prints it.
+#
+# The image's ip is busybox's, and it prints the fields in this order:
+#
+#	192.168.1.141 dev lan5 lladdr 84:47:09:5b:bd:2c PERMANENT
+#
+# The MAC is behind the word "lladdr" and the device is behind the word
+# "dev".  The first version of this script read the third field as the
+# MAC and the second field as the device, and both of them were wrong:
+# the MAC it took was the device name, and the device it took was the
+# word "dev".  (Measured on 2026-10-29 23:21: the ONT's MAC was never
+# learned, because the third field was "br-lan", and the cleanup of the
+# pins deleted nothing while saying that it had.)
+#
+# The two helpers below ask for the word, so they do not care whether the
+# line says "PERMANENT" or "nud permanent".
+mac_of_line() {
+	echo "$1" | awk '{
+		for (i = 1; i <= NF; i++)
+			if ($i == "lladdr") { print $(i + 1); exit }
+	}'
+}
+
+dev_of_line() {
+	echo "$1" | awk '{
+		for (i = 1; i <= NF; i++)
+			if ($i == "dev") { print $(i + 1); exit }
+	}'
 }
 
 # The route and the pin for one client in the ONT's subnet.
@@ -210,11 +245,13 @@ refresh_clients() {
 
 	# And the clients that have an address of their own.
 	ip neigh show dev "$BRIDGE" 2>/dev/null |
-	while read ip ll mac state rest; do
+	while read line; do
+		ip=$(echo "$line" | awk '{print $1}')
 		case "$ip" in
 		"$BASE".*) ;;
 		*) continue ;;
 		esac
+		mac=$(mac_of_line "$line")
 		[ -n "$mac" ] || continue
 		pin_client "$ip" "$mac"
 	done
@@ -223,13 +260,20 @@ refresh_clients() {
 	# would keep a stale address on a jack for ever.  Only the pins on
 	# a jack are touched: the ones on the bridge are the kernel's own
 	# business, and they are there for the proxy ARP to work.
-	ip neigh show nud permanent 2>/dev/null |
-	while read ip dev ll mac state rest; do
+	ip neigh show 2>/dev/null |
+	while read line; do
+		# Only the pins are of interest here, and the state is spelled
+		# "PERMANENT" by this image's ip and "nud permanent" by another
+		# one, so the word is looked for rather than a field.
+		echo "$line" | grep -qi permanent || continue
+		ip=$(echo "$line" | awk '{print $1}')
 		case "$ip" in
 		"$BASE".*) ;;
 		*) continue ;;
 		esac
 		[ "$ip" = "$ONT" ] && continue
+		dev=$(dev_of_line "$line")
+		[ -n "$dev" ] || continue
 		[ "$dev" = "$BRIDGE" ] && continue
 		grep -q "^$ip " /tmp/lablan-clients 2>/dev/null && continue
 		ip neigh del "$ip" dev "$dev" nud permanent 2>/dev/null
@@ -282,10 +326,28 @@ setup_lan() {
 # untagged, and the ONT answers.
 learn_ont() {
 	if [ -z "$ONTMAC" ]; then
+		# The route to the ONT and the pin on it have to go before the
+		# question is asked.  With them in place the ARP leaves through
+		# the ONT's own jack, and the DSA layer tags the frames it sends
+		# out of a user port - and the ONT does not answer a tagged ARP.
+		#
+		# Measured on 2026-10-29 23:17: an earlier run of this script had
+		# left the route behind, the question went through it, and the
+		# ONT's MAC was not learned at all - the whole run then depended
+		# on the pin that the client's own round puts in.
+		ip route del "$ONT"/32 dev "$ONTPORT" 2>/dev/null
+		ip neigh del "$ONT" dev "$ONTPORT" 2>/dev/null
 		ip neigh flush dev "$BRIDGE" 2>/dev/null
-		ping -c 1 -W 1 "$ONT" >/dev/null 2>&1
+		# The ONT needs a moment after the bridge has been rebuilt, so
+		# the question is asked a few times before it is given up on.
+		i=0
+		while [ $i -lt 5 ]; do
+			ping -c 1 -W 1 "$ONT" >/dev/null 2>&1 && break
+			i=$((i + 1))
+			sleep 1
+		done
 		ONTMAC=$(ip neigh show dev "$BRIDGE" 2>/dev/null |
-			awk -v ip="$ONT" '$1 == ip {print $3}')
+			awk -v ip="$ONT" '$1 == ip {print; exit}' | mac_of_line)
 	fi
 	if [ -n "$ONTMAC" ]; then
 		ip neigh replace "$ONT" lladdr "$ONTMAC" nud permanent dev "$ONTPORT" 2>/dev/null
@@ -429,7 +491,10 @@ if command -v uci >/dev/null 2>&1; then
 	# socket, and the one that did is not necessarily the one whose
 	# configuration is written down.
 	grep -h -E 'dhcp-range|dhcp-option|leasefile' /var/etc/dnsmasq.conf.* 2>/dev/null >/dev/kmsg
-	say "dnsmasq processes: $(ps w 2>/dev/null | grep -c '[d]nsmasq')"
+	# The image runs dnsmasq under a ujail wrapper, and the wrapper's
+	# own line carries the name too - so the count is a count of the
+	# binary, or the number is one too high every time.
+	say "dnsmasq servers: $(ps w 2>/dev/null | grep -c '[/]usr/sbin/dnsmasq')"
 fi
 
 # The bridge's own port numbers, as the kernel states them.  It is

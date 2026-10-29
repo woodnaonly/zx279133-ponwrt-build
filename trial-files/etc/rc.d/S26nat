@@ -96,8 +96,10 @@ dev_of_port() {
 		# Only a member of the bridge is of any use: the CPU port
 		# carries a number of its own and is not one of them.
 		[ -e "/sys/class/net/br-lan/brif/$n" ] || continue
+		# The last one wins: the kernel numbers the ports again every
+		# time the bridge is rebuilt, and the old numbering is still in
+		# the log.
 		d="$n"
-		break
 	done
 	if [ -z "$d" ] && [ -e "/sys/class/net/lan$p" ]; then
 		d="lan$p"
