@@ -13243,3 +13243,7 @@ ERAM 表 0x1f（flood 组表）里，PPU 1..5 的三组（unknown-DA / broadcast
 
 **另一条纪律**：这一轮里 owner 的智能开关在实验期间断了电两次，每次都要重新 TFTP 引导（约 2 分钟），而且**串口通道会把长命令吞掉**——`printf` 带 `\n` 的写文件命令回显成了乱码，`echo ... >> file` 的两条命令拼在一起也一样。**板上手工配置必须一条一条发短命令，并且回读（`cat`）确认；回显出现乱码时要假定它没执行。**
 
+**顺手修掉的驱动缺陷**：debugfs 的 `trapall` 只写协议动作表的 bank 0x00，而芯片查的是 bank 0x10/0x20 那一侧 —— 所以上一轮在板上只能用 `for i in $(seq 2688 2815); do echo "es 0x18 $i 2 0x0" > /sys/kernel/debug/zx279133-9132; done` 这样的循环去补写。现在 `trapall` 走的是和初始化路径同一个 `zx279133_9132_proto_action_set()`，一次写三个 bank；port 空间也放宽到 0..7 / 0x10..0x17 / 0x20..0x27（给的是上层的号也归一到它自己那一组）。
+注释里同时记下了那个会 panic 的用法：**清 trap 之前必须先把 flood 组指到别处**，否则帧从 CPU 口回来时没有 transport VID，驱动拿不到源端口（栈在 `handle_softirqs`，伴随 rcu stall 与 NMI backtrace）。**这个 panic 的根因还没查清，是待办。**
+
+

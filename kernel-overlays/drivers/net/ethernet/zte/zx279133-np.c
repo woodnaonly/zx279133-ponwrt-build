@@ -488,6 +488,21 @@ static u32 zx279133_eram_bit_len_of(u32 sdt_id)
  * window is (base << 7) + (width * index & ~0x7f) and the entry sits in
  * word (width * index >> 5) & 3 at bit (width * index) & 0x1f of it.
  */
+/*
+ * One protocol action, in every port group the port has.
+ *
+ * The 9132 numbers its ports in three banks - a port p is also p + 0x10 and
+ * p + 0x20 - and the protocol action table is indexed by (port << 7) |
+ * protocol, so a frame that arrives on a jack looks its action up in one of
+ * the three groups.  Writing one group is not enough: the group a frame
+ * really looks up was empty on this board, and a frame that finds no action
+ * is neither forwarded nor trapped, it is dropped inside the chip.
+ *
+ * It is defined further down, next to the table's own story.
+ */
+static int zx279133_9132_proto_action_set(struct zx279133_eth *eth, u32 port,
+					  u32 proto, u32 action);
+
 static int zx279133_eram_table_set_bits(struct zx279133_eth *eth, u32 sdt_id,
 					u32 index, u32 width, u32 value)
 {
@@ -501,7 +516,6 @@ static int zx279133_eram_table_set_bits(struct zx279133_eth *eth, u32 sdt_id,
 		return -EINVAL;
 	if (width > bit_len || width > 32)
 		return -EINVAL;
-
 	bit_off = bit_len * index;
 	addr = (base << 7) + (bit_off & ~0x7fu);
 	word_idx = (bit_off >> 5) & (ZX279133_SMMU0_WORDS - 1);
@@ -2183,29 +2197,52 @@ static ssize_t zx279133_9132_write(struct file *file, const char __user *ubuf,
 	 *
 	 *	"trapall 2"	trap every protocol on the port 2
 	 *	"trapall 2 0"	leave every protocol on the port 2 alone
+	 *
+	 * The action is written to all three of the port's groups: the 9132
+	 * numbers a port p, p + 0x10 and p + 0x20, and a frame that arrives
+	 * on a jack looks its action up in one of the three.  Writing only
+	 * one of them - which is what this used to do - leaves the group a
+	 * frame really looks up empty, and a frame that finds no action is
+	 * neither forwarded nor trapped: it is dropped inside the chip.
+	 * A port number in one of the upper banks is reduced to the bank it
+	 * belongs to, so "trapall 21" and "trapall 5" are the same port.
+	 *
+	 * A WARNING, measured on the bench: taking the trap off a port
+	 * while the port's frames have nowhere else to go takes the kernel
+	 * down (the stack was in handle_softirqs, with an rcu stall and an
+	 * NMI backtrace behind it).  The frames that come back through the
+	 * CPU port then carry no transport VID, and the driver cannot tell
+	 * which port they came from.  So point the flood groups somewhere
+	 * else FIRST: a port that traps nothing and floods nowhere drops
+	 * its frames, and a port that floods to the CPU port alone sends
+	 * them back without the tag that names the port.
 	 */
 	if (!strcmp(tok, "trapall")) {
 		u32 port, action = 2, proto;
 		int err = 0;
 
 		tok = zx279133_9132_next_token(&p);
-		if (!tok || kstrtou32(tok, 0, &port) || port > 7)
+		if (!tok || kstrtou32(tok, 0, &port))
+			return -EINVAL;
+		if (port >= 0x20 && port <= 0x27)
+			port -= 0x20;
+		else if (port >= 0x10 && port <= 0x17)
+			port -= 0x10;
+		if (port > 7)
 			return -EINVAL;
 		tok = zx279133_9132_next_token(&p);
 		if (tok && kstrtou32(tok, 0, &action))
 			return -EINVAL;
 
 		for (proto = 0; proto < 128; proto++) {
-			err = zx279133_eram_table_set_bits(eth,
-					ZX279133_SWITCH_PROTO_SDT_ID,
-					proto | (port << 7), 2,
-					action);
+			err = zx279133_9132_proto_action_set(eth, port, proto,
+							     action);
 			if (err)
 				break;
 		}
 		if (err)
 			return err;
-		pr_info("port %u traps every protocol with action %u\n",
+		pr_info("port %u traps every protocol with action %u, in all three banks\n",
 			port, action);
 		return count;
 	}
