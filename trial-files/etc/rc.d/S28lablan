@@ -346,6 +346,10 @@ learn_ont() {
 		# an entry left on the ONT's own jack.
 		i=0
 		while [ $i -lt 5 ]; do
+			# The ONT's jack has to be in the bridge, or the question
+			# does not reach it: the network service rebuilds the bridge
+			# asynchronously, and the jack is out of it for a moment.
+			[ -e "/sys/class/net/$BRIDGE/brif/$ONTPORT" ] || setup_lan
 			for d in $(ip neigh show 2>/dev/null |
 				awk -v ip="$ONT" '$1 == ip {
 					for (j = 1; j <= NF; j++)
@@ -372,6 +376,14 @@ learn_ont() {
 		say "the ONT is $ONT ($ONTMAC) on $ONTPORT"
 	else
 		say "the ONT has no MAC yet; it will be learned"
+	fi
+	if [ -z "$ONTMAC" ]; then
+		# What the attempt saw.  The log is where the round's evidence
+		# lives, and a failure without a picture is a failure without a
+		# reason.
+		say "learn: the route to $ONT is $(ip route show 2>/dev/null | grep "$ONT" | tr '\n' ' ')"
+		say "learn: the bridge has $(ls /sys/class/net/$BRIDGE/brif 2>/dev/null | tr '\n' ' ')"
+		say "learn: the table is $(ip neigh show 2>/dev/null | tr '\n' ' ')"
 	fi
 	# The ONT's route, out of its own jack.  It is also what makes the
 	# proxy ARP answer, and what stops the kernel from calling the
