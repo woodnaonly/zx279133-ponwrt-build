@@ -464,6 +464,18 @@ struct zx279133_switch {
 	bool lane_lost;
 	u32 lane_tries;
 	/*
+	 * When the watch was armed, and how many times it has run.
+	 *
+	 * The first thirty seconds after the probe are sampled twenty
+	 * milliseconds apart.  The question this watch exists for is *when*
+	 * the far end loses the lane, and the candidates are fifty
+	 * milliseconds apart: eth0's link-up and the outer port's own
+	 * phylink setup happen in that window, and a two-second period
+	 * cannot tell them apart, while twenty milliseconds can.
+	 */
+	unsigned long lane_start;
+	u32 lane_samples;
+	/*
 	 * The loader's own four words for this lane's PCS, saved when the
 	 * loader is the one that configured it (judgment TT).
 	 *
@@ -715,6 +727,13 @@ static void zx279133_switch_lane_work_cleanup(void *data);
  */
 static int zx279133_switch_outerphy_link(struct zx279133_switch *priv);
 
+/*
+ * The lane's whole state, in one line: forward declaration.
+ *
+ * The function itself is further down, with the rest of the outer PHY's code.
+ */
+static void zx279133_switch_lane_state(struct zx279133_switch *priv);
+
 static void zx279133_switch_lane_watch(struct work_struct *work)
 {
 	struct zx279133_switch *priv =
@@ -723,6 +742,25 @@ static void zx279133_switch_lane_watch(struct work_struct *work)
 	int an_ctrl;
 	int bmcr;
 	int ret;
+	unsigned long period = 2000;
+
+	priv->lane_samples++;
+
+	/*
+	 * The first thirty seconds are sampled twenty milliseconds apart.
+	 *
+	 * The far end's word changes once, and the question is when.  The
+	 * events around that moment are fifty milliseconds apart - eth0's
+	 * link-up and the outer port's own phylink setup - so a two-second
+	 * period cannot tell them apart, and a twenty-millisecond one can.
+	 *
+	 * The fast window is over after thirty seconds, and the watch goes
+	 * back to two seconds: the change, if it is going to happen, has
+	 * happened by then.
+	 */
+	if (priv->lane_start &&
+	    jiffies - priv->lane_start < msecs_to_jiffies(30000))
+		period = 20;
 
 	/*
 	 * The far end's own word, every two seconds.
@@ -815,7 +853,15 @@ static void zx279133_switch_lane_watch(struct work_struct *work)
 	}
 
 rearm:
-	schedule_delayed_work(&priv->lane_work, msecs_to_jiffies(2000));
+	/*
+	 * And a line of the lane's state every half second while the fast
+	 * window lasts, so the timeline is dense enough to show what the
+	 * lane was doing before the far end's word changed.
+	 */
+	if (period == 20 && !(priv->lane_samples % 25))
+		zx279133_switch_lane_state(priv);
+
+	schedule_delayed_work(&priv->lane_work, msecs_to_jiffies(period));
 }
 
 /*
@@ -1764,25 +1810,117 @@ static void zx279133_switch_outerphy_dump(struct zx279133_switch *priv);
  * ethernet-phy node is a description, not a promise that phylib made a
  * device out of it.
  */
-static int zx279133_switch_outerphy_link(struct zx279133_switch *priv)
+/*
+ * The MDIO bus the outer PHY hangs off.
+ *
+ * The bus is looked up when it is needed rather than at the probe, because
+ * the MDIO controller is a separate device and the two are not probed in a
+ * fixed order.
+ */
+static struct mii_bus *zx279133_switch_outer_mdio(struct zx279133_switch *priv)
 {
 	struct device_node *np;
 	struct mii_bus *bus;
-	int val;
 
-	if (!priv->outer_mdio) {
-		np = of_parse_phandle(priv->dev->parent->of_node,
-				       "zx279133,outer-phy-bus", 0);
-		if (!np)
-			return -1;
-		bus = of_mdio_find_bus(np);
-		of_node_put(np);
-		if (!bus)
-			return -1;
-		priv->outer_mdio = bus;
+	if (priv->outer_mdio)
+		return priv->outer_mdio;
+
+	np = of_parse_phandle(priv->dev->parent->of_node,
+			       "zx279133,outer-phy-bus", 0);
+	if (!np)
+		return NULL;
+	bus = of_mdio_find_bus(np);
+	of_node_put(np);
+	if (!bus)
+		return NULL;
+
+	priv->outer_mdio = bus;
+	return bus;
+}
+
+/*
+ * The whole lane, in one line: both ends, the MAC, and the NPPT's words.
+ *
+ * What this is for: the far end's auto-negotiation status is the only word
+ * that says whether this lane carries code, and it changed from 0x00e9 (the
+ * loader's value, "negotiation complete with a link") to 0x00ad ("a
+ * negotiation restart in progress") some time between the loader's handover
+ * and the kernel's first traffic.  Knowing *when* is what the next step
+ * needs; knowing *what* changed on the near side at that moment is what
+ * says why.
+ *
+ * So this line carries, in one place:
+ *
+ *	- the far end's AN status and its two SerDes words (0x758d, 0x7580)
+ *	- the near end's three PCS words (VEND2 BMCR, AN_CTRL, DIG_CTRL1)
+ *	- the NPPT's four words around the lane's own two status words
+ *	  (0x0084 = the XMAC link, 0x0090 = the PCS status, and 0x0088 and
+ *	  0x008c, whose loader values are 0x00000c78 and 0x00000071 - two
+ *	  words nothing has ever been able to explain, and the first ones
+ *	  that would show a change)
+ *	- XMAC0's six control words and its SOPC send enable
+ *
+ * The loader's values for every one of them are in docs/92 §96.21, measured
+ * at the loader's own prompt on 2026-10-29 07:18 in one boot, after its
+ * net init: XMAC0 tx = 0xc0010000, rx = 0x3e8000c6, NPPT 0x84 = 1,
+ * 0x88 = 0x00000c78, 0x8c = 0x00000071, 0x90 = 0x0000380b, and the far end
+ * at 0x00e9.
+ */
+static void zx279133_switch_lane_state(struct zx279133_switch *priv)
+{
+	struct mii_bus *bus = zx279133_switch_outer_mdio(priv);
+	u32 xmac = ZX279133_XMAC0_BASE;
+	int an = -1, f758d = -1, f7580 = -1;
+	int bmcr, anctrl, dig;
+
+	if (bus) {
+		an = mdiobus_c45_read(bus, ZX279133_SWITCH_OUTERPHY_ADDR,
+				       ZX279133_SWITCH_OUTERPHY_AN_DEVAD,
+				       ZX279133_SWITCH_OUTERPHY_AN_STATUS);
+		f758d = mdiobus_c45_read(bus, ZX279133_SWITCH_OUTERPHY_ADDR,
+					  0x1e, 0x758d);
+		f7580 = mdiobus_c45_read(bus, ZX279133_SWITCH_OUTERPHY_ADDR,
+					  0x1e, 0x7580);
 	}
 
-	val = mdiobus_c45_read(priv->outer_mdio,
+	bmcr = zx279133_switch_xpcs_read(priv, MDIO_MMD_VEND2, MII_BMCR);
+	anctrl = zx279133_switch_xpcs_read(priv, MDIO_MMD_VEND2,
+					   ZX279133_XPCS_VR_MII_AN_CTRL);
+	dig = zx279133_switch_xpcs_read(priv, MDIO_MMD_VEND2,
+					ZX279133_XPCS_VR_MII_DIG_CTRL1);
+
+	dev_info(priv->dev,
+		 "lane: far an=0x%04x 758d=0x%04x 7580=0x%04x | near bmcr=0x%04x anctrl=0x%04x dig=0x%04x | nppt 84=0x%08x 88=0x%08x 8c=0x%08x 90=0x%08x | xmac0 tx=0x%08x rx=0x%08x frame=0x%08x mode=0x%08x duplex=0x%08x misc=0x%08x send=0x%08x\n",
+		 an < 0 ? 0xffff : an,
+		 f758d < 0 ? 0xffff : f758d,
+		 f7580 < 0 ? 0xffff : f7580,
+		 bmcr < 0 ? 0xffff : (bmcr & 0xffff),
+		 anctrl < 0 ? 0xffff : (anctrl & 0xffff),
+		 dig < 0 ? 0xffff : (dig & 0xffff),
+		 zx279133_switch_nppt_read(priv, ZX279133_NPPT_XMAC_LINK),
+		 zx279133_switch_nppt_read(priv, 0x0088),
+		 zx279133_switch_nppt_read(priv, 0x008c),
+		 zx279133_switch_nppt_read(priv, ZX279133_NPPT_XPCS0_STATUS),
+		 zx279133_switch_nppt_read(priv, xmac + ZX279133_XMAC_TX_CTRL),
+		 zx279133_switch_nppt_read(priv, xmac + ZX279133_XMAC_RX_CTRL),
+		 zx279133_switch_nppt_read(priv, xmac + ZX279133_XMAC_FRAME_CFG),
+		 zx279133_switch_nppt_read(priv, xmac + ZX279133_XMAC_MODE_CFG),
+		 zx279133_switch_nppt_read(priv, xmac + ZX279133_XMAC_DUPLEX),
+		 zx279133_switch_nppt_read(priv, xmac + ZX279133_XMAC_MISC_CFG),
+		 zx279133_switch_nppt_read(priv,
+						  ZX279133_XMAC0_SOPC_SEND_ENABLE));
+}
+
+static int zx279133_switch_outerphy_link(struct zx279133_switch *priv)
+{
+	struct mii_bus *bus;
+	int val;
+
+	bus = zx279133_switch_outer_mdio(priv);
+	if (!bus)
+		return -1;
+
+	val = mdiobus_c45_read(bus,
 			       ZX279133_SWITCH_OUTERPHY_ADDR,
 			       ZX279133_SWITCH_OUTERPHY_AN_DEVAD,
 			       ZX279133_SWITCH_OUTERPHY_AN_STATUS);
@@ -1813,6 +1951,18 @@ static int zx279133_switch_outerphy_link(struct zx279133_switch *priv)
 			 val, val & 0x69,
 			 (val & 0x69) == 0x69 ? "" :
 			 " - at least one of them is missing, the lane carries no code");
+
+		/*
+		 * What the lane looks like at the moment this word changed.
+		 *
+		 * The word itself says that the far end is no longer
+		 * negotiating; it does not say what changed on this side of
+		 * the lane, and that is the question.  So the whole lane goes
+		 * into the log next to it: the far end's SerDes words, the
+		 * near end's PCS words, the NPPT's four status words and
+		 * XMAC0's six control words.
+		 */
+		zx279133_switch_lane_state(priv);
 	}
 
 	zx279133_switch_outerphy_dump(priv);
@@ -3004,8 +3154,16 @@ report:
 	 * and nothing has programmed the lane since this probe.  The watcher
 	 * puts the loader's values back when it finds the block empty.
 	 */
-	if (!priv->usxgmii)
+	if (!priv->usxgmii) {
+		/*
+		 * The watch's fast window starts here, so that the thirty
+		 * seconds it covers include the moment this lane is handed
+		 * over - the eth0 link-up happens about ten seconds into the
+		 * boot.
+		 */
+		priv->lane_start = jiffies;
 		schedule_delayed_work(&priv->lane_work, msecs_to_jiffies(2000));
+	}
 
 	/*
 	 * The four jacks as DSA ports.  The conduit has to be there first: a
