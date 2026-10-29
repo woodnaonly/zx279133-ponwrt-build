@@ -1,0 +1,27 @@
+=== 00:39:49 beat 1 log=0 frozen=0 wrote=unknown ===
+--- signals: quiet=0s writes=1800s newproc=900s hard=5400s cmp=-cnewer proc=unknowns ---
+--- the last 30 lines of the build's own log ---
+--- the build's own processes ---
+   4906 Ss   /usr/bin/python3 /usr/bin/networkd-dispatcher --run-startup-triggers
+   4906 Ss   /usr/bin/python3 -u /usr/sbin/waagent -daemon
+   4902 Sl   /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.3-py3.12.egg -run-exthandlers
+      0 S    timeout --kill-after=60s 280m bash -c echo $$ > ../compile-make.pid; exec make -j"$(nproc)"
+      0 S    tee ../compile-parallel.log
+      0 S    make -j4
+--- the oldest processes that are not kernel threads ---
+   4915 Ss   /sbin/init
+   4914 S<s  /lib/systemd/systemd-journald
+   4914 SLsl /sbin/multipathd -d -s
+   4914 Ss   /lib/systemd/systemd-udevd
+   4913 Ss   /usr/lib/linux-tools/6.8.0-1070-azure/hv_kvp_daemon -n
+   4912 Ss   /usr/sbin/haveged --Foreground --verbose=1
+   4911 Ss   /lib/systemd/systemd-networkd
+   4911 Ss   /lib/systemd/systemd-resolved
+--- what is running under the build ---
+--- the directories the build touched lately ---
+host
+target-aarch64_cortex-a53_musl
+--- how big the root filesystem is getting ---
+--- memory and load ---
+Mem:           15988         726        5142          50       10119       14864
+ 08:39:49 up  1:21,  0 users,  load average: 4.17, 1.82, 0.85
