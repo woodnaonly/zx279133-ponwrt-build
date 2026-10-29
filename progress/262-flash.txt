@@ -1,66 +1,67 @@
-=== 12:56:42 beat 27 log=3388 frozen=10 wrote=yes ===
---- signals: quiet=606s writes=1800s newproc=900s hard=5400s cmp=-cnewer proc=1s ---
+=== 13:02:51 beat 30 log=5064 frozen=0 wrote=yes ===
+--- signals: quiet=0s writes=1800s newproc=900s hard=5400s cmp=-cnewer proc=0s ---
 --- the last 30 lines of the build's own log ---
- make[3] -C tools/fakeroot compile
- make[3] -C tools/gengetopt compile
- make[3] -C tools/mklibs compile
- make[3] -C tools/patchelf compile
- make[3] -C tools/gmp compile
- make[3] -C tools/cmake compile
- make[3] -C tools/bison compile
- make[3] -C tools/bc compile
- make[3] -C tools/util-linux compile
- make[3] -C tools/elfutils compile
- make[3] -C tools/findutils compile
- make[3] -C tools/mkimage compile
- make[3] -C tools/mtd-utils compile
- make[3] -C tools/mpfr compile
- make[3] -C tools/e2fsprogs compile
- make[3] -C tools/erofs-utils compile
- make[3] -C tools/padjffs2 compile
- make[3] -C tools/quilt compile
- make[3] -C tools/mpc compile
- make[3] -C tools/firmware-utils compile
- make[2] toolchain/compile
- make[3] -C toolchain/fortify-headers compile
- make[3] -C toolchain/gdb compile
- make[3] -C toolchain/binutils compile
- make[3] -C toolchain/gcc/initial compile
- make[3] -C toolchain/kernel-headers compile
- make[3] -C toolchain/musl compile
- make[3] -C toolchain/gcc/final compile
- make[2] target/compile
- make[3] -C target/linux compile
+ make[3] -C feeds/luci/contrib/package/csstidy host-compile
+ make[3] -C package/system/apk host-compile
+ make[3] -C package/libs/libubox host-compile
+ make[3] -C package/system/ucert host-compile
+ make[3] -C package/libs/toolchain compile
+ make[3] -C package/kernel/gpio-button-hotplug compile
+ make[3] -C package/libs/libnl-tiny compile
+ make[3] -C package/libs/libjson-c compile
+ make[3] -C package/utils/lua compile
+ make[3] -C package/libs/libmd compile
+ make[3] -C package/libs/zlib compile
+ make[3] -C package/firmware/linux-firmware compile
+ make[3] -C package/system/fwtool compile
+ make[3] -C package/libs/libsepol compile
+ make[3] -C package/libs/pcre2 compile
+ make[3] -C package/libs/musl-fts compile
+ make[3] -C package/system/openwrt-keyring compile
+ make[3] -C feeds/luci/libs/luci-lib-uqr compile
+ make[3] -C feeds/packages/libs/libcbor compile
+ make[3] -C feeds/packages/libs/libevdev compile
+ make[3] -C package/libs/openssl compile
+ make[3] -C feeds/packages/libs/libpam compile
+ make[3] -C package/utils/bzip2 compile
+ make[3] -C package/libs/argp-standalone compile
+ make[3] -C package/libs/libmnl compile
+ make[3] -C package/libs/mbedtls compile
+ make[3] -C package/network/services/dropbear compile
+ make[3] -C package/system/ca-certificates compile
+ make[3] -C package/utils/mdread compile
+ make[3] -C package/utils/rdreg compile
 --- the build's own processes ---
-   3991 Ss   /usr/bin/python3 /usr/bin/networkd-dispatcher --run-startup-triggers
-   3991 Ss   /usr/bin/python3 -u /usr/sbin/waagent -daemon
-   3990 Sl   /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
-   3168 S    timeout --kill-after=60s 280m bash -c echo $$ > ../compile-make.pid; exec make -j"$(nproc)"
-   3168 S    tee ../compile-parallel.log
-   3168 S    make -j4
-   3158 S    /bin/sh -c _limit=`ulimit -n`; [ "$_limit" = "unlimited" -o "$_limit" -ge 1024 ] || ulimit -n 1024; umask 022; cmd() { >/dev/null 2>&1 make -s "$@" < /dev/null || { echo "make $*: build failed. Please re-run make with -j1 V=s or V=sc for a higher verbosity level to see what's going on"; false; } } 8>&1 9>&2; cmd -r world 
-   3158 S    make -s -r world
-    698 S    make --no-print-directory target/compile
-    695 S    bash -c /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/time.pl "time: target/linux/compile" make  -r -C target/linux BUILD_SUBDIR="target/linux" BUILD_VARIANT="" ALL_VARIANTS="" compile  || ?(?{ printf "%s\n" "    ERROR: target/linux failed to build." >&8 || printf "%s\n" "    ERROR: target/linux failed to build."; } 2>/dev/null;   exit 1;) 
-    695 S    perl /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/time.pl time: target/linux/compile make -r -C target/linux BUILD_SUBDIR=target/linux BUILD_VARIANT= ALL_VARIANTS= compile
-    695 S    make -r -C target/linux BUILD_SUBDIR=target/linux BUILD_VARIANT= ALL_VARIANTS= compile
-    695 S    make V=s -C zte compile
-    694 S    make -C /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/build_dir/target-aarch64_cortex-a53_musl/linux-zte_zx279133/linux-6.18.38 KCFLAGS=-fmacro-prefix-map=/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/build_dir/target-aarch64_cortex-a53_musl=target-aarch64_cortex-a53_musl -fno-caller-saves  HOSTCFLAGS=-O2 -I/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/host/include -Wall -Wmissing-prototypes -Wstrict-prototypes CROSS_COMPILE=aarch64-openwrt-linux-musl- ARCH=arm64 KBUILD_HAVE_NLS=no KBUILD_BUILD_USER= KBUILD_BUILD_HOST= KBUILD_BUILD_TIMESTAMP=Mon Oct 26 04:58:01 2026 KBUILD_BUILD_VERSION=0 KBUILD_HOSTLDFLAGS=-L/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/host/lib CONFIG_SHELL=bash V= cmd_syscalls= CC=aarch64-openwrt-linux-musl-gcc Image dtbs modules
+   4360 Ss   /usr/bin/python3 /usr/bin/networkd-dispatcher --run-startup-triggers
+   4360 Ss   /usr/bin/python3 -u /usr/sbin/waagent -daemon
+   4359 Sl   /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
+   3537 S    timeout --kill-after=60s 280m bash -c echo $$ > ../compile-make.pid; exec make -j"$(nproc)"
+   3537 S    tee ../compile-parallel.log
+   3537 S    make -j4
+   3527 S    /bin/sh -c _limit=`ulimit -n`; [ "$_limit" = "unlimited" -o "$_limit" -ge 1024 ] || ulimit -n 1024; umask 022; cmd() { >/dev/null 2>&1 make -s "$@" < /dev/null || { echo "make $*: build failed. Please re-run make with -j1 V=s or V=sc for a higher verbosity level to see what's going on"; false; } } 8>&1 9>&2; cmd -r world 
+   3527 S    make -s -r world
+    150 S    make --no-print-directory package/compile
+     80 S    bash -c /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/time.pl "time: package/libs/openssl/compile" make  -r -C package/libs/openssl BUILD_SUBDIR="package/libs/openssl" BUILD_VARIANT="" ALL_VARIANTS="" compile  || ?(?{ printf "%s\n" "    ERROR: package/libs/openssl failed to build." >&8 || printf "%s\n" "    ERROR: package/libs/openssl failed to build."; } 2>/dev/null;   exit 1;) 
+     80 S    perl /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/time.pl time: package/libs/openssl/compile make -r -C package/libs/openssl BUILD_SUBDIR=package/libs/openssl BUILD_VARIANT= ALL_VARIANTS= compile
+     80 S    make -r -C package/libs/openssl BUILD_SUBDIR=package/libs/openssl BUILD_VARIANT= ALL_VARIANTS= compile
+     72 S    make --jobserver-auth=3,4 -C /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/build_dir/target-aarch64_cortex-a53_musl/openssl-3.5.7 CC=aarch64-openwrt-linux-musl-gcc SOURCE_DATE_EPOCH=1792990681 all
+     67 S    /bin/sh -c "make" depend && "make" _build_sw
 --- the oldest processes that are not kernel threads ---
-   4000 Ss   /sbin/init
-   3999 S<s  /lib/systemd/systemd-journald
-   3998 SLsl /sbin/multipathd -d -s
-   3998 Ss   /lib/systemd/systemd-udevd
-   3998 Ss   /usr/lib/linux-tools/6.8.0-1070-azure/hv_kvp_daemon -n
-   3997 Ss   /usr/sbin/haveged --Foreground --verbose=1
-   3996 Ss   /lib/systemd/systemd-networkd
-   3991 Ss   @dbus-daemon --system --address=systemd: --nofork --nopidfile --systemd-activation --syslog-only
+   4369 Ss   /sbin/init
+   4368 S<s  /lib/systemd/systemd-journald
+   4367 SLsl /sbin/multipathd -d -s
+   4367 Ss   /lib/systemd/systemd-udevd
+   4367 Ss   /usr/lib/linux-tools/6.8.0-1070-azure/hv_kvp_daemon -n
+   4366 Ss   /usr/sbin/haveged --Foreground --verbose=1
+   4365 Ss   /lib/systemd/systemd-networkd
+   4360 Ss   @dbus-daemon --system --address=systemd: --nofork --nopidfile --systemd-activation --syslog-only
 --- what is running under the build ---
 --- the directories the build touched lately ---
 target-aarch64_cortex-a53_musl
+hostpkg
 toolchain-aarch64_cortex-a53_gcc-14.3.0_musl
 host
 --- how big the root filesystem is getting ---
 --- memory and load ---
-Mem:           15988        1021         868          52       14098       14568
- 20:56:42 up  1:06,  0 users,  load average: 5.25, 5.15, 5.28
+Mem:           15988        1129         279          52       14579       14460
+ 21:02:51 up  1:12,  0 users,  load average: 9.53, 6.41, 5.67
