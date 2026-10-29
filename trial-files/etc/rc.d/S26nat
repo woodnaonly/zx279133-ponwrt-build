@@ -72,7 +72,7 @@ if [ -e /sys/class/net/br-lan ]; then
 fi
 
 dsa_ports() {
-	for d in lan1 lan2 lan3 lan4; do
+	for d in lan1 lan2 lan3 lan4 lan5; do
 		[ -e "/sys/class/net/$d" ] && echo "$d"
 	done
 }
@@ -271,6 +271,22 @@ if [ -f /etc/labwan ]; then
 	FORCED=$(head -n 1 /etc/labwan 2>/dev/null | tr -d '\r\n ')
 fi
 
+# The ports that must never be taken for the WAN, and the switch that turns
+# the upstream search off altogether.
+#
+# /etc/labnowan holds "off" to stop the search and the watcher completely -
+# the bench uses that when a device on one of the jacks answers DHCP and the
+# search would take that jack for the WAN - or a list of port names that are
+# not to be taken for the WAN.  On 2026-10-29 the watcher took the port with
+# the ONT behind it, wrote a LAN device list of "lan1 lan2 lan3 lan-cpu0"
+# into the configuration and left the board with no bridge at all.
+NO_WAN=""
+SKIP_WAN=0
+if [ -f /etc/labnowan ]; then
+	NO_WAN=$(head -n 1 /etc/labnowan 2>/dev/null | tr -d '\r\n ')
+	[ "$NO_WAN" = "off" ] && SKIP_WAN=1
+fi
+
 # S15trial put 192.168.9.1 on everything.  Keep it on the LAN only.
 for d in /sys/class/net/*; do
 	[ -d "$d" ] || continue
@@ -329,8 +345,15 @@ adopt_wan() {
 		) >/dev/kmsg 2>&1
 	fi
 	if command -v uci >/dev/null 2>&1; then
-		uci set network.lan.ports="$lan_list" 2>/dev/null
-		uci set network.lan.device="$lan_list" 2>/dev/null
+		# Only the port list is written.  The LAN's device is the
+		# bridge itself, and this image's /etc/config/network is in the
+		# json form that "uci set" does not write - a device of
+		# "lan1 lan2 lan3 lan-cpu0" is not a device, and a network
+		# service that reads it builds no bridge at all.  That is what
+		# the watcher did on 2026-10-29, and the board was left with no
+		# bridge and no LAN.
+		uci -q get network.lan.ports >/dev/null 2>&1 && \
+			uci set network.lan.ports="$lan_list" 2>/dev/null
 		uci set network.wan.device="$p" 2>/dev/null
 		uci commit network 2>/dev/null
 	fi
@@ -380,11 +403,11 @@ search_others() {
 }
 
 WAN=""
-if [ -n "$BR" ]; then
+if [ -n "$BR" ] && [ "$SKIP_WAN" = 0 ]; then
 	if [ -n "$FORCED" ]; then
 		case "$FORCED" in
 		pc) FORCED="$PC_PORT" ;;
-		lan1|lan2|lan3|lan4) ;;
+		lan1|lan2|lan3|lan4|lan5) ;;
 		*) FORCED="" ;;
 		esac
 	fi
@@ -581,7 +604,7 @@ fi
 # The bench's state is "no upstream cable yet", so the search has to keep
 # running: a cable that is plugged in after this script has run has to be
 # picked up without anybody touching the board.
-if [ -n "$BR" ]; then
+if [ -n "$BR" ] && [ "$SKIP_WAN" = 0 ]; then
 	cat > /tmp/trial-nat-watch.sh <<'EOF'
 #!/bin/sh
 # Two jobs, once a minute:
@@ -613,7 +636,7 @@ else
 			[ -n "$p" ] && WAN="$p"
 		fi
 		;;
-	lan1|lan2|lan3|lan4) ;;
+	lan1|lan2|lan3|lan4|lan5) ;;
 	*) WAN="" ;;
 	esac
 fi
@@ -629,36 +652,35 @@ while true; do
 		fi
 		continue
 	fi
-	for p in lan3 lan1 lan4 lan2; do
+	for p in lan3 lan1 lan4 lan2 lan5; do
 		[ -e "/sys/class/net/$p" ] || continue
 		[ "$p" = "$PC" ] && continue
+		# A port the bench has named is never taken for the WAN: the ONT
+		# behind it answers DHCP, and taking that jack for the WAN took
+		# the bridge down with it on 2026-10-29.
+		case " $NO_WAN " in *" $p "*) continue ;; esac
 		ip addr show dev "$p" 2>/dev/null | grep -q 'inet ' && continue
 		was=0
 		[ -e "/sys/class/net/$p/bridge" ] && was=1
 		[ "$was" = 1 ] && ip link set "$p" nomaster 2>/dev/null
 		if udhcpc -i "$p" -n -q -t 2 -s /tmp/probe-script.sh >/dev/null 2>&1; then
 			echo "trial: nat: the watcher found an upstream on $p" >/dev/kmsg
-			lan_list=""
-			for q in lan1 lan2 lan3 lan4; do
-				[ -e "/sys/class/net/$q" ] || continue
-				[ "$q" = "$p" ] && continue
-				lan_list="$lan_list${lan_list:+ }$q"
-			done
-			# The DSA CPU port stays in the bridge: it is the way in and
-			# out of the switch for the router's own traffic, and a
-			# bridge without it forwards between the jacks and never
-			# reaches the host.
-			[ -e /sys/class/net/lan-cpu0 ] && \
-				lan_list="$lan_list${lan_list:+ }lan-cpu0"
-			if uci -q get network.lan.ports >/dev/null 2>&1; then
-				uci set network.lan.ports="$lan_list" 2>/dev/null
-			else
-				uci set network.lan.device="$lan_list" 2>/dev/null
+			# The upstream is taken at runtime only.  The configuration
+			# is NOT rewritten: this image's /etc/config/network is in
+			# the json form that "uci set" does not write, and a rewrite
+			# of it left the network service with a LAN it could not
+			# build - the bridge went down with it.  The port leaves the
+			# bridge and a client of our own takes the lease on it, which
+			# is what the forced case does as well.
+			ip link set "$p" nomaster 2>/dev/null
+			ip link set "$p" up 2>/dev/null
+			echo "$p" > /tmp/labwan.port
+			WAN="$p"
+			if command -v udhcpc >/dev/null 2>&1; then
+				setsid udhcpc -i "$p" -f -s /tmp/udhcpc-trial.sh \
+					>"/tmp/udhcpc-$p.log" 2>&1 &
 			fi
-			uci set network.wan.device="$p" 2>/dev/null
-			uci commit network 2>/dev/null
-			/etc/init.d/network reload >/dev/kmsg 2>&1
-			exit 0
+			break
 		fi
 		[ "$was" = 1 ] && ip link set "$p" master br-lan 2>/dev/null
 	done

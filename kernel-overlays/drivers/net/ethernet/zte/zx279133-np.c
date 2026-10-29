@@ -2100,6 +2100,73 @@ static ssize_t zx279133_9132_write(struct file *file, const char __user *ubuf,
 	}
 
 	/*
+	 * Read and write one port's own SPA memory.
+	 *
+	 * The 9132's ports are not all the same thing, and the fifth one is
+	 * the odd one out.  On the vendor's board the fifth port (XMAC0) is
+	 * the CPU's trap: the words read out of the vendor's live board for
+	 * it are the trap's - a different entry program (0x0000a767, not the
+	 * jacks' 0x0000a6a5), a port attribute word of zero instead of
+	 * 0x96040001, and flood words of its own (docs/69) - and not a jack's.
+	 * This board has five jacks instead of four, and the fifth one is
+	 * that same XMAC0 lane: the 2.5G jack is the SoC's own 2.5G MAC's
+	 * lane, and the driver writes a jack's words onto it.
+	 *
+	 * The bench says the frames from that jack do not come out again:
+	 * a frame sent from the 2.5G jack reaches the 9132 and is never
+	 * seen by any other jack, while the board's own frames reach the
+	 * far end of the same bridge without trouble.  So the words on that
+	 * port are worth being able to change at runtime and read back,
+	 * rather than only being a guess compiled into the driver.
+	 *
+	 *	"spr 5"		print PPU 5's words 0..31
+	 *	"sp 5 0 0x0000a767"	write PPU 5's word 0 and read it back
+	 */
+	if (!strcmp(tok, "spr")) {
+		u32 ppu, word, value;
+		int err;
+
+		tok = zx279133_9132_next_token(&p);
+		if (!tok || kstrtou32(tok, 0, &ppu) || ppu > 0x1f)
+			return -EINVAL;
+
+		for (word = 0; word < 32; word++) {
+			err = zx279133_spa_indirect_read(eth, ppu, word,
+							 &value);
+			if (err)
+				return err;
+			pr_info("PPU %u word %2u = 0x%08x\n",
+				ppu, word, value);
+		}
+		return count;
+	}
+
+	if (!strcmp(tok, "sp")) {
+		u32 ppu, word, value, back;
+		int err;
+
+		tok = zx279133_9132_next_token(&p);
+		if (!tok || kstrtou32(tok, 0, &ppu) || ppu > 0x1f)
+			return -EINVAL;
+		tok = zx279133_9132_next_token(&p);
+		if (!tok || kstrtou32(tok, 0, &word) || word > 0x1f)
+			return -EINVAL;
+		tok = zx279133_9132_next_token(&p);
+		if (!tok || kstrtou32(tok, 0, &value))
+			return -EINVAL;
+
+		err = zx279133_spa_indirect_write(eth, ppu, word, value);
+		if (err)
+			return err;
+		err = zx279133_spa_indirect_read(eth, ppu, word, &back);
+		if (err)
+			return err;
+		pr_info("PPU %u word %u = 0x%08x (read back 0x%08x)\n",
+			ppu, word, value, back);
+		return count;
+	}
+
+	/*
 	 * Trap every protocol on a port to the CPU.
 	 *
 	 * The 9132 gives a frame from a jack to the CPU only when the port's

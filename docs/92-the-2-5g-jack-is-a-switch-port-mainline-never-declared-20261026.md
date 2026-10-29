@@ -13089,3 +13089,75 @@ scope link 不是 local ⇒ **不会应答**。
 Windows 的 `Get-NetNeighbor` 里，如果某地址的 `State` 是 **Unreachable**
 且 `LinkLayerAddress` 全 0 ⇒ **这个地址的 ARP 无人应答**。
 不用抓包就能判「ARP 没人回」，本轮就是这么确认的。
+
+### 96.36 判决 AA：PC 在 2.5G 口上够不到 LAN4 的光猫，而帧在芯片里被吞掉（2026-10-29 17:42 – 18:35）
+
+**这一轮的题目**：owner 把 PC 插在面板 LAN1（2.5G 丝印口），又拿一台光猫插在 LAN4。PC 访问光猫的 192.168.1.1，100% 失败。owner 说 LAN1 很重要，所以这一轮只解决这一件事。
+
+**这一轮改掉的两条旧结论**：
+
+* 上一轮写下的「CPU trap 口没有 flood group ⇒ 板子从 CPU 口发出的广播在 9132 上无处可去」**作废**：板子自己 ping 光猫 2/2 通（0.47–1.03 ms），它的 ARP 请求显然到了 LAN4。
+* 上一轮写下的「2.5G 口与 1G 口互不通是硬件架构/隔离矩阵所致」**作废**：网桥把 veth 客户端的 ARP 转到 LAN4，光猫正常应答（2/2，0.47–1.09 ms）。
+
+**判决链（每一条都是实测，不是推测）**：
+
+| 试验 | 结果 |
+| --- | --- |
+| 板子（CPU 口）→ 光猫 192.168.1.1 | **通**，2/2，0.47–1.03 ms |
+| 板子 → PC 的 192.168.1.25（同一个 192.168.1.0/24） | **通**，2/2，0.31–3.55 ms |
+| PC → 板子 192.168.9.1 | **通**（owner 从昨天起就一直开着 `ping 192.168.9.1 -t` 与 HTTP 轮询） |
+| veth 客户端 labcli0（192.168.1.50）→ 光猫 | **通**，2/2，0.47–1.09 ms |
+| PC（2.5G 口）→ 光猫 | **不通**，邻居项恒为 Incomplete，PC 抓包里 0 个来自光猫的帧 |
+
+**⇒ 同一个网桥、同一个出口、同一根 LAN4 线，从 veth 进来的帧能到光猫，从 2.5G 口进来的帧不能。**
+
+桥的两边都学到了：FDB 里 `84:47:09:5b:bd:2c`（PC）在 port 5、`0c:f0:7b:39:d9:91`（光猫）在 port 4。
+
+**帧走到了哪一步**：
+
+* PC 一次 ping 产生 12 个 `who-has 192.168.1.1 tell 192.168.1.25`（PC 侧抓包逐个数过），同期 lan4 的 `tx_packets` 增量与这个数吻合（57 秒窗口 +8，噪声基线 25 秒 +2–3）。
+* **但** lan4 的 `tx_packets` 是 DSA 驱动在 xmit 时加的，不是「已经从 PHY 发出去」。
+
+**逐一排除**（都是实测）：
+
+* **untag SVID**：板上 `usv 0`（PPU 1..5 的 untag SVID 清零）与 `usv 1`（写成各自的 transport VID）**都测过**，板子→光猫在两种状态下都通、PC→光猫在两种状态下都不通。**不是它。** 读回确认过：usv 1 时 PPU 4 的 word 2 = `0x00f80000`（VID 62）、PPU 5 的 word 2 = `0x00fc0000`（VID 63）。
+* **tagger 的 VID 范围**：CI 构建用的 overlay `include/net/dsa_zx279133_rtl8372n.h` **已经是** `ZX279133_RTL8372N_USER_PORT_MAX 8`（VID 63 → DSA port 8 在范围内）；`staging/ktree` 里那份是 SR1010 旧树的副本（MAX 7），**不是构建树**，之前拿它当证据是错的。
+* **帧上残留 VLAN tag**：PC 抓包 228131 行里没有任何带 802.1Q 的数据帧（13 个 "VLAN" 命中全是 pktmon 的属性头行）；板子能解析从 2.5G 口进来的 PC 的 ARP reply（板子 ping 192.168.1.25 成功就是证据），说明进 CPU 的帧是无 tag 的普通以太网帧。**不是它。**
+* **隔离矩阵 / PVID 表 / 端口绑定表**：读过，空表，不解释任何现象。
+* **源 MAC**：把 br-lan 的 MAC 改成 PC 自己的 MAC，板子的 ARP 仍被光猫正常应答。
+* **flood group 与协议动作表**：ERAM 表 0x1f（PPU 1..5 的广播组，索引 `(p+0x10)<<6`）读出来**全是 15（CPU 口）**；PPU 5 的 SPA word 17 = `0x05400410`，指向的组就是 1344。把它改成 4（光猫口），再 `trapall 5 0` / `trapall 6 0` / `trapall 7 0` 把 ARP trap 关掉，**PC 仍然不通**。
+
+**⇒ 这一轮最重要的两个新事实**：
+
+1. **trap 关掉之后，PC 的帧彻底不再到 CPU**：FDB 里 PC 的 MAC 的 ageing timer 停在 203 秒不再刷新。也就是说，PC 的帧进了 9132，**既没有被 trap 到 CPU，也没有从任何别的口出来**——**帧在芯片内部被吞掉了**。
+2. **`trapall 5 0` 单独执行会让板子 kernel panic**（栈在 `handle_softirqs`）。原因也清楚：那时 PPU 5 的广播组还指向 CPU 口，帧从 flood 路径回到 CPU 口，而**这条路径不带 transport VID**，驱动拿不到源端口。
+
+**⇒ 于是矛头转到「2.5G 口在芯片里到底是什么」**：
+
+U-Boot 的打印里写着 `enter outerphy info init! … xmac0 is used. … [outerphy_phy_init]Warning: No outerphy on this port<6>`——**2.5G 口走的是 XMAC0 通道**，不是普通 UNI 口。
+
+厂商口径下，9132 的 **PPU 5 = XMAC0 = CPU 的 trap 口**：它的字是 entry program `0x0000a767`（UNI 口是 `0x0000a6a5`）、端口属性字 `0`（UNI 口是 `0x96040001`）、flood 字 `0x07c00000 / 0x03c00bc0`。
+
+**而驱动把 PPU 5 当成第五个 UNI 口，给它写的是 UNI 口的字**（`zx279133_9132_ppu5_words()` → `zx279133_9132_port_words_vendor()`，flood 用 `zx279133_9132_vendor_flood[4]`）。**端口配置与硬件身份对不上，是目前最强的解释**：一个 XMAC0 通道挂着 UNI 口的 entry program，收帧路径可能整个不工作。
+
+**为此加了两个 debugfs 动词**（`zx279133-np.c`）：
+
+```
+spr 5                    # 打印 PPU 5 的 word 0..31
+sp 5 0 0x0000a767        # 写 PPU 5 的 word 0 并读回
+```
+
+它们存在的意义是：2.5G 口的端口字必须在**运行时**能换成 XMAC0 那套再做 A/B，而不是把它猜死在驱动里。
+
+**这一轮顺手修掉的试跑镜像 bug**（`trial-files/etc/rc.d/S26nat`）：
+
+* `dsa_ports()` 漏了 **lan5**（2.5G 口从来不在 LAN 列表里）。
+* watcher 收编上游时写 `network.lan.device="lan1 lan2 lan3 lan-cpu0"`——**空格分隔的伪设备名不是设备**，netifd 于是建不出 br-lan，网桥整个消失（17:37 实测 `ip link set lan4 master br-lan` 报 `Device does not exist`）。这条 uci 写入已删。
+* watcher 收编上游时**改配置**（`uci set` + `network reload`）也一并去掉了：这个镜像的 `/etc/config/network` 是 json 形式，`uci set` 写进去的是另一种格式，网络服务读到就废。现在 watcher 找到上游只做运行时的事（把口摘出桥 + 自己起 udhcpc），和 forced 分支一样。
+* watcher 的候选口列表里**有 lan4**——而 LAN4 上插着的正是那台会答 DHCP 的光猫，所以它被当成了 WAN。新增 **`/etc/labnowan`**：`off` 表示完全不搜上游、也不跑 watcher（默认），或写一串不得作为 WAN 的口名。
+
+**仍然没有答案的问题**：
+
+* PC 在 2.5G 口上够不到 LAN4 的光猫，**根因还没有钉到最后一环**；已排除的上面都写了，未排除的最强嫌疑是「2.5G 口是 XMAC0 通道却挂着 UNI 口的端口字」。
+* 需要一次对照：把 PC 挪到任意一个 **1G 口**再测一次（问卷 `ask_61141c03db9f7c0580001164`）。1G 口能通 ⇒ 根因锁定在 2.5G 口的芯片配置；1G 口也不通 ⇒ 根因是「从 DSA 用户口进桥的帧」这类普遍问题，得另找解释（veth 对照为什么通，会变成新的问题）。
+* `192.168.1.2` 是谁仍然未知。它给 PC 回过 ICMP destination unreachable，但**板子上没有任何地方是 192.168.1.2**（只有 192.168.9.1 和 192.168.1.100），PC 自己的邻居表里它也是 Unreachable——所以那个 unreachable 多半不是它自己发的。

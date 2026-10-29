@@ -1,0 +1,17 @@
+# The ports that must never be taken for the WAN, and the switch that turns
+# the upstream search off altogether.  Read by S26nat.
+#
+# "off" means: do not search for an upstream at all, and do not run the
+# watcher.  That is the default for this bench, because there is no upstream
+# here - the only thing plugged into a LAN jack is an ONT that answers DHCP -
+# and the search took that jack for the WAN on 2026-10-29, wrote a LAN
+# device list of "lan1 lan2 lan3 lan-cpu0" into the configuration and left
+# the board with no bridge at all.
+#
+# A list of port names means: those ports are never taken for the WAN, and
+# the search runs on the others.
+#
+# To give the board a WAN of its own, put the port name in /etc/labwan
+# instead: that is the forced case, which takes the port at runtime and
+# leaves the configuration alone.
+off
