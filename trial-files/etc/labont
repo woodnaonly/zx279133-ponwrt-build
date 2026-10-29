@@ -2,6 +2,10 @@
 #
 #	ont=192.168.1.1	the ONT's address
 #	ontport=lan4		the jack the ONT is in
+#	ontnet=192.168.1	the subnet the ONT is in; the clients get their
+#				addresses from it, so it has to be the ONT's
+#				own subnet (see S28lablan for why)
 #	ontmac=			leave empty to learn it
 ont=192.168.1.1
 ontport=lan4
+ontnet=192.168.1

@@ -96,6 +96,7 @@ cat > /tmp/lablan.sh <<'LABEOF'
 ONT=192.168.1.1
 ONTPORT=lan4
 ONTMAC=""
+ONTNET=""
 BRIDGE=br-lan
 
 if [ -f /etc/labont ]; then
@@ -103,7 +104,19 @@ if [ -f /etc/labont ]; then
 fi
 [ -n "$ONT" ] || exit 0
 
-BASE=${ONT%.*}
+# The subnet the ONT is in.  The clients get their addresses from it, and
+# it has to be the ONT's own subnet: a client in another subnet cannot
+# reach the ONT.  The reason is not a matter of taste - the ONT's answer
+# comes back to the board, the board hands it to the client, and by then
+# its source address is the client's own address again (that is what the
+# translation does), and a client's own stack drops a packet that claims
+# to come from itself (RFC 1122 3.2.1.3).  Measured on 2026-10-29: with
+# the translation in place the answer reached the client's card and the
+# client threw it away.
+#
+# So the way to move the clients out of a subnet is to move the ONT out of
+# it as well, and to write the new subnet down here.
+BASE=${ONTNET:-${ONT%.*}}
 
 say() {
 	echo "trial: lablan: $*" >/dev/kmsg
@@ -293,10 +306,22 @@ dhcp-leasefile=/tmp/dnsmasq.leases
 pid-file=/tmp/dnsmasq.pid
 EOF
 	killall dnsmasq 2>/dev/null
-	sleep 1
+	# The old server has to let go of its sockets before the new one
+	# binds them: with a second in between the new one dies with
+	# "failed to bind DHCP server socket" and the clients get no lease
+	# at all.  (Measured on 2026-10-29.)
+	i=0
+	while [ $i -lt 10 ]; do
+		pidof dnsmasq >/dev/null 2>&1 || break
+		i=$((i + 1))
+		sleep 1
+	done
 	# setsid: the child is still attached to this shell's session, and
 	# a child that is attached is killed when the shell ends.
 	setsid dnsmasq -C /tmp/dnsmasq-lablan.conf >/dev/kmsg 2>&1 &
+	sleep 2
+	pidof dnsmasq >/dev/null 2>&1 ||
+		say "dnsmasq did not start; the clients will get no lease"
 	say "dnsmasq serves $BASE.0/24 and 192.168.9.0/24"
 fi
 
@@ -306,6 +331,12 @@ for p in 1 2 3 4 5 6 7 8; do
 	d=$(dev_of_port "$p")
 	[ -n "$d" ] && say "bridge port $p is $d"
 done
+
+# The clients are given addresses in the ONT's own subnet, and a machine
+# that has two of them - a wired one in that subnet and a wireless one in
+# it as well - has two routes to the same destination and picks one of
+# them by metric, not by where the ONT is.
+say "the clients will be in $BASE.0/24; a client that also has a wireless link in that subnet has two of them, and the route to the ONT goes to whichever one the metric picks"
 
 refresh_clients
 # Every five seconds, not every minute: a client that has just taken a
