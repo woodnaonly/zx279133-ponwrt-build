@@ -1,0 +1,30 @@
+=== 12:06:48 beat 1 log=0 frozen=0 wrote=unknown ===
+--- signals: quiet=0s writes=1800s newproc=900s hard=5400s cmp=-cnewer proc=unknowns ---
+--- the last 30 lines of the build's own log ---
+--- the build's own processes ---
+    372 Ss   /usr/bin/python3 /usr/bin/networkd-dispatcher --run-startup-triggers
+    372 Ss   /usr/bin/python3 -u /usr/sbin/waagent -daemon
+    371 Sl   /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
+      0 S    timeout --kill-after=60s 280m bash -c echo $$ > ../compile-make.pid; exec make -j"$(nproc)"
+      0 S    tee ../compile-parallel.log
+      0 S    make -j4
+      0 S    /bin/sh -c OPENWRT_BUILD= QUIET=0 make V=s -r -s prereq
+      0 S    make V=s -r -s prereq
+      0 S    make -r -s /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/host/.prereq-build OPENWRT_BUILD= QUIET=0
+--- the oldest processes that are not kernel threads ---
+    379 Ss   /sbin/init
+    378 S<s  /lib/systemd/systemd-journald
+    378 SLsl /sbin/multipathd -d -s
+    377 Ss   /lib/systemd/systemd-udevd
+    377 Ss   /usr/lib/linux-tools/6.8.0-1070-azure/hv_kvp_daemon -n
+    377 Ss   /usr/sbin/haveged --Foreground --verbose=1
+    376 Ss   /lib/systemd/systemd-networkd
+    376 Ss   /lib/systemd/systemd-resolved
+--- what is running under the build ---
+--- the directories the build touched lately ---
+host
+target-aarch64_cortex-a53_musl
+--- how big the root filesystem is getting ---
+--- memory and load ---
+Mem:           15988         718        4079          50       11191       14873
+ 20:06:48 up 6 min,  0 users,  load average: 2.30, 1.03, 0.43
