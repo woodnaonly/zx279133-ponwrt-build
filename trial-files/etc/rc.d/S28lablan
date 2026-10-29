@@ -36,8 +36,27 @@
 #   4. a route for every client in the ONT's subnet, out of the jack it
 #      is in, or the ONT's reply cannot be handed back to it.  The reply
 #      comes back to the board (the ONT learned the client's address from
-#      the board's own MAC), and the board has to give it to the client
-#      through the client's own jack.
+#      the board's own MAC, because the board's proxy ARP answered the
+#      ONT's ARP request), and the board has to give it to the client
+#      through the client's own jack;
+#   5. the client's MAC pinned on that jack as well, for the same reason:
+#      without the pin the board has to ask for it, and an ARP request
+#      the DSA layer sends out of a user port is tagged, and the client
+#      does not answer that either.
+#
+# WHAT THIS SCRIPT DELIBERATELY DOES NOT DO
+#
+# It does not masquerade the traffic towards the ONT.  With the
+# masquerade in place the ONT does answer - the board sees the reply in
+# its own connection tracking - but the reply arrives at the client's
+# network card with a checksum the client's stack rejects, and the
+# client never sees it.  Without it the ONT sees the client's own
+# address, and the reply comes back with a checksum the client accepts
+# (measured on 2026-10-29: 5/5 replies, 1-2 ms, TTL 63).
+#
+# It does not touch a single chip register either: the untag SVID and
+# the LAN TX output port were both set to their defaults again and the
+# traffic still went through.
 #
 # WHICH JACK A CLIENT IS IN
 #
@@ -91,13 +110,20 @@ say() {
 }
 
 # The device name of a bridge port number, as the kernel states it.
+#
+# The name that comes first is not always the right one: the CPU port
+# carries a number of its own and is not a member of the bridge, so only
+# the names that really are in the bridge are taken.
 dev_of_port() {
 	p=$1
 	d=""
 	if command -v dmesg >/dev/null 2>&1; then
-		d=$(dmesg 2>/dev/null |
-			sed -n "s/.*br-lan: port $p(\([^)]*\)).*/\1/p" |
-			head -n 1)
+		for n in $(dmesg 2>/dev/null |
+			sed -n "s/.*br-lan: port $p(\([^)]*\)).*/\1/p"); do
+			[ -e "/sys/class/net/$BRIDGE/brif/$n" ] || continue
+			d="$n"
+			break
+		done
 	fi
 	if [ -z "$d" ] && [ -e "/sys/class/net/lan$p" ]; then
 		d="lan$p"
@@ -105,8 +131,10 @@ dev_of_port() {
 	echo "$d"
 }
 
-# A route for every client in the ONT's subnet, out of the jack it is in.
+# A route for every client in the ONT's subnet, out of the jack it is in,
+# and the client's MAC pinned on that same jack.
 refresh_clients() {
+	: > /tmp/lablan-clients
 	# The MAC of every learned address, and the jack it was learned on.
 	brctl showmacs "$BRIDGE" 2>/dev/null |
 	while read port mac rest; do
@@ -128,8 +156,27 @@ refresh_clients() {
 		[ -n "$mac" ] || continue
 		dev=$(awk -v mac="$mac" '$1 == mac {print $2; exit}' /tmp/lablan-fdb)
 		[ -n "$dev" ] || continue
+		# The pin comes first: the board must not have to ask for
+		# the MAC, because the frames it sends out of a user port
+		# are tagged and the client does not answer a tagged ARP.
+		ip neigh replace "$ip" lladdr "$mac" nud permanent dev "$dev" 2>/dev/null
 		ip route replace "$ip"/32 dev "$dev" 2>/dev/null
 		say "$ip is in $dev"
+		echo "$ip" >> /tmp/lablan-clients
+	done
+
+	# The pins of clients that are gone are of no use to anybody and
+	# would keep a stale address on a jack for ever.
+	ip neigh show nud permanent 2>/dev/null |
+	while read ip ll mac state rest; do
+		case "$ip" in
+		"$BASE".*) ;;
+		*) continue ;;
+		esac
+		[ "$ip" = "$ONT" ] && continue
+		grep -q "^$ip$" /tmp/lablan-clients 2>/dev/null && continue
+		ip neigh del "$ip" nud permanent 2>/dev/null
+		say "the pin of $ip is gone"
 	done
 }
 

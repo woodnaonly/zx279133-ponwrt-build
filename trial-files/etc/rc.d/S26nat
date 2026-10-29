@@ -90,9 +90,15 @@ in_bridge() {
 # the port and survives its leaving and coming back.
 dev_of_port() {
 	p=$1
-	d=$(dmesg 2>/dev/null |
-		sed -n "s/.*br-lan: port $p(\([^)]*\)).*/\1/p" |
-		head -n 1)
+	d=""
+	for n in $(dmesg 2>/dev/null |
+		sed -n "s/.*br-lan: port $p(\([^)]*\)).*/\1/p"); do
+		# Only a member of the bridge is of any use: the CPU port
+		# carries a number of its own and is not one of them.
+		[ -e "/sys/class/net/br-lan/brif/$n" ] || continue
+		d="$n"
+		break
+	done
 	if [ -z "$d" ] && [ -e "/sys/class/net/lan$p" ]; then
 		d="lan$p"
 	fi
