@@ -439,3 +439,59 @@ the one that was dead.  So after the acceptance, check
 `ps w | grep dnsmasq`: there must be a `/usr/sbin/dnsmasq -C
 /var/etc/dnsmasq.conf.*`, and there must **not** be a
 `dnsmasq -C /tmp/dnsmasq-trial.conf`.
+
+### 完全自动验收（第二轮：镜像 #276，2026-10-30 01:34–01:38）
+
+#276 是**第一个把七个坑全部装进去**的镜像（#270 只有第一个）。这一轮的验收
+**和 #270 走的是同一条路、同一个脚本**，只是镜像里的 S28lablan 是完整加固版。
+
+```powershell
+# PC 侧：先给有线口加回 TFTP 地址
+New-NetIPAddress -InterfaceIndex 19 -IPAddress 192.168.9.25 -PrefixLength 24
+```
+（**WLAN 绝不动** —— 整个实验只用 ifIndex 19 这根有线。）
+
+板上（U-Boot 提示符，**一条一条发，间隔 ≥4 s**）：
+```
+setenv ipaddr 192.168.9.1; setenv serverip 192.168.9.25
+tftpboot 0x89000000 run276.itb     # 必须看到 Bytes transferred = 12176764
+bootm 0x89000000
+```
+然后**等 70–90 秒**，让镜像自带的 S28lablan 自己跑完。**此后不要再碰板子**，
+只剩下这四条**只读**的取证命令：
+```
+dmesg | grep lablan | tail -12
+ps w | grep dnsmasq
+grep -h dhcp-range /var/etc/dnsmasq.conf.*
+ip neigh show
+```
+
+板上该看到的东西（**四项都要对上**，这是 §96.41 定下来的判据）：
+- `the ONT is 192.168.1.1 (0c:f0:7b:39:d9:91) on lan4`
+- `dnsmasq serves 192.168.1.101-192.168.1.200` **且** `dnsmasq servers: 1`
+- `ps w | grep dnsmasq` 里活着的只有 `/usr/sbin/dnsmasq -C /var/etc/dnsmasq.conf.*`，
+  **不能**有 `dnsmasq-trial.conf`
+- `dhcp-range=set:lan,192.168.1.101,192.168.1.200,255.255.255.0,12h`
+- 邻居表里客户端钉在 lan5（`PERMANENT`）、光猫钉在 lan4（`PERMANENT`）
+
+PC 侧验收：
+```powershell
+pwsh -NoProfile -File staging/ctl/accept-lablan.ps1 -IfIndex 19
+```
+期望：`== 拿到租约 192.168.1.141/24 ==` 然后 **`PASS: 5 个回答`**，
+邻居的 `LinkLayerAddress` 是板子 MAC（`D0-45-8D-84-09-00`）。
+
+**#276 的实测结果（2026-10-30 01:34–01:38，四分钟）**：上面四项全对，
+`PASS: 5 个回答`。**板上零手工干预。**
+
+**镜像与校验**：release 直链
+`https://github.com/woodnaonly/zx279133-ponwrt-build/releases/download/skd840n_initramfs_276_40907144565/sk-d840n-initramfs.itb`，
+同 tag 的 `sha256sums` 给出
+`4fbc3a54f567e9247cdf7283d4f2b7de7af14f9aa2e1e1de5a2844114c759c02`，
+与本地算的一致；长度 **12176764** 字节，和 U-Boot 的
+`Bytes transferred = 12176764` 一致。**长度对不上就是文件没下全，别往下走。**
+
+**窗口纪律**：插座每 10–30 分钟断一次电，断电后板上一切运行时配置归零、回到
+U-Boot。**一轮实验（引导 + 等 S28lablan + 验收）必须挤在同一个窗口里。**
+#276 这一轮从引导到验收结束只用了 **四分钟**，所以窗口是够的 —— 但**下载和校验
+要在窗口之外做完**。
