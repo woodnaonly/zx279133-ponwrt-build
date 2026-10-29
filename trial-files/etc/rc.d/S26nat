@@ -312,7 +312,15 @@ fi
 NO_WAN=""
 SKIP_WAN=0
 if [ -f /etc/labnowan ]; then
-	NO_WAN=$(head -n 1 /etc/labnowan 2>/dev/null | tr -d '\r\n ')
+	# The value is the first line that is neither a comment nor empty.
+	# Reading the first line of the file took the comment header for the
+	# value, so "off" was never seen and the watcher ran anyway - and the
+	# watcher is the thing that takes the jack with the ONT behind it.
+	# (Measured on 2026-10-29 21:52: the watcher was running, and the
+	# kernel log said "the test PC is in lan4" - lan4 is where the ONT
+	# is.)
+	NO_WAN=$(grep -v '^[[:space:]]*#' /etc/labnowan 2>/dev/null |
+		grep -v '^[[:space:]]*$' | head -n 1 | tr -d '\r\n ')
 	[ "$NO_WAN" = "off" ] && SKIP_WAN=1
 fi
 

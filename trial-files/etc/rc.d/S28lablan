@@ -261,6 +261,24 @@ ip link set "$ONTPORT" up 2>/dev/null
 
 # The board's own address in the ONT's subnet: the proxy ARP answers for
 # addresses in a subnet the board is in.
+#
+# The address is written down as well as being put on the bridge, because
+# the DHCP range is computed from the network configuration (see the
+# dnsmasq part below).  And the network is reloaded right here, before
+# anything is pinned: a reload rebuilds the bridge, and everything that
+# was pinned on it is gone with it.
+if command -v uci >/dev/null 2>&1; then
+	uci set network.lan.ipaddr="$BASE.100/24" 2>/dev/null
+	uci commit network 2>/dev/null
+	/etc/init.d/network reload >/dev/kmsg 2>&1
+	# The reload takes a moment, and the bridge is rebuilt in it.
+	i=0
+	while [ $i -lt 20 ]; do
+		[ -e "/sys/class/net/$BRIDGE" ] && break
+		i=$((i + 1))
+		sleep 1
+	done
+fi
 ip addr replace "$BASE.100/24" dev "$BRIDGE" 2>/dev/null
 
 # The ONT's MAC, learned through the bridge.  This has to happen before
@@ -293,36 +311,76 @@ echo 1 > /proc/sys/net/ipv4/conf/all/proxy_arp 2>/dev/null
 
 # The image's own dnsmasq has to hand out an address in the ONT's subnet,
 # or a client that asks for a lease gets one in the board's subnet and
-# cannot reach the ONT at all.  S26nat wrote dnsmasq's configuration; it
-# is rewritten here with the ONT's range first.
-if command -v dnsmasq >/dev/null 2>&1; then
-	cat > /tmp/dnsmasq-lablan.conf <<EOF
-interface=$BRIDGE
-dhcp-range=$BASE.101,$BASE.200,255.255.255.0,12h
-dhcp-range=192.168.9.100,192.168.9.200,255.255.255.0,12h
-dhcp-option=3,$BASE.100
-dhcp-option=6,$BASE.100
-dhcp-leasefile=/tmp/dnsmasq.leases
-pid-file=/tmp/dnsmasq.pid
-EOF
-	killall dnsmasq 2>/dev/null
-	# The old server has to let go of its sockets before the new one
-	# binds them: with a second in between the new one dies with
-	# "failed to bind DHCP server socket" and the clients get no lease
-	# at all.  (Measured on 2026-10-29.)
-	i=0
-	while [ $i -lt 10 ]; do
-		pidof dnsmasq >/dev/null 2>&1 || break
-		i=$((i + 1))
-		sleep 1
-	done
-	# setsid: the child is still attached to this shell's session, and
-	# a child that is attached is killed when the shell ends.
-	setsid dnsmasq -C /tmp/dnsmasq-lablan.conf >/dev/kmsg 2>&1 &
-	sleep 2
+# cannot reach the ONT at all.
+#
+# The configuration is written through UCI and the image's own init script,
+# and not through a dnsmasq of our own:
+#
+#   * S26nat has already started a dnsmasq, and a second one cannot have
+#     the DHCP socket - it dies with "failed to bind DHCP server socket:
+#     Address in use" (measured on 2026-10-29 22:00), and the check that
+#     was supposed to notice that ("pidof dnsmasq") sees the *old* process,
+#     which is still alive, so it reports success.  The clients then get
+#     nothing and the log says the ranges are served.
+#   * the process the image runs is the one procd knows about, so it is
+#     the one that survives, and its configuration is the one that is
+#     written down.
+#
+# Three things about this image's dnsmasq init script (S19dnsmasq) decide
+# how the range has to be written, and all three were measured on
+# 2026-10-29 22:02 - 22:09:
+#
+#   1. the DHCP section's "interface" is a *network* name, not a device
+#      name.  With "br-lan" the section is skipped silently and the
+#      generated configuration has no dhcp-range at all: the script asks
+#      the network configuration for the device behind the name, and
+#      there is no network called "br-lan".
+#   2. the section needs "force 1".  Without it the script checks whether
+#      a DHCP server is already running on that interface - and one is:
+#      the ONT answers DHCP on the jack that is in the same bridge.  So
+#      the range is refused with "found already running DHCP-server on
+#      interface 'br-lan'".
+#   3. the range is computed from the *network's* address, not from the
+#      section: the script takes network.lan's ipaddr and adds the
+#      section's "start" and "limit" to it.  So the range only comes out
+#      in the ONT's subnet if network.lan's address is in the ONT's
+#      subnet - which is what the board's own address has to be anyway.
+#
+# The board's address is therefore changed here: network.lan gets the
+# ONT's subnet, and the address the bridge already carries is the same
+# one, so nothing moves.
+if command -v uci >/dev/null 2>&1; then
+	# The DHCP section.  "lan" is the network name (see 1 above).
+	uci set dhcp.lan="dhcp" 2>/dev/null
+	uci set dhcp.lan.interface="lan" 2>/dev/null
+	uci set dhcp.lan.start="101" 2>/dev/null
+	uci set dhcp.lan.limit="100" 2>/dev/null
+	uci set dhcp.lan.leasetime="12h" 2>/dev/null
+	# force 1 (see 2 above): the ONT answers DHCP on a jack of the same
+	# bridge, and without this the range is refused.
+	uci set dhcp.lan.force="1" 2>/dev/null
+	# The gateway is the board itself, in the ONT's subnet.
+	uci -q delete dhcp.lan.dhcp_option 2>/dev/null
+	uci add_list dhcp.lan.dhcp_option="3,$BASE.100" 2>/dev/null
+	uci add_list dhcp.lan.dhcp_option="6,$BASE.100" 2>/dev/null
+	# The lease file is where the clients' addresses and MACs are read
+	# from, and it has to be the one the image's dnsmasq writes.
+	uci set dhcp.@dnsmasq[0].leasefile="/tmp/dnsmasq.leases" 2>/dev/null
+	uci commit dhcp 2>/dev/null
+
+	# The server is restarted through the image's own init script, so
+	# there is exactly one dnsmasq and procd knows which one it is.
+	/etc/init.d/dnsmasq restart >/dev/kmsg 2>&1
+	sleep 3
 	pidof dnsmasq >/dev/null 2>&1 ||
 		say "dnsmasq did not start; the clients will get no lease"
-	say "dnsmasq serves $BASE.0/24 and 192.168.9.0/24"
+	# The range that is really in the generated configuration is what
+	# matters, and it is read back rather than assumed.
+	if grep -qs "dhcp-range=.*$BASE.101" /var/etc/dnsmasq.conf.* 2>/dev/null; then
+		say "dnsmasq serves $BASE.101-$BASE.200"
+	else
+		say "dnsmasq does not serve $BASE.0/24; the clients will get no lease"
+	fi
 fi
 
 # The bridge's own port numbers, as the kernel states them.  It is

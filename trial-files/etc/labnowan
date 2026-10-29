@@ -1,3 +1,4 @@
+off
 # The ports that must never be taken for the WAN, and the switch that turns
 # the upstream search off altogether.  Read by S26nat.
 #
@@ -14,4 +15,9 @@
 # To give the board a WAN of its own, put the port name in /etc/labwan
 # instead: that is the forced case, which takes the port at runtime and
 # leaves the configuration alone.
-off
+#
+# The value is on the first line, and it is also the first line that is not
+# a comment - a reader may take either.  It used to be the last line of a
+# comment block, and a reader that took the file's first line read the
+# comment instead of the value: the watcher ran anyway on 2026-10-29, and
+# it took lan4 - the jack with the ONT behind it - for the WAN.
