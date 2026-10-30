@@ -800,6 +800,20 @@ static void zx279133_switch_lane_work_cleanup(void *data);
 static int zx279133_switch_outerphy_link(struct zx279133_switch *priv);
 
 /*
+ * The far end's SerDes class: forward declarations.
+ *
+ * The functions themselves are further down, with the rest of the outer
+ * PHY's code, but the watch above uses two of them - and the kernel does
+ * not accept a call to a function it has not been told about, so they have
+ * to be named here.
+ */
+static int zx279133_switch_outerphy_serdes_read(struct zx279133_switch *priv,
+						u32 *vals);
+static int zx279133_switch_outerphy_serdes_set(struct zx279133_switch *priv,
+						bool force);
+static bool zx279133_switch_outerphy_serdes_check(struct zx279133_switch *priv);
+
+/*
  * The lane's whole state, in one line: forward declaration.
  *
  * The function itself is further down, with the rest of the outer PHY's code.
@@ -2069,9 +2083,20 @@ static int zx279133_switch_outerphy_serdes_set(struct zx279133_switch *priv,
 					    ZX279133_SWITCH_OUTERPHY_SERDES_DEVAD,
 					    zx279133_switch_outerphy_serdes_1g[i][0],
 					    zx279133_switch_outerphy_serdes_1g[i][1]);
-		after[i] = val < 0 ? 0xffffffff : (u32)val;
 		if (val < 0)
 			ret = -EIO;
+	}
+
+	/*
+	 * What the chip says now that it has been told: the write answers
+	 * with "done" or with an error, not with the word it took, so the
+	 * word is read back.
+	 */
+	for (i = 0; i < ARRAY_SIZE(zx279133_switch_outerphy_serdes_1g); i++) {
+		int val = mdiobus_c45_read(bus, ZX279133_SWITCH_OUTERPHY_ADDR,
+					   ZX279133_SWITCH_OUTERPHY_SERDES_DEVAD,
+					   zx279133_switch_outerphy_serdes_1g[i][0]);
+		after[i] = val < 0 ? 0xffffffff : (u32)val;
 	}
 
 	if (changed)
