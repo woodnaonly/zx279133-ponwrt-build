@@ -579,3 +579,67 @@ m45 5 0x1f 0xa438   # DSP 补丁窗：0x0038 = SoC 侧在动这颗 PHY
 
 **`7.0x01` 那个字不作判据**（§94 的结论）：能区分的只有一个东西 ——
 **LAN1 上有对端，而且帧在动**。判据就用上面那张三窗口表。
+
+### 没有对端（光猫没插）的时候，怎么测 LAN1 这条线（2026-10-30 10:39 实测）
+
+光猫不在的时候，**板上唯一的对端就是板子自己**（`192.168.1.100`）—— 这是一次
+干净的隔离测量：DHCP、ping、大流量三个层次都能测。
+
+```powershell
+# 1) 引导：PC 侧给有线口加回 TFTP 地址（板子此刻在 U-Boot 提示符）
+New-NetIPAddress -InterfaceIndex 19 -IPAddress 192.168.9.25 -PrefixLength 24
+# 板上：setenv ipaddr 192.168.9.1 / setenv serverip 192.168.9.25
+#       tftpboot 0x89000000 run276.itb  →  Bytes transferred = 12176764
+#       bootm 0x89000000
+# 等 70–90 秒，让 S28lablan 自己跑完（它会学不到光猫，这是预期的）
+
+# 2) 拿租约：**release + renew 两步**，只 renew 不保险
+ipconfig /release 19
+ipconfig /renew 19
+Get-NetIPAddress -InterfaceIndex 19 -AddressFamily IPv4
+# 期望：192.168.1.141/24（Dhcp）
+
+# 3) 与板子对话（光猫不在，所以目标是板子自己）
+ping -n 25 192.168.1.100
+```
+
+**光猫不在时，板上该看到的东西**（这些是**正常**的，不是故障）：
+- `the ONT has no MAC yet; it will be learned`
+- `learn: the route to 192.168.1.1 is ... 192.168.1.1 dev lan4 scope link linkdown`
+- `dnsmasq serves 192.168.1.101-192.168.1.200`、`dnsmasq servers: 1`
+- 桥口映射照旧：`bridge port 5 is lan5`
+
+**⚠️ 两条要注意的**：
+- `learn_ont` **只在开机时做一次**（它在那个 5 秒自愈循环之外）。所以**开机时没有
+  光猫 ⇒ 永远学不到它的 MAC**；光猫后来插回去，也要**再引导一次板子**。
+- PC 侧**只 `ipconfig /renew` 可能停在 APIPA**（看起来像板子不给租约）。用
+  **release + renew** 两步。
+
+**三窗口（目标换成板子自己）**：
+
+```bash
+cd /c/UGit/openwrt/SK-D840N
+SKD_TARGET=192.168.1.100 SKD_BIND=192.168.1.141 sh staging/ctl/lanerate-lablan.sh
+```
+
+2026-10-30 10:52 的实测：ping **25/25**；XMAC0 帧计数 `nppt+0x142400` 静默窗
+**+51**、突发窗 **+127**；字节计数 `nppt+0x142420` 静默 **+4318**、突发 **+11837**。
+（`lan5` 的 `rx_packets` 仍然不动 —— 那个驱动没有 per-port 的 rx 统计。）
+
+**大流量（这条线能不能扛住）**：
+
+```bash
+# PC 侧准备一个 500 MiB 的文件，HTTP 服务已经在跑（staging/trial 就是它的根）
+fsutil file createnew C:\UGit\openwrt\SK-D840N\staging\trial\bulk500.bin 524288000
+
+# 板上：板子当客户端，从 PC 拉
+time wget -q -O /dev/null http://192.168.1.141:8000/bulk500.bin
+# 板子当服务端，PC 往里灌：
+#   PC: pwsh -File staging/ctl/recvbulk.ps1 -Port 9000 -Seconds 12
+#   板: time nc 192.168.1.141 9000 < /dev/zero
+```
+
+2026-10-30 10:49 的实测：板子 ← PC **500 MiB / 10.32 s = 50.8 MB/s（406 Mbit/s）**，
+`time` 的 `user 1.69s / sys 7.80s`；板子 → PC **695 MB / 12.00 s = 55.2 MB/s
+（442 Mbit/s）**，`user 0.80s / sys 10.72s`。**两个方向的 CPU 都占掉 92–96% 的
+墙钟 ⇒ 瓶颈是板子的 CPU，不是线。**
