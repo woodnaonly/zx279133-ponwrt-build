@@ -495,3 +495,87 @@ pwsh -NoProfile -File staging/ctl/accept-lablan.ps1 -IfIndex 19
 U-Boot。**一轮实验（引导 + 等 S28lablan + 验收）必须挤在同一个窗口里。**
 #276 这一轮从引导到验收结束只用了 **四分钟**，所以窗口是够的 —— 但**下载和校验
 要在窗口之外做完**。
+
+### 回到 U-Boot 的两条路（2026-10-30 08:46 实测）
+
+**relay 的复位对这块板子无效。** `tools/serrelay.ps1` 那套 DTR/RTS 抖动
+（`hold_ms` 取 900 与 3500 各试一次）板子**毫无反应**，`/proc/uptime` 停在
+`889.85` 不归零 ⇒ 这块板子的 RESET 不接在那两根线上。**别再在复位上花时间。**
+
+只有两条路能回 U-Boot 提示符：
+
+1. **插座断电**（板上一切运行时配置归零）—— owner 那边每 10–30 分钟一次。
+2. **`reboot -f`**（在**flash 里那个厂商的 Oct 23 内核**上有效）：
+   ```
+   reboot -f
+   ```
+   内核打印 `[  960.920298] reboot: Restarting system`，随后 U-Boot 的横幅在串口上
+   出来（`U-Boot 2021.01-svn308776`、`Hit any key to stop autoboot: 1 0`），
+   **提示符是 `=>`**。从 `reboot -f` 到看到横幅约 **17 秒**。
+
+   ⚠️ **适用范围**：docs/07:14880 记的是另一种情况 —— 在 flash 里那个 **mainline**
+   上，`reboot` 与 `echo b > /proc/sysrq-trigger` 都**弹不回** U-Boot，只会让板子
+   停住。**同一个动词在两个内核上结果不同**，别照搬。
+
+拿到 `=>` 之后照常 TFTP 引导：
+
+```
+setenv ipaddr 192.168.9.1
+setenv serverip 192.168.9.25
+tftpboot 0x89000000 run276.itb     # 必须看到 Bytes transferred = 12176764
+bootm 0x89000000
+```
+
+### 量「LAN1（2.5G）这条线有没有在跑帧」：三窗口（2026-10-30 09:00 实测）
+
+**先看这个坑**：这个驱动**没有实现 per-port 的 rx 统计**。板上
+`cat /proc/net/dev` 里 **lan1…lan5 的 rx 全是 0 字节 0 包**（只有 tx 在涨），
+`/sys/class/net/lan5/statistics/rx_packets` 在三个窗口里也都是 **50 不动**。
+⇒ **网卡层量不到这条线的收方向**；能用的是**芯片自己的 XMAC0 统计块**
+（nppt + `0x142400` 起）。§94 那条「lane 的 frames 涨、dropped 不涨」（N5）
+在网卡层是量不了的，别再拿它当判据。
+
+脚本：`staging/ctl/lanerate-lablan.sh`（`tools/lanerate.sh` 的 lablan 版：
+量 lan5 / br-lan，目标 `192.168.1.1`，**不往板子上写地址**）。
+在 git-bash 里跑：
+
+```bash
+cd /c/UGit/openwrt/SK-D840N
+sh staging/ctl/lanerate-lablan.sh
+```
+
+它做三段同长的窗口：**pre（静默）→ sil（静默 30 s）→ bur（PC 发 25 帧）**，
+每段把 XMAC0 的统计块、XMAC1 的统计块、SOPC 那几块全读一遍，外加 lan5 与
+br-lan 的网卡计数。**判据是老规矩：突发窗的增量必须明显大于静默窗的增量**
+（静默窗量的是板子自己的背景流量）。
+
+**期望值（2026-10-30 09:00，#276，PC 从 192.168.1.141 ping 光猫 192.168.1.1）**：
+
+| 字 | 静默窗 | 突发窗 |
+| --- | --- | --- |
+| XMAC0 帧计数 `nppt+0x142400` | +36 | **+88** |
+| XMAC0 字节计数 `nppt+0x142420` | +3109 | **+7145** |
+| `br-lan` rx_packets | +94 | +122 |
+| PC 侧 `ping 192.168.1.1` | — | **24/25 有回答** |
+
+配套的板上只读取证（各发一条，间隔 ≥4 s）：
+
+```
+brctl showmacs br-lan     # 客户端 84:47:09:5b:bd:2c 必须落在 port 5 = lan5
+ip neigh show              # 192.168.1.141 dev lan5 ... PERMANENT
+cat /sys/class/net/lan5/speed /sys/class/net/lan5/operstate
+```
+
+远端 PHY 的寄存器用 `m45` 读（trial 镜像里这个动词可用；**flash 里的 Oct 23
+内核没有**，会报「the running image does not have that verb yet」）：
+
+```
+m45 5 0x1e 0x758d   # 链路字，通流基准 0x801e
+m45 5 0x1e 0x7589   # AN 状态，通流基准 0x035a
+m45 5 0x1e 0x7580   # 模式字：0x9402 = 1000BASE-X；0x9416 = 2.5G 档
+m45 5 0x07 0x01     # AN 状态：0x00e9 / 0x00ad / 0x002d 都会动，不作判据
+m45 5 0x1f 0xa438   # DSP 补丁窗：0x0038 = SoC 侧在动这颗 PHY
+```
+
+**`7.0x01` 那个字不作判据**（§94 的结论）：能区分的只有一个东西 ——
+**LAN1 上有对端，而且帧在动**。判据就用上面那张三窗口表。
