@@ -397,6 +397,19 @@
 #define ZX279133_SWITCH_OUTERPHY_AN_STATUS	1
 /* The auto-negotiation's "link partner detect" bit. */
 #define ZX279133_SWITCH_OUTERPHY_AN_PARTNER	BIT(2)
+/*
+ * AN control, and the bit that makes the PHY re-latch.
+ *
+ * This word reads 0x3000 on this chip, and 0x3000 is not a value to write
+ * back blindly: the other bits are the enabling and the advertisement, and
+ * clobbering them turns the PHY off.  The restart is therefore always a
+ * read-modify-write (see zx279133_switch_outerphy_serdes_set()).
+ */
+#define ZX279133_SWITCH_OUTERPHY_AN_CTRL	0
+#define ZX279133_SWITCH_OUTERPHY_AN_RESTART	BIT(9)
+/* The two bits of the AN status word that say the negotiation is finished. */
+#define ZX279133_SWITCH_OUTERPHY_AN_LINK	BIT(0)
+#define ZX279133_SWITCH_OUTERPHY_AN_COMPLETE	BIT(3)
 
 /*
  * The outer PHY's SerDes option registers, and the two words that say which
@@ -2056,12 +2069,16 @@ static int zx279133_switch_outerphy_serdes_set(struct zx279133_switch *priv,
 						bool force)
 {
 	struct mii_bus *bus = zx279133_switch_outer_mdio(priv);
-	u32 before[3], after[3];
+	u32 before[3] = { 0 };
+	u32 after[3] = { 0 };
+	int class = -1;
+	int carry = -1;
 	int link = -1;
 	int mode = -1;
 	unsigned int i;
 	int ret = 0;
 	bool changed = false;
+	bool needs_latch = false;
 
 	if (!bus)
 		return -ENODEV;
@@ -2075,37 +2092,193 @@ static int zx279133_switch_outerphy_serdes_set(struct zx279133_switch *priv,
 			changed = true;
 	}
 
-	if (!force && !changed)
+	class = mdiobus_c45_read(bus, ZX279133_SWITCH_OUTERPHY_ADDR,
+				 ZX279133_SWITCH_OUTERPHY_SERDES_DEVAD,
+				 ZX279133_SWITCH_OUTERPHY_SERDES_MODE);
+	carry = mdiobus_c45_read(bus, ZX279133_SWITCH_OUTERPHY_ADDR,
+				 ZX279133_SWITCH_OUTERPHY_SERDES_DEVAD,
+				 ZX279133_SWITCH_OUTERPHY_SERDES_LINK);
+	needs_latch = class < 0 || carry < 0 ||
+		      (class & ZX279133_SWITCH_OUTERPHY_SERDES_MODE_MASK) !=
+			      ZX279133_SWITCH_OUTERPHY_SERDES_MODE_1G ||
+		      !(carry & ZX279133_SWITCH_OUTERPHY_SERDES_LINK_BIT);
+
+	if (!force && !changed && !needs_latch)
 		return 0;
 
-	for (i = 0; i < ARRAY_SIZE(zx279133_switch_outerphy_serdes_1g); i++) {
-		int val = mdiobus_c45_write(bus, ZX279133_SWITCH_OUTERPHY_ADDR,
-					    ZX279133_SWITCH_OUTERPHY_SERDES_DEVAD,
-					    zx279133_switch_outerphy_serdes_1g[i][0],
-					    zx279133_switch_outerphy_serdes_1g[i][1]);
-		if (val < 0)
-			ret = -EIO;
+	if (changed || force) {
+		for (i = 0; i < ARRAY_SIZE(zx279133_switch_outerphy_serdes_1g); i++) {
+			int val = mdiobus_c45_write(bus, ZX279133_SWITCH_OUTERPHY_ADDR,
+						    ZX279133_SWITCH_OUTERPHY_SERDES_DEVAD,
+						    zx279133_switch_outerphy_serdes_1g[i][0],
+						    zx279133_switch_outerphy_serdes_1g[i][1]);
+			if (val < 0)
+				ret = -EIO;
+		}
+
+		/*
+		 * What the chip says now that it has been told: the write answers
+		 * with "done" or with an error, not with the word it took, so the
+		 * word is read back.
+		 */
+		for (i = 0; i < ARRAY_SIZE(zx279133_switch_outerphy_serdes_1g); i++) {
+			int val = mdiobus_c45_read(bus, ZX279133_SWITCH_OUTERPHY_ADDR,
+						   ZX279133_SWITCH_OUTERPHY_SERDES_DEVAD,
+						   zx279133_switch_outerphy_serdes_1g[i][0]);
+			after[i] = val < 0 ? 0xffffffff : (u32)val;
+		}
+
+		if (changed)
+			dev_info(priv->dev,
+				 "the 2.5G jack's PHY: the SerDes option is set to the 1G class (75f3 %04x->%04x, 697a %04x->%04x, 6a04 %04x->%04x)\n",
+				 before[0], after[0], before[1], after[1], before[2], after[2]);
+	}
+
+	if (needs_latch) {
+		int val = mdiobus_c45_read(bus, ZX279133_SWITCH_OUTERPHY_ADDR,
+					   ZX279133_SWITCH_OUTERPHY_AN_DEVAD,
+					   ZX279133_SWITCH_OUTERPHY_AN_CTRL);
+
+		/*
+		 * Restart auto-negotiation, because writing the option words
+		 * above does not make the chip re-latch its SerDes class.
+		 *
+		 * This is the step the driver has been missing since it was
+		 * written.  Measured on 2026-10-30, on boards that booted with
+		 * the PHY in the out-of-box class (`0x1e:0x7580 = 0x9412`):
+		 *
+		 *	- the option writes are not the missing thing.  A cold
+		 *	  boot does write them and says so at 1.57 s
+		 *	  ("the SerDes option is set to the 1G class (75f3
+		 *	  030d->0002, 697a 0003->0000, 6a04 0503->0403)") and the
+		 *	  class word does not move.  What has to move is the
+		 *	  PHY's own latching, and only a restart does it.
+		 *	- setting bit 9 of AN control moves the class to `0x9402`
+		 *	  and lets AN complete with the partner: devad 7 register 1
+		 *	  reaches `0x002d`, the value the traffic-proven boot
+		 *	  reports.  Reproduced three times.
+		 *	- on its own that is still not the lane: `0x1e:0x758d` stays
+		 *	  `0x0010` and the near end's `nppt +0x0084` stays 0.  The
+		 *	  other half is the near end's own initialisation - the
+		 *	  reset pulse, the 49-word image and the enable bit that
+		 *	  phy-zx279133-uni-serdes.c puts through that block when it
+		 *	  is powered on, which in this bring-up happens just after
+		 *	  this function returns (zx279133_switch_hardware_prepare()
+		 *	  calls this one, then phy_set_mode_ext()).  On the bench
+		 *	  the two were done by hand in that order - the class
+		 *	  already flipped by an earlier restart, then an enable
+		 *	  pulse on a block that had been initialised since boot -
+		 *	  and that moved every witness at once (docs/92 §96.49.4,
+		 *	  §96.49.9).  What is being changed here is only *when*
+		 *	  the near end is initialised relative to the far end's
+		 *	  latch; the enable pulse itself is what the phy driver
+		 *	  already does, and adding a second one to the same boot
+		 *	  would leave two variables and no way to read the result.
+		 *
+		 * So this is one variable: the far end is put into the 1G class
+		 * and left having completed its negotiation, before the near end
+		 * is initialised.  If the lane still carries nothing after that,
+		 * the ordering answer is "no", and the next thing to separate is
+		 * the enable pulse against a block that has already been
+		 * initialised.
+		 *
+		 * The write is read-modify-write on purpose.  This word reads
+		 * 0x3000 on this chip and those bits are the enabling and the
+		 * advertisement; writing 0x0200 - the restart bit alone - turns
+		 * the PHY off.
+		 */
+		if (val >= 0) {
+			int w = mdiobus_c45_write(bus, ZX279133_SWITCH_OUTERPHY_ADDR,
+						  ZX279133_SWITCH_OUTERPHY_AN_DEVAD,
+						  ZX279133_SWITCH_OUTERPHY_AN_CTRL,
+						  val | ZX279133_SWITCH_OUTERPHY_AN_RESTART);
+
+			dev_info(priv->dev,
+				 "the 2.5G jack's PHY: auto-negotiation restarted (AN control was 0x%04x, class 0x%04x, lane word 0x%04x)\n",
+				 val, class < 0 ? 0xffff : class,
+				 carry < 0 ? 0xffff : carry);
+			if (w < 0)
+				ret = -EIO;
+		} else {
+			dev_warn(priv->dev,
+				 "the 2.5G jack's PHY: AN control cannot be read (%d); the class was left as it is\n",
+				 val);
+		}
+
+		/*
+		 * Wait for the negotiation to finish before returning, because
+		 * the caller that matters is the one after this.
+		 *
+		 * hardware_prepare() runs this function and then
+		 * phy_set_mode_ext(), and phy_set_mode_ext() powers the Uni
+		 * SerDes on - where phy-zx279133-uni-serdes.c pulses that
+		 * block's reset, writes its 49-word image and sets its enable
+		 * bit.  That is the near end's initialisation, and an
+		 * initialisation of an analog front end wants a signal to
+		 * adapt to.  Measured 2026-10-30 in a cold boot: the driver ran
+		 * that whole sequence at 6.33 s ("Uni SerDes 1G profile written:
+		 * mode 0x101 already, image differs in 0/49 word(s)") while the
+		 * far end was still in the out-of-box class, and the block's
+		 * adaptive words came back as never-adapted - RX_STATUS
+		 * 0x100019fc and PLL_STATUS 0xc8fbb902, where the boot that
+		 * carries traffic reads 0x01000706 and 0xc880bb83
+		 * (docs/92 §96.49.2, §96.49.9).
+		 *
+		 * The negotiation takes seconds, not the 500 ms the loop below
+		 * used to give it: restarted at 269.9 s, AN status walked
+		 * 0x0008 → 0x0009 → 0x002d and was finished at 274.3 s.
+		 *
+		 * A timeout here is not an error and does not fail the bring-up:
+		 * the word below is what the lane reports afterwards, and
+		 * lane_watch() keeps reading it.
+		 */
+		if (val >= 0) {
+			unsigned int waited = 0;
+
+			for (i = 0; i < 40; i++) {
+				int an = mdiobus_c45_read(bus,
+							   ZX279133_SWITCH_OUTERPHY_ADDR,
+							   ZX279133_SWITCH_OUTERPHY_AN_DEVAD,
+							   ZX279133_SWITCH_OUTERPHY_AN_STATUS);
+
+				if (an >= 0 && (an & ZX279133_SWITCH_OUTERPHY_AN_LINK) &&
+				    (an & ZX279133_SWITCH_OUTERPHY_AN_COMPLETE)) {
+					dev_info(priv->dev,
+						 "the 2.5G jack's PHY: auto-negotiation is complete (status 0x%04x) after %u ms\n",
+						 an, waited);
+					break;
+				}
+				msleep(200);
+				waited += 200;
+			}
+			if (i == 40)
+				dev_warn(priv->dev,
+					 "the 2.5G jack's PHY: auto-negotiation did not complete in %u ms; the near end is initialised against whatever the far end is doing\n",
+					 waited);
+		}
 	}
 
 	/*
-	 * What the chip says now that it has been told: the write answers
-	 * with "done" or with an error, not with the word it took, so the
-	 * word is read back.
+	 * Wait for the lane to say it carries code - but not as if this is
+	 * where it happens.
+	 *
+	 * The 2026-10-30 measurement restarted AN at 269.9 s and `0x758d` first
+	 * had the code bit at 274.3 s, and the write in between was the Uni
+	 * SerDes enable pulse in phy-zx279133-uni-serdes.c - which in this
+	 * bring-up runs *after* this function (hardware_prepare() calls this one
+	 * first, then phy_set_mode_ext()).  So a cold boot is expected to leave
+	 * this loop at its timeout and print "the lane carries no code"; what
+	 * that line says is "the restart alone was not enough", not "the lane is
+	 * dead".  lane_watch() re-reads the word later and is where a cold boot
+	 * is expected to report the lane up.
+	 *
+	 * The wait is short on purpose (40 × 50 ms): it is here to catch the
+	 * boot where the restart is enough on its own, not to stall the bring-up
+	 * for the case where it is not.  It used to be 25 × 20 ms, which is
+	 * inside the window the measurement says the PHY needs to walk
+	 * 0x0008 → 0x0009 → 0x002d and so could only ever answer "no".
 	 */
-	for (i = 0; i < ARRAY_SIZE(zx279133_switch_outerphy_serdes_1g); i++) {
-		int val = mdiobus_c45_read(bus, ZX279133_SWITCH_OUTERPHY_ADDR,
-					   ZX279133_SWITCH_OUTERPHY_SERDES_DEVAD,
-					   zx279133_switch_outerphy_serdes_1g[i][0]);
-		after[i] = val < 0 ? 0xffffffff : (u32)val;
-	}
-
-	if (changed)
-		dev_info(priv->dev,
-			 "the 2.5G jack's PHY: the SerDes option is set to the 1G class (75f3 %04x->%04x, 697a %04x->%04x, 6a04 %04x->%04x)\n",
-			 before[0], after[0], before[1], after[1], before[2], after[2]);
-
-	/* The lane needs a moment to lock again. */
-	for (i = 0; i < 25; i++) {
+	for (i = 0; i < 40; i++) {
 		int val = mdiobus_c45_read(bus, ZX279133_SWITCH_OUTERPHY_ADDR,
 					   ZX279133_SWITCH_OUTERPHY_SERDES_DEVAD,
 					   ZX279133_SWITCH_OUTERPHY_SERDES_LINK);
@@ -2114,7 +2287,7 @@ static int zx279133_switch_outerphy_serdes_set(struct zx279133_switch *priv,
 			if (val & ZX279133_SWITCH_OUTERPHY_SERDES_LINK_BIT)
 				break;
 		}
-		msleep(20);
+		msleep(50);
 	}
 
 	mode = mdiobus_c45_read(bus, ZX279133_SWITCH_OUTERPHY_ADDR,
