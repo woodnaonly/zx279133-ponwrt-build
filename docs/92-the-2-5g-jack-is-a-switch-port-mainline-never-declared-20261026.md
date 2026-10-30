@@ -13688,3 +13688,42 @@ PC 侧：**清掉所有静态地址 → 只设 DHCP → 拿到 192.168.1.141/24 
 3. **owner 那个「2.5G 网卡」的印象要更正**：机器里那张是 RTL8168，1G。**2.5G 档这件事被硬件挡住了，不是被软件挡住了。**
 4. **一条运维事实**：PC 侧只 `ipconfig /renew` 不保险，要 **release + renew 两步**；否则可能停在 APIPA，看起来像「板子没给租约」。
 5. **一条代码事实**：`learn_ont` 只在开机时做一次 ⇒ 光猫在开机时缺席的话，后来插回去也得**再引导一次**才能学到它的 MAC。
+### 96.45 判决 AJ：flash 刷好了 —— 三段写入并按内容校验，板子从 flash 起来，2.5G 口是真正的 LAN 口（2026-10-30 11:03 – 11:16）
+
+**结论先说**：owner 说「赶紧刷机」，于是刷了。**CI 的 flash release #280 已经写进板子的 flash，三段全部按内容校验通过**；板子现在从 flash 启动，`lan5`（2.5G 口）**在 DSA 树里**，PC 插在面板 LAN1 上 `ping 192.168.9.1` **3/3、<1 ms**。
+
+**刷的是什么**（CI 的 flash release，tag `skd840n_flash_280_40984125609`）：
+
+| 文件 | 字节 | sha256（本地 vs 同 tag 的 `sha256sums-release`） |
+| --- | --- | --- |
+| `flash-uImage` | 8,131,025 | `fc3f92d0…d35e185d` **一致** |
+| `flash-dtb.bin` | 13,357 | `96cad0e5…51d1b004c` **一致** |
+| `flash-rootfs.jffs2` | 4,718,596 | `b06905c9…a386ffb8` **一致** |
+
+**为什么刷三段而不是只刷 kernel+dtb**：自 10-23 起，`kernel-overlays/`（驱动 + DTS）改了十几轮，`overlays/target/linux/zte/zx279133/base-files/etc/board.d/02_network` 也改过一次（2.5G 口的网络配置）。只刷 kernel+dtb 会留下一个**不认识 lan5 的 rootfs**。
+
+**通道与闸门**：U-Boot 侧（`tools/ubflash.sh`），这是本项目唯一验证过的刷机通道。闸门按项目纪律走：payload 先 padding + crc32 → **书面授权**（`tools/permit-waiver.sh`，run=280，授权里写着 owner 指令原文、三个 md5、回滚件、以及未测项清单）→ 才允许擦。
+
+**实际执行**（11:09 – 11:11，每段各自「下载 → crc32 → 擦 → 写 → 回读校验」）：
+
+| 段 | 写入 | 擦后校验 | 写后回读校验 |
+| --- | --- | --- | --- |
+| dtb | `0x3800` B（padded） | 头/尾读回 `0xFF`（crc `f154670a`） | crc `cfda7eac` ✔ |
+| kernel | `0x7c1800` B | 头/尾 `0xFF` ✔ | crc `de8eefbd` ✔ |
+| root | `0x480800` B | 头/尾 `0xFF` ✔ | crc `84b9bb1b` ✔ |
+
+**`boot` 分区与 `parameter tags`（GPON 身份）全程没碰。** 回滚件：厂商那两份整分区 dump `staging/kernel_stock.bin`（8 MiB）+ `staging/dtb_stock.bin`（1 MiB）；root 的回滚件是 `staging/rootfs.jffs2`（11,812,720 B，社区那版）。
+
+**起来之后**（11:13 起，从 flash 引导）：
+
+- U-Boot **没有 `boot` 命令**，它的 bootcmd 是 `mtd read kernel 0x88000000; mtd read dtb 0x88800000; bootm 0x88000000 - 0x88800000` —— 拆成三条发（串口行长限制）。
+- `Linux ImmortalWrt 6.18.38+ #0 SMP Mon Oct 26 04:58:01 2026`
+- `ls /sys/class/net` = `br-lan eth0 lan-cpu0 lan1 lan2 lan3 lan4 lan5` —— **lan5 在 DSA 树里**（flash 里原来那个 10-23 内核**没有** lan5，这就是刷机的直接收益）
+- `br-lan = 192.168.9.1/24`；dnsmasq 发 `192.168.9.100-192.168.9.249`
+- `lan5`：`speed 2500`、`operstate up`；`lan4`（光猫口）：`lowerlayerdown`（光猫还拔着）
+- lane 报告与 trial 镜像**逐字相同**：`far an=0x002d 758d=0x801e 7580=0x9402 | near bmcr=0x1140 anctrl=0x0005 dig=0x2200 | nppt 90=0x2c03 | xmac0 tx=0x60010001 rx=0x3e8000c7 frame=0x80000001 … misc=0x00002000`
+- PC 侧（有线口 192.168.9.25）：`ping 192.168.9.1` **3/3，<1 ms**，邻居 `d0-45-8d-84-09-00`（板子 MAC）—— **走的就是 2.5G 口**
+
+**要说清的一条**：刷进 flash 的 rootfs **故意不带** lablan 脚本 —— CI 里 `trial-files/` 只进 initramfs 镜像（工作流里的原话：*"trial-files are RAM-image scaffolding only: a released flashed rootfs must not carry a script that reboots the board five minutes after boot"*）。⇒ **「PC 通过板子访问 192.168.1.1 的光猫」这件事，刷机后的板子做不到**，那是 RAM 版 trial 镜像的能力。要在 flash 版上做，得把脚本另做一份进 rootfs（一次新构建），或者继续用 RAM 镜像。
+
+**遗留**：光猫插回 LAN4 之后，flash 版板子的 LAN 是 `192.168.9.0/24`、光猫在 `192.168.1.0/24` —— 同一个二层桥、不同网段，访问光猫仍需要 lablan 那套路由 + 钉片逻辑。

@@ -643,3 +643,54 @@ time wget -q -O /dev/null http://192.168.1.141:8000/bulk500.bin
 `time` 的 `user 1.69s / sys 7.80s`；板子 → PC **695 MB / 12.00 s = 55.2 MB/s
 （442 Mbit/s）**，`user 0.80s / sys 10.72s`。**两个方向的 CPU 都占掉 92–96% 的
 墙钟 ⇒ 瓶颈是板子的 CPU，不是线。**
+
+### 刷机：把 CI 的 flash release 写进板子的 flash（2026-10-30 11:09 实测）
+
+**通道**：U-Boot 侧（`tools/ubflash.sh`）—— 本项目唯一验证过的刷机通道。
+**闸门**：payload 先 padding + crc32 → 书面授权（`staging/ctl/flash.permit`）→ 才允许擦。
+
+```bash
+# 1) 取 flash release（tag 里带 run 号）；下面是 run 280
+base=https://github.com/woodnaonly/zx279133-ponwrt-build/releases/download/skd840n_flash_280_40984125609
+for f in flash-uImage flash-dtb.bin flash-rootfs.jffs2 sha256sums-release sha256sums; do
+  curl -sfL -o staging/trial/$f $base/$f
+done
+# 2) 校验（sha256sums-release 是这份 flash 产物的清单）
+sha256sum -c staging/trial/sha256sums-release   # 三份必须一字不差
+# 3) 造 .runN 副本（授权闸门要拿它证明「授权的字节就是这次拉的字节」）
+cp staging/trial/flash-uImage    staging/trial/flash-uImage.run280
+cp staging/trial/flash-dtb.bin   staging/trial/flash-dtb.bin.run280
+# 4) 先跑一次刷机器：它只做 padding，然后停在「没有授权」那里，不碰板子
+sh tools/ubflash.sh 280
+# 5) 写书面授权（第三段是 owner 的决定，原文写进去）
+sh tools/permit-waiver.sh 280 "dtb kernel root" "<owner 决定>"
+# 6) 真刷
+STAGES="dtb kernel root" sh tools/ubflash.sh 280
+```
+
+**PC 侧要先给有线口 TFTP 地址**（板子 U-Boot 的 serverip 是 192.168.9.25）：
+```powershell
+New-NetIPAddress -InterfaceIndex 19 -IPAddress 192.168.9.25 -PrefixLength 24
+```
+
+**刷完从 flash 起来**（U-Boot **没有 `boot` 命令**，它的 bootcmd 是三条，拆开发）：
+```
+mtd read kernel 0x88000000
+mtd read dtb 0x88800000
+bootm 0x88000000 - 0x88800000
+```
+
+**三段各自验的内容**（`tools/ubflash.sh` 自己做的）：擦后读分区头/尾各 4 KiB 必须是 `0xFF`
+（crc `f154670a`），写后整段回读的 crc32 必须等于 padded 文件的 crc32。
+**`boot` 与 `parameter tags`（GPON 身份）全程不碰。**
+
+**2026-10-30 的实测**：dtb crc `cfda7eac`、kernel crc `de8eefbd`、root crc `84b9bb1b`，
+全部通过；起来后 `lan5` 在 DSA 树里（flash 里原来那个 10-23 内核没有）、`br-lan = 192.168.9.1/24`、
+`lan5` speed 2500 / up，PC 侧 `ping 192.168.9.1` 3/3 <1 ms。
+
+**⚠️ 两条**：
+- **插座断电节奏 vs 擦写时间**。智能插座每 10–30 分钟断一次，断在擦写中间就是一个
+  写坏的分区（可恢复：三段都有回读校验，断了重跑那一段就行；kernel/dtb 的回滚件是
+  `staging/kernel_stock.bin` + `staging/dtb_stock.bin`，root 的回滚件是 `staging/rootfs.jffs2`）。
+- **flash 版的 rootfs 不带 lablan 脚本**（CI 里 `trial-files/` 只进 initramfs 镜像）。
+  「PC 通过板子访问 192.168.1.1 的光猫」这件事，flash 版做不到 —— 那是 RAM 版 trial 镜像的能力。
