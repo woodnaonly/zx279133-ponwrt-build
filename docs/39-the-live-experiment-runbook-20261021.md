@@ -694,3 +694,182 @@ bootm 0x88000000 - 0x88800000
   `staging/kernel_stock.bin` + `staging/dtb_stock.bin`，root 的回滚件是 `staging/rootfs.jffs2`）。
 - **flash 版的 rootfs 不带 lablan 脚本**（CI 里 `trial-files/` 只进 initramfs 镜像）。
   「PC 通过板子访问 192.168.1.1 的光猫」这件事，flash 版做不到 —— 那是 RAM 版 trial 镜像的能力。
+
+### 让板子自己从 flash 起来：relay 的 `ser-nostop` 开关（2026-10-30 12:33 起）
+
+**症状**：智能插座每 10–30 分钟断一次电；每次回来板子都停在 U-Boot 的 `=>`，
+不自己引导。**原因是我们自己的串口 relay** —— `tools/serrelay.ps1` 在 autoboot
+倒计时窗口里发空格（空格就是按键），倒计时被打断，bootcmd 就没跑。
+
+板子 flash 里的 `bootcmd` **本来就是对的**（2026-10-30 11:38 实测）：
+
+```
+mtd read kernel 0x88000000; mtd read dtb 0x88800000; bootm 0x88000000 - 0x88800000
+```
+
+**修法**（零代码；relay 每轮都 `Test-Path`，建了立刻生效）：
+
+```powershell
+New-Item -ItemType File -Path 'C:\UGit\openwrt\SK-D840N\staging\ctl\ser-nostop' -Force
+```
+
+**回滚 / 怎么再拿到 `=>` 提示符**：把这个文件**改名让位**（本机策略拦 `Remove-Item`，
+改名更稳）—— 例如 `Rename-Item ser-nostop ser-nostop.disabled`；
+relay 下一轮（≈1 s）就不再发空格，再复位板子就有了。
+**刷机需要提示符 ⇒ 刷机前先改名让位（`ser-nostop.disabled`），刷完再改回 `ser-nostop`。**
+
+```powershell
+Rename-Item 'C:\UGit\openwrt\SK-D840N\staging\ctl\ser-nostop' 'ser-nostop.disabled'
+Rename-Item 'C:\UGit\openwrt\SK-D840N\staging\ctl\ser-nostop.disabled' 'ser-nostop'
+```
+
+**为什么删/改名是有效的**：`tools/serrelay.ps1` 第 145 行每一轮都 `Test-Path` 那个文件，
+文件在位 ⇒ **一个空格都不发**（连换行也不发）；文件不在位 ⇒ 发空格，
+空格就是按键，把 autoboot 倒计时打断，板子就停在 `=>`。
+第 134–139 行还有一层：loader 一旦回了 `=>`，phase 变成 `prompt`，此后连空格都不发了。
+
+### relay 掉线怎么发现、怎么拉起来（2026-10-30 14:38 实测）
+
+**症状**：MCP 的 `board_state` 答 `unknown`，`bench_status` 的 markers 里出现
+`=== relay down 14:38:37 ===`，`relay.log_age_s` 不再增长。
+
+**为什么要紧**：relay 死了 ⇒ **没有人往串口发空格** ⇒ 下一次插座断电时，
+板子会自己走完 autoboot 倒计时并**从 flash 引导**（不是停在 `=>`）。
+刷机需要 `=>` 提示符，所以 relay 掉线期间断电，板子就不在刷机位上。
+
+**拉起来**（`Start-Process` 让它脱离本轮命令，否则命令一结束它也跟着死）：
+
+```powershell
+$p = Start-Process -FilePath 'C:\Program Files\PowerShell\7\pwsh.exe' `
+  -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File',
+                'C:\UGit\openwrt\SK-D840N\tools\serrelay.ps1','-Seconds','21600' `
+  -WorkingDirectory 'C:\UGit\openwrt\SK-D840N' -WindowStyle Hidden -PassThru
+```
+
+`-WorkingDirectory` 必须是工作区根目录：`serrelay.ps1` 的相对路径（`staging/ctl/...`）
+是按 `Get-Location` 算的。拉起来之后 markers 里应当出现
+`=== relay up COM3 @115200 8N1 <时间> ===`。
+
+**顺手把待发命令清掉**：relay 死之前 `staging/ctl/sercmd.txt` 里可能还压着一条命令，
+relay 一活就会把它发出去（刷机时这会插进 U-Boot 的命令行里）。
+`Rename-Item sercmd.txt sercmd.txt.stale` 把它挪开即可（本机策略拦 `Remove-Item`）。
+
+**插座断电的节奏**（2026-10-30 实测）：每 **20 分 30 秒**一次，断电 **15 秒**。
+实测时刻：10:36:06 / 10:56:37 / 11:17:07 / 11:37:38 / 11:58:08 / 12:18:39 /
+12:39:09 / 12:59:40 / 13:20:11 / 13:40:41 / 14:01:11 / 14:21:41 / 14:42:11。
+⇒ **刷机要挑一个断电之后的窗口**：断电后 15 秒起、到下一次断电前 9 分钟止，
+刷三段大约要 3–5 分钟。
+
+### 2.5G 口的链路查法：远端 PHY 的 SerDes 档位（2026-10-30 12:39 定案）
+
+**症状**：面板 LAN1（2.5G 丝印口）在刷机版板子上永远不通 —— PC 的 ping 全丢、
+ARP 是 `Incomplete`；面板 LAN2/3/4 正常。
+
+**根因**：这条 lane 的远端是外挂的 RTL8226（MDIO controller #1 的地址 5）。
+它的 SerDes 档位寄存器**只有厂商 U-Boot 的 net bring-up 会写**，而 net bring-up
+只在 loader 被给了网络时才跑 —— 从 flash 自己起来的板子没有这一步，RTL8226
+就停在出厂的 2.5G 档，而 SoC 侧是 1G 档（`Uni SerDes 1G profile written: mode 0x101`）
+⇒ 两端对不上，base-X 永不锁定。
+
+**三个要看的寄存器**（devad `0x1e`）：
+
+| 寄存器 | 出厂默认 | U-Boot 的 1G 档 | 备注 |
+| --- | --- | --- | --- |
+| `0x75f3` | `0x030d` | `0x0002` | |
+| `0x697a` | `0x0003` | `0x0000` | 低 6 位 = SerDes 档 |
+| `0x6a04` | `0x0503` | `0x0403` | |
+
+`0x6f10` / `0x6f11`（出厂 `0x084a` / `0x0021`）**loader 没动，不要碰**；
+`0x7588` / `0x7589` / `0x7587` 也不要碰。
+
+**两个判读位**：
+
+- `0x758d` 的 **bit 2** = lane 在不在送码：`0x801e` 通、`0x8018` 不通、冷启动 `0x0010`。
+- `0x7580` 的**低 6 位** = SerDes 档：`0x02` = 1000BASE-X（本 lane 要的），
+  `0x12` / `0x16` = 2.5G 档。
+
+**读**（板上的 debugfs 控制台，`zx279133-np.c` 的动词，走真 Clause-45，
+不经过 phylib 的 C22 路径 —— 那条路对这颗芯片的 devad `0x1e` 只回 `0xdead`）：
+
+```
+echo 'm45 5 0x1e 0x758d' > /sys/kernel/debug/zx279133-9132
+```
+
+**写**（手工验证用；出厂值随时可写回去）：
+
+```
+echo 'm45w 5 0x1e 0x75f3 0x0002' > /sys/kernel/debug/zx279133-9132
+echo 'm45w 5 0x1e 0x697a 0x0000' > /sys/kernel/debug/zx279133-9132
+echo 'm45w 5 0x1e 0x6a04 0x0403' > /sys/kernel/debug/zx279133-9132
+```
+
+写完在 PC 上 `ping 192.168.9.1`：通了就说明这条 lane 只差这三个寄存器
+（2026-10-30 12:29–12:32 实测：写出厂值 → 0/10；写 1G 档 → 15/15）。
+
+**U-Boot 侧的对照**（loader 的 net init 一跑就把 RTL8226 配好了，这也是为什么
+经 TFTP 引导的 RAM 版镜像一直是通的）：
+
+```
+setenv ipaddr 192.168.9.1
+ping 192.168.9.25        # 这一步会触发 net init
+```
+
+日志里应当出现 `mode_eth_1gbase_x_cfg` → `uni serdes init succeed` →
+`xmac 0 speed set 2 in sgmii(xmac speed 3)` → `mac 4 phy status changed: 1000M
+full-duplex` → `host 192.168.9.25 is alive`。
+
+### 刷机之后的全自动验收清单（2026-10-30 定版）
+
+**第 0 步 · 前提**：`staging/ctl/ser-nostop` **在位**（relay 一个空格都不发），
+插座断电后板子才自己走完 autoboot 倒计时并从 flash 引导。
+刷机需要 `=>` 提示符 ⇒ **刷机前先把它改名让位**（`ser-nostop.disabled`），**刷完改回来**。
+
+1. **板子自己从 flash 起来**：插座断电 15 s → 板子自动走完倒计时 → 串口出现
+   `Linux version 6.18.38+`，**且没有停在 `=>`**。
+2. **LAN1 冷启动自通**（同一块板、同一根网线、同一个 PC 口）：
+   - 板上 dmesg 出现 `the 2.5G jack's PHY: the SerDes option is set to the 1G class`
+     —— 这一行就是「出厂档被改回 1G 档」；
+   - 板上 `echo 'm45 5 0x1e 0x758d' > /sys/kernel/debug/zx279133-9132` = **`0x801e`**（bit 2 = 1，lane 在送码）；
+   - PC 侧 `ping 192.168.9.1` **25/25**。
+3. **自愈**（验的是驱动自己会修，不是人会修）：
+   板上把三个寄存器写回出厂档 ——
+   `m45w 5 0x1e 0x75f3 0x030d`、`m45w 5 0x1e 0x697a 0x0003`、`m45w 5 0x1e 0x6a04 0x0503`；
+   链路随即断（`0x758d` 的 bit 2 变 0、ping 全丢）；
+   **≤ 2 s 内** dmesg 要再出现一次 `the SerDes option is set to the 1G class`，
+   `0x758d` 回到 `0x801e`，ping 恢复。
+4. **拔电再上电 ⇒ 板子自己起来**（同第 1 条），并且第 2 条自动成立。
+5. **LuCI 与「进系统」**：`http://192.168.9.1/` = **200**；
+   `/cgi-bin/luci` = **403 + `x-luci-login-required: yes` + 完整登录页**
+   （**这是 LuCI 未登录时的正常应答，不是坏了**）；
+   `tcp/22` 有握手（证明跑的是 Linux，不是停在 U-Boot —— 那个 U-Boot 也会回答 ping）。
+6. **10 分钟稳定性**：连跑 10 分钟，lane 不掉档（覆盖 11:25 那次「128 s 后自己掉档」的事件）。
+7. **面板灯**：四个 LAN 灯走 **SoC 的 LED 引擎**，mainline **没有**那个引擎的驱动 ⇒
+   **即使端口上了链路，这四个灯也必然是灭的**（dts 里已经写明这一点，它是 mainline 支持的缺口，
+   不是刷机失败）。面板上**电源灯（gpio-10）与 PON 灯（gpio-63）是 GPIO 驱动的**，
+   可以当「板子确实起来了」的证据。**LAN1 灯的亮灭要 owner 当场看面板记**。
+
+**量具**：`tools/acceptlan1.ps1`（PC 侧：ping / tcp22 / http / ARP）＋
+板上 debugfs 控制台的 `m45` / `m45w`。
+PC 侧只用以太网适配器 ifIndex 19（192.168.9.25/24 静态），**WLAN 不动**。
+
+> ⚠️ **判 ping 的时候要用对 API**（2026-10-30 15:07 实测踩到）。
+>
+> Windows PowerShell 5.1 的 `Test-Connection` 返回 `StatusCode`（int，0 是好）
+> 和 `ResponseTime`；**PowerShell 7 返回的是 `Status`（字符串 `"Success"`）和
+> `Latency`**。只认一种的脚本会把**通的链路读成死的** ——
+> 15:07 那一次就是这样：板子在 LAN1 上答 TCP、答 HTTP，`arp` 也是
+> `Reachable`，而脚本报 `ping: 0/25 replies - THE LINK DID NOT ANSWER`。
+> 同一时刻 `ping.exe -n 10 192.168.9.1` 是 10/10、1–2 ms。
+>
+> ⇒ **拿 `ping.exe` 复核一次再下结论**；脚本里两种字段都认。
+
+> ⚠️ **刷机时 `tftpboot` 会触发 loader 的 net init**（2026-10-30 15:03 实测）。
+>
+> `tools/ubflash.sh` 用 `tftpboot` 取镜像，**这一步会让厂商 U-Boot 跑它的
+> net bring-up**，于是 **RTL8226 被 loader 配成了 1G 档**（`0x697a=0x0000`、
+> `0x7580=0x9402`、`0x758d=0x801e`，`nppt 84=0x00000001`）。
+> 刷完立刻 `run bootcmd` 引导，看到的链路是通的 —— **但那不是驱动的功劳**，
+> 是 loader 的。⇒ **要验驱动自己修，必须做一次没有人碰网络的冷启动**
+> （`ser-nostop` 在位 + 插座断电），那一次 loader 不会跑 net init。
+> 判据是 dmesg 里出现 `the 2.5G jack's PHY: the SerDes option is set to the 1G class`。
+

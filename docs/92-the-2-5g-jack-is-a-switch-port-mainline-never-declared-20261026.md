@@ -13824,7 +13824,7 @@ echo 'm45w 5 0x1e 0x6a04 0x0503' > /sys/kernel/debug/zx279133-9132
 `0x7589` 写成 0x70d0/0x71d0），但在**这块板、这个对端**上那两个字的现值就是它谈成的结果，
 照抄厂商的写法只会把已谈好的档位再扳一次。`0x6f10` / `0x6f11` 则是另一回事：基树的
 `rtl822x_set_serdes_option_mode()` 会把这两个字**错开一位**写坏这条 lane（§94.6），
-而两态实测也都是 `0x6f10=0x084a` / `0x6f11=0x0021`（§96.49.1）——loader 没动它们，M5 的
+而两态实测也都是 `0x6f10=0x084a` / `0x6f11=0x0021`（§96.48.1 的对照表）——loader 没动它们，M5 的
 「gen2 magic」假设也已经被这组同值实测否掉（判决 AM）。
 
 这一版**固定 1G 档**：手边没有 2.5G 对端（PC 是 RTL8168，1G 卡）。对真的 2.5G 对端最多降到 1G，不会把口弄死。2.5G 档的扩展位置写在代码注释里：PHY 谈好的速率读 devad `0x1f` 的 `0xa434` / `0xa616`，厂商就是拿它选 profile 的。
@@ -14379,3 +14379,85 @@ datapath 是不是在活的 lane 上 arm 的。**
 调用顺序天然正确：`switch.c:3207` 的 `outerphy_serdes_set()` 跑在 `:3231` 的
 `phy_set_mode_ext()`（SerDes power_on）**之前** —— 与 21:16 实测有效的
 「先 AN restart、后 pulse enable」同序。
+
+（这两个行号写的是当时的文件；`f5d573e` 之后实测是 `switch.c:3367` 的
+`outerphy_serdes_set(priv, false)` 早于 `:3391` 的 `phy_set_mode_ext()` 和 `:3419` 的
+`phy_power_on()`，顺序没变。）
+
+### 96.50 M3 的改动记录：这一版**只改一个变量** —— 把远端的锁档放到近端初始化之前（commit `f5d573e`，已 push，CI 在飞）
+
+计划书 §6 的原文要求 M3 同时落两个动作（AN restart + Uni SerDes 的 enable-bit pulse）。
+**实际出图的这一版只有第一个**，理由是「一次改动只验一件事」：
+
+- §96.49.4 里 enable-bit toggle 是在一个**开机以来一直被初始化过**的块上手抠的；
+  冷启动的 `phy_power_on()` 本来就要走「复位 → 写 49 字 → 置 enable」这条完整初始化
+  （§96.49 实测那次冷启动在 6.33 s 打了 `Uni SerDes 1G profile written: mode 0x101 already,
+  image differs in 0/49 word(s)`）。所以计划书要的 pulse 在冷启动里**已经存在**，
+  只是它发生时远端还是死的。
+- 于是这一版改的确实是**编排**：远端先 latch 并完成 AN，近端才初始化。若 lane 通了，
+  顺序假设成立；若仍不通，下一个要分离的变量才是 enable pulse 相对一个已初始化的块。
+  两个动作同版改，判据回来读不出是哪个起的作用。
+
+**`zx279133_switch_outerphy_serdes_set()` 具体变成什么**（`kernel-overlays/drivers/net/ethernet/zte/zx279133-switch.c`）：
+
+1. 新增 `AN_CTRL`(=0) / `AN_RESTART`(=BIT 9) / `AN_LINK`(=BIT 0) / `AN_COMPLETE`(=BIT 3) 四个宏。
+   `AN_CTRL` 在这颗芯片上是 `0x3000`，其余位是使能与广告位，**不能盲写** `0x0200`，
+   所以 restart 只能是 read-modify-write。
+2. 新增 `needs_latch` 判定：`0x7580` 低 6 位不是 `0x02`，或 `0x758d` 的 bit 2 是 0 ⇒ 需要重锁。
+   提前返回条件由 `!force && !changed` 变成 `!force && !changed && !needs_latch` ——
+   **档位字已经对但 lane 没锁上的那种启动，以前是直接跳过的**（§96.48.1 冷启动基线正是这种）。
+3. 三个 option 字的写入只在 `changed || force` 时做（值本来就对就不动它）。
+4. `needs_latch` 时做 AN restart，并**等 AN 谈完**（devad 7 reg 1 的 bit 0 与 bit 3 同时置位，
+   最多 40 × 200 ms = 8 s）。实测 restart 后 AN 走 `0x0008 → 0x0009 → 0x002d`，
+   269.9 s 发起、274.3 s 谈完 —— 4.4 s，所以旧版那个 500 ms 的窗口永远只能答「没成」。
+5. 原有那段等 lane 载码的轮询从 25 × 20 ms 改成 40 × 50 ms（同样 0.5 → 2 s），
+   并且**注释写明**：冷启动里这一版预期在 `0x758d` 上超时打「the lane carries no code」，
+   这一行的意思是「单独 restart 不够」，不是「lane 死了」。
+
+**判据（G3，本版的通过线，与计划书 §6 一致）**：一次**自动断电**的 mainline 冷启动里，
+(a) `758d=0x801e`、`nppt 84=1`、`nppt 90=0x2c03`；**并且** (b) `tools/pcrxwatch.ps1` 的
+`rx_delta > 0` 且 `ping 192.168.9.1` 4/4。**(a) 单独成立不算通过** —— §96.49.4 已经单独拿到过 (a)
+而流量为零。连续两次冷启动都自动成立才算 M3 过。
+
+**本版没做、留在树上的两件事**（都记在这里，免得下轮再查一遍）：
+
+- `lane_watch` 的自愈节流还是 `if (period > 20 || !(priv->lane_samples % 25))`
+  （现在在 `:896`；同一形状的另一处在 `:977` 决定 lane 状态行的密度）。一次采样本身约 1.5 s，
+  `% 25` 实际 ≈ 37 s，和注释里写的「快窗内每 0.5 s」不符 —— 要改成按 `jiffies` 判定。
+  它不改变任何一个判据，所以**不单独触发一次 CI**，等下一版真正有问题的改动一起出图。
+- `zx279133-eth` 的 remove 路径本身是坏的（§96.49.10）：`unbind` 在
+  `unregister_netdevice_many_notify+0xa40` WARN，`x13` 是 ASCII `lan-cpu0`，并把执行 unbind 的
+  `ash` 一起拖死。这是独立的一条 bug，本轮只挂账，不在 M3 里顺手改。
+
+#### 96.49.11 为什么 run #285 只改一个变量（而不是 §96.49.7 说的两个动作）
+
+`docs/PLAN-lan1-2p5g-20261030.md` §6 原本要求 M3 同时落两个动作：AN restart，**加上**在
+`phy-zx279133-uni-serdes.c` 的 inherit 分支里 pulse 一次 `0x16100054` 的 enable bit。
+**这一版只做了前者**，理由是把 21:36 那次冷启动的 dmesg 拉出来看之后的结果：
+
+```
+[    1.571622] the SerDes option is set to the 1G class (75f3 030d->0002, 697a 0003->0000, 6a04 0503->0403)
+[    2.320520] Uni SerDes lane set to SGMII mode
+[    6.330342] Uni SerDes 1G profile written: mode 0x101 already, image differs in 0/49 word(s),
+               status 0xc8fbb902/0x100019fc
+```
+
+- `1.57 s` 那行说明冷启动里 `changed` 本来就是 **真**（出厂值是 `030d/0003/0503`），
+  §96.48 里"冷启动上那三个 option 字已经是目标值，所以函数会提前 return"这句**是错的**，
+  它来自 U-Boot 配过的那次启动。驱动确实写了 option 字，然后档位不动。
+- `6.33 s` 那行是 **`profile written` 分支**，不是 inherit 分支：冷启动时这个块的 mode 字还是
+  复位默认 `0x01`（所以 `if ((status & ENABLE) && (status & ~ENABLE))` 不成立），驱动自己做了
+  **reset pulse → 写 49 字 image → 置 enable → 等 PLL/CDR**。
+  也就是说**"pulse enable bit"这个动作，驱动在启动期本来就做了**，只是做的时候远端还在出厂档。
+  它的证据就在同一行里：`status 0xc8fbb902/0x100019fc` = 死态的 PLL/RX 自适应字
+  （活态是 `0xc880bb83/0x01000706`，§96.49.2）。
+
+⇒ 我在 21:16 手工做的 pulse，语义是"对一个已经初始化过的块**再**初始化一次"，
+它的作用等价于"把近端初始化挪到远端锁档**之后**"。而 `hardware_prepare()` 里
+`outerphy_serdes_set()`（`switch.c:3207`）本来就跑在 `phy_set_mode_ext()`（`:3231`）之前，
+所以**只要 restart 之后等 AN 真的谈完再返回，启动期自然就是这个次序**。
+再加一次 pulse 只会让这一版同时改两件事，出图后无法判读是谁起的作用。
+
+所以 #285 的内容是：**AN restart（RMW）+ 等 AN 完成（40 × 200 ms）+ `needs_latch` 判定
+（修掉 `!force && !changed` 的提前 return）+ lane 字轮询从 25 × 20 ms 放到 40 × 50 ms**。
+第二个 pulse 不做，除非这一版出图后判据 (a) 成立而 (b) 不成立 —— 那时候它才是下一个变量。
