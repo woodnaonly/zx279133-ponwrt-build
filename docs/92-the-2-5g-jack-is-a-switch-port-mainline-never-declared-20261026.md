@@ -14421,6 +14421,16 @@ datapath 是不是在活的 lane 上 arm 的。**
 
 **本版没做、留在树上的两件事**（都记在这里，免得下轮再查一遍）：
 
+> **2026-10-31 00:4x 复核：这两条都已经被 `staging/ctl/switch_selfheal_followup.diff` 收掉了，机主拍板先出 #287 再刷。**
+> 那张 diff 做了：`ZX279133_SWITCH_OUTERPHY_RESTART_MAX = 3` + `outerphy_restarts` 计数（打满时只说一次
+> 「no more auto-negotiation restarts this boot」）、`:896` 的节流改成 `time_after_eq(jiffies, priv->lane_heal_due)`
+> 配 15 s 冷却并把注释改成实测（快窗内 `lane:` 行也是 1.5 s 一条，所以 `% 25` 是 37 s 一次而不是 0.5 s）、
+> 我提的第 2 条也修了（写被拒绝时不再打「restarted」，改成 `restarted` 布尔 + 单独一条 `refused` 的 dev_warn，
+> 等 AN 那一段现在只在真重启过的时候才走）。
+> 它**没有**采纳我提的「needs_latch 里加对端存在位」，理由写在 diff 里并且我认：那个判断已经由
+> `outerphy_serdes_check()` 在所有自愈路径上做了，加在这里会顺带 gate 掉 probe 在 1.57 s 自己发起的那一次——
+> 而那一次正是本轮要读的判据。`:977` 那条同样形状的 `% 25`（控制 `lane:` 行的密度）**没在这张 diff 里**，仍然留着。
+
 - `lane_watch` 的自愈节流还是 `if (period > 20 || !(priv->lane_samples % 25))`
   （现在在 `:896`；同一形状的另一处在 `:977` 决定 lane 状态行的密度）。一次采样本身约 1.5 s，
   `% 25` 实际 ≈ 37 s，和注释里写的「快窗内每 0.5 s」不符 —— 要改成按 `jiffies` 判定。
@@ -14428,6 +14438,78 @@ datapath 是不是在活的 lane 上 arm 的。**
 - `zx279133-eth` 的 remove 路径本身是坏的（§96.49.10）：`unbind` 在
   `unregister_netdevice_many_notify+0xa40` WARN，`x13` 是 ASCII `lan-cpu0`，并把执行 unbind 的
   `ash` 一起拖死。这是独立的一条 bug，本轮只挂账，不在 M3 里顺手改。
+
+**G3 的实际状态（2026-10-31 00:1x 实测，记在这里免得下一轮以为已经测过）**：release 列表里 #285、#286 都已经出图，
+但**这两个都还没在这块板上跑过**。证据不是 banner（banner 的编译时间被构建系统钉住，不能当血缘证人），
+而是 `f5d573e` 新加的那三条句子在**整个 129 MB 的 `staging/ctl/serial.log` 归档里 0 次**：
+`auto-negotiation restarted` / `is complete` / `did not complete in` 都是 0；
+对照组是 `grep auto-negotiation` 有 212 次命中，全部来自旧 `ethtool` 输出的
+「Supports auto-negotiation: Yes」——所以这个零是真的零，不是模式写错。
+23:55:52 和 00:00:07 两次启动的 witness 仍是死态（`758d=0x0010`、`7580=0x9412`、`nppt 84=0`、`90=0x280b`，
+`ping 192.168.9.1` 0/2）⇒ **kernel 分区里是 10-26 那一版**。
+因此 G3 的前置是**把 #285/#286 的 `flash-uImage` 刷进 kernel 分区**再走断电冷启动：
+TFTP/initramfs 起的都不算，因为走 TFTP 就会让 loader 跑 net bring-up，而那正是要绕开的东西。
+`tools/lan1sweep.sh` 已经把这三条句子和 `uname -r` + `/proc/uptime` 加进了固定命令表，
+下一轮开头就能证明「跑的是不是被测版本」。
+
+**被测版本已经离线验过了（2026-10-31 00:17，不用上板）**：把 `skd840n_flash_286_41068140744` 的
+`flash-uImage` 下到 `staging/lineage286/`（**刻意不是** bench 的 trial 目录，免得和刷机的文件混在一起），
+uImage magic `0x27051956`、payload 是 gzip，64 字节头之后解压出 20 637 704 字节的 Image，
+在里面按字符串找 `f5d573e` 那三条句子：
+
+```
+HIT   auto-negotiation restarted
+HIT   auto-negotiation is complete
+HIT   did not complete in
+HIT   SerDes option is set
+HIT   Uni SerDes image inherited
+HIT   the lane's PCS was reset
+```
+
+并且 `python tools/getrel.py` 自己校验过 `sha256sums-release` 里全部五项（`flash-uImage` / `flash-dtb.bin` /
+`flash-rootfs.jffs2` / `flash-sysupgrade.bin` / `flash-sk-d840n.sh` 都 OK），kernel uImage
+8 132 138 字节 vs 8 388 608 字节的分区，装得下。
+⇒ **「#286 里就是 AN restart 那一版」这条现在是实测的，不用花窗口去证明。**
+#285 没有单独验（`f5d573e` 之后到 #286 之间只有 docs 提交），**这一句是推断、不是实测**：
+两版内核字节相同这一点尚未核对，刷机前该核的是 sha256 而不是 run 号。
+
+### 96.51 M4 的灯：「Linux 侧到底有没有控制者」这件事现在就能回答一半，不用上板（2026-10-30 22:0x，全部读代码与已有实测）
+
+计划书 §7 留了一句「这是 `xmac-led` 还是 SoC GPIO 尚未定论，先确认 Linux 侧有没有对应控制者，再决定要不要动」。
+**「四只 LAN 灯」这一半已经有定论了**，而且写的就是本树的 DTS：
+
+- 面板的 lan1..lan4 = 厂商 `/sys/class/leds` 里的 `led_lan0..3`，它们在厂商自己的 debugfs 认领表里**一个 GPIO 都不占**
+  （`zx279133-sk-d840n.dts:163-192`：占 GPIO 的是 los/power/wps/usb1/wan/phone1/pon/wlan 这八个，全部实测点亮过）；
+  厂商走的是 SoC 的 LED 引擎，stock DTB 用 `led-id` 那个 cell 认领（`led_power=0x33`、`led_usb1=0x34`、`led_los=0x08`…）。
+- mainline **没有这个引擎的驱动**，所以 DTS 里这四只灯是「deliberately absent」（同一处 `:184-191`），
+  并且那句话已经把结论写死了：**这四只灯在 mainline 下本来就点不亮，与 LAN1 通不通无关**。
+
+所以「LAN1 不亮」不能当 LAN1 不通的证据。还没定的只有 LAN1（2.5G 口）那只灯归谁驱动，三条候选，一次观察就能分开：
+
+1. **RTL8226 自己的 LED 脚**（硬件跟着 link 走，Linux 不需要任何驱动）；
+2. 9132 的 inner-GE LED 引擎 —— U-Boot 里 `innerGeLedPolarSet` 出现 4 次（本文 §96.47.5 的实测：681588 / 681615 那一段），
+   对应的是**四个内置 GbE PHY**（PPU 1..4 = MDIO 0x0a..0x0d），而 2.5G 口走的是 SPA 5、不在这四个里面 ⇒ 这条**可能性低**；
+3. 与 lan0..3 同一台 SoC LED 引擎。
+
+**给机主的那条观察（§96.46.7.1 欠的就是它，两次断电就能分开这三种）**：
+(i) loader 跑过 net bring-up、lane 正在传 ping 的那次冷启动里，LAN1 这只灯亮不亮、什么颜色；
+(ii) 刷 mainline 且 lane 通的时候，同一只灯亮不亮。
+只有 (i) 亮 ⇒ 是 PHY 的硬件脚，M4 不用改驱动；两轮都不亮 ⇒ 是引擎那条，得补驱动，那是另一件事、另立里程碑。
+
+**G4 已改（机主 2026-10-31 00:1x 点头）**：计划书 §7 的门槛原本是「冷启动 → 灯亮（机主确认）→ ping 4/4 → ssh」，
+现在**灯从门槛降为观察项**，门槛是「冷启动 → `ping` 4/4 → `ssh root@192.168.9.1` 可登录 → 连续两轮成立」。
+上面那条观察照做、答案原样记在这里，但它不参与通过判定。
+
+#### 96.51.1 那条观察的第 (i) 问，机主已经答了（2026-10-31 00:4x，原样记录）
+
+问：「之前 loader 跑过 net bring-up、LAN1 能 ping 通 4/4 的那次启动（10-30 20:54），面板上 LAN1 那只灯当时亮吗？」
+答：**「亮过」**。
+
+⇒ 按上面定的分法，这落在「(i) 亮」这一支：**这只灯跟着 PHY 的链路状态走，不是那四只走 SoC LED 引擎的 `led_lan0..3`**。
+所以 M4 在灯这一项上**不需要 Linux 侧补驱动**——只要 lane 真的活了，灯自己会亮。
+第 (ii) 问（mainline 把 lane 弄活以后同一只灯亮不亮）现在没法答，因为 mainline 从来没有把 lane 弄活过；
+它和 G3 是同一个窗口里的一次观察，**G3 那一轮顺手记**：`ping` 4/4 成立时看一眼面板。
+这条记完，§96.46.7.1 欠的就是第 (ii) 问，不再欠第 (i) 问。
 
 #### 96.49.11 为什么 run #285 只改一个变量（而不是 §96.49.7 说的两个动作）
 
@@ -14461,3 +14543,33 @@ datapath 是不是在活的 lane 上 arm 的。**
 所以 #285 的内容是：**AN restart（RMW）+ 等 AN 完成（40 × 200 ms）+ `needs_latch` 判定
 （修掉 `!force && !changed` 的提前 return）+ lane 字轮询从 25 × 20 ms 放到 40 × 50 ms**。
 第二个 pulse 不做，除非这一版出图后判据 (a) 成立而 (b) 不成立 —— 那时候它才是下一个变量。
+
+### 96.52 判决 AO：**「一次采样要 1.5 s、所以 `% 25` 是 ~37 s 一次」是错的**（2026-10-31 00:5x，纯离线，从 `staging/ctl/serial.log` 直接数）
+
+这条错误结论从 §96.48 一路传到计划书 §6 和我自己的代码注释里，00:5x 拿日志数了一遍才发现：
+
+- 一次冷启动（21:11 那次）里 `switch: lane:` 行从 **4.400 s 到 31.450 s 共 41 条，间隔 0.75 s**
+  （4.400 / 5.150 / 5.900 / 6.650 / … / 31.450，间距完全规则）。
+- 快窗里 `period = 20 ms`，所以 0.75 s = **25 个样本 ×（20 ms + 约 10 ms 的 MDIO）**
+  ⇒ `lane_watch` 一趟真实耗时 **约 10 ms**，不是 1.5 s。
+- 我那个 1.5 s 是从哪来的：**我自己用串口 `echo … > $D` 发命令的间隔**（`m45` 读数的时间戳
+  57.08 / 58.47 / 59.87 / 61.26 / 62.71…）。那是**控制台在占 MDIO 总线**时的被动间隔，
+  不是工作队列的节奏。270.150 / 272.240 / 274.320 / 275.350 那四条 `lane:` 行也不是这条规则打的，
+  是 `zx279133_switch_outerphy_link()` 里「AN status 变了就把整条 lane 打一遍」那个调用点
+  （`switch.c:2534`）—— 那正是我当时手动 restart AN 造成的变化。
+
+⇒ 两件事要改口：
+1. **`% 25` 那条日志规则原意是做到了的**（0.75 s，注释说"每半秒"只差 1.5 倍），
+   所以它**不该被放慢**；`17fe20f` 之后我按等节奏把它写成 `jiffies`（750 ms），
+   密度不变，但不再依赖"总线当时归谁"。
+2. **自愈那条（`period > 20 || !(samples % 25)`）的问题从来不是节奏估错，而是代价变了**：
+   `period > 20` 在快窗之后**每趟都为真**，也就是 **每 2 s 一次**；`f5d573e` 之前一趟只是几个
+   MDIO 读，之后一趟可能包含 AN restart + 最多 8 s 等谈完 + 2 s 等载码。
+   每 2 s 把远端重谈一次，恰好会打死"再多给它 10–20 s 就能稳"的 lane ⇒ **假阴性**。
+   机主 00:4x 因此拍板：**先上带冷却的 #287 再测 G3**，不要刷 #286。
+   这一条纠正了我在上一条消息里给的比例（我说的 ~37 s 应为 0.75 s；2 s 那个数字是对的）。
+
+**方法教训（写给自己也写给下一个读的人）**：从串口日志里读"驱动自己的节奏"，只能用
+**驱动主动打的行**（`lane:` 这种由 work queue 打的），不能用**我通过控制台发起的读**的时间戳 —
+后者测的是往返延迟（`tools/concmd.sh` 的 `GAP=1.2 s` 就在里面）。这次两样被我混成一件事，
+一个错误的量化结论在文档、计划书和代码注释里连坐了三轮。
