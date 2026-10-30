@@ -410,6 +410,17 @@
 /* The two bits of the AN status word that say the negotiation is finished. */
 #define ZX279133_SWITCH_OUTERPHY_AN_LINK	BIT(0)
 #define ZX279133_SWITCH_OUTERPHY_AN_COMPLETE	BIT(3)
+/*
+ * How many times one boot may restart the far end's auto-negotiation.
+ *
+ * A restart is not free: it takes the far end out of latch and it takes about
+ * four seconds to walk back (0x0008 → 0x0009 → 0x002d, measured 2026-10-30),
+ * and the lane-watch self-heal calls this path on every one of its periods as
+ * long as the lane is not right.  Three is the bring-up's own attempt plus two
+ * self-heal passes; after that the boot has had its chances and the count in
+ * the log is the evidence of what was tried.
+ */
+#define ZX279133_SWITCH_OUTERPHY_RESTART_MAX	3
 
 /*
  * The outer PHY's SerDes option registers, and the two words that say which
@@ -510,6 +521,14 @@ struct zx279133_switch {
 	int outerphy_serdes_link;
 	int outerphy_serdes_mode;
 	/*
+	 * How many times this boot has restarted the far end's
+	 * auto-negotiation.  It is counted because the lane-watch self-heal
+	 * reaches this path again and again while the lane is not right, and a
+	 * boot where the restart was tried five times has to be readable
+	 * without guessing it from five copies of the same line.
+	 */
+	unsigned int outerphy_restarts;
+	/*
 	 * Whether the outer PHY's own configuration has been printed yet.
 	 *
 	 * The print happens on the first read of the PHY, because the MDIO
@@ -560,6 +579,14 @@ struct zx279133_switch {
 	 */
 	unsigned long lane_start;
 	u32 lane_samples;
+	/*
+	 * When the next look-and-fix of the far end's class is allowed.  The
+	 * watch itself runs on `lane_start` and a sample, the fix runs on this,
+	 * and the two are different because a sample costs about 1.5 s of MDIO
+	 * while a fix can cost ten - see the rule in
+	 * zx279133_switch_lane_watch().
+	 */
+	unsigned long lane_heal_due;
 	/*
 	 * The loader's own four words for this lane's PCS, saved when the
 	 * loader is the one that configured it (judgment TT).
@@ -892,8 +919,19 @@ static void zx279133_switch_lane_watch(struct work_struct *work)
 	 * Every half second while the fast window lasts, and every two
 	 * seconds after it: the check is a handful of MDIO reads, and the fast
 	 * window is there to time the far end's own word, not this.
+	 *
+	 * That sentence described a rule that counted samples, and a sample of
+	 * this work is not instantaneous: measured 2026-10-30, the lane lines
+	 * come out 1.5 s apart even inside the fast window (270.1, 272.2,
+	 * 274.3, 275.3 s), so `% 25` was a pass every 37 s rather than every
+	 * 0.5 s, and `period > 20` - every sample once the window is over -
+	 * was a pass every 2 s.  Now that a pass can wait on a negotiation, a
+	 * rule that counts samples cannot bound what it costs, so this is time
+	 * based: at most one look-and-fix every 15 s.  The restart cap in
+	 * zx279133_switch_outerphy_serdes_set() is what bounds the work.
 	 */
-	if (period > 20 || !(priv->lane_samples % 25)) {
+	if (time_after_eq(jiffies, priv->lane_heal_due)) {
+		priv->lane_heal_due = jiffies + msecs_to_jiffies(15000);
 		if (!zx279133_switch_outerphy_serdes_check(priv))
 			zx279133_switch_outerphy_serdes_set(priv, true);
 	}
@@ -2103,6 +2141,21 @@ static int zx279133_switch_outerphy_serdes_set(struct zx279133_switch *priv,
 			      ZX279133_SWITCH_OUTERPHY_SERDES_MODE_1G ||
 		      !(carry & ZX279133_SWITCH_OUTERPHY_SERDES_LINK_BIT);
 
+	/*
+	 * There is deliberately no "is there a partner" test here.
+	 *
+	 * That test exists and it is right - zx279133_switch_outerphy_serdes_check()
+	 * applies it (AN status without bit 2 means the jack is empty and
+	 * returns "nothing to put back"), and every self-heal pass comes through
+	 * it before this function is called with `force`.  Putting it here as
+	 * well would gate the one call that the bring-up makes on its own, at
+	 * 1.57 s into a boot, before anything in this driver has established
+	 * that there is somebody on the other end.  Measured, the word does
+	 * read 0x002d with the bench cable in and nothing restarted, so the
+	 * gate would most likely pass - but "most likely" is not a reason to
+	 * put a second condition on the single attempt whose result this round
+	 * is reading.
+	 */
 	if (!force && !changed && !needs_latch)
 		return 0;
 
@@ -2138,6 +2191,7 @@ static int zx279133_switch_outerphy_serdes_set(struct zx279133_switch *priv,
 		int val = mdiobus_c45_read(bus, ZX279133_SWITCH_OUTERPHY_ADDR,
 					   ZX279133_SWITCH_OUTERPHY_AN_DEVAD,
 					   ZX279133_SWITCH_OUTERPHY_AN_CTRL);
+		bool restarted = false;
 
 		/*
 		 * Restart auto-negotiation, because writing the option words
@@ -2187,18 +2241,49 @@ static int zx279133_switch_outerphy_serdes_set(struct zx279133_switch *priv,
 		 * advertisement; writing 0x0200 - the restart bit alone - turns
 		 * the PHY off.
 		 */
-		if (val >= 0) {
+		if (val >= 0 && priv->outerphy_restarts >=
+				 ZX279133_SWITCH_OUTERPHY_RESTART_MAX) {
+			/*
+			 * Said once, not every period: the counter reaching the
+			 * max is the last copy of this line the boot will get.
+			 */
+			if (priv->outerphy_restarts ==
+			    ZX279133_SWITCH_OUTERPHY_RESTART_MAX) {
+				priv->outerphy_restarts++;
+				dev_warn(priv->dev,
+					 "the 2.5G jack's PHY: no more auto-negotiation restarts this boot (%d tried, class 0x%04x, lane word 0x%04x); the far end is left as it last was\n",
+					 ZX279133_SWITCH_OUTERPHY_RESTART_MAX,
+					 class < 0 ? 0xffff : class,
+					 carry < 0 ? 0xffff : carry);
+			}
+		} else if (val >= 0) {
 			int w = mdiobus_c45_write(bus, ZX279133_SWITCH_OUTERPHY_ADDR,
 						  ZX279133_SWITCH_OUTERPHY_AN_DEVAD,
 						  ZX279133_SWITCH_OUTERPHY_AN_CTRL,
 						  val | ZX279133_SWITCH_OUTERPHY_AN_RESTART);
 
-			dev_info(priv->dev,
-				 "the 2.5G jack's PHY: auto-negotiation restarted (AN control was 0x%04x, class 0x%04x, lane word 0x%04x)\n",
-				 val, class < 0 ? 0xffff : class,
-				 carry < 0 ? 0xffff : carry);
-			if (w < 0)
+			priv->outerphy_restarts++;
+			if (w < 0) {
+				/*
+				 * The line below is not printed on a failed
+				 * write: it says "restarted", and a write that
+				 * was refused restarted nothing.
+				 */
 				ret = -EIO;
+				dev_warn(priv->dev,
+					 "the 2.5G jack's PHY: the restart was refused (%d), attempt %u; AN control was 0x%04x, class 0x%04x, lane word 0x%04x\n",
+					 w, priv->outerphy_restarts, val,
+					 class < 0 ? 0xffff : class,
+					 carry < 0 ? 0xffff : carry);
+			} else {
+				restarted = true;
+				dev_info(priv->dev,
+					 "the 2.5G jack's PHY: auto-negotiation restarted (attempt %u/%d, AN control was 0x%04x, class 0x%04x, lane word 0x%04x)\n",
+					 priv->outerphy_restarts,
+					 ZX279133_SWITCH_OUTERPHY_RESTART_MAX,
+					 val, class < 0 ? 0xffff : class,
+					 carry < 0 ? 0xffff : carry);
+			}
 		} else {
 			dev_warn(priv->dev,
 				 "the 2.5G jack's PHY: AN control cannot be read (%d); the class was left as it is\n",
@@ -2232,7 +2317,7 @@ static int zx279133_switch_outerphy_serdes_set(struct zx279133_switch *priv,
 		 * the word below is what the lane reports afterwards, and
 		 * lane_watch() keeps reading it.
 		 */
-		if (val >= 0) {
+		if (restarted) {
 			unsigned int waited = 0;
 
 			for (i = 0; i < 40; i++) {
