@@ -578,15 +578,18 @@ struct zx279133_switch {
 	 * cannot tell them apart, while twenty milliseconds can.
 	 */
 	unsigned long lane_start;
-	u32 lane_samples;
 	/*
-	 * When the next look-and-fix of the far end's class is allowed.  The
-	 * watch itself runs on `lane_start` and a sample, the fix runs on this,
-	 * and the two are different because a sample costs about 1.5 s of MDIO
-	 * while a fix can cost ten - see the rule in
-	 * zx279133_switch_lane_watch().
+	 * When the next look-and-fix of the far end's class is allowed, and
+	 * when the next dense lane-state line is allowed.  Both are in time
+	 * rather than in sample counts: a pass of this work costs about ten
+	 * milliseconds on a quiet MDIO bus and about a second while a serial
+	 * console is sharing it (measured 2026-10-30: the fast window's lines
+	 * are 0.75 s apart in one boot, ~2 s apart while the console was
+	 * typing), so counting samples makes the cadence depend on who else is
+	 * on the bus.  See zx279133_switch_lane_watch().
 	 */
 	unsigned long lane_heal_due;
+	unsigned long lane_log_due;
 	/*
 	 * The loader's own four words for this lane's PCS, saved when the
 	 * loader is the one that configured it (judgment TT).
@@ -870,8 +873,6 @@ static void zx279133_switch_lane_watch(struct work_struct *work)
 	int ret;
 	unsigned long period = 2000;
 
-	priv->lane_samples++;
-
 	/*
 	 * The first thirty seconds are sampled twenty milliseconds apart.
 	 *
@@ -920,15 +921,21 @@ static void zx279133_switch_lane_watch(struct work_struct *work)
 	 * seconds after it: the check is a handful of MDIO reads, and the fast
 	 * window is there to time the far end's own word, not this.
 	 *
-	 * That sentence described a rule that counted samples, and a sample of
-	 * this work is not instantaneous: measured 2026-10-30, the lane lines
-	 * come out 1.5 s apart even inside the fast window (270.1, 272.2,
-	 * 274.3, 275.3 s), so `% 25` was a pass every 37 s rather than every
-	 * 0.5 s, and `period > 20` - every sample once the window is over -
-	 * was a pass every 2 s.  Now that a pass can wait on a negotiation, a
-	 * rule that counts samples cannot bound what it costs, so this is time
-	 * based: at most one look-and-fix every 15 s.  The restart cap in
-	 * zx279133_switch_outerphy_serdes_set() is what bounds the work.
+	 * The cadence in that sentence was right and is not what changed.  What
+	 * is wrong about the rule is what it costs: `period > 20` is every
+	 * sample once the fast window is over, which is a pass of the fix every
+	 * two seconds, and before this patch a pass was a handful of MDIO reads.
+	 * Now a pass can also restart the far end and wait for it - up to eight
+	 * seconds for the negotiation plus two for the lane word, measured at
+	 * 269.9 s → 274.3 s on 2026-10-30 - and a rule that runs every two
+	 * seconds would spend the whole boot restarting auto-negotiation.  A
+	 * lane that needs "another ten seconds" would never get them, because it
+	 * would be knocked back every two; that is how this version reads as a
+	 * false negative.
+	 *
+	 * So the fix is time based - at most one look-and-fix every 15 s - and
+	 * the restart cap inside zx279133_switch_outerphy_serdes_set() is what
+	 * bounds how much of that is spent negotiating.
 	 */
 	if (time_after_eq(jiffies, priv->lane_heal_due)) {
 		priv->lane_heal_due = jiffies + msecs_to_jiffies(15000);
@@ -1011,9 +1018,26 @@ rearm:
 	 * And a line of the lane's state every half second while the fast
 	 * window lasts, so the timeline is dense enough to show what the
 	 * lane was doing before the far end's word changed.
+	 *
+	 * The half second was approximately true and it is worth keeping
+	 * exactly what it measured: in a cold boot on 2026-10-30 the lane lines
+	 * ran from 4.400 s to 31.450 s, 41 of them, 0.75 s apart.  That is
+	 * `25 samples x (20 ms + about 10 ms of MDIO)`, which is the first
+	 * thing this file got wrong in this round - a pass of this work is
+	 * roughly ten milliseconds, not the 1.5 s a measurement taken while a
+	 * serial console was typing next to it suggested.
+	 *
+	 * It is still rewritten as a time rule, because the density is the
+	 * thing that matters and counting samples makes that density depend on
+	 * how fast the MDIO bus happens to answer: at 270 s in the same boot the
+	 * console was holding the bus, a pass cost about a second, and the same
+	 * rule would have printed every 25 s.  750 ms is what the rule delivered
+	 * when it was working as intended, said directly.
 	 */
-	if (period == 20 && !(priv->lane_samples % 25))
+	if (period == 20 && time_after_eq(jiffies, priv->lane_log_due)) {
+		priv->lane_log_due = jiffies + msecs_to_jiffies(750);
 		zx279133_switch_lane_state(priv);
+	}
 
 	schedule_delayed_work(&priv->lane_work, msecs_to_jiffies(period));
 }
