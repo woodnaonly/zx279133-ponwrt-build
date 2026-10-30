@@ -1,10 +1,6 @@
-=== 05:32:26 beat 6 log=2847 frozen=0 wrote=yes ===
---- signals: quiet=0s writes=1800s newproc=900s hard=5400s cmp=-cnewer proc=0s ---
+=== 05:38:32 beat 9 log=2982 frozen=4 wrote=yes ===
+--- signals: quiet=240s writes=1800s newproc=900s hard=5400s cmp=-cnewer proc=0s ---
 --- the last 30 lines of the build's own log ---
- make[3] -C tools/mtools compile
- make[3] -C tools/patch-image compile
- make[3] -C tools/squashfs4 compile
- make[3] -C tools/sstrip compile
  make[3] -C tools/zip compile
  make[3] -C tools/autoconf compile
  make[3] -C tools/meson compile
@@ -31,35 +27,39 @@
  make[3] -C tools/mtd-utils compile
  make[3] -C tools/mpfr compile
  make[3] -C tools/e2fsprogs compile
+ make[3] -C tools/erofs-utils compile
+ make[3] -C tools/padjffs2 compile
+ make[3] -C tools/quilt compile
+ make[3] -C tools/mpc compile
 --- the build's own processes ---
-   1751 Ss   /usr/bin/python3 /usr/bin/networkd-dispatcher --run-startup-triggers
-   1751 Ss   /usr/bin/python3 -u /usr/sbin/waagent -daemon
-   1750 Sl   /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
-    611 S    timeout --kill-after=60s 280m bash -c echo $$ > ../compile-make.pid; exec make -j"$(nproc)"
-    611 S    tee ../compile-parallel.log
-    611 S    make -j4
-    601 S    /bin/sh -c _limit=`ulimit -n`; [ "$_limit" = "unlimited" -o "$_limit" -ge 1024 ] || ulimit -n 1024; umask 022; cmd() { >/dev/null 2>&1 make -s "$@" < /dev/null || { echo "make $*: build failed. Please re-run make with -j1 V=s or V=sc for a higher verbosity level to see what's going on"; false; } } 8>&1 9>&2; cmd -r world 
-    601 S    make -s -r world
-    598 S    make --no-print-directory tools/compile
-    369 S    bash -c /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/time.pl "time: tools/cmake/compile" make  -r -C tools/cmake BUILD_SUBDIR="tools/cmake" BUILD_VARIANT="" ALL_VARIANTS="" compile  || ?(?{ printf "%s\n" "    ERROR: tools/cmake failed to build." >&8 || printf "%s\n" "    ERROR: tools/cmake failed to build."; } 2>/dev/null;   exit 1;) 
-    369 S    perl /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/time.pl time: tools/cmake/compile make -r -C tools/cmake BUILD_SUBDIR=tools/cmake BUILD_VARIANT= ALL_VARIANTS= compile
-    369 S    make -r -C tools/cmake BUILD_SUBDIR=tools/cmake BUILD_VARIANT= ALL_VARIANTS= compile
-    198 S    bash -c /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/time.pl "time: tools/elfutils/compile" make  -r -C tools/elfutils BUILD_SUBDIR="tools/elfutils" BUILD_VARIANT="" ALL_VARIANTS="" compile  || ?(?{ printf "%s\n" "    ERROR: tools/elfutils failed to build." >&8 || printf "%s\n" "    ERROR: tools/elfutils failed to build."; } 2>/dev/null;   exit 1;) 
-    198 S    perl /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/time.pl time: tools/elfutils/compile make -r -C tools/elfutils BUILD_SUBDIR=tools/elfutils BUILD_VARIANT= ALL_VARIANTS= compile
+   2117 Ss   /usr/bin/python3 /usr/bin/networkd-dispatcher --run-startup-triggers
+   2117 Ss   /usr/bin/python3 -u /usr/sbin/waagent -daemon
+   2116 Sl   /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
+    977 S    timeout --kill-after=60s 280m bash -c echo $$ > ../compile-make.pid; exec make -j"$(nproc)"
+    977 S    tee ../compile-parallel.log
+    977 S    make -j4
+    967 S    /bin/sh -c _limit=`ulimit -n`; [ "$_limit" = "unlimited" -o "$_limit" -ge 1024 ] || ulimit -n 1024; umask 022; cmd() { >/dev/null 2>&1 make -s "$@" < /dev/null || { echo "make $*: build failed. Please re-run make with -j1 V=s or V=sc for a higher verbosity level to see what's going on"; false; } } 8>&1 9>&2; cmd -r world 
+    967 S    make -s -r world
+    964 S    make --no-print-directory tools/compile
+    735 S    bash -c /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/time.pl "time: tools/cmake/compile" make  -r -C tools/cmake BUILD_SUBDIR="tools/cmake" BUILD_VARIANT="" ALL_VARIANTS="" compile  || ?(?{ printf "%s\n" "    ERROR: tools/cmake failed to build." >&8 || printf "%s\n" "    ERROR: tools/cmake failed to build."; } 2>/dev/null;   exit 1;) 
+    735 S    perl /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/time.pl time: tools/cmake/compile make -r -C tools/cmake BUILD_SUBDIR=tools/cmake BUILD_VARIANT= ALL_VARIANTS= compile
+    735 S    make -r -C tools/cmake BUILD_SUBDIR=tools/cmake BUILD_VARIANT= ALL_VARIANTS= compile
+    424 S    /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/host/bin/ninja -C /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/build_dir/host/cmake-4.2.0
+      6 S    /bin/sh -c /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/host/bin/g++ -DCURL_STATICLIB -DLIBARCHIVE_STATIC -I/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/build_dir/host/cmake-4.2.0/Source/CTest -I/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/build_dir/host/cmake-4.2.0/Source -I/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/build_dir/host/cmake-4.2.0/Source/LexerParser -isystem /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/build_dir/host/cmake-4.2.0/Utilities/std -isystem /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/build_dir/host/cmake-4.2.0/Utilities -O2 -I/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/host/include -O3 -DNDEBUG -std=c++17 -MD -MT Source/CMakeFiles/CTestLib.dir/CTest/cmCTestTestHandler.cxx.o -MF Source/CMakeFiles/CTestLib.dir/CTest/cmCTestTestHandler.cxx.o.d -o Source/CMakeFiles/CTestLib.dir/CTest/cmCTestTestHandler.cxx.o -c /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/build_dir/host/cmake-4.2.0/Source/CTest/cmCTestTestHandler.cxx
 --- the oldest processes that are not kernel threads ---
-   1760 Ss   /sbin/init
-   1759 S<s  /lib/systemd/systemd-journald
-   1759 SLsl /sbin/multipathd -d -s
-   1758 Ss   /lib/systemd/systemd-udevd
-   1758 Ss   /usr/lib/linux-tools/6.8.0-1070-azure/hv_kvp_daemon -n
-   1757 Ss   /usr/sbin/haveged --Foreground --verbose=1
-   1756 Ss   /lib/systemd/systemd-networkd
-   1756 Ss   /lib/systemd/systemd-resolved
+   2126 Ss   /sbin/init
+   2125 S<s  /lib/systemd/systemd-journald
+   2125 SLsl /sbin/multipathd -d -s
+   2124 Ss   /lib/systemd/systemd-udevd
+   2124 Ss   /usr/lib/linux-tools/6.8.0-1070-azure/hv_kvp_daemon -n
+   2123 Ss   /usr/sbin/haveged --Foreground --verbose=1
+   2122 Ss   /lib/systemd/systemd-networkd
+   2122 Ss   /lib/systemd/systemd-resolved
 --- what is running under the build ---
 --- the directories the build touched lately ---
 host
 target-aarch64_cortex-a53_musl
 --- how big the root filesystem is getting ---
 --- memory and load ---
-Mem:           15988        2038        1610          52       12339       13551
- 13:32:26 up 29 min,  0 users,  load average: 9.97, 8.14, 4.45
+Mem:           15988        1889        1620          52       12478       13699
+ 13:38:32 up 35 min,  0 users,  load average: 8.83, 9.03, 6.18
