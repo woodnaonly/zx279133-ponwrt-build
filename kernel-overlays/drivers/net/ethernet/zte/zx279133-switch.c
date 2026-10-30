@@ -395,6 +395,71 @@
 /* The auto-negotiation block of a Clause 45 PHY, and its status register. */
 #define ZX279133_SWITCH_OUTERPHY_AN_DEVAD	7
 #define ZX279133_SWITCH_OUTERPHY_AN_STATUS	1
+/* The auto-negotiation's "link partner detect" bit. */
+#define ZX279133_SWITCH_OUTERPHY_AN_PARTNER	BIT(2)
+
+/*
+ * The outer PHY's SerDes option registers, and the two words that say which
+ * SerDes class the chip is in.
+ *
+ * The RTL8226 answers a clause 45 read of its vendor bank (devad 0x1e) with
+ * these words:
+ *
+ *	0x1e.0x75f3	0x030d	out of the box	0x0002	the 1G class
+ *	0x1e.0x697a	0x0003	out of the box	0x0000	the 1G class
+ *	0x1e.0x6a04	0x0503	out of the box	0x0403	the 1G class
+ *	0x1e.0x6f10	0x084a	out of the box	untouched	the loader leaves it
+ *	0x1e.0x6f11	0x0021	out of the box	untouched	the loader leaves it
+ *
+ * The "1G class" column is what this board's own U-Boot leaves behind after
+ * its net bring-up has configured this PHY - measured at the loader's prompt
+ * on 2026-10-30 12:26, right after "mac 4 phy status changed: 1000M
+ * full-duplex" - and the "out of the box" column is what the same chip reads
+ * when nothing has configured it.  That is the state a board that boots from
+ * flash is in, because the loader's net bring-up only runs when the loader is
+ * given a network to talk to.
+ *
+ * The difference between the two states is the whole of this lane's problem
+ * (docs/92 §96.46): with the chip in the 1G class the lane carries code and
+ * the board answers pings on it; with the chip in its out-of-the-box class the
+ * SoC side - which mainline does put in the 1G class, the Uni SerDes prints
+ * "1G profile written: mode 0x101" - and the far end disagree about the rate,
+ * the base-X lane never locks, and every word the driver reads still looks the
+ * way it looked when it worked.
+ *
+ * Two more words say whether the lane carries code:
+ *
+ *	0x1e.0x7580	the SerDes mode the chip is in.  Its low six bits are the
+ *			class: 0x02 is 1000BASE-X, which is what this lane needs.
+ *	0x1e.0x758d	the lane's own word.  Bit 2 is the one that says the lane
+ *			carries code: it reads 0x801e when the lane works and
+ *			0x8018 when it does not.
+ *
+ * Both measured on the running board on 2026-10-30 12:29-12:32, by writing
+ * the three option registers by hand and watching the board stop answering
+ * pings (0x8018) and start again (0x801e).
+ */
+#define ZX279133_SWITCH_OUTERPHY_SERDES_DEVAD	0x1e
+#define ZX279133_SWITCH_OUTERPHY_SERDES_OPT_1	0x75f3
+#define ZX279133_SWITCH_OUTERPHY_SERDES_OPT_2	0x697a
+#define ZX279133_SWITCH_OUTERPHY_SERDES_OPT_3	0x6a04
+#define ZX279133_SWITCH_OUTERPHY_SERDES_MODE	0x7580
+#define ZX279133_SWITCH_OUTERPHY_SERDES_LINK	0x758d
+/* The mode word's low six bits, and the class this lane needs. */
+#define ZX279133_SWITCH_OUTERPHY_SERDES_MODE_MASK	0x3f
+#define ZX279133_SWITCH_OUTERPHY_SERDES_MODE_1G	0x02
+/* The bit of the lane's word that says the lane carries code. */
+#define ZX279133_SWITCH_OUTERPHY_SERDES_LINK_BIT	BIT(2)
+
+/*
+ * The 1G class, word for word: the three registers and the values this
+ * board's own U-Boot leaves in them.
+ */
+static const u16 zx279133_switch_outerphy_serdes_1g[][2] = {
+	{ ZX279133_SWITCH_OUTERPHY_SERDES_OPT_1, 0x0002 },
+	{ ZX279133_SWITCH_OUTERPHY_SERDES_OPT_2, 0x0000 },
+	{ ZX279133_SWITCH_OUTERPHY_SERDES_OPT_3, 0x0403 },
+};
 
 struct zx279133_switch {
 	/* The device this driver was probed on.  Two of the helpers below
@@ -424,6 +489,13 @@ struct zx279133_switch {
 	 * the base-X lane still delivers frames at all.
 	 */
 	u32 outerphy_an_status;
+	/*
+	 * The far end's SerDes class and the two words that say whether the
+	 * lane carries code, so that the lane's own report is printed when it
+	 * changes and not every time the lane is looked at.
+	 */
+	int outerphy_serdes_link;
+	int outerphy_serdes_mode;
 	/*
 	 * Whether the outer PHY's own configuration has been printed yet.
 	 *
@@ -781,6 +853,23 @@ static void zx279133_switch_lane_watch(struct work_struct *work)
 	 * nothing at all.
 	 */
 	zx279133_switch_outerphy_link(priv);
+
+	/*
+	 * The far end's SerDes class is the one thing on this lane that the
+	 * board itself can take away, and none of the words read above tells
+	 * that apart from a lane that works: the far end's auto-negotiation
+	 * word reads the same either way (0x002d), and its mode word only
+	 * changes when the chip re-negotiates.  So the class is checked here
+	 * and put back when it is wrong.
+	 *
+	 * Every half second while the fast window lasts, and every two
+	 * seconds after it: the check is a handful of MDIO reads, and the fast
+	 * window is there to time the far end's own word, not this.
+	 */
+	if (period > 20 || !(priv->lane_samples % 25)) {
+		if (!zx279133_switch_outerphy_serdes_check(priv))
+			zx279133_switch_outerphy_serdes_set(priv, true);
+	}
 
 	an_ctrl = zx279133_switch_xpcs_read(priv, MDIO_MMD_VEND2,
 					     ZX279133_XPCS_VR_MII_AN_CTRL);
@@ -1911,6 +2000,184 @@ static void zx279133_switch_lane_state(struct zx279133_switch *priv)
 						  ZX279133_XMAC0_SOPC_SEND_ENABLE));
 }
 
+/*
+ * The outer PHY's SerDes option registers, read.
+ */
+static int zx279133_switch_outerphy_serdes_read(struct zx279133_switch *priv,
+						u32 *vals)
+{
+	struct mii_bus *bus = zx279133_switch_outer_mdio(priv);
+	unsigned int i;
+
+	if (!bus)
+		return -ENODEV;
+
+	for (i = 0; i < ARRAY_SIZE(zx279133_switch_outerphy_serdes_1g); i++) {
+		int val = mdiobus_c45_read(bus, ZX279133_SWITCH_OUTERPHY_ADDR,
+					   ZX279133_SWITCH_OUTERPHY_SERDES_DEVAD,
+					   zx279133_switch_outerphy_serdes_1g[i][0]);
+		if (val < 0)
+			return val;
+		vals[i] = (u32)val;
+	}
+
+	return 0;
+}
+
+/*
+ * Put the outer PHY into the 1G SerDes class.
+ *
+ * The chip is read first and written only when it is not already in that
+ * class: a PHY that is already right is not disturbed.  The write is a real
+ * clause 45 transaction on the same bus the reads use (mdiobus_c45_write()),
+ * and not phylib's, because this chip answers devad 0x1e only through a true
+ * clause 45 access (docs/92 §94.4) - the same reason the debugfs console
+ * reaches it the way it does.
+ *
+ * After the write the lane needs a moment to lock again, so the word that
+ * says whether it carries code is polled for half a second, and what the two
+ * words say is printed whether it locked or not.
+ */
+static int zx279133_switch_outerphy_serdes_set(struct zx279133_switch *priv,
+						bool force)
+{
+	struct mii_bus *bus = zx279133_switch_outer_mdio(priv);
+	u32 before[3], after[3];
+	int link = -1;
+	int mode = -1;
+	unsigned int i;
+	int ret = 0;
+	bool changed = false;
+
+	if (!bus)
+		return -ENODEV;
+
+	for (i = 0; i < ARRAY_SIZE(zx279133_switch_outerphy_serdes_1g); i++) {
+		int val = mdiobus_c45_read(bus, ZX279133_SWITCH_OUTERPHY_ADDR,
+					   ZX279133_SWITCH_OUTERPHY_SERDES_DEVAD,
+					   zx279133_switch_outerphy_serdes_1g[i][0]);
+		before[i] = val < 0 ? 0xffffffff : (u32)val;
+		if (before[i] != zx279133_switch_outerphy_serdes_1g[i][1])
+			changed = true;
+	}
+
+	if (!force && !changed)
+		return 0;
+
+	for (i = 0; i < ARRAY_SIZE(zx279133_switch_outerphy_serdes_1g); i++) {
+		int val = mdiobus_c45_write(bus, ZX279133_SWITCH_OUTERPHY_ADDR,
+					    ZX279133_SWITCH_OUTERPHY_SERDES_DEVAD,
+					    zx279133_switch_outerphy_serdes_1g[i][0],
+					    zx279133_switch_outerphy_serdes_1g[i][1]);
+		after[i] = val < 0 ? 0xffffffff : (u32)val;
+		if (val < 0)
+			ret = -EIO;
+	}
+
+	if (changed)
+		dev_info(priv->dev,
+			 "the 2.5G jack's PHY: the SerDes option is set to the 1G class (75f3 %04x->%04x, 697a %04x->%04x, 6a04 %04x->%04x)\n",
+			 before[0], after[0], before[1], after[1], before[2], after[2]);
+
+	/* The lane needs a moment to lock again. */
+	for (i = 0; i < 25; i++) {
+		int val = mdiobus_c45_read(bus, ZX279133_SWITCH_OUTERPHY_ADDR,
+					   ZX279133_SWITCH_OUTERPHY_SERDES_DEVAD,
+					   ZX279133_SWITCH_OUTERPHY_SERDES_LINK);
+		if (val >= 0) {
+			link = val;
+			if (val & ZX279133_SWITCH_OUTERPHY_SERDES_LINK_BIT)
+				break;
+		}
+		msleep(20);
+	}
+
+	mode = mdiobus_c45_read(bus, ZX279133_SWITCH_OUTERPHY_ADDR,
+				ZX279133_SWITCH_OUTERPHY_SERDES_DEVAD,
+				ZX279133_SWITCH_OUTERPHY_SERDES_MODE);
+
+	if (link != priv->outerphy_serdes_link ||
+	    mode != priv->outerphy_serdes_mode) {
+		priv->outerphy_serdes_link = link;
+		priv->outerphy_serdes_mode = mode;
+
+		dev_info(priv->dev,
+			 "the 2.5G jack's PHY: the lane's word is 0x%04x and its mode word is 0x%04x%s\n",
+			 link < 0 ? 0xffff : link,
+			 mode < 0 ? 0xffff : mode,
+			 (link >= 0 && (link & ZX279133_SWITCH_OUTERPHY_SERDES_LINK_BIT)) ?
+			 " - the lane carries code" : " - the lane carries no code");
+	}
+
+	return ret;
+}
+
+/*
+ * Whether the far end's SerDes class has to be put back.
+ *
+ * Two things can be wrong, and they are different:
+ *
+ *	- the chip's configuration is not the 1G class.  That is the state a
+ *	  board that boots from flash is in, because the loader's net bring-up
+ *	  is what configures this PHY and it only runs when the loader is given
+ *	  a network to talk to.
+ *
+ *	- the chip is in the 1G class and the lane still carries nothing.
+ *	  That is what the board did to itself on 2026-10-30 11:25, 128 s into
+ *	  a boot that had started with the loader's class: the mode word went
+ *	  from 0x9402 to 0x9412 and the lane stopped.
+ *
+ * A lane with no cable in it is neither of those: the far end sees no
+ * partner then, and there is nothing to put back.
+ */
+static bool zx279133_switch_outerphy_serdes_check(struct zx279133_switch *priv)
+{
+	struct mii_bus *bus = zx279133_switch_outer_mdio(priv);
+	u32 vals[3];
+	int mode, link, an;
+	unsigned int i;
+
+	if (!bus)
+		return true;
+
+	if (zx279133_switch_outerphy_serdes_read(priv, vals))
+		return true;
+
+	/* The chip's own configuration first: that one is wrong even with no
+	 * cable in the jack.
+	 */
+	for (i = 0; i < ARRAY_SIZE(zx279133_switch_outerphy_serdes_1g); i++)
+		if (vals[i] != zx279133_switch_outerphy_serdes_1g[i][1])
+			return false;
+
+	/* Is there a partner at the far end?  Without one there is nothing
+	 * to put back and nothing to complain about.
+	 */
+	an = mdiobus_c45_read(bus, ZX279133_SWITCH_OUTERPHY_ADDR,
+			       ZX279133_SWITCH_OUTERPHY_AN_DEVAD,
+			       ZX279133_SWITCH_OUTERPHY_AN_STATUS);
+	if (an < 0 || !(an & ZX279133_SWITCH_OUTERPHY_AN_PARTNER))
+		return true;
+
+	/* The class the chip ended up in. */
+	mode = mdiobus_c45_read(bus, ZX279133_SWITCH_OUTERPHY_ADDR,
+				 ZX279133_SWITCH_OUTERPHY_SERDES_DEVAD,
+				 ZX279133_SWITCH_OUTERPHY_SERDES_MODE);
+	if (mode >= 0 &&
+	    (mode & ZX279133_SWITCH_OUTERPHY_SERDES_MODE_MASK) !=
+	    ZX279133_SWITCH_OUTERPHY_SERDES_MODE_1G)
+		return false;
+
+	/* And the lane's own word. */
+	link = mdiobus_c45_read(bus, ZX279133_SWITCH_OUTERPHY_ADDR,
+				 ZX279133_SWITCH_OUTERPHY_SERDES_DEVAD,
+				 ZX279133_SWITCH_OUTERPHY_SERDES_LINK);
+	if (link < 0 || (link & ZX279133_SWITCH_OUTERPHY_SERDES_LINK_BIT))
+		return true;
+
+	return false;
+}
+
 static int zx279133_switch_outerphy_link(struct zx279133_switch *priv)
 {
 	struct mii_bus *bus;
@@ -2894,6 +3161,25 @@ static int zx279133_switch_probe(struct platform_device *pdev)
 	 * this driver is measured against.
 	 */
 	zx279133_switch_lane_snapshot(priv, "pre-serdes");
+
+	/*
+	 * The far end of this lane is the external RTL8226, and its SerDes
+	 * class is the one thing on this lane that nobody else sets.
+	 *
+	 * The vendor's own U-Boot configures it in its net bring-up, which
+	 * only runs when the loader is given a network to talk to - so a board
+	 * that boots from flash never gets it, and the far end sits in the
+	 * class it came out of the box in while the SoC side (which mainline
+	 * does put in the 1G class) waits for a 1000BASE-X partner that never
+	 * comes.  The write below is the same one the loader makes, and it is
+	 * made here, before the near end is programmed, in the order the
+	 * loader makes it: the far end first.
+	 *
+	 * It is made only when the chip is not already in that class, so a
+	 * board whose loader did configure it (a warm boot, or a boot after a
+	 * TFTP) is left alone.
+	 */
+	zx279133_switch_outerphy_serdes_set(priv, false);
 
 	/*
 	 * The Uni SerDes carries the lane to the 9132's CPU port.  It is the
