@@ -13727,3 +13727,644 @@ PC 侧：**清掉所有静态地址 → 只设 DHCP → 拿到 192.168.1.141/24 
 **要说清的一条**：刷进 flash 的 rootfs **故意不带** lablan 脚本 —— CI 里 `trial-files/` 只进 initramfs 镜像（工作流里的原话：*"trial-files are RAM-image scaffolding only: a released flashed rootfs must not carry a script that reboots the board five minutes after boot"*）。⇒ **「PC 通过板子访问 192.168.1.1 的光猫」这件事，刷机后的板子做不到**，那是 RAM 版 trial 镜像的能力。要在 flash 版上做，得把脚本另做一份进 rootfs（一次新构建），或者继续用 RAM 镜像。
 
 **遗留**：光猫插回 LAN4 之后，flash 版板子的 LAN 是 `192.168.9.0/24`、光猫在 `192.168.1.0/24` —— 同一个二层桥、不同网段，访问光猫仍需要 lablan 那套路由 + 钉片逻辑。
+
+### 96.46 判决 AK：LAN1 进不去，是因为**没有人给 RTL8226 写它的 SerDes 档位**；板子停在 `=>`，是我们自己的串口 relay 发的空格（2026-10-30 11:33 – 12:40）
+
+**结论先说**：owner 说「刷完系统也进不去」「lan1 不能进入系统 灯不亮」。查完，两件事都不是玄学：
+
+1. **板子每次断电都停在 U-Boot 的 `=>`** —— 是**我们自己的串口 relay** 在 autoboot 倒计时窗口里发空格。板子 flash 里的 `bootcmd` 本来就是对的（今天实测：`mtd read kernel 0x88000000; mtd read dtb 0x88800000; bootm 0x88000000 - 0x88800000`）。修法是 relay 自带的开关文件，**零代码**。
+2. **面板 LAN1（2.5G）在刷机版里永远起不来** —— 根因是**这条 lane 的远端 PHY（RTL8226）的 SerDes 档位寄存器从来没有人写过**。厂商 U-Boot 的 net bring-up 会写它，而 net bring-up 只在 loader 被给了网络时才跑；**从 flash 自己起来的板子没有这一步**，RTL8226 就一直停在出厂档，和 SoC 侧的 1G 档对不上，base-X 永不锁定。
+3. **LuCI 没坏**（第三件事：owner 说的「进不去系统」里的那一层）—— 见 §96.46.6。
+
+#### 96.46.1 根因一：relay 发的空格
+
+`tools/serrelay.ps1` 第 145 行：`if (-not (Test-Path $noStopPath) -and $phase -ne 'prompt')`，`NoStopFile = 'staging/ctl/ser-nostop'`（第 18 行）。relay 每轮都 `Test-Path`，**文件一建即生效**。串口日志里 11:17:07 的那次就是标准现场：`Hit any key to stop autoboot:  1 0` 之后直接 `=>`，没有 bootcmd 的输出。
+
+⇒ 修法：**建一个空文件 `staging/ctl/ser-nostop`**。倒计时跑完，板子自己从 flash 起。回滚 = 删掉这个文件。
+
+#### 96.46.2 根因二：RTL8226 的 SerDes 档位没人写（对照实验）
+
+同一块板、同一个刷好的固件，只差 loader 有没有跑 net init：
+
+| 观测量 | 冷启动 / loader 没跑 net init（11:39 – 11:43 实测） | loader 跑过 net init（12:25 – 12:26 实测） |
+| --- | --- | --- |
+| `0x1e.0x75f3` | `0x030d`（出厂） | `0x0002`（U-Boot 写的） |
+| `0x1e.0x697a` | `0x0003`（出厂） | `0x0000`（U-Boot 写的） |
+| `0x1e.0x6a04` | `0x0503`（出厂） | `0x0403`（U-Boot 写的） |
+| `0x1e.0x6f10` / `0x6f11` | `0x084a` / `0x0021` | `0x084a` / `0x0021`（**未变**） |
+| `0x1e.0x7580`（SerDes 模式字） | **`0x9412`（2.5G 档）** | **`0x9402`（1G 档）** |
+| `0x1e.0x758d`（lane 的字） | `0x0010` | `0x801e` |
+| `0x07.0x01`（AN 状态） | `0x0008` | `0x002d` |
+| nppt `0x84` / `0x90` | `0x0` / `0x280b` | `0x1` / `0x2c03` |
+| 能不能通 | **不通**（ping 100% 丢、ARP `Incomplete`） | **通**（ping 20/20、1 ms） |
+
+**loader 的差异恰好就是那三个寄存器** —— `0x6f10` / `0x6f11` 前后一字未变。
+
+12:25–12:26 那次 loader 的 net init 的原话（串口日志）：
+
+```
+phy_id:0x5;  port:0x4;
+PHY_RLT8226_MDIO_READ_EXTENDED(0x2) in RTL_8226
+test:cur 0 phy sereds mode : 0x6, last mode0 : 0xc, last mode1 : 0xc
+mode_eth_1gbase_x_cfg
+com_pll_lock_ready / rx los =0 rx data in / cdr_lock_ready
+uni serdes init succeed
+xmac 0 speed set 2 in sgmii(xmac speed 3)
+mac 4 phy status changed: 1000M full-duplex
+host 192.168.9.25 is alive
+```
+
+（`0x6` 就是 1G 档，见 docs/92 §96.20 的枚举表；厂商的算法是**先读 PHY 谈好的速率，再选 profile**。）
+
+#### 96.46.3 两向实验：在跑着的板子上手工写那三个寄存器
+
+板子自己跑着刷机版，用内核自己的 debugfs 控制台（`zx279133-np.c` 的 `m45w` 动词，走**真 Clause-45**，不经过 phylib 的 C22 路径）：
+
+```
+echo 'm45w 5 0x1e 0x75f3 0x030d' > /sys/kernel/debug/zx279133-9132   # 写出厂值
+echo 'm45w 5 0x1e 0x697a 0x0003' > /sys/kernel/debug/zx279133-9132
+echo 'm45w 5 0x1e 0x6a04 0x0503' > /sys/kernel/debug/zx279133-9132
+```
+
+| 写完之后的读数 | `0x7580` | `0x758d` | `0x07.0x01` | PC 侧 ping 192.168.9.1 |
+| --- | --- | --- | --- | --- |
+| 写出厂三值 | `0x9402`（**不变**） | `0x8018` | `0x002d`（**不变**） | **0/10** |
+| 再写 1G 三值 | `0x9402` | `0x801e` | `0x002d` | **15/15，0–1 ms** |
+
+⇒ **写出厂值 = 断，写 1G 档 = 通**，因果链闭合。
+
+⇒ **判别位是 `0x758d` 的 bit 2（`0x0004`）**：`0x801e` = lane 在送码，`0x8018` = 不送码；冷启动那档 `0x0010` 也没有它。而模式字 `0x7580` 与 AN 状态 `0x07.0x01` 在死与活两种状态下**读数一样** ⇒ 自愈只能看 `0x758d`。
+
+这同时把 §96.45 那次「128 s 后掉线」解释了：那次是**热重启**，RTL8226 继承了 U-Boot 的 1G 档所以通了；128 s 后它自己回到出厂的 2.5G 档（`0x7580` 从 `0x9402` 变 `0x9412`）⇒ 掉线。**所以修法必须带自愈，不能只在开机写一次。**
+
+#### 96.46.4 为什么 RAM 版的 trial 镜像通、刷机版不通
+
+**不是内核的差别，也不在 dtb**：CI 的两个 mode 共用同一套内核配置 —— `scripts/configure-sk-d840n.sh` 按 mode 改的只有 `CONFIG_PACKAGE_zrec` 与 JFFS2 目标（工作流第 673–694 行）；`trial-dtb.bin` 与 `flash-dtb.bin` 同长（13,357 B）且 `tools/dtprops.py` dump 无差异。
+
+差别在**引导方式**：trial 镜像是经 TFTP 引导的，U-Boot 为了 TFTP 跑了 net init，**顺手把 RTL8226 配好了**；刷机版自己从 flash 起，**没人配** ⇒ 死。
+
+⇒ 顺带把 mainline 已经做对的一半记下来：SoC 侧是好的 —— `zx279133-uni-serdes 16100000.phy: Uni SerDes 1G profile written: mode 0x101 already, image differs in 0/49 word(s)`，近端 PCS 是 SGMII 1G（`bmcr=0x1140 anctrl=0x0005 dig=0x2200`），`XMAC0 tx=0x60010001`（speed = 1G）。**唯一缺口就是远端那三个寄存器。**
+
+#### 96.46.5 改动（commit `4f5fa5f`）
+
+`kernel-overlays/drivers/net/ethernet/zte/zx279133-switch.c`：
+
+- `zx279133_switch_outerphy_serdes_set(priv, force)`：按 loader 的 1G 档写那三个寄存器（`0x75f3=0x0002`、`0x697a=0x0000`、`0x6a04=0x0403`）。**写前先读，值已经对就不动它**；写后轮询 `0x758d` 最多 500 ms，并把前后的值和 lane 的字打出来。
+- `zx279133_switch_outerphy_serdes_check(priv)`：三个寄存器不对、或者有对端在（AN 的 partner 位）而 `0x758d` 的 bit 2 是 0、或者模式字不是 1G 档（`0x94xx` 的低 6 位不是 `0x02`）—— 都要修；**没插线时（partner 位是 0）不管**。
+- probe 里在 `lane pre-serdes` 快照之后调一次 `serdes_set(priv, false)`：只在该改的时候改，顺序照厂商的来 —— **先远端后近端**。
+- 2 秒一次的 lane watch 里加自愈：前 30 秒每 500 ms 查一次，之后每 2 秒查一次。
+
+**不碰** `0x7588` / `0x7589` / `0x7587`，**也不碰** `0x6f10` / `0x6f11`：基树的 `rtl822x_set_serdes_option_mode()` 会把 `0x6f10`/`0x6f11` **错开一位**写坏这条 lane（§94.6），而这两个寄存器 loader 本来就没动。
+
+这一版**固定 1G 档**：手边没有 2.5G 对端（PC 是 RTL8168，1G 卡）。对真的 2.5G 对端最多降到 1G，不会把口弄死。2.5G 档的扩展位置写在代码注释里：PHY 谈好的速率读 devad `0x1f` 的 `0xa434` / `0xa616`，厂商就是拿它选 profile 的。
+
+#### 96.46.5b 自审 `4f5fa5f` 抓出来的两个 bug（commit `53ee291`）
+
+`4f5fa5f` 推上去之后，在等 CI 的那段时间里把它从头到尾读了一遍，抓到两个自己写错的地方。两个都会让这一版白等一轮，所以记在这里。
+
+**1. 缺前置声明，编不过。**
+
+`zx279133_switch_lane_watch()` 在文件第 809 行，它在里面调用
+`zx279133_switch_outerphy_serdes_check()` 和 `zx279133_switch_outerphy_serdes_set()`，
+而这两个函数的**定义在第 2055 行和第 2147 行**，文件里没有它们的前置声明。
+
+内核从 6.5 起把 `-Werror=implicit-function-declaration` 打开（6.18 当然在内），
+所以 CI 会在**编内核那一步**直接报 `implicit declaration of function` 而挂掉 ——
+不是运行期的问题，是这一步产物根本出不来。
+
+补上三个前置声明（`read` / `set` / `check`），跟文件里已有的
+`zx279133_switch_outerphy_link()` 那几个一样的写法。
+
+**2. `mdiobus_c45_write()` 的返回值被当成了寄存器的值。**
+
+`mdiobus_c45_write()` 的返回值是 0（成功）或者负数（出错），**不是它写进去的那个字**。
+原代码 `after[i] = val < 0 ? 0xffffffff : (u32)val;` 于是把 `after[]` 填成了 0，
+`"75f3 %04x->%04x"` 那一行永远打的是 `->0000`。
+
+改成**写完之后回读一遍**，用回读到的值填 `after[]`。
+
+顺带确认过的三件事（都不是改动，只是核对，都记在这里免得再查一遍）：
+
+- `mdiobus_c45_write()` 这条路在外置 PHY 上是真的能用：板上 debugfs 控制台的 `m45w`
+  走的就是同一个函数、同一个总线（`zx279133-np.c:1582`），而 `m45w` 在
+  2026-10-30 12:29–12:32 已经实测写过这三个寄存器并让链路死掉又活过来。
+- 外置 PHY 的总线句柄在驱动里是对的：`zx279133_switch_outer_mdio()` 走
+  `priv->dev->parent->of_node` 上的 `zx279133,outer-phy-bus` 句柄，和 `np.c` 里
+  `of_mdio_find_bus()` 拿到的是同一条总线；板上 dmesg 里
+  `the 2.5G jack's PHY: AN status` 能读出 `0x002d` 就是证据。
+- 判据用的对端存在位（devad 7 reg 1 的 bit 2）在链路通的时候是 1：
+  板上实测 `0x002d = 0b101101`，bit 2 = 1。
+
+#### 96.46.6 根因三：LuCI 没坏（这是误判）
+
+板上本地请求 `/cgi-bin/luci`：
+
+```
+Status: 403 Forbidden
+x-luci-login-required: yes
+content-type: text/html; charset=UTF-8
+...
+<title>ImmortalWrt | Overview</title>
+```
+
+这是 LuCI **未登录时的正常应答**（它把登录页整个送回来，并带上 `x-luci-login-required` 这个头让前端处理）。静态页 `/` 是 200 / 664 字节，`rpcd`（`-t 30`）与 `ubusd` 都在跑。
+
+PC 侧看到的「21 s 后连接被掐断」是**死链路上的 TCP 连接超时**（那时 ARP 已经是 `Incomplete`，面板 LAN1 的 lane 是死的），不是 CGI 坏了。
+
+另外，uhttpd 配置里那条 `list lua_prefix '/cgi-bin/luci=/usr/lib/lua/luci/sgi/uhttpd.lua'` 指向一个不存在的文件（`/usr/lib/lua/luci` 整棵都没有，装的是 ucode 版 LuCI：`/www/cgi-bin/luci` 是 `#!/usr/bin/env ucode` 的脚本，`/usr/share/ucode/luci/` 有 `dispatcher.uc` / `http.uc`），但 **uhttpd 的二进制里根本没有 `lua_prefix` / `luci_prefix` 字符串** ⇒ 该选项被忽略，无害。**本轮不改它。**
+
+#### 96.46.7 验收
+
+**受测对象**：`skd840n_flash_284_41007244975`（CI run #284，`head_sha 53ee291`），
+三段 `dtb + kernel + root` 写进板子 flash。`boot` 与 `parameter tags` 全程未碰。
+
+**量具**：`tools/acceptlan1.ps1`（PC 侧）＋ 板上 debugfs 控制台的 `m45` / `m45w`。
+PC 侧只用以太网适配器 ifIndex 19（192.168.9.25/24），WLAN 不动。
+
+##### 96.46.7.0 「之前」基线：冷启动 + 旧内核（2026-10-30 13:21–13:26 实测）
+
+这一组是**对照**，用的是 flash 里那份**没有新驱动**的旧内核（#282），同一块板、同一根网线。
+
+插座在 13:20:11 断电 15 秒，板子自己回来后我们在 `=>` 上 `run bootcmd` 引导，
+冷启动的出厂状态实测是：
+
+```
+outer phy 5 devad 0x1e reg 0x758d = 0x0010
+```
+
+**bit 2（0x0004）是 0** ⇒ lane 不送码。（注：这里整字是 `0x0010`，比 12:29 手工写
+出厂值时看到的 `0x8018` 少两个高位 —— 那是芯片刚上电、还没被任何软件碰过的状态；
+判别用的仍然是 bit 2，两种状态下它都是 0。）
+
+驱动自己的 lane watch 在同一次冷启动里打出来的整行（同一份数据，四个字）：
+
+```
+lane: far an=0x002d 758d=0x0010 7580=0x9412 | near bmcr=0x1140 anctrl=0x0005 dig=0x2200
+      | nppt 84=0x00000000 88=0x00000670 8c=0x00000670 90=0x0000280b
+      | xmac0 tx=0x60010001 rx=0x3e8000c7 frame=0x80000001 mode=0x00000000 duplex=0x00000100
+```
+
+对着读：
+
+| 字 | 读数 | 意思 |
+| --- | --- | --- |
+| `an`（devad 7 reg 1） | `0x002d` | **对端存在位是 1** —— 铜缆那头认得到 PC，**不是没插线** |
+| `758d` | `0x0010` | **bit 2 = 0** —— lane 不送码 |
+| `7580` | `0x9412` | 低 6 位 = `0x12` —— **2.5G 档**，不是这条 lane 要的 `0x02`（1G） |
+| `nppt 84` | `0x00000000` | XMAC 侧没有链路 |
+| 近端 `bmcr/anctrl/dig` | `0x1140/0x0005/0x2200` | 近端是 SGMII 1G —— **mainline 这一半本来是对的** |
+
+⇒ 冷启动之后两端口**档位不一致**：近端 1G、远端 2.5G。这就是 §96.46.2 那张对照表里
+「loader 未跑 net init」那一行的实测值，也是新驱动要修的那一处。
+
+PC 侧（`staging/ctl/accept-control-oldkernel.log`）：
+
+| 项 | 结果 |
+| --- | --- |
+| ARP | `Incomplete` |
+| ping | **0/10** — THE LINK DID NOT ANSWER |
+| tcp/22 | CLOSED |
+| http `/` | 10 s 超时 |
+| http `/cgi-bin/luci` | 10 s 超时 |
+
+⇒ **冷启动之后，LAN1 在旧内核下整条线是死的**，这与「板子自己从 flash 起来就进不去」
+完全对得上。
+
+##### 96.46.7.1 待补：新内核的验收结果
+
+（待补：新 release 刷进去之后的全自动验收结果 —— 冷启动 LAN1 自通、打坏后 2 秒自愈、
+拔电后板子自己起来、ping 25/25、LuCI 登录页、10 分钟稳定性、LAN1 灯的当场记录。）
+
+### 96.47 判决 AL：#284 的自愈**确实写了那三个寄存器**，档位字一个字没动 —— §96.46「唯一缺口就是远端那三个寄存器」作废（2026-10-30 17:16 – 17:50，全部是已有日志的复盘，台面上没有新实验）
+
+**这一节的性质**：一行代码没改、一次上板都没有。owner 报「lan1 不能用、灯都不亮」之后，
+先把 `staging/ctl/serial.log`（127 MB）和 `staging/ctl/accept-284-loaderconfigured.log`
+里**已经存在**的证据读完。读完的结果是 §96.46 的根因判断错了一层。
+
+#### 96.47.1 驱动写了，值也对 —— 但 `0x7580` 不动
+
+同一次 boot（`Linux version` banner 在 `serial.log:2470673`）里：
+
+```
+2470972  [    1.571418] ... the 2.5G jack's PHY: the SerDes option is set to the 1G class
+                         (75f3 030d->0002, 697a 0003->0000, 6a04 0503->0403)
+2471232  [   10.900563] ... lane: far an=0x002d 758d=0x0010 7580=0x9412 | ...
+   ...   每 1.5 秒一条，一直到
+2471303  [   37.940553] ... lane: far an=0x002d 758d=0x0010 7580=0x9412 | ...
+```
+
+写进去的三个值和 §96.46.2 那张对照表里「loader 跑过 net init」那一列**逐字相同**，
+可档位字 `0x7580` 全程 `0x9412`、`0x758d` 的 bit 2 全程是 0。PC 侧同一份固件：
+`accept-284-loaderconfigured.log` 第 4 行 `ping: 0/25 replies - THE LINK DID NOT ANSWER`。
+
+⇒ **「唯一缺口就是远端那三个寄存器」不成立**。那三个是**必要条件**（§96.46.3 证明了写坏
+能死、写回能活），但**不充分**：从出厂的 2.5G 档把 PHY 扳到 1G 档，缺的是别的东西。
+§96.46.3 那次手工实验之所以看不出这一点，是因为它做在 loader 已经配好档的 boot 里，
+`0x7580` 本来就是 `0x9402`，从头到尾没有发生过「切换档位」这件事。
+
+#### 96.47.2 全日志的 lane 状态只有五种，判据是 `0x7580` 的低 6 位
+
+把 1650 条 `lane:` 样本按 `(an, 758d, 7580)` 归并，只有五行：
+
+| 样本数 | `an` | `758d` | `7580` | 低 6 位 | 状态 |
+|---|---|---|---|---|---|
+| **875** | `0x002d` | **`0x801e`** | **`0x9402`** | `0x02` | **活** —— loader 配好档、AN 完成，就是 15:10 那次 25/25 的状态 |
+| 540 | `0x00ad` | `0x801e` | `0x9416` | `0x16` | **不通** —— 2500BASE-X，AN 卡在 restart、block-lock 位是 0，一帧不过（§94.6 的 N3、§95 就是这一行） |
+| **163** | `0x002d` | **`0x0010`** | **`0x9412`** | `0x12` | **今天这一版**：出厂 2.5G 档，lane 不送码 |
+| 47 | `0x0008` | `0x0010` | `0x9412` | `0x12` | 同上，但 `an` 的对端存在位是 0（没插线） |
+| 16 | `0x0089`/`0x0008`/`0x0009` | `0x8018` | `0x941f` | `0x1f` | §96.46.3 手工写出厂值那两次 |
+
+⇒ 判据只有一条：**`0x7580` 低 6 位 == `0x02`（1G 档）且 `0x758d` bit 2 == 1**。
+`an` 不能当判据（死的 163 条和活的 875 条都是 `0x002d`）。
+
+#### 96.47.3 三条不用上板就能排除的路线（省下三轮台面）
+
+1. **XMAC0 的 `MODE_CFG` 不是判据。** 驱动在 `zx279133-switch.c:1461` 写 2，冷启动的 lane
+   打印里 `mode=0x00000000`，看着像是「写了没生效」——但 **1650 条样本里 `mode` 全是
+   `0x00000000`，包括那 875 条链路真通的**。所以这个字读 0 与通不通无关，别再往这儿查。
+2. **devad 也不是「错开一位」的问题。** Linux 定义 `MDIO_MMD_VEND1 = 30 = 0x1e`，
+   厂商 `realtek_main.c:1251-1271` 用的 VEND1 和我们 `ZX279133_SWITCH_OUTERPHY_SERDES_DEVAD`
+   **是同一页**。`zx279133-np.c:1615` 那段注释早就把两页的实测行为写清楚了（0x1e 读 0
+   不代表写不进，0x1f 才是某些字的所在页）——这一条只是把它对到 PHY 侧来。
+3. **近端那 49 个字的 image 不是差别。** 死与活两种 boot 里 mainline 都打
+   `Uni SerDes ... mode 0x101 ... image differs in 0/49 word(s)`（或 `inherited`），
+   **内容一致**。差别只在 status 字（`0xc8fbb902/0x100019fc` 对 `0xc87fbb83/0x1000706`），
+   而那是 PHY 侧有没有在送码的**下游结果**。§96.46.4 的「SoC 侧是好的」这一半仍然成立。
+
+#### 96.47.4 下一个要试的东西，以及「它就是这颗芯片的分支」的证据
+
+`staging/ktree-git/drivers/net/phy/realtek/realtek_main.c:1214` 的
+`rtl822x_set_serdes_option_mode(phydev, gen1)` 有两条分支：`gen1=true` 写完 `0x697a`
+就 return（:1260-1261），**`gen1=false` 还要再写 `0x6a04=0x0503`、`0x6f10=0xd455`、
+`0x6f11=0x8020`**（:1263-1271），函数自己的注释称这一段为
+"the following sequence with magic numbers **sets up the SerDes option mode**"。
+**我们这一版从来没写 `0x6f10` / `0x6f11`。**
+
+走哪条分支由 PHY ID 决定，而 PHY ID 板上量过：`serial.log` 里有 `phy_id:0x001cc849`
+（`m45 5 0x1 0x02` 读到 `0x001c` 也对得上），docs/07 那张表把 `0x001cc849` 归到
+**RTL8221B-VB-CG → `rtl822xb_config_init` → `gen1=false`**。
+⇒ **厂商的活系统在这颗芯片上就是走 gen2 那条、就是会写这两个 magic。**
+
+⚠ 一条要留意的矛盾：§96.46.2 实测 loader 自己**不动** `0x6f10/0x6f11`（两种状态都是
+`0x084a`/`0x0021`）。所以「写这两个」是**厂商 Linux 的路**，不是 U-Boot 的路；
+两条路都能到 `0x9402`，但只有先试了才知道哪条在这块板上成立。
+
+已备好两个脚本（都走 `tools/concmd.sh`，一条一 send，串口不走 ssh）：
+`tools/lan1probe.sh`（读两页 + PHY ID + 当前 lane 状态，只读）、
+`tools/lan1magic.sh`（只加那两个写，然后轮询 `0x7580`/`0x758d`）。
+**撤销键是那个智能开关**：断电 30 秒 PHY 就回到出厂字，所以脚本不需要 off 模式。
+
+#### 96.47.5 顺带纠正一个会让人白跑一轮的方向错误
+
+`staging/ctl/uboot_phyfind.py` / `uboot_phyfind2.py` 扫的是
+`zx-repo/uboot-img/ZX279133/uboot-G7615.bin`，**而那颗里面没有**
+`innerGeLedPolarSet`、`mode_xgpon_nsyn_cfg_133`、`leds DTS probe` ——
+可板子的 banner 三条都打了。真正在跑的是 **`backups/mtd1_boot.bin`**（2 MiB），全在里面：
+
+| 符号 | mtd1_boot.bin 内偏移 |
+|---|---|
+| `mode_eth_1gbase_x_cfg` | 643098（`0x9D31A`） |
+| `mode_eth_1gbase_x_cfg_133` | 651861（`0x9F455`） |
+| `mode_xgpon_nsyn_cfg_133` | 651699 |
+| `innerGeLedPolarSet` | 681588 / 681615 |
+| `leds DTS probe by vid, successed` | 681230 |
+
+从 `mtd1_boot.bin` 的 rodata 读出的 **profile 表顺序**（同一页里紧挨着排）：
+
+```
+0 mode_epon_cfg   1 10g_epon_nsyn_dpll   2 10g_epon_nsyn_fifo   3 10g_epon_nsyn_nofifo
+4 10g_epon_syn    5 gpon                 6 xgpon_nsyn           7 xgpon_syn
+8 eth_10gbase_r   9 eth_5gbase_r        10 eth_2p5gbase_r      11 eth_2p5gbase_x
+                                                                               12 eth_1gbase_x
+```
+
+loader 那句 `test:cur 0 phy sereds mode : 0x6, last mode0 : 0xc, last mode1 : 0xc`
+于是能读成：**当前档 0x6（xgpon_nsyn）、要下到 0xc（eth_1gbase_x）**，然后它打
+`mode_eth_1gbase_x_cfg`。⚠ 这张表的序号是**按字符串排列顺序推的**，只有 0..3 被它自己的
+help 串（`[mode] 0:EPON, 1:10G_EPON_NSYN_DPLL, 2:..., 3:...`，偏移 643321）钉住；
+`0xc` 对 `1gbase_x` 是靠「数过去第 13 个」推的，**没在代码里核实**。
+
+另外：`outerphy_set_xmac_mode` 的代码在 `0x5a0f4`（`work in SGMII 1G AUTO mode. ret = %d`）
+和 `0x5a344`，那才是 loader 打 `xmac 0 speed set 2 in sgmii(xmac speed 3)` 的地方 ——
+如果 96.47.4 那两个 magic 不够，下一步就反汇编这一段。
+
+#### 96.47.6 为什么这一节没有板上结果
+
+`tools/relayctl.ps1` 查到 **`relay processes: 0`**，而 COM3 打开被拒
+（`对端口"COM3"的访问被拒绝`）。命令行里找不到持有者；`pwsh.exe` 3236 是 owner 自己那个
+`ping 192.168.9.1 -t` 的宿主，不是串口。**需要 owner 把 UsbDk 的串口重定向重新接上。**
+
+顺带一条 §96.46.1 的续集：relay 停摆这段时间**没人发空格**，所以板子从 17:05 起就一直
+乖乖停在 `=>`。我已经建了 `staging/ctl/ser-nostop`（relay 一活过来它就生效），
+所以下一次自动断电给的是「冷启动直接进 Linux、PHY 停在 `0x9412`」——
+**正是 96.47.1 那个待复现的状态**，也是 96.47.4 那两个脚本要的现场。
+
+#### 96.47.7 待办（按顺序）
+
+1. 串口活过来 → 架 relay → 等下一次断电进 Linux（`dmesg | grep 'lane:' | tail -1` 应读到 `0x9412`）。
+2. `sh tools/lan1probe.sh` —— 钉死两页各自的 `0x75f3/0x697a/0x6a04/0x6f10/0x6f11` 和 PHY ID。
+3. `sh tools/lan1magic.sh` —— 只加 `0x6f10=0xd455`、`0x6f11=0x8020`。判据：`0x7580` → `0x9402`
+   且 `0x758d` bit 2 起来，PC 侧 `tools/acceptlan1.ps1` 的 ping 从 0/25 变成有回应。
+4. 不够就反汇编 `0x5a0f4` 附近（`outerphy_set_xmac_mode`）和引用 `0x9D31A` 的那段，
+   把 loader 的 `mode_eth_1gbase_x_cfg` 写序抄出来。
+5. 补 §96.46.7.1 欠的那条：**LAN1 灯的当场记录**（亮与不亮都要写）。
+6. 全部落定之后才动 `zx279133-switch.c` 的 `outerphy_serdes_set()`，
+   并修 `switch.c:883` 的自愈节流（一次采样本身要 1.5 s，`% 25` 实际是 ~37 s 一次，
+   不是注释说的「快窗内每 0.5 s」）。
+
+### 96.48 判决 AM：**AN 重启才是扳档位那一步**（`0x7580` 实测 `0x9412` → `0x9402`，两次可复现）；但 lane 仍不送码，最后一条差异还没找到（2026-10-30 20:36 – 20:41，全部在跑着的板子上量）
+
+**这一轮的现场是白送的**：`staging/ctl/ser-nostop` 建好之后（§96.47.6），
+20:31 那次自动断电板子**自己进了 Linux**，没人碰 U-Boot —— 于是串口里就是
+§96.47.1 那个「冷启动、PHY 停在出厂档」的状态，正是这一节要的。
+
+⚠ 顺带记一条仪器的坑：`tools/relayctl.ps1` 报 `relay processes: 0`，
+而 **PID 38740 就是一个 `-Seconds 21600` 的 relay，正占着 COM3** —— 它只认
+`powershell.exe`，这个是 `pwsh.exe`。所以「relay 没了」是假象，
+真去开 COM3 才拿到 `对端口的访问被拒绝`。设备本身是 `USB-SERIAL CH340 (COM3)`，
+PnP 状态 OK（**不是 UsbDk 重定向**，上一条 commit 里那个猜测是错的）。
+
+#### 96.48.1 冷启动基线：三个 option 寄存器**已经全是工作态的值**
+
+`sh tools/lan1probe.sh`（只读）在 uptime 389 s 读到：
+
+| devad 0x1e | 读到的值 | §96.46.2 工作态 | 出厂态 |
+|---|---|---|---|
+| `0x75f3` | **`0x0002`** | `0x0002` | `0x030d` |
+| `0x697a` | **`0x0000`** | `0x0000` | `0x0003` |
+| `0x6a04` | **`0x0403`** | `0x0403` | `0x0503` |
+| `0x6f10` | `0x084a` | `0x084a` | `0x084a` |
+| `0x6f11` | `0x0021` | `0x0021` | `0x0021` |
+
+而 `dmesg` 里 `[1.571446]` 就是驱动写它们那一行，`lane:` 打印停在
+`7580=0x9412 758d=0x0010`。
+
+⇒ **§96.47.4 那条「厂商 gen2 的 `0x6f10/0x6f11` 是缺的一步」当场不用试了**：
+这两个寄存器在死态和工作态**本来就是同一个值**（`0x084a`/`0x0021`），
+和 §96.46.2 的实测一致。写 `0xd455/0x8020` 是往一个本来对的格子里塞别的值，
+方向不对。**这一条记下来免得下一轮再去试它。**
+
+⇒ 更一般的一句：**三个 option 寄存器全都等于工作态的值，lane 仍然是死的。**
+所以 §96.46 的根因不是「少写了哪个 option 寄存器」，而是**少了一个动作**。
+
+#### 96.48.2 判决：AN 重启把档位扳过来了，两次都成
+
+`devad 7 reg 0`（AN control 1）读到 `0x3000`，restart 位（bit 9）是 0。写 `0x3200`：
+
+```
+[  476.875318] outer phy 5 devad 0x1e reg 0x758d = 0x0010
+[  478.303708] outer phy 5 devad 0x1e reg 0x7580 = 0x9402      <-- 扳过来了
+[  478.310810] lane: far an=0x002d 758d=0x0010 7580=0x9402 | ... nppt 84=0x00000000 ...
+```
+
+第二次（先 `m45w 5 0x0 0x00 0x8000` 软复位、再重写三个 option、再 AN restart）：
+
+```
+[  524.172744] ... reg 0x7580 = 0x941f      (复位中)
+[  527.082814] ... reg 0x7580 = 0x9402      (又扳回来了)
+[  527.190785] lane: far an=0x002d 758d=0x0010 7580=0x9402
+```
+
+⇒ **「写了 option 但档位不切换」的原因找到了：PHY 要重新锁存一次，而重新锁存的开关
+就是 AN restart。** 驱动现在写完那三个字就结束，从来不让 PHY 重启协商，
+所以 `0x7580` 永远停在出厂的 `0x9412`。
+
+#### 96.48.3 但 lane 还是不通 —— 最后一条差异没找到，而且不是 XMAC 使能
+
+`0x7580` 对了之后：`758d` 仍是 `0x0010`（工作态是 `0x801e`，缺 bit 1/2/3）、
+`nppt 84` 仍是 `0x00000000`（工作态 `0x1`）、`ip -4 neigh` 里没有 `192.168.9.25`。
+
+试过的下一步是**翻近端的使能**（`regw 140000 60010000` / `regw 140010 3e8000c6`
+关掉 TX/RX enable，再写回 `...01` / `...c7`）—— **没有任何效果**，
+`758d` 与 `nppt 84` 一字不变。所以「MAC 重新使能一次就能重新锁上」这条也不成立。
+
+⇒ 到这一步，与 §96.46.2 那张工作态表相比，**只剩 `758d`（bit 1/2/3）和
+`nppt 84` 两处不同**，而这两处一个是远端的收码状态、一个是近端的链路状态。
+继续猜寄存器没有意义，**下一轮做差分**：
+
+1. 现在这个「档位已对、lane 仍死」的状态是**第一次**被完整抓下来的：
+
+   ```
+   devad 0x1e: 7580=0x9402  7581=0x0000  7587=0x0002  7588=0x00ce
+               7589=0x035a  758b=0x0005  758d=0x0010
+   devad 0x07: 00=0x3000    01=0x002d
+   devad 0x01: 00=0x2058
+   nppt: 84=00000000  88=00000670  8c=00000670  90=0000280b
+   xmac0: tx=60010001 rx=3e8000c7 frame=80000001 mode=00000000
+          duplex=00000100 misc=00002000 send=00000001
+   ```
+
+2. 下一轮在**同一个 boot 里**先抓这份，再让 U-Boot 跑一次 net init（`tftpboot`，
+   TFTP 服务在跑：PID 33904 `tools/tftpsrv.py staging/trial 69`）之后重抓同一批，
+   **逐字 diff**。差异只剩一处的时候，修复就是一行。
+
+#### 96.48.4 已经可以确定的驱动改动（不用等差分）
+
+`zx279133_switch_outerphy_serdes_set()` 写完 option 之后**必须跟一次 AN restart**
+（`devad 7 reg 0 |= BIT(9)`，读-改-写，别整字覆盖 —— 板上 `0x3000` 里另外那些位是
+enable，写丢就把 PHY 关了）。这一条是 §96.48.2 实测出来的，不是推的。
+
+§96.46.5 那句「不碰 `0x7587/0x7589/0x7587`」现在有了实测值可以对照
+（`0x7587=0x0002`、`0x7588=0x00ce`、`0x7589=0x035a`、`0x758b=0x0005`），
+差分做完再决定要不要动。
+
+#### 96.48.5 待办（顺序变了）
+
+1. **差分**（96.48.3 第 2 条）—— 这是现在唯一能定位最后一条差异的仪器。
+2. 驱动里加 AN restart（96.48.4）—— 这条独立成立，先合进去就能让冷启动的
+   `0x7580` 到 `0x9402`，即使 lane 还差一步，也已经把「档位」这个变量从后面所有
+   实验里消掉了。
+3. §96.46.7.1 欠的 LAN1 灯当场记录 —— 这一轮**仍然没记**：板子在串口上看得见，
+   但灯的状态要 owner 眼睛看。
+4. `tools/relayctl.ps1` 的进程检测要连 `pwsh.exe` 一起认（96.48 开头那条假象）。
+
+
+---
+
+### 96.49 判决 AN：**把死 lane 的四个 witness 全部扳到活态值已经在 mainline 冷启动里做到了**（`socw` 抠 enable bit + AN restart），**但流量仍然是零** —— 缺的不是迁移，是**编排顺序**（2026-10-30 21:11 – 21:22，一次自动断电的冷启动，全程串口）
+
+本轮的执行口径来自 `docs/PLAN-lan1-2p5g-20261030.md` 的 M1/M2。
+
+#### 96.49.1 先纠正一处取证地址错误（它让上一轮的 84 个字白抓了）
+
+Uni SerDes 的基址是 **`0x16100000`**：`zx279133.dtsi:449-451` 的节点就叫 `phy@16100000`，
+`zx279133-np.c:1203-1205` 的白名单把 `0x16000000`/`0x16010000` 明确标成
+**PON SerDes / PON SerDes PLL**。上一轮存的 84 个字是 PON 侧的，那份文件改名
+`staging/ctl/ponserdes-working.clean` 保留，但它不是 LAN1 的证据。
+`tools/lan1waitdead.sh` 已改成抓 `soc 0x16100000 73`，头注释里写明了这个坑
+（它之所以能活过一整轮，是因为 PON 侧那个块恰好回了**和 image 前十个字相同**的值）。
+
+#### 96.49.2 M1 差分收口：**配置 image 两态一字不差**
+
+同一台板子、同一个驱动，两个启动各抓 73 个字（`python staging/ctl/uni_profile_diff.py`）：
+
+| | 死态（21:11 冷启，b64hyy2tz 抓） | 活态（20:54 冷启，loader 跑过 net bring-up） |
+|---|---|---|
+| `0x16100000..0x161000C0`（49 字 image） | **`zx279133_uni_1g_profile` 0/49 differ**，mode 字 `0x16100054 = 0x00000101` | **同样 0/49**，mode 字同样 `0x101` |
+| image 之外（`0x161000C4..0x16100110`） | 13 个字不同，且呈「从未自适应过」的样子 | 有真实自适应值 |
+
+那 13 个字（`dead` → `work`）：
+`c4 0x00002400→0x0000e402`、`cc 0x00a80000→0x00f80000`、`d0 0xc8fbb902→0xc880bb83`、
+`d8 0x60370037→0x90370037`、`dc 0x00004000→0x00000000`、`e4 0x100019fc→0x01000706`、
+**`e8 0x00000000→0x78b2b41c`**、`ec 0x01800000→0x03800019`、`f8 0→0x40000000`、
+`fc 0x00000008→0x00016adb`、`100 0x00000081→0x00000001`、`104 0→0x00008000`、
+**`110 0x00000000→0x00000101`**。
+
+⇒ **「loader 切了档、mainline 只比 image 没切」这条假设作废**：两态的 image 完全相同，
+差异全在模拟前端/CDR 的**结果**字上（`e8` 从 0 变成 `0x78b2b41c` 这种形状，就是"RX 收到过信号并
+做过均衡"的样子）。这仍然是"少了一个状态"，不是"少写了一个配置寄存器"。
+
+顺带一个命名坑，下轮别再被绕进去：`phy-zx279133-uni-serdes.c:144-169` 那个叫
+`zx279133_uni_1gbase_x_profile` 的数组（mode `0x409`）**其实是 loader 的 2.5G image**，
+文件里 `:160` 自己承认了；真正让四只 1G 口今天能用的 image 是 `zx279133_uni_1g_profile`
+（mode `0x101`），也就是板上现在这份。
+
+#### 96.49.3 AN restart 单独做：**不够**（第三次复现）
+
+死态基线（uptime 135–139 s，实测）：`devad 7:00 = 0x3000`、`7:01 = 0x002d`、
+`0x1e:7580 = 0x9412`、`758d = 0x0010`。
+`echo 'm45w 5 0x7 0x00 0x3200' > $D` 之后（uptime 269–275 s 的 `lane_watch` 采样）：
+
+```
+an=0x0008 758d=0x0010 7580=0x941f   ← AN 正在重谈
+an=0x0009 758d=0x0010 7580=0x941f
+an=0x002d 758d=0x0010 7580=0x9402   ← 谈完，an 与活态完全一致
+                       nppt 84=0  nppt 90=0x280b
+```
+
+档位翻了、AN 完成、`an` 到达活态的 `0x002d`，**`758d` 仍 `0x0010`、`nppt 84` 仍 0**。
+⇒ §96.48 的"AN restart 是扳档位那一步"成立，但它不是点亮 lane 的那一步。
+
+#### 96.49.4 扳动 Uni SerDes 的 enable bit + AN restart：**四个 witness 全部到位**
+
+21:16:18（uptime 267 s）在死态冷启动里做两个写：
+
+```
+socw 0x16100054 0x00000100   → 读回 0x00000100
+socw 0x16100054 0x00000101   → 读回 0x00000101
+m45w 5 0x7 0x00 0x3200       → 读回 0x3000（bit9 已自清）
+```
+
+`lane_watch` 随后（uptime 270 / 272 / 274 / 275 s）：
+
+```
+far an=0x0008 758d=0x8018 7580=0x941f | nppt 84=0 90=0x2c03
+far an=0x0009 758d=0x8018 7580=0x941f | nppt 84=0 90=0x2c03
+far an=0x002d 758d=0x801e 7580=0x9402 | nppt 84=1 90=0x2c03   ← 与活态一字不差
+```
+
+**这是本项目第一次在 mainline 自己配起来的冷启动里，用软件把
+`758d`、`7580`、`nppt 84`、`nppt 90` 四个 witness 全部扳到 traffic-proven 的值。**
+（先抠 enable 再重启 AN，顺序是有意的：让远端在近端重新初始化的时刻正在发码。）
+
+#### 96.49.5 但流量是零 —— 本轮真正的结论
+
+| 观测 | 结果 |
+|---|---|
+| PC `ping -n 4 192.168.9.1` | 4 发 **0 收** |
+| 板 `ping -c 3 192.168.9.25` | 0 收，`ip -4 neigh` → `192.168.9.25 FAILED` |
+| PC 网卡（ifIndex 19） | `Status=Up LinkSpeed=1 Gbps MediaConnectionState=Connected` |
+| `tools/pcrxwatch.ps1 -Seconds 28` | **`rx_delta=0` 全程**，`tx_delta` 每 4 s 涨 1300–1500 B |
+| 板 `eth0` 计数 | **`RX 0 bytes 0 pkts`**，`TX 35674 B / 106 pkts`（几分钟后 `64348 B / 192 pkts`，继续涨） |
+| `lan-cpu0` / `lan5` | `rx 0` / `tx 3146`；`rx 0` / `tx 1380` |
+
+⇒ **板子的 TX 计数是软件计数**。`pcrxwatch.ps1` 的注释当年留下这个歧义（"MAC 发了但回不来"
+vs "MAC 什么都没发、tx 只是软件计数"），本轮给出答案：帧没有上线。
+PC 侧网卡认为链路是 1 Gbps 且 Connected，所以 SerDes/PHY 层的链路是真的；
+**没有的是 MAC 层往线上吐帧，和从线上收帧。**
+
+`ip link set eth0 down/up` 做过一次（uptime 497/498 s，dmesg 里 `Link is Down` →
+`Link is Up - 1Gbps/Full` 各一条），**RX 仍然是 0** —— 它只重做了 link，没重做 datapath。
+
+#### 96.49.6 归因（改口径）
+
+不是"少写一个寄存器"（96.47/96.48 已排除），也不只是"少一个 SerDes 迁移"（本轮把迁移做了，
+witness 全对，流量仍为零）。现在的说法：
+
+> **9132 的端口/NP/XMAC datapath 是在 lane 还死的时候 arm 的，arm 出来的那张路径不会随着 lane
+> 复活而重做。** loader 的启动之所以能通，是因为它的 net bring-up 让 lane 在 Linux arm datapath
+> **之前**就已经活着了。
+
+#### 96.49.7 下一轮唯一的决定性实验（顺序假设）
+
+驱动是 **built-in**（`lsmod | grep zx` 空，`/sys/module/` 里只有名字），**不能 rmmod**。
+用 platform bind/unbind 在 lane 复活之后重跑整条 bring-up：
+
+```sh
+D=/sys/kernel/debug/zx279133-9132
+ls /sys/bus/platform/drivers/            # 现场确认驱动目录名，不要猜
+echo 19000000.ethernet > /sys/bus/platform/drivers/<name>/unbind
+sleep 2
+echo 19000000.ethernet > /sys/bus/platform/drivers/<name>/bind
+# 立刻：dmesg | grep 'lane:' | tail -1；然后 PC 侧跑 pcrxwatch -Seconds 40
+```
+
+- **前提**：先在新冷启动里重做 96.49.4 那两个写（enable toggle + AN restart），让 lane 在
+  rebind 之前就是活的；rebind 会重跑 bring-up，所以 witness 必须在 rebind 之后仍然对
+  （本轮 rebind 之后**没有**再读 witness，这是个未闭合的口子）。
+- **判据（唯一）**：`pcrxwatch` 的 `rx_delta > 0`，且板 `eth0` 的 `RX bytes` 离开 0。
+- 成立 ⇒ M3 的驱动改动就是**把 kick 放到 datapath arm 之前**（`zx279133_switch_outerphy_serdes_set()`
+  里加 enable-bit toggle + AN restart，并保证它在 `zx279133_np_prepare()`/端口 init 之前跑到）。
+- 不成立 ⇒ 顺序假设也作废，下一个取证目标是反汇编 loader 里 `uni_serdes_init` 在 image 之外
+  那 13 个字到底写了什么（`backups/mtd1_boot.bin`，`devtools/np133.py` 那套离线工具链可用）。
+- **回退**：全是运行期写 + bind/unbind，断电即恢复；不碰 flash。
+
+#### 96.49.8 仪器账
+
+- 冷启动由插座给出：21:11 上电（banner 21:11:52），本轮可用约 21:12–21:31。
+- 继电器 20:53:51 以 `-Seconds 3600` 起来，**约 21:53 自己到期** —— 下一轮开始前先确认它还活着，
+  并且**不要起第二个**（`tools/relayctl.ps1` 只认 `powershell.exe`，对 `pwsh.exe` 报 `relay processes: 0`，
+  是假阴性）。
+- `staging/ctl/` 新增：`lan1-uni-working.clean`、`lan1-uni-dead.clean`（各 73 字）、
+  `uni_profile_diff.py`、`ponserdes-working.clean`（错块，保留备查）。
+
+#### 96.49.9 补：kick 之后那 13 个自适应字**也翻到了活态值**（uptime 283 s 实测）
+
+`echo 'soc 0x161000c4 12' > $D` 的回读：
+
+| 字 | 死（96.49.2） | **kick 之后** | 活（96.49.2） |
+|---|---|---|---|
+| `0x161000cc` | 0x00a80000 | **0x00f80000** | 0x00f80000 |
+| `0x161000d0` | 0xc8fbb902 | **0xc880bb83** | 0xc880bb83 |
+| `0x161000d8` | 0x60370037 | **0x90370037** | 0x90370037 |
+| `0x161000dc` | 0x00004000 | **0x00000000** | 0x00000000 |
+| `0x161000e4` | 0x100019fc | **0x01000706** | 0x01000706 |
+| `0x161000e8` | 0x00000000 | **0x46cea835** | 0x78b2b41c |
+| `0x161000ec` | 0x01800000 | **0x03800000** | 0x03800019 |
+
+`e8` 是个会变的测量值（两边不同属正常），它**离开 0** 才是重点。
+⇒ **kick 不只是扳了状态字，它真的让 SerDes 收到了信号并做了均衡。** 「近端从未自适应过」这条
+解释到此关闭：近端自适应了、远端 1G 档 AN 完成了、四个 witness 与活态一字不差，
+**帧仍然不过**。剩下的差异只能是「什么时候 arm 的」。
+
+#### 96.49.10 `unbind` 不能作为重跑 bring-up 的杠杆（21:25:43，uptime 832 s）
+
+```
+DRV=/sys/bus/platform/drivers/zx279133-eth
+echo 19000000.ethernet > $DRV/unbind
+→ WARNING: CPU: 1 PID: 2671 Comm: ash Not tainted 6.18.38+ #0 NONE
+  pc : unregister_netdevice_many_notify+0xa40/0xad0
+  x13: 007570632d6e616c   ← ASCII "lan-cpu0"
+  Call trace: unregister_netdevice_many_notify(P) → unregister_netdevice_queue →
+              unregister_netdev → devm_unregister_netdev → devres_release_all →
+              device_unbind_cleanup → … → platform_device_unregister →
+              of_platform_device_destroy → device_for_each_child_reverse →
+              devm_of_platform_populate_release → devres_release_all →
+              device_driver_detach → unbind_store
+```
+
+之后发出 ping 与读计数器的两条命令**都没有回音**（做 unbind 的那个 `ash` 就是 PID 2671）。
+⇒ 两件事：
+1. **`zx279133-eth` 的 remove 路径本身是坏的**（unregister 一个 DSA user port 时 WARN，
+   设备名在 `x13` 里是 `lan-cpu0`），这是独立的一条 bug，要在 M3 里单独处理或至少在文档里挂账。
+2. **控制台上没有"干净地重跑整条 bring-up"的杠杆**：驱动 built-in 不能 rmmod，unbind 会 WARN 且
+   把 shell 拖死。而 9132 端口属性字（`w <mem> 19 …`）重写一遍同样的值是**无信息量的**
+   —— 它们本来就没随 lane 状态变过。
+
+⇒ 因此 §96.49.7 的 rebind 实验**作废**。顺序假设只剩一种能证伪它的实验：
+**把这两个动作放到启动期（`zx279133_switch_outerphy_serdes_set()` 里 AN restart，
+再让 Uni SerDes 驱动在 inherit 分支里 pulse enable bit），出一版 CI 内核，看冷启动的
+datapath 是不是在活的 lane 上 arm 的。**
+调用顺序天然正确：`switch.c:3207` 的 `outerphy_serdes_set()` 跑在 `:3231` 的
+`phy_set_mode_ext()`（SerDes power_on）**之前** —— 与 21:16 实测有效的
+「先 AN restart、后 pulse enable」同序。
