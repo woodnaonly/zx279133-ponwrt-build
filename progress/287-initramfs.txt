@@ -1,61 +1,64 @@
-=== 18:02:24 beat 30 log=5013 frozen=0 wrote=yes ===
---- signals: quiet=0s writes=1800s newproc=900s hard=5400s cmp=-cnewer proc=0s ---
+=== 18:08:30 beat 33 log=7359 frozen=0 wrote=yes ===
+--- signals: quiet=0s writes=1800s newproc=900s hard=5400s cmp=-cnewer proc=1s ---
 --- the last 30 lines of the build's own log ---
- make[4] scripts/config/conf
- make[3] -C package/system/usign host-compile
- make[3] -C feeds/luci/modules/luci-base host-compile
- make[3] -C feeds/luci/contrib/package/csstidy host-compile
- make[3] -C package/system/apk host-compile
- make[3] -C package/libs/libubox host-compile
- make[3] -C package/system/ucert host-compile
- make[3] -C package/libs/toolchain compile
- make[3] -C package/kernel/gpio-button-hotplug compile
- make[3] -C package/libs/libnl-tiny compile
- make[3] -C package/libs/libjson-c compile
- make[3] -C package/utils/lua compile
- make[3] -C package/libs/libmd compile
- make[3] -C package/libs/zlib compile
- make[3] -C package/firmware/linux-firmware compile
- make[3] -C package/system/fwtool compile
- make[3] -C package/libs/libsepol compile
- make[3] -C package/libs/pcre2 compile
- make[3] -C package/libs/musl-fts compile
- make[3] -C package/system/openwrt-keyring compile
- make[3] -C feeds/luci/libs/luci-lib-uqr compile
- make[3] -C feeds/packages/libs/libcbor compile
- make[3] -C feeds/packages/libs/libevdev compile
- make[3] -C package/libs/openssl compile
- make[3] -C feeds/packages/libs/libpam compile
- make[3] -C package/utils/bzip2 compile
- make[3] -C package/libs/argp-standalone compile
- make[3] -C package/libs/libmnl compile
- make[3] -C package/libs/mbedtls compile
- make[3] -C package/network/services/dropbear compile
+ make[3] -C package/network/utils/iwinfo compile
+ make[3] -C feeds/packages/net/cgi-io compile
+ make[3] -C package/network/services/dnsmasq compile
+ make[3] -C package/network/utils/iptables compile
+ make[3] -C package/network/utils/nftables compile
+ make[3] -C package/utils/ucode compile
+ make[3] -C package/libs/libbpf compile
+ make[3] -C package/libs/uclient compile
+ make[3] -C package/network/services/uhttpd compile
+ make[3] -C package/libs/udebug compile
+ make[3] -C feeds/luci/contrib/package/lucihttp compile
+ make[3] -C package/system/rpcd compile
+ make[3] -C feeds/luci/contrib/package/ucode-mod-html compile
+ make[3] -C package/network/utils/iproute2 compile
+ make[3] -C package/network/config/netifd compile
+ make[3] -C package/system/ubox compile
+ make[3] -C feeds/luci/libs/rpcd-mod-luci compile
+ make[3] -C package/system/urandom-seed compile
+ make[3] -C package/system/fstools compile
+ make[3] -C feeds/luci/modules/luci-base compile
+ make[3] -C package/system/procd compile
+ make[3] -C feeds/luci/modules/luci-mod-network compile
+ make[3] -C feeds/luci/modules/luci-mod-status compile
+ make[3] -C feeds/luci/modules/luci-mod-system compile
+ make[3] -C feeds/luci/themes/luci-theme-bootstrap compile
+ make[3] -C package/base-files compile
+ make[3] -C feeds/luci/modules/luci-mod-admin-full compile
+ make[3] -C feeds/packages/libs/libfido2 compile
+ make[3] -C package/system/apk compile
+ make[3] -C feeds/packages/net/openssh compile
 --- the build's own processes ---
-   4827 Ss   /usr/bin/python3 /usr/bin/networkd-dispatcher --run-startup-triggers
-   4827 Ss   /usr/bin/python3 -u /usr/sbin/waagent -daemon
-   4826 Sl   /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
-   3542 S    timeout --kill-after=60s 280m bash -c echo $$ > ../compile-make.pid; exec make -j"$(nproc)"
-   3542 S    tee ../compile-parallel.log
-   3542 S    make -j4
-   3532 S    /bin/sh -c _limit=`ulimit -n`; [ "$_limit" = "unlimited" -o "$_limit" -ge 1024 ] || ulimit -n 1024; umask 022; cmd() { >/dev/null 2>&1 make -s "$@" < /dev/null || { echo "make $*: build failed. Please re-run make with -j1 V=s or V=sc for a higher verbosity level to see what's going on"; false; } } 8>&1 9>&2; cmd -r world 
-   3532 S    make -s -r world
-    137 S    make --no-print-directory package/compile
-     64 S    bash -c /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/time.pl "time: package/libs/openssl/compile" make  -r -C package/libs/openssl BUILD_SUBDIR="package/libs/openssl" BUILD_VARIANT="" ALL_VARIANTS="" compile  || ?(?{ printf "%s\n" "    ERROR: package/libs/openssl failed to build." >&8 || printf "%s\n" "    ERROR: package/libs/openssl failed to build."; } 2>/dev/null;   exit 1;) 
-     64 S    perl /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/time.pl time: package/libs/openssl/compile make -r -C package/libs/openssl BUILD_SUBDIR=package/libs/openssl BUILD_VARIANT= ALL_VARIANTS= compile
-     64 S    make -r -C package/libs/openssl BUILD_SUBDIR=package/libs/openssl BUILD_VARIANT= ALL_VARIANTS= compile
-     57 S    make --jobserver-auth=3,4 -C /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/build_dir/target-aarch64_cortex-a53_musl/openssl-3.5.7 CC=aarch64-openwrt-linux-musl-gcc SOURCE_DATE_EPOCH=1792990681 all
-     50 S    /bin/sh -c "make" depend && "make" _build_sw
+   5193 Ss   /usr/bin/python3 /usr/bin/networkd-dispatcher --run-startup-triggers
+   5193 Ss   /usr/bin/python3 -u /usr/sbin/waagent -daemon
+   5192 Sl   /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
+   3908 S    timeout --kill-after=60s 280m bash -c echo $$ > ../compile-make.pid; exec make -j"$(nproc)"
+   3908 S    tee ../compile-parallel.log
+   3908 S    make -j4
+   3898 S    /bin/sh -c _limit=`ulimit -n`; [ "$_limit" = "unlimited" -o "$_limit" -ge 1024 ] || ulimit -n 1024; umask 022; cmd() { >/dev/null 2>&1 make -s "$@" < /dev/null || { echo "make $*: build failed. Please re-run make with -j1 V=s or V=sc for a higher verbosity level to see what's going on"; false; } } 8>&1 9>&2; cmd -r world 
+   3898 S    make -s -r world
+    503 S    make --no-print-directory package/compile
+     11 S    bash -c /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/time.pl "time: package/system/apk/mbedtls/compile" make  -r -C package/system/apk BUILD_SUBDIR="package/system/apk" BUILD_VARIANT="mbedtls" ALL_VARIANTS="mbedtls " compile  || ?(?{ printf "%s\n" "    ERROR: package/system/apk failed to build (build variant: mbedtls)." >&8 || printf "%s\n" "    ERROR: package/system/apk failed to build (build variant: mbedtls)."; } 2>/dev/null;   exit 1;) 
+     11 S    perl /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/time.pl time: package/system/apk/mbedtls/compile make -r -C package/system/apk BUILD_SUBDIR=package/system/apk BUILD_VARIANT=mbedtls ALL_VARIANTS=mbedtls  compile
+     11 S    make -r -C package/system/apk BUILD_SUBDIR=package/system/apk BUILD_VARIANT=mbedtls ALL_VARIANTS=mbedtls  compile
+      3 S    bash -c /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/time.pl "time: package/feeds/packages/openssh/without-pam/compile" make  -r -C package/feeds/packages/openssh BUILD_SUBDIR="package/feeds/packages/openssh" BUILD_VARIANT="without-pam" ALL_VARIANTS=" " compile  || ?(?{ printf "%s\n" "    ERROR: package/feeds/packages/openssh failed to build (build variant: without-pam)." >&8 || printf "%s\n" "    ERROR: package/feeds/packages/openssh failed to build (build variant: without-pam)."; } 2>/dev/null;   exit 1;) 
+      3 S    perl /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/time.pl time: package/feeds/packages/openssh/without-pam/compile make -r -C package/feeds/packages/openssh BUILD_SUBDIR=package/feeds/packages/openssh BUILD_VARIANT=without-pam ALL_VARIANTS=  compile
 --- the oldest processes that are not kernel threads ---
-   4836 Ss   /sbin/init
-   4835 S<s  /lib/systemd/systemd-journald
-   4834 SLsl /sbin/multipathd -d -s
-   4834 Ss   /lib/systemd/systemd-udevd
-   4833 Ss   /usr/lib/linux-tools/6.8.0-1070-azure/hv_kvp_daemon -n
-   4832 Ss   /usr/sbin/haveged --Foreground --verbose=1
-   4831 Ss   /lib/systemd/systemd-networkd
-   4831 Ss   /lib/systemd/systemd-resolved
+   5202 Ss   /sbin/init
+   5201 S<s  /lib/systemd/systemd-journald
+   5200 SLsl /sbin/multipathd -d -s
+   5200 Ss   /lib/systemd/systemd-udevd
+   5199 Ss   /usr/lib/linux-tools/6.8.0-1070-azure/hv_kvp_daemon -n
+   5198 Ss   /usr/sbin/haveged --Foreground --verbose=1
+   5197 Ss   /lib/systemd/systemd-networkd
+   5197 Ss   /lib/systemd/systemd-resolved
 --- what is running under the build ---
+     11 S    bash -c /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/time.pl "time: package/system/apk/mbedtls/compile" make  -r -C package/system/apk BUILD_SUBDIR="package/system/apk" BUILD_VARIANT="mbedtls" ALL_VARIANTS="mbedtls " compile  || ?(?{ printf "%s\n" "    ERROR: package/system/apk failed to build (build variant: mbedtls)." >&8 || printf "%s\n" "    ERROR: package/system/apk failed to build (build variant: mbedtls)."; } 2>/dev/null;   exit 1;) 
+     11 S    perl /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/time.pl time: package/system/apk/mbedtls/compile make -r -C package/system/apk BUILD_SUBDIR=package/system/apk BUILD_VARIANT=mbedtls ALL_VARIANTS=mbedtls  compile
+      0 S    bash /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/host/bin/fakeroot /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/staging_dir/host/bin/apk mkpkg --info name:apk-mbedtls --info version:3.0.5-r3 --info description:apk package manager (mbedtls) --info arch:aarch64_cortex-a53 --info license:GPL-2.0-only --info origin:feeds/base/system/apk --info url:https://gitlab.alpinelinux.org/alpine/apk-tools.git --info maintainer:Paul Spooren <mail@aparcar.org> --info provides:apk-mbedtls-any apk=3.0.5-r3 --script post-install:/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/build_dir/target-aarch64_cortex-a53_musl/apk-mbedtls/apk-3.0.5/apk-aarch64_cortex-a53/apk-mbedtls/post-install --script post-upgrade:/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/build_dir/target-aarch64_cortex-a53_musl/apk-mbedtls/apk-3.0.5/apk-aarch64_cortex-a53/apk-mbedtls/post-upgrade --script pre-deinstall:/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/build_dir/target-aarch64_cortex-a53_musl/apk-mbedtls/apk-3.0.5/apk-aarch64_cortex-a53/apk-mbedtls/pre-deinstall --info depends:libc zlib wget-any libmbedtls21 --files /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/build_dir/target-aarch64_cortex-a53_musl/apk-mbedtls/apk-3.0.5/ipkg-aarch64_cortex-a53/apk-mbedtls --output /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/bin/packages/aarch64_cortex-a53/base/apk-mbedtls-3.0.5-r3.apk
 --- the directories the build touched lately ---
 target-aarch64_cortex-a53_musl
 hostpkg
@@ -63,5 +66,5 @@ toolchain-aarch64_cortex-a53_gcc-14.3.0_musl
 host
 --- how big the root filesystem is getting ---
 --- memory and load ---
-Mem:           15988        1093         270          54       14624       14493
- 02:02:24 up  1:20,  0 users,  load average: 9.11, 6.60, 5.72
+Mem:           15988         919         348          54       14720       14667
+ 02:08:30 up  1:26,  0 users,  load average: 6.43, 6.83, 6.14
