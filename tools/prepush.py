@@ -119,8 +119,8 @@ def repo_tests():
     offline.
     """
     bad = 0
-    for name in ("test-jffs2names.py", "test-getrel.py"):
-        t = os.path.join(REPO, "tools", name)
+    for name in ("tools/test-jffs2names.py", "tools/test-getrel.py", "tests/test_sk_port_status.py"):
+        t = os.path.join(REPO, name)
         if not os.path.exists(t):
             continue
         r = subprocess.run([sys.executable, t], capture_output=True, text=True)

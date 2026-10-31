@@ -326,20 +326,10 @@ jobs:
             echo "::error::overlays/package/utils/wrreg did not reach openwrt/package/utils/wrreg"; exit 1; }
           test -f openwrt/package/utils/wrreg/src/wrreg.c || {
             echo "::error::wrreg overlay is missing src/wrreg.c"; exit 1; }
-          PORTS=openwrt/target/linux/zte/zx279133/base-files/etc/uci-defaults/99-sk-ports
-          PORTJS=openwrt/target/linux/zte/zx279133/base-files/usr/share/sk-port-status/29_ports.js
-          test -f "$PORTS" || { echo "::error::99-sk-ports did not reach the tree"; exit 1; }
-          test -f "$PORTJS" || { echo "::error::the panel port view did not reach base-files"; exit 1; }
-          sh -n "$PORTS" || { echo "::error::99-sk-ports does not parse"; exit 1; }
-          CR=$(tr -cd '\r' < "$PORTS" | wc -c)
-          [ "$CR" = 0 ] || { echo "::error::99-sk-ports carries $CR CR byte(s)"; exit 1; }
-          grep -q '/usr/share/sk-port-status/29_ports.js' "$PORTS" || {
-            echo "::error::99-sk-ports does not copy the panel view"; exit 1; }
-          grep -q "lan5:'LAN1'" "$PORTJS" || {
-            echo "::error::the panel view no longer labels lan5 as LAN1"; exit 1; }
-          # LuCI stops at the first quote that is not use strict or require.
-          awk 'BEGIN{r=0;p=0} /require baseclass/{r=NR} /SK_PANEL=/{p=NR} END{if(r==0||p==0||r>p) exit 1}' "$PORTJS" || {
-            echo "::error::29_ports.js puts a string before its require lines; LuCI will not load the view"; exit 1; }
+          test -f openwrt/target/linux/zte/zx279133/base-files/etc/uci-defaults/99-sk-ports || {
+            echo "::error::99-sk-ports did not reach base-files"; exit 1; }
+          test -f openwrt/target/linux/zte/zx279133/base-files/usr/share/sk-port-status/29_ports.js || {
+            echo "::error::panel 29_ports.js did not reach base-files"; exit 1; }
           for f in src/zrec.c files/usr/sbin/zrec-run files/usr/libexec/zrec-ops \
                    files/usr/libexec/zrec-bringup files/lib/preinit/85_zrec \
                    files/etc/rc.d/S21zrec files/www/zrec/index.html; do
