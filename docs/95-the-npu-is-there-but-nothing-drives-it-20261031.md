@@ -298,6 +298,37 @@ ZCAM / IKEY 的编号空间无关。按那个映射去写，就是拿一个没�
 之后），并把 `DYNAMIC_DEBUG_CORE` 也放进 CI 门禁的 **required** 列表（卡住式）。
 门禁现在查两个符号，缺一个就红。
 
+### 4.8 CI 一开跑就撞上的另外两处
+
+这一节记的是「代码写完、推上去、CI 开始跑」之后才暴露的两处。两处都不是本轮 NPU
+计划的内容，但都挡着 CI，而 CI 是本轮唯一的验证通道。
+
+**一、`CONFIG_PACKAGE_tc` 在这个树里不存在（run 294 的 Configure 红了）**
+
+- `scripts/configure-sk-d840n.sh` 写的是 `CONFIG_PACKAGE_tc=y`，断言也是查它。
+- 但 `cnjn/ImmortalWrt`（`sr1010-zx279133`）的 `package/network/utils/iproute2/Makefile`
+  里**没有 `Package/tc`**：只有 `Package/tc-tiny`、`Package/tc-bpf`、`Package/tc-full`，
+  三者都带 `PROVIDES:=tc`。
+- 于是 `tc` 是一个**虚拟包** —— 三个包提供的那个名字 —— 而虚拟包不能被单独选中：
+  `CONFIG_PACKAGE_tc=y` 被 defconfig **静默丢掉**（正是「给一个不存在的符号写一行
+  配置」的那一种静默），存活断言随之失败，Configure 在 step 14 exit 1。
+- **修**：改成 `CONFIG_PACKAGE_tc-full=y`，断言跟着改。选 full 不是因为「更大」：
+  iproute2 Makefile 里的变体开关只管 `TC_CONFIG_XT` / `TC_CONFIG_XT_OLD` /
+  `TC_CONFIG_IPSET` 三项，**flower 分类器每个变体都有**；full 额外带上 libbpf 与
+  xtables 一家，那是 bpf 动作要用的。
+
+**二、ZX-PON netlink 的同名碰撞（run 293 的 Compile 就红了，来自上一轮提交）**
+
+- `zx279133-pon.c:127` 的 netlink handler 叫 `zxpon_set_identity`，而 `zxpon.c:325`
+  已经有一个 `zxpon_set_identity(zxpon *, sn, regid)`。同名 ⇒ 编译器把它们当成一个
+  函数：调用处报 `too many arguments`，定义处报 `conflicting types`。
+- 同时 `zxpon_family` 的定义在 222 行，110 行的回复路径却要用它 —— 定义在使用之后，
+  报 `'zxpon_family' undeclared`。
+- **修**：handler 改名 `zxpon_nl_set_identity`（`nl_` 前缀说明是 netlink 那一侧），
+  ops 表里的 `.doit` 跟着改；`zxpon_family` 加一个前置的 tentative definition，真
+  正那个定义仍留在 ops 表旁边 —— 两者必须分开：ops 表要先存在，family 才能引用
+  它，而 handler 又要先有 family 才能回复。
+
 ---
 
 ## 5. 没做的，和为什么
@@ -312,13 +343,13 @@ ZCAM / IKEY 的编号空间无关。按那个映射去写，就是拿一个没�
 ## 6. 下一轮要什么
 
 1. **CI build + kexec 试跑**（本轮做不了：本地没有 kernel build tree，产物只能由 CI 出），验收清单：
-   - 合并后的 kernel `.config` 含 `CONFIG_DYNAMIC_DEBUG=y`（门禁已卡）；
+   - 合并后的 kernel `.config` 含 `CONFIG_DYNAMIC_DEBUG=y` **与** `CONFIG_DYNAMIC_DEBUG_CORE=y`（门禁两个都卡，见 §4.7）；
    - `dmesg | grep -c 'switch: lane'` = 0；`dynamic_debug/control` 的 `+p` 后原样复现；
    - 板上 `/sys/kernel/debug/dynamic_debug/control` 存在；
    - `echo me > /sys/kernel/debug/zx279133-9132` 打出 16 行 ME 表与 64 个 flow 的引擎号；
    - `echo pr 90350 16 > /sys/kernel/debug/zx279133-9132` 读回 ME 表；
    - `echo cam > /sys/kernel/debug/zx279133-9132` 打出算法块寄存器；
-   - `tc filter add dev eth0 ingress flower ...` 可执行，`zx279133-flows` 非空；
+   - `tc filter add dev eth0 ingress flower ...` 可执行（客户端是 `tc-full`，见 §4.8），`zx279133-flows` 非空；
    - 板子 br-lan / eth0 正常，ping 通。
 2. **ME 表的写实验**（机主已授权读写 ME 表与 PPS 中断相关寄存器）：写前先 `me`
    读出原值，写后 `me` 回读；只在 kexec 试跑轮里做，失败即断电复位。
