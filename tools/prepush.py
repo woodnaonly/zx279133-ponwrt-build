@@ -410,6 +410,31 @@ def gate_against_snapshot():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def use_before_decl_check():
+    """A static function that is called before it is declared does not compile.
+
+    The kernel builds with -Werror=implicit-function-declaration (since 6.5),
+    so this is not a warning but a build that never produces an image - and
+    the overlay is compiled on a runner, where that costs an hour.  On
+    2026-10-30 the SerDes fix (commit 4f5fa5f) called two static functions
+    from the lane watch and defined them eight hundred lines further down,
+    with no prototype above the call: run #283 was spent finding that out.
+
+    The checker itself is tools/check-c-use-before-decl.py, and it is run as
+    a separate process so that it can also be run on its own.
+    """
+    t = os.path.join(REPO, "tools", "check-c-use-before-decl.py")
+    if not os.path.exists(t):
+        return 0
+    r = subprocess.run([sys.executable, t, REPO], capture_output=True, text=True)
+    sys.stdout.write(r.stdout)
+    if r.returncode != 0:
+        print("prepush: the overlay uses a static function before it is declared")
+        sys.stdout.write(r.stderr)
+        return 1
+    return 0
+
+
 def main():
     bad = 0
     files = list(c_files())
@@ -426,6 +451,7 @@ def main():
     bad += gate_against_snapshot()
     bad += release_manifest_check()
     bad += overlay_modes_check()
+    bad += use_before_decl_check()
 
     defined = set()
     for f in files:
