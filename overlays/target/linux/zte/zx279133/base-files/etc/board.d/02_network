@@ -110,12 +110,11 @@ skyworth,sk-d840n)
 	# docs/92 §90.  This replaces a table here that was inherited from jack walks
 	# run on an image in which only eth0 could send, and it got eth0 wrong twice:
 	# eth0 is the NPPT's own netdev - the PON side - and neither "jack 4" nor the
-	# panel's 2.5G jack.  A carrier is still not a question about a cable: lan5's
-	# fixed-link is in the DTS, and for a switch's own user port that fixed-link
-	# is what phylink uses - the driver's phylink_fixed_state() is installed by
-	# the DSA core for user devices only, so it never runs for lan5
-	# (docs/92 §96.31.6).  lan5 therefore always claims a carrier, and the rate
-	# it reports is the one in the DTS (now 2500, docs/92 §96.31.7).
+	# panel's 2.5G jack.  The netdev stays lan5. Its published rate is the
+	# RTL8226 copper status (1f.0xa434), written over the DTS fixed-link
+	# ceiling by phylink_fixed_state(). On this 6.18 tree that callback is
+	# installed for the user port in dsa_user_phy_setup(), so a 1G peer is
+	# reported as 1000 and not as the DTS ceiling of 2500.
 	#
 	#   DSA port 4 = PPU 1 = PHY 0x0a = lan1   no jack on this SKU
 	#   DSA port 5 = PPU 2 = PHY 0x0b = lan2   panel LAN2

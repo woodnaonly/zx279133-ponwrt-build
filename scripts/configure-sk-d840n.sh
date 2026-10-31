@@ -396,8 +396,12 @@ grep -hE "^(CONFIG_|# CONFIG_)(NETFILTER|NETFILTER_ADVANCED|NF_CONNTRACK|NF_NAT|
 # masquerade is a router that only works on the bench.
 printf 'CONFIG_PACKAGE_nftables=y\n' >>.config
 
-make defconfig
+# The overview row. luci-mod-status ships the stock 29_ports.js; this package
+# depends on it, so opkg installs the silk-screen names afterwards. Both
+# images get it: a flashed root and a RAM trial are looked at the same way.
+printf 'CONFIG_PACKAGE_sk-port-status=y\n' >>.config
 
+make defconfig
 # The same rule that this file already states twice: a config line for a symbol
 # that does not exist is dropped by defconfig in silence. Assert the outcome.
 if [ "$MODE" = initramfs ]; then
@@ -439,6 +443,12 @@ grep -qx 'CONFIG_PACKAGE_nftables=y' .config || {
 	echo "CONFIG_PACKAGE_nftables did not survive defconfig - is overlays/package/network/utils/nftables/Makefile in the tree?" >&2
 	ls -d package/network/utils/nftables 2>/dev/null || echo "package/network/utils/nftables is NOT in the tree" >&2
 	grep -i 'nftables' .config || echo "(nothing at all)" >&2
+	exit 1; }
+
+grep -qx 'CONFIG_PACKAGE_sk-port-status=y' .config || {
+	echo "CONFIG_PACKAGE_sk-port-status did not survive defconfig - is package/utils/sk-port-status/Makefile in the tree?" >&2
+	ls -d package/utils/sk-port-status 2>/dev/null || echo "package/utils/sk-port-status is NOT in the tree" >&2
+	grep -i 'sk-port-status' .config || echo "(nothing at all)" >&2
 	exit 1; }
 
 # CONFIG_DEVMEM lost three rounds, and the winner is not the fragment merge. Read out of

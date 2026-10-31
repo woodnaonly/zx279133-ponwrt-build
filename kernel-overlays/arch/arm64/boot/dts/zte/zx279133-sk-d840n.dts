@@ -706,13 +706,12 @@
 			 * of this switch's own bus, so the core must not go
 			 * looking for one there.
 			 *
-			 * The driver watches the RTL8226's own auto-negotiation
-			 * status and prints it on every change (docs/92 §96.31),
-			 * but that status does NOT decide the carrier: for a
-			 * switch's own user port the fixed-link below is what
-			 * phylink uses, so this port always claims a carrier
-			 * and the rate it reports is the one written here
-			 * (docs/92 §96.31.6).
+			 * The fixed-link below is the boot ceiling phylink
+			 * copies in first. The rate and carrier the user
+			 * netdev publishes come from the RTL8226 copper
+			 * status (1f.0xa434) via phylink_fixed_state(). On
+			 * this 6.18 tree that callback is installed for the
+			 * user port, so a 1G peer is reported as 1G.
 			 */
 			port@8 {
 				reg = <8>;
@@ -724,19 +723,13 @@
 				 * board's own kernel reached a host behind
 				 * this jack with 0% loss.
 				 *
-				 * This is a fixed-link port, and for a switch's
-				 * own user port the fixed-link in the device
-				 * tree is the only thing phylink uses: the
-				 * driver's phylink_fixed_state() is installed
-				 * by the DSA core for user devices only, so
-				 * for this port it never runs
-				 * (docs/92 §96.31.6).  The rate declared here
-				 * is therefore the lane's ceiling - when the
-				 * peer only offers 1G the lane drops to 1G
-				 * base-X and the kernel still says 2.5G.  The
-				 * rate the far end really negotiated is in
-				 * the driver's own log (PHY status 1f.0xa434
-				 * and PMA speed 1f.0xa616).
+				 * speed = <2500> is the ceiling, not the
+				 * negotiated rate. phylink copies it into the
+				 * state and the driver's fixed-state callback
+				 * then overwrites speed, duplex, link and the
+				 * interface (1000base-x or 2500base-x) from
+				 * PHYSR 1f.0xa434. A peer that only offers 1G
+				 * must not stay advertised as 2.5G.
 				 */
 				phy-mode = "2500base-x";
 

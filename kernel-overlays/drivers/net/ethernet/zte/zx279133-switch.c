@@ -478,6 +478,23 @@
 #define ZX279133_SWITCH_OUTERPHY_SERDES_LINK_BIT	BIT(2)
 
 /*
+ * Copper status of the RTL8226, MMD 0x1f register 0xa434.
+ *
+ * This is the word the mainline Realtek driver calls RTL_VND2_PHYSR
+ * (drivers/net/phy/realtek/realtek_main.c, rtlgen_decode_physr). The speed
+ * is the mask of bits 5:4 and 10:9 together, not bits 5:4 on their own:
+ * 0x1b1e has bits 5:4 equal to 1, and it is 2500 because the mask is
+ * 0x0210. 0x192c masks to 0x0020, which is 1000. Bit 3 is duplex. Bit 2
+ * is the link bit used here. Do not read the AN BMCR (devad 7, reg 0);
+ * that read drops this lane.
+ */
+#define ZX279133_SWITCH_OUTERPHY_PHYSR_DEVAD	0x1f
+#define ZX279133_SWITCH_OUTERPHY_PHYSR		0xa434
+#define ZX279133_SWITCH_OUTERPHY_PHYSR_LINK	BIT(2)
+#define ZX279133_SWITCH_OUTERPHY_PHYSR_DUPLEX	BIT(3)
+#define ZX279133_SWITCH_OUTERPHY_PHYSR_SPEED	(GENMASK(5, 4) | GENMASK(10, 9))
+
+/*
  * The 1G class, word for word: the three registers and the values this
  * board's own U-Boot leaves in them.
  */
@@ -538,6 +555,16 @@ struct zx279133_switch {
 	 * probed in a fixed order.
 	 */
 	bool outerphy_dumped;
+	/*
+	 * Last copper reading of the 2.5G jack that was fit to publish.
+	 * A failed or unrecognised PHYSR read keeps this. It must not fall
+	 * back to the device tree's 2500 Mbit/s ceiling.
+	 */
+	bool outer_reported;
+	int outer_speed;
+	int outer_duplex;
+	bool outer_link;
+	phy_interface_t outer_interface;
 	/*
 	 * The bus of the switch's own, which the four user ports' PHYs are
 	 * on: DSA port N is at MDIO address N on it, and it translates to
@@ -2700,12 +2727,95 @@ static void zx279133_switch_outerphy_dump(struct zx279133_switch *priv)
 	}
 }
 
+
+/* 0x0000 10, 0x0010 100, 0x0020 1000, 0x0210 2500. Same cases as
+ * rtlgen_decode_physr(), limited to the rates this jack can be.
+ * Returns false when the speed field is not one of those four, so the
+ * caller can keep the previous reading.
+ */
+static bool zx279133_switch_physr_decode(u16 raw, int *speed, int *duplex,
+					 bool *link)
+{
+	switch (raw & ZX279133_SWITCH_OUTERPHY_PHYSR_SPEED) {
+	case 0x0000:
+		*speed = SPEED_10;
+		break;
+	case 0x0010:
+		*speed = SPEED_100;
+		break;
+	case 0x0020:
+		*speed = SPEED_1000;
+		break;
+	case 0x0210:
+		*speed = SPEED_2500;
+		break;
+	default:
+		return false;
+	}
+
+	*duplex = (raw & ZX279133_SWITCH_OUTERPHY_PHYSR_DUPLEX) ?
+		DUPLEX_FULL : DUPLEX_HALF;
+	*link = !!(raw & ZX279133_SWITCH_OUTERPHY_PHYSR_LINK);
+	return true;
+}
+
+/* 1000base-x at 1G and below, 2500base-x at 2.5G. Both are already in
+ * phylink_get_caps() for this port. A 1000 report left on 2500base-x is
+ * what made the fixed link keep saying 2.5G.
+ */
+static phy_interface_t zx279133_switch_outer_interface(int speed)
+{
+	if (speed == SPEED_2500)
+		return PHY_INTERFACE_MODE_2500BASEX;
+	return PHY_INTERFACE_MODE_1000BASEX;
+}
+
+/* One Clause-45 read of 1f.0xa434. Nothing else: the AN control register
+ * is not touched.
+ */
+static void zx279133_switch_outer_link_state(struct zx279133_switch *priv,
+					     struct phylink_link_state *state)
+{
+	struct mii_bus *bus = zx279133_switch_outer_mdio(priv);
+	int raw = -1;
+	int speed = SPEED_UNKNOWN;
+	int duplex = DUPLEX_UNKNOWN;
+	bool link = false;
+
+	if (bus)
+		raw = mdiobus_c45_read(bus, ZX279133_SWITCH_OUTERPHY_ADDR,
+				       ZX279133_SWITCH_OUTERPHY_PHYSR_DEVAD,
+				       ZX279133_SWITCH_OUTERPHY_PHYSR);
+	if (raw >= 0 &&
+	    zx279133_switch_physr_decode((u16)raw, &speed, &duplex, &link)) {
+		priv->outer_reported = true;
+		priv->outer_speed = speed;
+		priv->outer_duplex = duplex;
+		priv->outer_link = link;
+		priv->outer_interface = zx279133_switch_outer_interface(speed);
+	}
+
+	if (!priv->outer_reported) {
+		state->speed = SPEED_UNKNOWN;
+		state->duplex = DUPLEX_UNKNOWN;
+		state->link = false;
+		return;
+	}
+
+	state->speed = priv->outer_speed;
+	state->duplex = priv->outer_duplex;
+	state->link = priv->outer_link;
+	state->interface = priv->outer_interface;
+}
+
 /*
  * phylink asks the driver for the link state of a port it has no PHY to
  * poll.  The 9132's ports do have PHYs - internal ones - so the answer is
- * read there.  DSA sets poll_fixed_state when the driver provides this, so
- * phylink asks again and again, and a cable that arrives after boot is
- * noticed without anything else having to be done.
+ * read there.  On this 6.18 tree dsa_user_phy_setup() installs
+ * get_fixed_state and poll_fixed_state before dsa_port_phylink_create(),
+ * so this callback is what the user netdev publishes. ethtool, sysfs
+ * speed and LuCI all read it. The device tree fixed-link is only the
+ * value phylink copies in first.
  */
 static void zx279133_switch_phylink_fixed_state(struct dsa_switch *ds, int port,
 						 struct phylink_link_state *state)
@@ -2722,30 +2832,7 @@ static void zx279133_switch_phylink_fixed_state(struct dsa_switch *ds, int port,
 	}
 
 	if (port == ZX279133_SWITCH_DSA_OUTER_PORT) {
-		struct mii_bus *bus = zx279133_switch_outer_mdio(priv);
-		int mode = -1;
-		int cls = -1;
-
-		link = -1;
-		if (bus) {
-			link = mdiobus_c45_read(bus, ZX279133_SWITCH_OUTERPHY_ADDR,
-						ZX279133_SWITCH_OUTERPHY_SERDES_DEVAD,
-						ZX279133_SWITCH_OUTERPHY_SERDES_LINK);
-			mode = mdiobus_c45_read(bus, ZX279133_SWITCH_OUTERPHY_ADDR,
-						ZX279133_SWITCH_OUTERPHY_SERDES_DEVAD,
-						ZX279133_SWITCH_OUTERPHY_SERDES_MODE);
-		}
-		if (mode >= 0)
-			cls = mode & ZX279133_SWITCH_OUTERPHY_SERDES_MODE_MASK;
-		state->link = link >= 0 &&
-			      (link & ZX279133_SWITCH_OUTERPHY_SERDES_LINK_BIT);
-		state->duplex = DUPLEX_FULL;
-		if (cls == ZX279133_SWITCH_OUTERPHY_SERDES_MODE_2G5)
-			state->speed = SPEED_2500;
-		else if (cls == ZX279133_SWITCH_OUTERPHY_SERDES_MODE_1G)
-			state->speed = SPEED_1000;
-		else
-			state->speed = SPEED_UNKNOWN;
+		zx279133_switch_outer_link_state(priv, state);
 		return;
 	}
 

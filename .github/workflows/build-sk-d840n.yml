@@ -326,6 +326,10 @@ jobs:
             echo "::error::overlays/package/utils/wrreg did not reach openwrt/package/utils/wrreg"; exit 1; }
           test -f openwrt/package/utils/wrreg/src/wrreg.c || {
             echo "::error::wrreg overlay is missing src/wrreg.c"; exit 1; }
+          test -f openwrt/package/utils/sk-port-status/Makefile || {
+            echo "::error::overlays/package/utils/sk-port-status did not reach openwrt/package/utils/sk-port-status"; exit 1; }
+          test -f openwrt/package/utils/sk-port-status/files/29_ports.js || {
+            echo "::error::sk-port-status overlay is missing files/29_ports.js"; exit 1; }
           for f in src/zrec.c files/usr/sbin/zrec-run files/usr/libexec/zrec-ops \
                    files/usr/libexec/zrec-bringup files/lib/preinit/85_zrec \
                    files/etc/rc.d/S21zrec files/www/zrec/index.html; do
