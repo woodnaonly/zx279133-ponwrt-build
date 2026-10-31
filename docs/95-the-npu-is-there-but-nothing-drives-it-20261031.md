@@ -312,10 +312,31 @@ ZCAM / IKEY 的编号空间无关。按那个映射去写，就是拿一个没�
 - 于是 `tc` 是一个**虚拟包** —— 三个包提供的那个名字 —— 而虚拟包不能被单独选中：
   `CONFIG_PACKAGE_tc=y` 被 defconfig **静默丢掉**（正是「给一个不存在的符号写一行
   配置」的那一种静默），存活断言随之失败，Configure 在 step 14 exit 1。
-- **修**：改成 `CONFIG_PACKAGE_tc-full=y`，断言跟着改。选 full 不是因为「更大」：
-  iproute2 Makefile 里的变体开关只管 `TC_CONFIG_XT` / `TC_CONFIG_XT_OLD` /
-  `TC_CONFIG_IPSET` 三项，**flower 分类器每个变体都有**；full 额外带上 libbpf 与
-  xtables 一家，那是 bpf 动作要用的。
+- **修（第一版，不够）**：改成 `CONFIG_PACKAGE_tc-full=y`，断言跟着改。**结果 run 296
+  又红在同一处** —— 见下面第二条。
+
+**二、这个分支没有 `kmod-*` 包，于是 tc 的三个变体一个都选不上（run 296 的 Configure
+又红了）**
+
+- `cnjn/ImmortalWrt` 的 `sr1010-zx279133` 分支**没有 `package/kernel/modules/` 目录**
+  （`package/kernel/linux/` 在，`kmod-*` 的包不在）。
+- 而 iproute2 的三个 tc 变体都写着 `DEPENDS:=+kmod-sched-core ...`。指向一个**不存在
+  的包**的强制依赖，包就选不上 —— 三个变体无一例外。
+- **修**：照 `overlays/package/network/utils/nftables/Makefile` 的既有做法（那份也是
+  feed 的配方去掉一个指向不存在的 kmod 的依赖），新增
+  `overlays/package/network/utils/iproute2/Makefile`：feed 的 iproute2 配方逐字照抄
+  （6.18.0、源、哈希、configure 参数、变体开关、安装布局），只去掉 `+kmod-sched-core`。
+  - 去掉它丢的是 `tc qdisc add ... netem` 用的 `net/sched/sch_*.ko`；flower 过滤器
+    不需要它（`tc filter add ... ingress flower` 是 netlink 上对 cls_flower 的操作，
+    不是队列模块）。
+  - 变体开关一个字没动：它只切 `TC_CONFIG_XT` / `TC_CONFIG_XT_OLD` /
+    `TC_CONFIG_XT_OLD_H` 与 `TC_CONFIG_IPSET`，**flower 分类器在每个变体里都有**。
+- 最终选的符号是 **`tc-tiny`**：三个变体都有 flower，而 tiny 不把 libxtables 与
+  libbpf 拉进镜像（本板用不到那些 action）。
+- **一条查证过的事实**（免得再走一遍）：`libxtables` **是存在的**，在
+  `package/network/utils/iptables/Makefile` 的 `Package/libxtables` 里，不在
+  `package/network/config/` 下；`libbpf` 在 `package/libs/libbpf`。先前「config 下没有
+  iptables ⇒ 没有 libxtables」的推断是错的。
 
 **二、ZX-PON netlink 的同名碰撞（run 293 的 Compile 就红了，来自上一轮提交）**
 

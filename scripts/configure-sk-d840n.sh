@@ -442,18 +442,30 @@ printf 'CONFIG_PACKAGE_nftables=y\n' >>.config
 # already carries ip-full; tc is the other half of iproute2, from the same
 # package, and it is what "tc filter add dev eth0 ingress flower ..." needs.
 #
-# The symbol is tc-full, not tc, and the difference is not cosmetic: this
+# The symbol is tc-tiny, not tc, and the difference is not cosmetic: this
 # tree's iproute2 (cnjn/ImmortalWrt sr1010-zx279133) has no Package/tc at
 # all.  It has Package/tc-tiny, Package/tc-bpf and Package/tc-full, each
 # with "PROVIDES:=tc", so "tc" is a *virtual* package - a name the three of
 # them provide - and a virtual package cannot be selected on its own: the
 # line "CONFIG_PACKAGE_tc=y" is dropped by defconfig in silence, exactly the
 # way a config line for a symbol that does not exist is.  Asking for the
-# real package is what survives.  tc-full is the one to ask for: it carries
-# libbpf and the xtables family, and the variant switch in iproute2's
-# Makefile only turns XT and IPSET on or off - the flower classifier is in
-# every variant.
-printf 'CONFIG_PACKAGE_tc-full=y\n' >>.config
+# real package is what survives.
+#
+# tc-tiny and not tc-full: the variant switch in iproute2's Makefile only
+# turns the xtables family and IPSET on or off, and the flower classifier
+# is in every variant - so the client this is here for does not depend on
+# the choice, and the tiny one does not drag libxtables and libbpf into the
+# image for actions this board never installs.
+#
+# There is one more thing this tree is missing, and it is why
+# overlays/package/network/utils/iproute2/Makefile exists: the feed's recipe
+# makes every tc variant depend on "+kmod-sched-core", and this branch has
+# no kernel module packages at all - there is no package/kernel/modules/
+# directory in it.  A package whose dependency names a package that does not
+# exist cannot be selected, so the overlay is the feed's recipe with that
+# one dependency dropped.  What the dependency was for is "tc qdisc add ...
+# netem"; a flower filter does not need it.
+printf 'CONFIG_PACKAGE_tc-tiny=y\n' >>.config
 
 # The overview row is not a package. luci-mod-status already owns
 # 29_ports.js, and a second package installing that path is rejected while
@@ -510,10 +522,10 @@ grep -qx 'CONFIG_PACKAGE_nftables=y' .config || {
 # being selectable, not about a missing Makefile: a tc that defconfig
 # dropped means an image whose offload has no client, which is the same
 # failure as an offload driver with no rules to install.  The symbol
-# checked is tc-full - the real package - and not the virtual "tc" the
+# checked is tc-tiny - the real package - and not the virtual "tc" the
 # three variants provide, which defconfig drops without a word.
-grep -qx 'CONFIG_PACKAGE_tc-full=y' .config || {
-	echo "CONFIG_PACKAGE_tc-full did not survive defconfig - is package/network/utils/iproute2 in the tree?" >&2
+grep -qx 'CONFIG_PACKAGE_tc-tiny=y' .config || {
+	echo "CONFIG_PACKAGE_tc-tiny did not survive defconfig - is package/network/utils/iproute2 in the tree, and is the overlay applied?" >&2
 	ls -d package/network/utils/iproute2 2>/dev/null || echo "package/network/utils/iproute2 is NOT in the tree" >&2
 	grep 'PACKAGE_tc' .config || echo "(no PACKAGE_tc line at all)" >&2
 	exit 1; }
