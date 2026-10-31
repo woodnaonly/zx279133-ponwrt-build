@@ -28,7 +28,7 @@ set -eu
 cd "$(dirname "$0")"
 export MSYS_NO_PATHCONV=1
 
-WANT_PORTS=${WANT_PORTS:-"lan1 lan2 lan3 lan4 lan5 lan-cpu0"}
+WANT_PORTS=${WANT_PORTS:-"lan0 lan1 lan2 lan3 lan4 lan-cpu0"}
 WAN=${WAN:-eth0}
 BIND=${SKD_BIND:-192.168.9.25}
 HOST=${SKD_HOST:-192.168.9.1}
@@ -53,7 +53,7 @@ fi
 # The ports the board actually has.  A port that is not there is left out
 # rather than named: netifd keeps a named port that does not exist in a
 # pending state, and the images from before the 2.5G jack became a DSA
-# port have no lan5 at all.
+# port have no such name at all.
 have=$(echo "for p in $WANT_PORTS; do [ -e /sys/class/net/\$p ] && printf '%s ' \$p; done" |
 	board 2>&1 | tr -d '\r' | tail -1 | sed 's/ *$//')
 [ -n "$have" ] || have="$WANT_PORTS"

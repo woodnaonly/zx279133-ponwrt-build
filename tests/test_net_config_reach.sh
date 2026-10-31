@@ -206,9 +206,9 @@ echo "=== case E: the flashed board - every UNI jack is LAN, and no jack is a WA
 # the carving happens.
 out=$(run_case "skyworth,sk-d840n" lan1 lan2 lan3 lan4 lan-cpu0 eth0)
 echo "$out" | sed 's/^/  /'
-echo "$out" | grep -qx 'ucidef_set_interface lan device lan1 lan2 lan3 lan4 lan-cpu0 protocol static ipaddr 192.168.9.1 netmask 255.255.255.0' \
+echo "$out" | grep -qx 'ucidef_set_interface lan device lan1 lan2 lan3 lan4 protocol static ipaddr 192.168.9.1 netmask 255.255.255.0' \
 	|| bad "the LAN bridge is not every UNI jack plus the CPU port"
-ok "all four UNI jacks and lan-cpu0 are in the LAN bridge"
+ok "board.json lan ports are the four panel jacks"
 # The decisive half, and it has to be the negative one: a WAN whose device is a
 # lanN is a panel jack taken away from the user, which looks like a dead port.
 if echo "$out" | grep -q 'ucidef_set_interface wan device lan'; then
@@ -219,15 +219,16 @@ ok "no UNI jack is carved out as the WAN"
 # The slot still exists, on the one port that is not a 9132 UNI.  Both a user and
 # tools/portmove.sh write into this section with `uci set network.wan.device=`, so
 # deleting it would break the thing the owner asked for.
-echo "$out" | grep -qx 'ucidef_set_interface wan device eth0 protocol dhcp' \
-	|| bad "there is no wan section for a user to point at an uplink"
-ok "the wan slot exists on eth0 (the panel's LAN1, not a 9132 UNI)"
+if echo "$out" | grep -q 'ucidef_set_interface wan'; then
+	bad "wan was published in board.json; eth0 would be drawn as a panel port"
+fi
+ok "wan is not in board.json (sk-bridge creates it on eth0)"
 
 echo
 echo "=== case F: no eth0 - the wan slot is not invented out of nothing ==="
 out=$(run_case "skyworth,sk-d840n" lan1 lan2 lan3 lan4 lan-cpu0)
 echo "$out" | sed 's/^/  /'
-echo "$out" | grep -qx 'ucidef_set_interface lan device lan1 lan2 lan3 lan4 lan-cpu0 protocol static ipaddr 192.168.9.1 netmask 255.255.255.0' \
+echo "$out" | grep -qx 'ucidef_set_interface lan device lan1 lan2 lan3 lan4 protocol static ipaddr 192.168.9.1 netmask 255.255.255.0' \
 	|| bad "the LAN bridge lost ports because eth0 was missing"
 if echo "$out" | grep -q 'ucidef_set_interface wan'; then
 	echo "  it did:"; sed 's/^/    /' "$out"

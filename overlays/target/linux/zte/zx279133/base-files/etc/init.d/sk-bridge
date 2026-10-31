@@ -1,0 +1,64 @@
+#!/bin/sh /etc/rc.common
+# Add the switch ports the overview must not draw, and the wan slot that
+# board.json must not publish.
+#
+# config_generate builds br-lan from board.json, and stock LuCI draws every
+# name in that list. The four panel jacks are the whole list. lan-cpu0 is
+# what makes those jacks reach the router, and lan0 is the jackless DSA
+# port; both belong in the bridge and neither belongs on the port row.
+# eth0 is the PON MAC. It is the wan device, not a panel jack.
+#
+# A build executes this inside the package root. There is no network
+# config to edit there, and this must not loop or the image build waits
+# on it forever.
+START=15
+STOP=90
+
+in_build() {
+	[ -n "${IPKG_INSTROOT:-}" ] && return 0
+	[ -n "${PKG_ROOT:-}" ] && return 0
+	[ -n "${CI:-}" ] && return 0
+	return 1
+}
+
+apply_bridge() {
+	in_build && return 0
+	command -v uci >/dev/null 2>&1 || return 0
+	[ -s /etc/config/network ] || return 0
+
+	i=0
+	while uci -q get "network.@device[$i]" >/dev/null 2>&1; do
+		typ=$(uci -q get "network.@device[$i].type")
+		if [ "$typ" = bridge ]; then
+			ports=$(uci -q get "network.@device[$i].ports")
+			case " $ports " in
+			*" lan1 "*)
+				for p in lan0 lan-cpu0; do
+					case " $ports " in
+					*" $p "*) ;;
+					*)
+						if [ -e "/sys/class/net/$p" ]; then
+							uci add_list "network.@device[$i].ports=$p"
+							ports="$ports $p"
+						fi
+						;;
+					esac
+				done
+				break
+				;;
+			esac
+		fi
+		i=$((i + 1))
+	done
+
+	if ! uci -q get network.wan >/dev/null 2>&1; then
+		uci set network.wan=interface
+		uci set network.wan.device=eth0
+		uci set network.wan.proto=dhcp
+	fi
+	uci commit network
+}
+
+start() {
+	apply_bridge
+}

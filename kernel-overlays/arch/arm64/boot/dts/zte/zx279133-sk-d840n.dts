@@ -643,7 +643,7 @@
 			 */
 			port@4 {
 				reg = <4>;
-				label = "lan1";
+				label = "lan0";
 				phy-mode = "internal";
 
 				fixed-link {
@@ -715,7 +715,7 @@
 			 */
 			port@8 {
 				reg = <8>;
-				label = "lan5";
+				label = "lan1";
 				/*
 				 * The lane runs 2500BASE-X (docs/92 §96.31):
 				 * the far end's SerDes mode word reads 0x9416

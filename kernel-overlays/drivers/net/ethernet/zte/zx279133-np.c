@@ -4418,7 +4418,7 @@ static const u32 zx279133_lan_vport_mf[][ZX279133_SMMU0_WORDS] = {
 	 * port.  If the jack's traffic turns out to be dropped on the way
 	 * out, this entry is the first thing to look at.
 	 */
-	{ 0x1c8c2800, 0x31a37e00, 0x00000ad8, 0 },	/* VID 63, lan5 */
+	{ 0x1c8c2800, 0x31a37e00, 0x00000ad8, 0 },	/* VID 63, lan1 */
 };
 
 /*

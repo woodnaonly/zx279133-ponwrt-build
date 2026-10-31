@@ -72,7 +72,7 @@ if [ -e /sys/class/net/br-lan ]; then
 fi
 
 dsa_ports() {
-	for d in lan1 lan2 lan3 lan4 lan5; do
+	for d in lan0 lan1 lan2 lan3 lan4; do
 		[ -e "/sys/class/net/$d" ] && echo "$d"
 	done
 }
@@ -86,7 +86,7 @@ in_bridge() {
 # The device name of a bridge port number.  The bridge's forwarding
 # database speaks in the bridge's own numbers, and the kernel states the
 # mapping itself every time a port joins or leaves the bridge:
-# "br-lan: port 5(lan5) entered forwarding state".  The number belongs to
+# "br-lan: port 1(lan1) entered forwarding state".  The number belongs to
 # the port and survives its leaving and coming back.
 dev_of_port() {
 	p=$1
@@ -446,7 +446,7 @@ if [ -n "$BR" ] && [ "$SKIP_WAN" = 0 ]; then
 	if [ -n "$FORCED" ]; then
 		case "$FORCED" in
 		pc) FORCED="$PC_PORT" ;;
-		lan1|lan2|lan3|lan4|lan5) ;;
+		lan1|lan2|lan3|lan4) ;;
 		*) FORCED="" ;;
 		esac
 	fi
@@ -675,7 +675,7 @@ else
 			[ -n "$p" ] && WAN=$(dev_of_port "$p")
 		fi
 		;;
-	lan1|lan2|lan3|lan4|lan5) ;;
+	lan1|lan2|lan3|lan4) ;;
 	*) WAN="" ;;
 	esac
 fi
@@ -691,7 +691,7 @@ while true; do
 		fi
 		continue
 	fi
-	for p in lan3 lan1 lan4 lan2 lan5; do
+	for p in lan3 lan1 lan4 lan2; do
 		[ -e "/sys/class/net/$p" ] || continue
 		[ "$p" = "$PC" ] && continue
 		# A port the bench has named is never taken for the WAN: the ONT

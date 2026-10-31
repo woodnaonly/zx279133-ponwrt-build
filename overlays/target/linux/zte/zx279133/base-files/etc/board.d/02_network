@@ -18,7 +18,7 @@
 # /etc/config/network says "lan bridge = eth1 eth2 eth3, wan.device = eth0", but
 # those ethN are vendor switch ports rather than Linux netdevs, and taking them
 # for netdevs is how this board's panel map got wrong - the panel's 2.5G jack is
-# not eth0 at all: it is the 9132's fifth user port, lan5 (docs/90 §6, revised
+# not eth0 at all: it is the 9132's fifth user port, netdev lan1 (docs/90 §6, revised
 # by docs/92 §90).
 
 . /lib/functions/uci-defaults.sh
@@ -54,12 +54,12 @@ skyworth,sk-d840n)
 	# Which netdev carries the LAN depends on what the 9132's driver managed to bring up,
 	# and every case here is real:
 	#
-	#   lan1 lan2 lan3 lan4  the 9132's UNI jacks as separate DSA ports, one netdev
-	#                        per jack.  All of them are LAN - see the note under
-	#                        the loop.
-	#   lan5                the panel's 2.5G jack: the 9132's fifth user port, the one
-	#                        the vendor calls the outerphy, with the external RTL8226
-	#                        on &mdio1 at address 5 (docs/92 §90).
+	#   lan1                panel LAN1, the 2.5G jack: DSA port 8, the RTL8226.
+	#   lan2 lan3 lan4      panel LAN2..LAN4, DSA ports 5..7.
+	#   lan0                DSA port 4. This SKU has no jack on it. It is not
+	#                        in board.json, so the stock overview does not draw it.
+	#   The four names above are the only lan ports written into board.json.
+	#   (docs/92 §90).
 	#   lan-cpu0             the conduit - the 9132's CPU port.  It is a member of the
 	#                        LAN bridge, never the LAN's only member and never a WAN.
 	#   eth0                 the NPPT's own netdev - the PON side.  Two jobs: it is
@@ -75,7 +75,11 @@ skyworth,sk-d840n)
 	# which is the one thing that makes every jack reachable from the router.
 	lan_dev=""
 	uni=""
-	for d in lan1 lan2 lan3 lan4 lan5; do
+	# Panel jacks only. lan0 (no jack), lan-cpu0 and eth0 are real netdevs
+	# but must not be published here: stock LuCI draws every name in
+	# board.json. sk-bridge adds lan0 and lan-cpu0 to the bridge, and
+	# creates the wan section on eth0, after config_generate.
+	for d in lan1 lan2 lan3 lan4; do
 		[ -e "/sys/class/net/$d" ] && { lan_dev="$lan_dev${lan_dev:+ }$d"; uni=1; }
 	done
 	[ -n "$lan_dev" ] || { [ -e /sys/class/net/lan-cpu0 ] && lan_dev="lan-cpu0"; }
@@ -110,17 +114,17 @@ skyworth,sk-d840n)
 	# docs/92 §90.  This replaces a table here that was inherited from jack walks
 	# run on an image in which only eth0 could send, and it got eth0 wrong twice:
 	# eth0 is the NPPT's own netdev - the PON side - and neither "jack 4" nor the
-	# panel's 2.5G jack.  The netdev stays lan5. Its published rate is the
-	# RTL8226 copper status (1f.0xa434), written over the DTS fixed-link
+	# panel's 2.5G jack.  That jack's netdev is lan1. Its published rate is
+	# the RTL8226 copper status (1f.0xa434), written over the DTS fixed-link
 	# ceiling by phylink_fixed_state(). On this 6.18 tree that callback is
 	# installed for the user port in dsa_user_phy_setup(), so a 1G peer is
 	# reported as 1000 and not as the DTS ceiling of 2500.
 	#
-	#   DSA port 4 = PPU 1 = PHY 0x0a = lan1   no jack on this SKU
+	#   DSA port 4 = PPU 1 = PHY 0x0a = lan0   no jack on this SKU
 	#   DSA port 5 = PPU 2 = PHY 0x0b = lan2   panel LAN2
 	#   DSA port 6 = PPU 3 = PHY 0x0c = lan3   panel LAN3
 	#   DSA port 7 = PPU 4 = PHY 0x0d = lan4   panel LAN4
-	#   DSA port 8 = PPU 5 = RTL8226 = lan5    panel LAN1, the 2.5G jack
+	#   DSA port 8 = PPU 5 = RTL8226 = lan1    panel LAN1, the 2.5G jack
 	#   (not DSA)    NPPT   = the PON side = eth0
 	#
 	# The 2.5G jack is the 9132's fifth user port, the one the vendor
@@ -133,7 +137,7 @@ skyworth,sk-d840n)
 	# (docs/92 §90).  eth0 is the NPPT's own netdev - the PON side - and
 	# is the `wan` slot.
 	#
-	# lan1 being a netdev with no jack behind it is why leaving it in the bridge
+	# lan0 being a netdev with no jack behind it is why leaving it in the bridge
 	# costs nothing and why it must not be "tidied" out of one.
 	#
 	# The other cases keep the single-interface behaviour above: one address on
@@ -157,8 +161,10 @@ skyworth,sk-d840n)
 		#
 		# Measured on the trial image on 2026-10-23: br-lan carried lan1, lan2
 		# and lan4, and lan-cpu0 was in no bridge at all.
-		[ -e /sys/class/net/lan-cpu0 ] && \
-			lan_ports="$lan_ports${lan_ports:+ }lan-cpu0"
+		# lan-cpu0 is not appended here. ucidef_set_interface turns every
+		# name in this list into a board.json port, and the stock overview
+		# draws those. The CPU port is added to the bridge by sk-bridge
+		# after config_generate has written /etc/config/network.
 		#
 		# The address is set with ucidef_set_interface, not with "uci set":
 		# this image's /lib/functions/uci-defaults.sh is built on
@@ -170,11 +176,10 @@ skyworth,sk-d840n)
 		# 192.168.9.1, and the board looks dead while it is up.
 		ucidef_set_interface "lan" device "$lan_ports" protocol "static" \
 			ipaddr "192.168.9.1" netmask "255.255.255.0"
-		# The slot only exists if the port it names does; tests/test_network_binding.sh
-		# is what proves eth0 is there, and if it ever is not, a WAN pointing at
-		# nothing would be netifd chasing a netdev that was never registered.
-		[ -e /sys/class/net/eth0 ] && \
-			ucidef_set_interface "wan" device "eth0" protocol "dhcp"
+		# wan is not declared here. A wan.device in board.json is drawn by
+		# the stock port row, and eth0 is the PON MAC, not a panel jack.
+		# sk-bridge creates network.wan.device=eth0 proto=dhcp so a user
+		# can still `uci set network.wan.device=` and sk-nat can read it.
 	else
 		ucidef_set_interface "lan" device "$lan_dev" protocol "static" \
 			ipaddr "192.168.9.1" netmask "255.255.255.0"

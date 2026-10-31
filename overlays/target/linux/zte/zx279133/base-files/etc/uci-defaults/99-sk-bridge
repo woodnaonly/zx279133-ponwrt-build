@@ -1,0 +1,17 @@
+#!/bin/sh
+# Link sk-bridge, and run it once this boot if the network config exists.
+#
+# Image builds execute uci-defaults and then delete them. The link is what
+# remains, so later boots still add lan0 and lan-cpu0 before netifd starts.
+# Nothing here is started in the background.
+mkdir -p /etc/rc.d
+ln -sf ../init.d/sk-bridge /etc/rc.d/S15sk-bridge
+
+if [ -n "${IPKG_INSTROOT:-}" ] || [ -n "${PKG_ROOT:-}" ] || [ -n "${CI:-}" ]; then
+	exit 0
+fi
+
+if [ -x /etc/init.d/sk-bridge ]; then
+	/etc/init.d/sk-bridge start
+fi
+exit 0
