@@ -400,6 +400,7 @@ printf 'CONFIG_PACKAGE_nftables=y\n' >>.config
 # 29_ports.js, and a second package installing that path is rejected while
 # the image is assembled. base-files carries the view, and 99-sk-ports
 # copies it into place on the first boot.
+printf 'CONFIG_PACKAGE_zxpond=y\n' >>.config
 
 make defconfig
 # The same rule that this file already states twice: a config line for a symbol
@@ -443,6 +444,12 @@ grep -qx 'CONFIG_PACKAGE_nftables=y' .config || {
 	echo "CONFIG_PACKAGE_nftables did not survive defconfig - is overlays/package/network/utils/nftables/Makefile in the tree?" >&2
 	ls -d package/network/utils/nftables 2>/dev/null || echo "package/network/utils/nftables is NOT in the tree" >&2
 	grep -i 'nftables' .config || echo "(nothing at all)" >&2
+	exit 1; }
+
+grep -qx 'CONFIG_PACKAGE_zxpond=y' .config || {
+	echo "CONFIG_PACKAGE_zxpond did not survive defconfig - is package/utils/zxpond/Makefile in the tree?" >&2
+	ls -d package/utils/zxpond 2>/dev/null || echo "package/utils/zxpond is NOT in the tree" >&2
+	grep -i 'zxpond' .config || echo "(nothing at all)" >&2
 	exit 1; }
 
 # CONFIG_DEVMEM lost three rounds, and the winner is not the fragment merge. Read out of

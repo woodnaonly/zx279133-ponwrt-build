@@ -727,6 +727,7 @@ static void zx279133_mac_link_up(struct phylink_config *config,
 
 out_unlock:
 	mutex_unlock(&eth->xmac_lock);
+	zx279133_pon_carrier_kick(eth->ndev);
 }
 
 static void zx279133_mac_disable_tx_lpi(struct phylink_config *config)

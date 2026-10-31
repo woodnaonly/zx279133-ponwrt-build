@@ -1543,6 +1543,13 @@ void zx279133_xmac_set_enabled(struct zx279133_eth *eth, bool enabled);
 int zx279133_xpcs_set_bypass(struct zx279133_eth *eth, bool enabled);
 extern const struct phylink_mac_ops zx279133_phylink_ops;
 
+struct led_classdev;
+void zx279133_pon_set_led(struct led_classdev *led);
+void zx279133_pon_note_rxsd(int light);
+void zx279133_pon_carrier_kick(struct net_device *ndev);
+void zx279133_pon_attach(struct net_device *ndev);
+void zx279133_pon_stop(void);
+
 int zx279133_ptp_init(struct zx279133_eth *eth);
 void zx279133_ptp_start(struct zx279133_eth *eth);
 void zx279133_ptp_stop(struct zx279133_eth *eth);

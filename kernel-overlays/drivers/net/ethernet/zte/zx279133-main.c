@@ -809,9 +809,11 @@ static void zx279133_pon_led_work(struct work_struct *work)
 		return;
 
 	rxsd = gpiod_get_value_cansleep(eth->opsd_gpio);
-	if (rxsd >= 0)
+	if (rxsd >= 0) {
 		led_set_brightness(eth->los_led,
 				   rxsd ? LED_OFF : eth->los_led->max_brightness);
+		zx279133_pon_note_rxsd(rxsd > 0);
+	}
 
 	schedule_delayed_work(&eth->pon_led_work, msecs_to_jiffies(200));
 }
@@ -830,6 +832,7 @@ static int zx279133_eth_probe(struct platform_device *pdev)
 	struct reserved_mem *idm_rmem;
 	unsigned int i;
 	int ret;
+	struct led_classdev *pon_led;
 
 	ndev = devm_alloc_etherdev_mqs(dev, sizeof(*eth),
 				       ZX279133_CPU_TX_QUEUES, ZX279133_CPU_RX_QUEUES);
@@ -903,6 +906,14 @@ static int zx279133_eth_probe(struct platform_device *pdev)
 		dev_warn(dev, "no LOS LED: %d\n", ret);
 		eth->los_led = NULL;
 	}
+	pon_led = devm_led_get(dev, "pon");
+	if (IS_ERR(pon_led)) {
+		ret = PTR_ERR(pon_led);
+		if (ret == -EPROBE_DEFER)
+			return ret;
+		pon_led = NULL;
+	}
+	zx279133_pon_set_led(pon_led);
 
 	ret = devm_add_action_or_reset(dev, zx279133_pon_led_cancel, eth);
 	if (ret)
@@ -1321,6 +1332,7 @@ static int zx279133_eth_probe(struct platform_device *pdev)
 	ret = devm_register_netdev(dev, ndev);
 	if (ret)
 		return dev_err_probe(dev, ret, "failed to register netdev\n");
+	zx279133_pon_attach(ndev);
 
 	eth->lan_service.ops = &zx279133_lan_service_ops;
 	platform_set_drvdata(pdev, &eth->lan_service);
@@ -1349,6 +1361,7 @@ static int zx279133_eth_probe(struct platform_device *pdev)
 static void zx279133_eth_shutdown(struct platform_device *pdev)
 {
 	struct zx279133_lan_service *service = platform_get_drvdata(pdev);
+	zx279133_pon_stop();
 
 	zx279133_shutdown(container_of(service, struct zx279133_eth,
 				       lan_service));

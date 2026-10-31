@@ -208,7 +208,7 @@
 			label = "skyworth:green:power";
 		};
 
-		led-pon {
+		led_pon: led-pon {
 			color = <LED_COLOR_ID_GREEN>;
 			default-state = "keep";
 			function = LED_FUNCTION_WAN;
@@ -361,6 +361,9 @@
 	 *     the 9132's CPU port.  The 9132's own driver owns that lane, the
 	 *     same way the RTL8372N driver owns it on the SR1010.
 	 *
+ * xgpon_nsyn is not selected here: mode_xgpon_nsyn_cfg_133 did not
+ * yield a 49-word image, so this lane stays SGMII and the state machine
+ * does not invent a SerDes profile.
 	 * The PON SerDes driver accepts both SGMII and 2.5GBASE-X, so "sgmii"
 	 * is a mode it can actually be put into.  The Uni SerDes and XPCS0 are
 	 * left for the switch driver below.
@@ -375,8 +378,8 @@
 	 * as loss of signal.  The NPPT driver polls it and drives los_led;
 	 * see docs/91.
 	 */
-	leds = <&los_led>;
-	led-names = "los";
+	leds = <&los_led &led_pon>;
+	led-names = "los", "pon";
 	opsd-gpios = <&gpio2 1 GPIO_ACTIVE_HIGH>;
 	pcs-handle = <&xpcs1>;
 	/* The NP's own memory. Not a guess and not a leftover: in the one U-Boot session

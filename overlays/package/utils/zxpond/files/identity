@@ -1,0 +1,5 @@
+# Eight-byte serial number and 36-byte registration id, hex, no spaces.
+# Leave either line empty and the ONU stays in O1. This file is not read
+# from the parameter-tags partition.
+SN=
+REGID=
