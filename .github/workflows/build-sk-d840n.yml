@@ -1134,6 +1134,19 @@ jobs:
           # so the cost of this entry is a few hundred kilobytes of kernel and one
           # config symbol, and the cost of leaving it out is silent evidence loss.
           #
+          # DYNAMIC_DEBUG_CORE is on that list with it because the two gate different
+          # halves of the same feature and neither substitutes for the other:
+          # include/linux/dynamic_debug.h:137 makes a dev_dbg() site runtime
+          # switchable under CONFIG_DYNAMIC_DEBUG, while lib/Makefile builds
+          # lib/dynamic_debug.c - the fs_initcall() at line 1494 that creates
+          # /sys/kernel/debug/dynamic_debug/control - only under
+          # CONFIG_DYNAMIC_DEBUG_CORE.  The Kconfig links them with "select", and a
+          # select loses to an explicit "is not set" in a fragment, which
+          # target/linux/generic/config-6.18:1876 carries.  So CONFIG_DYNAMIC_DEBUG=y
+          # on its own would make this gate green while the control file was never
+          # created and the demoted line was neither switchable nor recoverable -
+          # the exact failure the symbol above was added to prevent.
+          #
           # reported: bring-up instruments. Worth having, never worth a red run - and
           # that is not a preference, it is what runs 28/29/30/31 measured: all four
           # stopped here on CONFIG_DETECT_HUNG_TASK while the phy-mode question that
@@ -1149,7 +1162,7 @@ jobs:
           # every run below so the next reader gets the answer without another round:
           # if the seed says =y and the merge says otherwise, the question is which of
           # the three config-* fragments is last, not whether the pin ran.
-          required="REALTEK_PHY LEDS_GPIO GPIO_ZX279133 GPIO_SYSFS PSTORE PSTORE_CONSOLE PSTORE_RAM MAGIC_SYSRQ MAGIC_SYSRQ_SERIAL DYNAMIC_DEBUG"
+          required="REALTEK_PHY LEDS_GPIO GPIO_ZX279133 GPIO_SYSFS PSTORE PSTORE_CONSOLE PSTORE_RAM MAGIC_SYSRQ MAGIC_SYSRQ_SERIAL DYNAMIC_DEBUG DYNAMIC_DEBUG_CORE"
           reported="DEVMEM STRICT_DEVMEM IO_STRICT_DEVMEM DETECT_HUNG_TASK SOFTLOCKUP_DETECTOR IKCONFIG IKCONFIG_PROC NETFILTER NETFILTER_ADVANCED NF_CONNTRACK NF_NAT NF_TABLES NF_TABLES_IPV4 NFT_NAT NFT_MASQ VETH"
           SEED=$( { ls openwrt/target/linux/zte/zx279133/config-* 2>/dev/null || true; } | head -1 )
           echo "kernel config seed: ${SEED:-none}"

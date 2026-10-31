@@ -149,6 +149,26 @@ pin_y IKCONFIG_PROC
 # so the merged kernel .config is the only place this can be checked - the CI
 # gate checks it, and it blocks.
 pin_y DYNAMIC_DEBUG
+# DYNAMIC_DEBUG_CORE is the other half of the same feature, and it is NOT
+# redundant with the line above.  Two different things are gated by two
+# different symbols:
+#
+#   * include/linux/dynamic_debug.h:137 - a dev_dbg() site becomes runtime
+#     switchable when CONFIG_DYNAMIC_DEBUG is on; without it the site is
+#     dev_no_printk() and the line is gone for good.
+#   * lib/Makefile: "obj-$(CONFIG_DYNAMIC_DEBUG_CORE) += dynamic_debug.o", and
+#     lib/dynamic_debug.c:1494 is the fs_initcall() that creates
+#     /sys/kernel/debug/dynamic_debug/control.  Without CORE the file does not
+#     exist - there is nothing to write "+p" into.
+#
+# The two are linked by "select DYNAMIC_DEBUG_CORE" in lib/Kconfig.debug, and a
+# select is NOT a depends on: an explicit "# CONFIG_DYNAMIC_DEBUG_CORE is not
+# set" in a fragment beats it, because kconfig gives the user's own value
+# priority over a select.  target/linux/generic/config-6.18:1876 carries
+# exactly that line, so pinning DYNAMIC_DEBUG alone leaves CORE at n - the CI
+# gate would go green on CONFIG_DYNAMIC_DEBUG=y while the control file was
+# never created and the demoted line was neither switchable nor recoverable.
+pin_y DYNAMIC_DEBUG_CORE
 
 # Reading MMIO from the board is the only way to compare a lane that works with a lane that
 # does not, and on 2026-10-17 that comparison was impossible: /proc/config.gz (the symbol
@@ -535,6 +555,13 @@ pin_y_build KERNEL_DEVMEM
 # actually reaches the kernel; the fragment stays as the documented way to ask
 # for it, and the CI gate checks the merged result.
 pin_y_build KERNEL_DYNAMIC_DEBUG
+# And CORE, for the reason spelled out at the fragment pin above: without it
+# lib/dynamic_debug.c is not compiled, /sys/kernel/debug/dynamic_debug/control
+# is never created, and the demoted lane dump has no switch to be turned by.
+# The same merge order applies - the build-root's "is not set" would land after
+# the fragment's =y and win it - so the build-root symbol has to be written
+# here as well.
+pin_y_build KERNEL_DYNAMIC_DEBUG_CORE
 # The applet as well: kernel /dev/mem with no `devmem` in busybox still means mknod + dd,
 # which reads one register per invocation. Only pin it if defconfig knows the symbol -
 # appending a line for a symbol that is not there would assert green and ship nothing, and

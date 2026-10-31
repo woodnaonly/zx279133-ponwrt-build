@@ -151,6 +151,7 @@ ERAM 表清单（板上 `cat /sys/kernel/debug/zx279133-9132`）：`0x18` base 1
 - `kernel-overlays/drivers/net/ethernet/zte/zx279133-switch.c:2097`：`dev_info()` → `dev_dbg()`。
 - `scripts/configure-sk-d840n.sh`：`pin_y DYNAMIC_DEBUG` + `pin_y_build KERNEL_DYNAMIC_DEBUG`。
   后者是必须的：`LINUX_CONF_CMD` 把 build-root `.config` 里所有 `CONFIG_KERNEL_*` 去前缀后**追加**在 fragment 之后，build-root 的 `# CONFIG_KERNEL_DYNAMIC_DEBUG is not set` 会压过 fragment 的 `=y` —— 这正是 `CONFIG_DEVMEM` 在 run 42/43 上丢掉的同一种坑（`configure-sk-d840n.sh:455-473`）。
+- **还要 `DYNAMIC_DEBUG_CORE`（第二轮补的，见 §4.7）**：只钉 `DYNAMIC_DEBUG` 会得到一个假的成功。
 - `.github/workflows/build-sk-d840n.yml`：把 `DYNAMIC_DEBUG` 加进 kernel config 门禁的 **required** 列表（不是 reported）—— `dev_dbg` 在没有 DYNAMIC_DEBUG 时会编译成 `no_printk`，那样这条日志不是变成可开关，而是**彻底消失**。
 - 顺带：`zx279133-switch.c:1028` 的 `dev_info("the lane was programmed again")` 在「PCS 保持空块」时会每个 20 ms pass 写一条（上限 50 行/秒）。改成**只在一轮重试的第一次打印**（episode 本身已经由 `:1013` 的边沿告警宣告过，重复的那部分没有信息量）。
 
@@ -266,6 +267,36 @@ ZCAM / IKEY 的编号空间无关。按那个映射去写，就是拿一个没�
 不是一条能用的重启路径（它让机器停在了 U-Boot 之前），bench 的 DTR/RTS 复位对
 它是空操作。下次要重启板子，**先断电**，不要用 sysrq。要在 U-Boot 阶段取证，
 顺序是：断电 → 上电 → 在倒计时里打断 autoboot → `md` 读 → `boot` 回来。
+
+### 4.7 门禁会绿的一个假成功：`DYNAMIC_DEBUG` 还差 `DYNAMIC_DEBUG_CORE`
+
+这一条是本轮提交之后、CI 在跑的时候查出来的，它会让 §4.1 的降级**看起来成功而实际失效**，
+所以单独记一节。
+
+**现象**：`CONFIG_DYNAMIC_DEBUG` 钉了，`CONFIG_DYNAMIC_DEBUG_CORE` 没钉，而后者是前者的
+**前提**，不是可选项。
+
+**证据**（上游 v6.18 源码行号，不是印象）：
+
+- `lib/Kconfig.debug`：`config DYNAMIC_DEBUG` … `select DYNAMIC_DEBUG_CORE`。
+  **是 `select`，不是 `depends on`** —— kconfig 里用户自己给的值优先于 select，
+  所以 fragment 里显式的 `# CONFIG_DYNAMIC_DEBUG_CORE is not set` 会**压过**这个 select。
+  而 `target/linux/generic/config-6.18:1876` 正好就带着这一行。
+- `include/linux/dynamic_debug.h:137`：`#if defined(CONFIG_DYNAMIC_DEBUG) || …`
+  —— `dev_dbg()` 的调用点变成可运行时开关，靠的是 `CONFIG_DYNAMIC_DEBUG`。
+- `lib/Makefile`：`obj-$(CONFIG_DYNAMIC_DEBUG_CORE) += dynamic_debug.o`
+  —— `lib/dynamic_debug.c` 整个文件只有 CORE 开着时才编。
+- `lib/dynamic_debug.c:1384/1494`：`dynamic_debug_init_control()` 是 `fs_initcall()`，
+  它创建 `/sys/kernel/debug/dynamic_debug/control`。
+
+**后果**：只钉 `DYNAMIC_DEBUG` 时，CORE 留在 n ⇒ 那条被降级的 lane 转储编译成
+`no_printk`（**彻底消失**），而 `/sys/kernel/debug/dynamic_debug/control` 压根没有生成
+（**没有地方写 `+p`**）。门禁当时只查 `CONFIG_DYNAMIC_DEBUG=y`，会**绿**——绿在一个假的
+成功上，正是这个符号本来要防的那件事。
+
+**修**：两边都钉（fragment + build-root，理由与 `KERNEL_DEVMEM` 相同：合并顺序在 fragment
+之后），并把 `DYNAMIC_DEBUG_CORE` 也放进 CI 门禁的 **required** 列表（卡住式）。
+门禁现在查两个符号，缺一个就红。
 
 ---
 
