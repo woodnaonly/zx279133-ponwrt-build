@@ -362,7 +362,7 @@ ZCAM / IKEY 的编号空间无关。按那个映射去写，就是拿一个没�
   `staging/ktree-git/drivers/net/macsec.c:1521` 就是 `static struct genl_family
   macsec_fam;` 这么写的，而内核没有开 `-Wredundant-decls`。
 
-**三、`zxpond` 这个包一次都没有被编译过 —— 下一处会红的地方**
+**三、`zxpond` 这个包一次都没有被编译过**
 
 - `zxpond` 是 `3bfadd1` 带进来的用户态守护进程，而 `3bfadd1` 就是 run 293 那个提交，
   它在 **Compile** 就红了 ⇒ **这个包从来没有被真正编译过**。最后一个绿的 run 292 的树
@@ -373,19 +373,24 @@ ZCAM / IKEY 的编号空间无关。按那个映射去写，就是拿一个没�
   $(TARGET_CC) $(TARGET_CFLAGS) -I$(PKG_BUILD_DIR) -o ... zxpond.c zxpon.c
   ```
 
-  `$(TARGET_CPPFLAGS)` 装的是 toolchain 的 include 目录，内核 uapi 头就在那个目录里，
-  而 `zxpond.c` 的头三个 include 就是 `<linux/genetlink.h>`、`<linux/netlink.h>`、
-  `<linux/if_packet.h>`。少了它，编译器会停在
-  `linux/genetlink.h: No such file or directory`。
-- OpenWrt 对**每个**包都给这份 flag：`include/package-defaults.mk:130` 把它放进
-  `CFLAGS`，走 configure 的那条路在 `:105` 放进 `CPPFLAGS`。本仓库的 `mdread` /
-  `rdreg` / `wrreg` 三个包也都写着它 —— `zxpond` 是唯一的例外。
-- **修**：`Build/Compile` 补上 `$(TARGET_CPPFLAGS)`。
-- **为什么先不加 `-Wall -Werror`**（另外三个包都加了）：这个文件从没被交叉编译器编过，
-  没人见过它的告警，而其中一条几乎必然出现 —— `zxpond.c` 用 `char *` 去读 netlink
-  属性，`-Wall` 会打开 `-Wcast-align`，而内核自己把它关掉了（`KBUILD_CFLAGS` 里有
-  `cc-disable-warning, cast-align`）。把它升级成错误，就是因为一条在这个 target 上
-  完全正确的 cast 而让构建变红。CI 编过之后，flag 可以跟另外三个包对齐。
+- **先更正一条走错路的推断**：上一条提交信息里写的是「少了 `$(TARGET_CPPFLAGS)`，编译器
+  会停在 `linux/genetlink.h: No such file or directory`」。**那是错的。** run 297 的构建
+  （那份树里还没有这个改动）在 02:33 的快照里已经把 `package/utils/zxpond compile`
+  跑完了 —— 那个目标已经不在进程表里，日志里也没有任何 error 行 —— 也就是说
+  **toolchain 的 include 目录本来就在编译器的搜索路径里**，少一份 flag 也编得过。
+- **那为什么还加上它**：OpenWrt 对**每个**包都给这份 flag（`include/package-defaults.mk:130`
+  放进 `CFLAGS`，走 configure 的那条路在 `:105` 放进 `CPPFLAGS`），本仓库的 `mdread` /
+  `rdreg` / `wrreg` 三个包也都写着它。`zxpond` 是唯一的例外，而「唯一的例外」正是那种
+  没人记得为什么、却会让下一个人花掉一小时去找的差异。
+- **`-Wall -Werror` 先不加**（另外三个包都加了）：这个文件从没被带着告警选项编译过，而
+  这里唯一能编译它的编译器是 CI —— 一次只因为一条告警而失败的构建，而那条告警只写在
+  没有 token 就读不到的 job 日志里，说明不了代码有没有问题。
+  能从源码上看出来的那一条已经改掉了：`zxpond.c` 里 `a->nla_len >= sizeof(*a)` 是
+  `__u16`（提升成 `int`）与 `size_t` 的比较，`-Wall` 会报 `-Wsign-compare`，
+  现在写成了 `(size_t)a->nla_len >= sizeof(*a)`。
+  （顺带更正另一条：`-Wcast-align` **不在** `-Wall` 里 —— GCC 16.2 手册的 `-Wall`
+  列表里没有它，它属于「不被 `-Wall` 隐含」的那一批，要 `-Wextra` 或单独打开。
+  上一条提交信息把它说成是 `-Wall` 打开的，是错的。）
 
 **四、这两类编译错误，各加一道本地门禁**
 

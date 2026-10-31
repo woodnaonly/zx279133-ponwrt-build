@@ -81,7 +81,13 @@ static int family_id(int fd)
 		struct nlattr *a = (struct nlattr *)(buf + NLMSG_LENGTH(GENL_HDRLEN));
 		int remain = len - NLMSG_LENGTH(GENL_HDRLEN);
 
-		while (remain >= (int)sizeof(*a) && a->nla_len >= sizeof(*a) &&
+		/* nla_len is a __u16, so it promotes to int; sizeof() is a size_t.
+		 * The comparison is the same either way (the length is never
+		 * negative), but the mixed signedness is what -Wsign-compare
+		 * reports, and this file is the one user-space tool here that
+		 * is not compiled with the warning flags yet.
+		 */
+		while (remain >= (int)sizeof(*a) && (size_t)a->nla_len >= sizeof(*a) &&
 		       a->nla_len <= remain) {
 			if (a->nla_type == CTRL_ATTR_FAMILY_ID)
 				return *(uint16_t *)((char *)a + NLA_HDRLEN);

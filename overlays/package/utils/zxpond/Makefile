@@ -22,24 +22,25 @@ endef
 # Compiled straight with the cross toolchain, as mdread, rdreg and wrreg are:
 # two files, no configure.
 #
-# $(TARGET_CPPFLAGS) is the part that was missing, and it is the part that
-# matters.  It carries the toolchain's include directory, which is where the
-# kernel's uapi headers live: zxpond.c includes <linux/genetlink.h>,
-# <linux/netlink.h> and <linux/if_packet.h>, and without that directory the
-# compiler stops with "linux/genetlink.h: No such file or directory".
-# OpenWrt hands it to every package it builds (include/package-defaults.mk
-# puts $(TARGET_CPPFLAGS) into both CFLAGS and CPPFLAGS), the other three
-# packages in this tree ask for it by name, and this one was the only package
-# in the tree that did not.
+# $(TARGET_CPPFLAGS) is what OpenWrt hands every package it builds
+# (include/package-defaults.mk puts it into both CFLAGS and CPPFLAGS), and the
+# other three packages in this tree ask for it by name.  This one did not, and
+# it was the only package in the tree that left it out.
 #
-# -Wall and -Werror are deliberately not here yet, even though the other
-# three packages use them.  This file has never been compiled by the cross
-# compiler, so nobody has seen what it warns about, and one warning is
-# certain to arrive: zxpond.c reads a netlink attribute through a char *, and
-# -Wall turns -Wcast-align on, which the kernel itself switches off
-# (KBUILD_CFLAGS carries cc-disable-warning, cast-align).  Turning that into
-# an error would fail a build over a cast that is correct on this target.
-# Once CI has compiled this file, the flags can follow the other three.
+# It is put back here NOT because a header was missing: run 297's build
+# compiled this package without it and its log has no error - the toolchain's
+# include directory is on the compiler's own search path.  It is put back
+# because being the one exception is how the next person loses an hour to a
+# difference nobody remembers.
+#
+# -Wall and -Werror are still not here, although the other three packages
+# have them.  This file has never been compiled with the warning flags, and
+# the only compiler here is CI: a build that fails over one warning, whose
+# text lands only in a job log that cannot be read without a token, says
+# nothing about whether the code is right.  The one warning that can be named
+# from the source - zxpond.c comparing an nla_len against a sizeof() - is
+# fixed there.  Once a build has run with -Wall and that log has been read,
+# -Werror can follow the other three.
 define Build/Compile
 	$(TARGET_CC) $(TARGET_CFLAGS) $(TARGET_CPPFLAGS) -Os \
 		-I$(PKG_BUILD_DIR) -o $(PKG_BUILD_DIR)/zxpond \
