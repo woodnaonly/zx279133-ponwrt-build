@@ -102,6 +102,26 @@ function Save-State {
     @{ period = $period; banners = $b } | ConvertTo-Json | Set-Content -LiteralPath $StateFile -Encoding utf8
 }
 
+function Test-Board {
+    param([string]$Address, [int]$TimeoutMs = 1000)
+    # Not Test-Connection.  This script runs under Windows PowerShell 5.1, where
+    # Test-Connection knows -ComputerName and -Size but not -TargetName, -Count or
+    # -TimeoutSec - those arrived with PowerShell 6.  The parameter binding fails,
+    # the catch below swallows it, and the board is reported as down for ever.
+    # The consequence was a constant stream of 'u' into a board that was up and
+    # healthy: every 'u' is a fork+exec on the board ('-ash: u: not found'), which
+    # is a real CPU load, and it fills the console log with noise.
+    # Measured 2026-10-31 21:05-21:07: five 'u' per second into a running kernel.
+    try {
+        $ping = New-Object System.Net.NetworkInformation.Ping
+        $reply = $ping.Send($Address, $TimeoutMs)
+        $ping.Dispose()
+        return ($reply.Status -eq [System.Net.NetworkInformation.IPStatus]::Success)
+    } catch {
+        return $false
+    }
+}
+
 function Measure-Period {
     # The period is the **median** of the intervals between the banners, not their mean.
     #
@@ -190,10 +210,7 @@ while ((Get-Date) -lt $end) {
     $iter++
     if (((Get-Date) - $lastPing).TotalSeconds -ge 10) {
         $lastPing = Get-Date
-        $alive = $false
-        try {
-            $alive = [bool](Test-Connection -TargetName $Board -Count 1 -TimeoutSec 1 -Quiet -ErrorAction SilentlyContinue)
-        } catch { $alive = $false }
+        $alive = Test-Board $Board
         if ($alive -and $down) {
             Write-Output ("coldboot-watch: the board answers again at " + (Get-Date).ToString('HH:mm:ss'))
         }

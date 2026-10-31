@@ -35,10 +35,41 @@ param(
 
 $ErrorActionPreference = 'Continue'
 $tools = Join-Path $Repo 'tools'
-$log = Join-Path $Repo 'staging\ctl\bench-keep.log'
+$ctl = Join-Path $Repo 'staging\ctl'
+$log = Join-Path $ctl 'bench-keep.log'
 if (-not (Test-Path -LiteralPath (Split-Path -Parent $log))) {
     New-Item -ItemType Directory -Path (Split-Path -Parent $log) -Force | Out-Null
 }
+
+# One keeper at a time.  Two of them would both start a relay when the relay is
+# gone, and the second one fails with "COM3 access denied".
+#
+# The lock carries the owner's PID, and it is taken over when that PID is gone.
+# A lock that only has a timestamp blocks its successor for two minutes, and the
+# moment a keeper has to be restarted is usually the moment right before a power
+# cut - on 2026-10-31 21:05 the replacement keeper walked away on a lock that the
+# dead keeper had left behind, and the board would have gone through a cold boot
+# with nobody knocking at the countdown.
+$lock = Join-Path $Repo 'staging\ctl\bench-keep.lock'
+if (Test-Path -LiteralPath $lock) {
+    $age = ((Get-Date) - (Get-Item -LiteralPath $lock).LastWriteTime).TotalMinutes
+    $owner = 0
+    $raw = ''
+    try { $raw = [string](Get-Content -LiteralPath $lock -Raw -ErrorAction Stop) } catch { }
+    if ($raw -match '\|(\d+)\s*$') { $owner = [int]$Matches[1] }
+    $ownerAlive = $false
+    if ($owner -gt 0) {
+        $ownerAlive = $null -ne (Get-Process -Id $owner -ErrorAction SilentlyContinue)
+    }
+    if ($age -lt 2 -and $ownerAlive) {
+        Write-Output ("bench-keep: another keeper holds the lock (pid " + $owner + ", " + [int]$age + " min old) - this one leaves")
+        exit 0
+    }
+    if ($age -lt 2) {
+        Write-Output ("bench-keep: the lock is stale (pid " + $owner + " is gone) - this one takes it over")
+    }
+}
+Set-Content -LiteralPath $lock -Value ((Get-Date).ToString('o') + '|' + $PID) -Encoding ascii
 
 function Get-Helpers {
     # The relay and the watcher may be powershell.exe or pwsh.exe: the bench has
@@ -54,7 +85,18 @@ function Find-Watch { param($Helpers) @($Helpers | Where-Object { $_.CommandLine
 
 function Start-Hidden {
     param([string]$Script, [string[]]$Arguments)
-    Start-Process -FilePath 'powershell' -WindowStyle Hidden -ArgumentList `
+    # -WorkingDirectory is not optional here.  The keeper itself is started through
+    # WMI (Invoke-CimMethod Win32_Process Create), and a process WMI creates has
+    # C:\Windows\System32 as its working directory - not the repository.  A child
+    # that resolves its paths against Get-Location therefore lands outside the
+    # repository entirely, and the damage is silent: the relay opened COM3 and
+    # kept it, but its log and its command inbox pointed at a directory that does
+    # not exist, so nothing reached the board and nothing came back.
+    # Measured 2026-10-31 21:01-21:05: the relay held the port and the keeper
+    # reported relay=1, while serial.log stayed at 20:59:58 and the watcher's
+    # 'u' never reached the UART - which is exactly how the next cold boot would
+    # have gone past the countdown and lost the data plane.
+    Start-Process -FilePath 'powershell' -WindowStyle Hidden -WorkingDirectory $Repo -ArgumentList `
         (@('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $Script) + $Arguments)
 }
 
@@ -63,11 +105,21 @@ Write-Output ("bench-keep: watching " + $Repo + " for " + $Minutes + " minutes")
 
 while ((Get-Date) -lt $end) {
     try {
+        # Keep the lock fresh, so a second keeper can tell this one is alive.
+        Set-Content -LiteralPath $lock -Value ((Get-Date).ToString('o') + '|' + $PID) -Encoding ascii
         $helpers = Get-Helpers
         $relay = Find-Relay $helpers
         if ($relay.Count -eq 0) {
             Write-Output ("bench-keep: the relay is not running - starting one (" + (Get-Date).ToString('HH:mm:ss') + ")")
-            Start-Hidden (Join-Path $tools 'serrelay.ps1') @('-Port', $Port, '-Seconds', "$RelaySeconds")
+            # The relay resolves its log and its inbox against Get-Location.  The paths are
+            # passed explicitly so that the relay can never end up talking to another
+            # directory than the watcher, whatever the working directory turns out to be.
+            Start-Hidden (Join-Path $tools 'serrelay.ps1') @('-Port', $Port, '-Seconds', "$RelaySeconds",
+                '-Log', (Join-Path $ctl 'serial.log'),
+                '-CmdFile', (Join-Path $ctl 'sercmd.txt'),
+                '-StopFile', (Join-Path $ctl 'serstop'),
+                '-ResetFile', (Join-Path $ctl 'serreset'),
+                '-NoStopFile', (Join-Path $ctl 'ser-nostop'))
             Start-Sleep -Seconds 5
         }
         $helpers = Get-Helpers
