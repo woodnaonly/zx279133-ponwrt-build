@@ -1024,10 +1024,22 @@ static void zx279133_switch_lane_watch(struct work_struct *work)
 		ret = zx279133_switch_outerphy_apply_speed(priv, speed);
 	}
 	priv->lane_tries++;
-	if (!ret)
-		dev_info(priv->dev, "the lane was programmed again\n");
-	else if (!((priv->lane_tries - 1) % 5))
+	/*
+	 * Only the first attempt of an episode gets a line.  This is the
+	 * retry path, and the retry runs once per 20 ms pass, so a lane that
+	 * keeps reading "unprogrammed" would write this line up to fifty
+	 * times a second.  The episode itself is already announced by the
+	 * edge-triggered warning above ("the lane's PCS was reset ...; the
+	 * lane is programmed again"), so the repeated part is the one that
+	 * carries no information.  The failure path keeps its counted
+	 * sample, which is the part that does.
+	 */
+	if (!ret) {
+		if (priv->lane_tries == 1)
+			dev_info(priv->dev, "the lane was programmed again\n");
+	} else if (!((priv->lane_tries - 1) % 5)) {
 		dev_warn(priv->dev, "the lane was not programmed again (%d)\n", ret);
+	}
 rearm:
 	{
 		int cls = zx279133_switch_outerphy_class(priv);
@@ -2094,8 +2106,30 @@ static void zx279133_switch_lane_state(struct zx279133_switch *priv)
 	dig = zx279133_switch_xpcs_read(priv, MDIO_MMD_VEND2,
 					ZX279133_XPCS_VR_MII_DIG_CTRL1);
 
-	dev_info(priv->dev,
-		 "lane: far an=0x%04x 758d=0x%04x 7580=0x%04x | near bmcr=0x%04x anctrl=0x%04x dig=0x%04x | nppt 84=0x%08x 88=0x%08x 8c=0x%08x 90=0x%08x | xmac0 tx=0x%08x rx=0x%08x frame=0x%08x mode=0x%08x duplex=0x%08x misc=0x%08x send=0x%08x\n",
+	/*
+	 * dev_dbg(), not dev_info(): this line is the periodic dump of the
+	 * lane's state, and for the first 32 seconds of every boot it was
+	 * written every 750 ms - thirty-odd lines of fifteen register words
+	 * each, which is most of the 64 KiB kernel ring buffer during the one
+	 * window where the boot log is worth reading (measured 2026-10-31: 61
+	 * lines, 11 KiB, one boot; 1129 boots in the archive average 31-39
+	 * lines each and none of them later than 32.6 s).
+	 *
+	 * It is a dev_dbg() rather than a removal because this line is also
+	 * the primary evidence for what the lane was doing over time - see
+	 * docs/92 §96.46.7 (the baseline row), §96.47 (the speed word did
+	 * not move for the whole fast window) and §96.53 (the shape
+	 * histogram). With CONFIG_DYNAMIC_DEBUG=y it is off by default and one
+	 * command brings it back:
+	 *
+	 *   echo 'file zx279133-switch.c +p' > /sys/kernel/debug/dynamic_debug/control
+	 *
+	 * Without DYNAMIC_DEBUG this would be no_printk() and the evidence
+	 * would be gone for good, so the config pin and the CI gate that
+	 * checks the merged .config are part of the same change.
+	 */
+	dev_dbg(priv->dev,
+		"lane: far an=0x%04x 758d=0x%04x 7580=0x%04x | near bmcr=0x%04x anctrl=0x%04x dig=0x%04x | nppt 84=0x%08x 88=0x%08x 8c=0x%08x 90=0x%08x | xmac0 tx=0x%08x rx=0x%08x frame=0x%08x mode=0x%08x duplex=0x%08x misc=0x%08x send=0x%08x\n",
 		 an < 0 ? 0xffff : an,
 		 f758d < 0 ? 0xffff : f758d,
 		 f7580 < 0 ? 0xffff : f7580,

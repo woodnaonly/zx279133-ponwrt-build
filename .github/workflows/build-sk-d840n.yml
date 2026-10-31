@@ -1119,6 +1119,21 @@ jobs:
           #
           # required: without these the board cannot be reached or read at all, and a
           # missing one looks exactly like "the kernel does not boot".
+          #
+          # DYNAMIC_DEBUG is on that list for a reason of its own: the 9132 lane
+          # dump was demoted to dev_dbg() so that the kernel ring buffer stops
+          # filling with fifteen register words every 750 ms, and a dev_dbg() is
+          # compiled to no_printk unless DYNAMIC_DEBUG (or DEBUG) is on.  Without
+          # this symbol the demotion would not make the line switchable, it would
+          # make it disappear - and the line is the primary evidence for the
+          # 2.5G lane's state (docs/92 §96.46.7, §96.47, §96.53).  The recovery is
+          # one command on the board:
+          #
+          #   echo 'file zx279133-switch.c +p' > /sys/kernel/debug/dynamic_debug/control
+          #
+          # so the cost of this entry is a few hundred kilobytes of kernel and one
+          # config symbol, and the cost of leaving it out is silent evidence loss.
+          #
           # reported: bring-up instruments. Worth having, never worth a red run - and
           # that is not a preference, it is what runs 28/29/30/31 measured: all four
           # stopped here on CONFIG_DETECT_HUNG_TASK while the phy-mode question that
@@ -1134,7 +1149,7 @@ jobs:
           # every run below so the next reader gets the answer without another round:
           # if the seed says =y and the merge says otherwise, the question is which of
           # the three config-* fragments is last, not whether the pin ran.
-          required="REALTEK_PHY LEDS_GPIO GPIO_ZX279133 GPIO_SYSFS PSTORE PSTORE_CONSOLE PSTORE_RAM MAGIC_SYSRQ MAGIC_SYSRQ_SERIAL"
+          required="REALTEK_PHY LEDS_GPIO GPIO_ZX279133 GPIO_SYSFS PSTORE PSTORE_CONSOLE PSTORE_RAM MAGIC_SYSRQ MAGIC_SYSRQ_SERIAL DYNAMIC_DEBUG"
           reported="DEVMEM STRICT_DEVMEM IO_STRICT_DEVMEM DETECT_HUNG_TASK SOFTLOCKUP_DETECTOR IKCONFIG IKCONFIG_PROC NETFILTER NETFILTER_ADVANCED NF_CONNTRACK NF_NAT NF_TABLES NF_TABLES_IPV4 NFT_NAT NFT_MASQ VETH"
           SEED=$( { ls openwrt/target/linux/zte/zx279133/config-* 2>/dev/null || true; } | head -1 )
           echo "kernel config seed: ${SEED:-none}"

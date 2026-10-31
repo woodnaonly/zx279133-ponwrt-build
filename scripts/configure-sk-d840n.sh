@@ -132,6 +132,24 @@ pin_y SOFTLOCKUP_DETECTOR
 pin_y IKCONFIG
 pin_y IKCONFIG_PROC
 
+# DYNAMIC_DEBUG is what makes a dev_dbg() site switchable at runtime, and the
+# log volume is the reason it is needed here: the 9132 driver dumped fifteen
+# register words of the 2.5G lane every 750 ms for the first 32 seconds of
+# every boot ("lane: far an=..." in zx279133-switch.c), and that dump is what
+# filled most of the 64 KiB ring buffer during the window where the boot log
+# is worth reading.  Demoting that dump to dev_dbg() only moves the problem -
+# a dev_dbg() is compiled to no_printk unless DYNAMIC_DEBUG (or DEBUG) is on,
+# so without this pin the line would disappear instead of becoming switchable.
+# With it, the default is silence and the evidence stays one command away:
+#
+#   echo 'file zx279133-switch.c +p' > /sys/kernel/debug/dynamic_debug/control
+#
+# DEBUG_KERNEL is already =y in target/linux/generic and DYNAMIC_DEBUG depends
+# on it; defconfig drops a symbol whose dependency is not met without a word,
+# so the merged kernel .config is the only place this can be checked - the CI
+# gate checks it, and it blocks.
+pin_y DYNAMIC_DEBUG
+
 # Reading MMIO from the board is the only way to compare a lane that works with a lane that
 # does not, and on 2026-10-17 that comparison was impossible: /proc/config.gz (the symbol
 # pinned just above is what made it readable) says "# CONFIG_DEVMEM is not set", so
@@ -486,6 +504,17 @@ pin_y_build() {
 		exit 1; }
 }
 pin_y_build KERNEL_DEVMEM
+# The fragment pin for DYNAMIC_DEBUG above is not enough on its own, and this
+# is the DEVMEM trap again.  LINUX_CONF_CMD runs "$(LINUX_CONF_CMD) >
+# .config.target" (the fragments) and then appends every CONFIG_KERNEL_* line
+# of the build-root .config with the prefix stripped, so the build root's
+# "# CONFIG_KERNEL_DYNAMIC_DEBUG is not set" lands AFTER the fragment's
+# CONFIG_DYNAMIC_DEBUG=y and wins the merge - exactly what happened to
+# CONFIG_DEVMEM on runs 42 and 43, where the seed said =y and the merged
+# .config still had no CONFIG_DEVMEM=y.  Writing the build-root symbol is what
+# actually reaches the kernel; the fragment stays as the documented way to ask
+# for it, and the CI gate checks the merged result.
+pin_y_build KERNEL_DYNAMIC_DEBUG
 # The applet as well: kernel /dev/mem with no `devmem` in busybox still means mknod + dd,
 # which reads one register per invocation. Only pin it if defconfig knows the symbol -
 # appending a line for a symbol that is not there would assert green and ship nothing, and
