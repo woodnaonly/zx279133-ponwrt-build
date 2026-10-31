@@ -58,7 +58,7 @@
 
 | 项 | 状态 | 证据 |
 |---|---|---|
-| 交换机硬件转发 | **开** | LAN↔LAN 二层转发在 switch 芯片里完成，不进 CPU |
+| 交换机硬件转发 | **未开**（2026-10-31 更正，原写「开」） | 板上实测：flood group 表 0x1f 的 15 个组**全是 `0x0000000f`**，即目的口只有 CPU trap 口 15；一条组只装**一个**目的口，⇒ UNI↔UNI 没有可指的目的口。协议动作表 0x18 对多数协议是 trap（action=2，板上读 0x18 index 640 = 2）。判决见 `docs/92` §96.36（AA）与 `docs/95` §3 |
 | rx-checksumming | on | `ethtool -k eth0/lan-cpu0/lan5` |
 | GRO | on | `generic-receive-offload: on` |
 | **TSO / GSO** | **无** | `tcp-segmentation-offload: off`、`generic-segmentation-offload: off [requested on]` |
@@ -122,20 +122,35 @@ echo 0 > /sys/class/net/br-lan/queues/rx-0/rps_cpus      # 恢复
    `change_mtu` 并把交换机的端口最大帧长寄存器一起改掉。PC 侧 Realtek 网卡有
    「巨型帧」高级属性（当前关闭），可直接开 9014。
 4. **TC flower 硬件流卸载接通**：驱动和 PPU 都在位，缺 `tc`（要 vendor 进 overlay）
-   和下发脚本。这是唯一能让 NAT/转发**完全不上 A53** 的路径，直接绕开 87 kpps
-   上限；验收还需要把 WAN 侧（`eth0`）配出 IPv4 和默认路由。
+   和下发脚本。**2026-10-31：`tc` 已经 pin 进构建**（`configure-sk-d840n.sh`
+   的 `CONFIG_PACKAGE_tc=y`，并加了 defconfig 之后的存活断言），剩下的就是
+   下发脚本与验收：验收还需要把 WAN 侧（`eth0`）配出 IPv4 和默认路由。
+   这是唯一能让 NAT/转发**完全不上 A53** 的路径，直接绕开 87 kpps 上限。
 5. **9132 二层硬件转发**：`docs/PLAN-lan1-2p5g-20261030.md` §9 已把它列为挂起项
-   （不是取消）：`zx279133-switch.c:2556` 的 `port_bridge_join` 不设
-   `*tx_fwd_offload`，`:3002-3016` 的 `dsa_switch_ops` 没有 `port_fdb_add/del`，
-   CPU 侧 FDB 不同步 → 交换机学不到 → 泛洪给 CPU。已知单播 UNI↔UNI 从来没被
-   干净测过，验收需要 LAN1 通 + 至少两只口插线。
+   （不是取消）。**2026-10-31 更正挂起项的成因**：不是「CPU 侧 FDB 不同步 →
+   交换机学不到 → 泛洪给 CPU」。板上属性字实测是厂商整字 `0x96040001`
+   （ERAM 0x7d entry 5），bit31 `sa_lookup_learn_en` 是**开着的**，`docs/92`
+   §96.36 的判决 AA 也是「9132 根本不转发 UNI 口之间的帧」。真正的挡路者是
+   flood group 表 0x1f 的「一组一个目的口」与协议动作表 0x18 的 trap 取代转发
+   （`docs/95` §3 有本轮读数）。`zx279133-switch.c:2938` 的 `port_bridge_join`
+   不设 `*tx_fwd_offload`、`:3384` 的 `dsa_switch_ops` 没有 `port_fdb_add/del`
+   这两条仍然成立，但**它们不是本项的原因**；按 DSA 侧补 FDB 大概率修不到点上。
+   另注：`tx_fwd_offload` 管的是 CPU 发出的帧（上游 `net/dsa/port.c:509-515`），
+   不是 UNI↔UNI —— 而本文 §2 的 95.8% 是 **PC → 板子 CPU** 的流量，这类流量
+   按设计必须进 CPU，**二层硬件转发不会降低这个数字**。
 6. **2.5G 档位**：`docs/PLAN-lan1-2p5g-20261030.md` §8 明确推迟（`1e:7580` 低 6 位
    要从 `0x02` 变成 `0x16`）。
 
 **硬件天花板（软件改不动）**
 
 7. CPU 是双核 A53 @1 GHz，无 cpufreq，超不了频。
-8. 8 核 NPU 在 OpenWrt 里没有网络转发用途，不是通用加速器。
+8. **2026-10-31 更正**：原写「8 核 NPU 在 OpenWrt 里没有网络转发用途，不是通用
+   加速器」。前半句不准确 —— 这颗 SoC 的 NPU 就是**网络**加速单元（8 核 64 线程
+   的包处理引擎簇），它不是通用加速器这半句成立；但「没有用途」是**没接上去**，
+   不是「用不上」。代码层的实情（`docs/95` §2 有证据）：mainline 只做了「装载厂商
+   微码 + 编程流表」，**引擎分派表（ME 表）没有按 flow 编程、PPS 的两条中断没有
+   申请、用户态没有 `tc`**。这三样补齐之前，NPU 的这 8 个核确实一个也没在跑
+   网络转发。
 
 ## 6. 没测到的，和为什么
 
