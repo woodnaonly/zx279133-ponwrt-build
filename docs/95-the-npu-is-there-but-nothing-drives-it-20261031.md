@@ -349,6 +349,64 @@ ZCAM / IKEY 的编号空间无关。按那个映射去写，就是拿一个没�
   ops 表里的 `.doit` 跟着改；`zxpon_family` 加一个前置的 tentative definition，真
   正那个定义仍留在 ops 表旁边 —— 两者必须分开：ops 表要先存在，family 才能引用
   它，而 handler 又要先有 family 才能回复。
+- **怎么验的**：本机没有 gcc / WSL / docker，只有 MSVC。于是搭了一套桩头
+  （`linux/*.h`、`net/*.h` 按内核真实语义写，比如 `NLA_POLICY_EXACT_LEN` 展开成自带
+  大括号的 `NLA_POLICY_RANGE`），把三个文件各编一遍：库 `zxpon.c`、修复后的
+  `zx279133-pon.c`、以及 `git show 3bfadd1:...zx279133-pon.c`（run 293 真正编的那一版）。
+  - 修复后：**通过**；
+  - 3bfadd1 那版：**失败，而且精确复现了 CI 的两条错** ——
+    `old_pon.c(110): error C2065: "zxpon_family": 未声明的标识符`、
+    `old_pon.c(127): error C2371: "zxpon_set_identity": 重定义；不同的基类型`。
+  - 对照组是这套桩的可信度证明：只有「修复版能过」而对照组不过，说明不了任何事。
+- `zxpon_family` 的前置 tentative definition 这种写法有上游先例：
+  `staging/ktree-git/drivers/net/macsec.c:1521` 就是 `static struct genl_family
+  macsec_fam;` 这么写的，而内核没有开 `-Wredundant-decls`。
+
+**三、`zxpond` 这个包一次都没有被编译过 —— 下一处会红的地方**
+
+- `zxpond` 是 `3bfadd1` 带进来的用户态守护进程，而 `3bfadd1` 就是 run 293 那个提交，
+  它在 **Compile** 就红了 ⇒ **这个包从来没有被真正编译过**。最后一个绿的 run 292 的树
+  里没有它。
+- 它的 `Build/Compile` 是本仓库**唯一一个不带 `$(TARGET_CPPFLAGS)`** 的包：
+
+  ```make
+  $(TARGET_CC) $(TARGET_CFLAGS) -I$(PKG_BUILD_DIR) -o ... zxpond.c zxpon.c
+  ```
+
+  `$(TARGET_CPPFLAGS)` 装的是 toolchain 的 include 目录，内核 uapi 头就在那个目录里，
+  而 `zxpond.c` 的头三个 include 就是 `<linux/genetlink.h>`、`<linux/netlink.h>`、
+  `<linux/if_packet.h>`。少了它，编译器会停在
+  `linux/genetlink.h: No such file or directory`。
+- OpenWrt 对**每个**包都给这份 flag：`include/package-defaults.mk:130` 把它放进
+  `CFLAGS`，走 configure 的那条路在 `:105` 放进 `CPPFLAGS`。本仓库的 `mdread` /
+  `rdreg` / `wrreg` 三个包也都写着它 —— `zxpond` 是唯一的例外。
+- **修**：`Build/Compile` 补上 `$(TARGET_CPPFLAGS)`。
+- **为什么先不加 `-Wall -Werror`**（另外三个包都加了）：这个文件从没被交叉编译器编过，
+  没人见过它的告警，而其中一条几乎必然出现 —— `zxpond.c` 用 `char *` 去读 netlink
+  属性，`-Wall` 会打开 `-Wcast-align`，而内核自己把它关掉了（`KBUILD_CFLAGS` 里有
+  `cc-disable-warning, cast-align`）。把它升级成错误，就是因为一条在这个 target 上
+  完全正确的 cast 而让构建变红。CI 编过之后，flag 可以跟另外三个包对齐。
+
+**四、这两类编译错误，各加一道本地门禁**
+
+CI 每暴露一类编译期错误，就在本地加一道门禁，免得再花一小时才发现。这两类现在各有一道：
+
+- `tools/check-c-name-collision.py`（新）：一个 `.c` 里用 `static` 定义的函数名，如果
+  同一个 `.c` 用 `#include "..."` 引进来的头文件已经声明了同名函数 ⇒ 报出来。C 只有一个
+  命名空间，编译器把两者当成同一个函数：定义处 `conflicting types`，调用处
+  `too many arguments`。
+- `tools/check-c-use-before-decl.py`（加宽）：原来只查 static 函数「先用后声明」，现在
+  也查 file-scope 的 static 对象。问的是同一个问题：编译器在这一行知不知道这个名字。
+  判据取**文件里第一次提到这个名字的地方** —— 第一次提到如果是声明（`int name`、
+  `int *name`、参数表里的名字），编译器知道它，什么都不说，而那正是一个同名的局部
+  变量或参数；第一次提到如果是使用（`&name`、`name.field`、`name = ...`），编译器还
+  不知道它。
+- 两个门禁都有自测：`tools/test-check-c-gates.py`（夹具在临时目录里，用完就删）。
+  自测里各有一个「就是 run 293 那个形状」的夹具，和几个「必须安静」的夹具 —— 同名的
+  局部变量、先声明后使用的对象、别人结构体里的成员。
+- **怎么验的**：两个门禁都拿 **3bfadd1（run 293 真正编的那棵树）** 和当前 HEAD 对照跑：
+  3bfadd1 报出 `zxpon_set_identity`（`zx279133-pon.c:127`）和 `zxpon_family`
+  （`zx279133-pon.c:110`）—— 正是 CI 的那两条错；当前 HEAD 报 0 条。
 
 ---
 
