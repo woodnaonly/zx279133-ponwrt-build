@@ -63,6 +63,7 @@
 #include <linux/mii.h>
 #include <linux/mod_devicetable.h>
 #include <linux/module.h>
+#include <linux/mutex.h>
 #include <linux/netdevice.h>
 #include <linux/of.h>
 #include <linux/of_mdio.h>
@@ -472,6 +473,7 @@
 /* The mode word's low six bits, and the class this lane needs. */
 #define ZX279133_SWITCH_OUTERPHY_SERDES_MODE_MASK	0x3f
 #define ZX279133_SWITCH_OUTERPHY_SERDES_MODE_1G	0x02
+#define ZX279133_SWITCH_OUTERPHY_SERDES_MODE_2G5	0x16
 /* The bit of the lane's word that says the lane carries code. */
 #define ZX279133_SWITCH_OUTERPHY_SERDES_LINK_BIT	BIT(2)
 
@@ -601,6 +603,9 @@ struct zx279133_switch {
 	 */
 	bool lane_pcs_inherited;
 	u32 lane_pcs_words[4];
+	struct mutex lane_lock;
+	int lane_class;
+	int lane_seen;
 	u16 saved_vend2_bmcr;
 	u16 saved_vend2_an_ctrl;
 	u16 saved_xpcs_bypass;
@@ -855,6 +860,9 @@ static int zx279133_switch_outerphy_serdes_read(struct zx279133_switch *priv,
 static int zx279133_switch_outerphy_serdes_set(struct zx279133_switch *priv,
 						bool force);
 static bool zx279133_switch_outerphy_serdes_check(struct zx279133_switch *priv);
+static int zx279133_switch_outerphy_class(struct zx279133_switch *priv);
+static int zx279133_switch_outerphy_apply_speed(struct zx279133_switch *priv,
+						int speed);
 
 /*
  * The lane's whole state, in one line: forward declaration.
@@ -952,6 +960,17 @@ static void zx279133_switch_lane_watch(struct work_struct *work)
 	 * zero.  Anything else is a configuration, and the watch's business
 	 * ends there.
 	 */
+	if (an_ctrl == 0 && bmcr == 0 && priv->xpcs_mdiodev &&
+	    priv->lane_class == ZX279133_SWITCH_OUTERPHY_SERDES_MODE_2G5) {
+		int pcs_type = zx279133_switch_xpcs_read(priv, MDIO_MMD_PCS, 7);
+
+		/* A live 2500BASE-X profile does not fill VEND2 BMCR. */
+		if (pcs_type == 0x0e) {
+			priv->lane_lost = false;
+			goto rearm;
+		}
+	}
+
 	if (an_ctrl != 0 || bmcr != 0) {
 		if (priv->lane_lost) {
 			dev_info(priv->dev,
@@ -964,56 +983,37 @@ static void zx279133_switch_lane_watch(struct work_struct *work)
 	}
 
 	if (!priv->lane_lost) {
-		if (an_ctrl < 0)
-			dev_warn(priv->dev,
-				 "the lane's PCS cannot be read (%d); the lane is programmed again\n",
-				 an_ctrl);
-		else
-			dev_warn(priv->dev,
-				 "the lane's PCS was reset (AN_CTRL = 0x%04x, BMCR = 0x%04x); the lane is programmed again\n",
-				 an_ctrl & 0xffff, bmcr & 0xffff);
+		dev_warn(priv->dev,
+			 "the lane's PCS was reset (AN_CTRL = 0x%04x, BMCR = 0x%04x); the lane is programmed again\n",
+			 an_ctrl & 0xffff, bmcr & 0xffff);
 		priv->lane_lost = true;
 		priv->lane_tries = 0;
 	}
+	{
+		int speed = (priv->lane_seen == ZX279133_SWITCH_OUTERPHY_SERDES_MODE_2G5 ||
+			     priv->lane_class == ZX279133_SWITCH_OUTERPHY_SERDES_MODE_2G5) ?
+			SPEED_2500 : SPEED_1000;
 
-	if (priv->lane_pcs_inherited) {
-		/*
-		 * The loader configured this lane, so the loader's words
-		 * are the ones that belong in this block - not this
-		 * driver's own image, which is a 1G one and this lane may
-		 * be a 2.5G one.
-		 */
-		ret = zx279133_switch_xpcs_write_words(priv,
-				priv->lane_pcs_words[0], priv->lane_pcs_words[1],
-				priv->lane_pcs_words[2], priv->lane_pcs_words[3]);
-	} else {
-		ret = zx279133_switch_xpcs_program_lane(priv);
+		ret = zx279133_switch_outerphy_apply_speed(priv, speed);
 	}
 	priv->lane_tries++;
-
-	/*
-	 * Did the writes take?
-	 *
-	 * This is the question the next round is about, so it is answered in
-	 * the log and not left to be inferred: the block may be gone (the
-	 * SerDes domain was reset under it) or it may be there and simply
-	 * refuse the writes.
-	 */
-	an_ctrl = zx279133_switch_xpcs_read(priv, MDIO_MMD_VEND2,
-					     ZX279133_XPCS_VR_MII_AN_CTRL);
-	if (an_ctrl == (int)(priv->lane_pcs_inherited ?
-			     priv->lane_pcs_words[3] :
-			     ZX279133_XPCS_UBOOT_AN_CTRL)) {
-		dev_info(priv->dev,
-			 "the lane's PCS took the values again (AN_CTRL = 0x%04x)\n",
-			 an_ctrl & 0xffff);
-	} else if (ret || !((priv->lane_tries - 1) % 5)) {
-		dev_warn(priv->dev,
-			 "the lane's PCS does not take the values (AN_CTRL = 0x%04x, %d)\n",
-			 an_ctrl < 0 ? 0xffff : (an_ctrl & 0xffff), ret);
-	}
-
+	if (!ret)
+		dev_info(priv->dev, "the lane was programmed again\n");
+	else if (!((priv->lane_tries - 1) % 5))
+		dev_warn(priv->dev, "the lane was not programmed again (%d)\n", ret);
 rearm:
+	{
+		int cls = zx279133_switch_outerphy_class(priv);
+
+		if ((cls == ZX279133_SWITCH_OUTERPHY_SERDES_MODE_1G ||
+		     cls == ZX279133_SWITCH_OUTERPHY_SERDES_MODE_2G5) &&
+		    cls != priv->lane_seen) {
+			priv->lane_seen = cls;
+			zx279133_switch_outerphy_apply_speed(priv,
+				cls == ZX279133_SWITCH_OUTERPHY_SERDES_MODE_2G5 ?
+				SPEED_2500 : SPEED_1000);
+		}
+	}
 	/*
 	 * And a line of the lane's state every half second while the fast
 	 * window lasts, so the timeline is dense enough to show what the
@@ -2446,6 +2446,13 @@ static bool zx279133_switch_outerphy_serdes_check(struct zx279133_switch *priv)
 
 	if (!bus)
 		return true;
+	mode = mdiobus_c45_read(bus, ZX279133_SWITCH_OUTERPHY_ADDR,
+				ZX279133_SWITCH_OUTERPHY_SERDES_DEVAD,
+				ZX279133_SWITCH_OUTERPHY_SERDES_MODE);
+	if (mode >= 0 &&
+	    (mode & ZX279133_SWITCH_OUTERPHY_SERDES_MODE_MASK) ==
+	    ZX279133_SWITCH_OUTERPHY_SERDES_MODE_2G5)
+		return true;
 
 	if (zx279133_switch_outerphy_serdes_read(priv, vals))
 		return true;
@@ -2700,19 +2707,6 @@ static void zx279133_switch_outerphy_dump(struct zx279133_switch *priv)
  * phylink asks again and again, and a cable that arrives after boot is
  * noticed without anything else having to be done.
  */
-/*
- * The link state of a port the switch owns but has no PHY for.
- *
- * NOTE (docs/92 §96.31.6): for a switch's *own* user ports this callback
- * is not consulted.  phylink_get_fixed_state() takes the device tree's
- * fixed-link first and only then lets config->get_fixed_state override it,
- * and the DSA core installs that callback for user devices only
- * (net_dsa_user.c: dsa_user_phylink_setup()); dsa_port_phylink_create()
- * does not install it.  So for lan5 the fixed-link in the device tree is
- * what phylink uses - it always claims a carrier, and the rate it reports
- * is the one written there.  The values below are the ones that would be
- * right if the callback did run.
- */
 static void zx279133_switch_phylink_fixed_state(struct dsa_switch *ds, int port,
 						 struct phylink_link_state *state)
 {
@@ -2728,11 +2722,30 @@ static void zx279133_switch_phylink_fixed_state(struct dsa_switch *ds, int port,
 	}
 
 	if (port == ZX279133_SWITCH_DSA_OUTER_PORT) {
-		/* The 2.5G jack: the external RTL8226's own link state. */
-		link = zx279133_switch_outerphy_link(priv);
-		state->link = link == 1;
-		state->speed = SPEED_2500;
+		struct mii_bus *bus = zx279133_switch_outer_mdio(priv);
+		int mode = -1;
+		int cls = -1;
+
+		link = -1;
+		if (bus) {
+			link = mdiobus_c45_read(bus, ZX279133_SWITCH_OUTERPHY_ADDR,
+						ZX279133_SWITCH_OUTERPHY_SERDES_DEVAD,
+						ZX279133_SWITCH_OUTERPHY_SERDES_LINK);
+			mode = mdiobus_c45_read(bus, ZX279133_SWITCH_OUTERPHY_ADDR,
+						ZX279133_SWITCH_OUTERPHY_SERDES_DEVAD,
+						ZX279133_SWITCH_OUTERPHY_SERDES_MODE);
+		}
+		if (mode >= 0)
+			cls = mode & ZX279133_SWITCH_OUTERPHY_SERDES_MODE_MASK;
+		state->link = link >= 0 &&
+			      (link & ZX279133_SWITCH_OUTERPHY_SERDES_LINK_BIT);
 		state->duplex = DUPLEX_FULL;
+		if (cls == ZX279133_SWITCH_OUTERPHY_SERDES_MODE_2G5)
+			state->speed = SPEED_2500;
+		else if (cls == ZX279133_SWITCH_OUTERPHY_SERDES_MODE_1G)
+			state->speed = SPEED_1000;
+		else
+			state->speed = SPEED_UNKNOWN;
 		return;
 	}
 
@@ -3390,6 +3403,161 @@ static int zx279133_switch_dsa_register(struct device *dev,
 	return 0;
 }
 
+static int zx279133_switch_xpcs_2500basex(struct zx279133_switch *priv)
+{
+	int ret;
+
+	ret = zx279133_switch_xpcs_init(priv);
+	if (ret)
+		return ret;
+	/* Vendor xpcs_2p5gbase_x_conf(): PCS type 0xe, then the PMA pulse.
+	 * Do not set XPCS_2G5_EN.
+	 */
+	ret = zx279133_switch_xpcs_write(priv, MDIO_MMD_PCS, 7, 0x0e);
+	if (ret)
+		return ret;
+	ret = zx279133_switch_xpcs_modify(priv, MDIO_MMD_PMAPMD, MII_BMCR,
+					   ZX279133_XPCS_SPEED_SEL, 0);
+	if (ret)
+		return ret;
+	ret = zx279133_switch_xpcs_modify(priv, MDIO_MMD_PMAPMD, MII_BMCR,
+					   ZX279133_XPCS_LOW_POWER,
+					   ZX279133_XPCS_LOW_POWER);
+	if (ret)
+		return ret;
+	usleep_range(859, 959);
+	ret = zx279133_switch_xpcs_modify(priv, MDIO_MMD_PMAPMD, MII_BMCR,
+					   ZX279133_XPCS_LOW_POWER, 0);
+	if (ret)
+		return ret;
+	priv->xpcs_configured = false;
+	return 0;
+}
+
+static void zx279133_switch_xmac_set_speed(struct zx279133_switch *priv,
+					   u32 speed_code)
+{
+	u32 xmac = ZX279133_XMAC0_BASE;
+	u32 value;
+
+	zx279133_switch_xmac_lock(priv);
+	value = zx279133_switch_nppt_read(priv, xmac + ZX279133_XMAC_RX_CTRL);
+	zx279133_switch_nppt_write(priv, xmac + ZX279133_XMAC_RX_CTRL,
+				    value & ~ZX279133_XMAC_ENABLE);
+	value = zx279133_switch_nppt_read(priv, xmac + ZX279133_XMAC_TX_CTRL);
+	zx279133_switch_nppt_write(priv, xmac + ZX279133_XMAC_TX_CTRL,
+				    value & ~ZX279133_XMAC_ENABLE);
+	zx279133_switch_nppt_write(priv, ZX279133_XMAC0_SOPC_SEND, 0);
+
+	zx279133_switch_xmac_program(priv, speed_code);
+
+	value = zx279133_switch_nppt_read(priv, ZX279133_XMAC_SOPC_DUPLEX);
+	zx279133_switch_nppt_write(priv, ZX279133_XMAC_SOPC_DUPLEX,
+				    value & ~ZX279133_XMAC0_SOPC_DUPLEX_MASK);
+	usleep_range(4295, 4395);
+	zx279133_switch_sopc_publish(priv);
+
+	value = zx279133_switch_nppt_read(priv, xmac + ZX279133_XMAC_RX_CTRL);
+	zx279133_switch_nppt_write(priv, xmac + ZX279133_XMAC_RX_CTRL,
+				    value | ZX279133_XMAC_ENABLE);
+	value = zx279133_switch_nppt_read(priv, xmac + ZX279133_XMAC_TX_CTRL);
+	zx279133_switch_nppt_write(priv, xmac + ZX279133_XMAC_TX_CTRL,
+				    value | ZX279133_XMAC_ENABLE);
+	zx279133_switch_xmac_unlock(priv);
+	priv->datapath_enabled = true;
+	priv->xmac_configured = true;
+}
+
+static int zx279133_switch_outerphy_class(struct zx279133_switch *priv)
+{
+	struct mii_bus *bus = zx279133_switch_outer_mdio(priv);
+	int mode;
+
+	if (!bus)
+		return -ENODEV;
+	mode = mdiobus_c45_read(bus, ZX279133_SWITCH_OUTERPHY_ADDR,
+				ZX279133_SWITCH_OUTERPHY_SERDES_DEVAD,
+				ZX279133_SWITCH_OUTERPHY_SERDES_MODE);
+	if (mode < 0)
+		return mode;
+	return mode & ZX279133_SWITCH_OUTERPHY_SERDES_MODE_MASK;
+}
+
+static int
+zx279133_switch_outerphy_apply_speed_locked(struct zx279133_switch *priv,
+					    int speed)
+{
+	phy_interface_t iface;
+	u32 speed_code;
+	int ret;
+
+	if (IS_ERR_OR_NULL(priv->serdes))
+		return -ENODEV;
+
+	if (speed == SPEED_2500) {
+		iface = PHY_INTERFACE_MODE_2500BASEX;
+		speed_code = ZX279133_XMAC_SPEED_2P5G;
+		dev_info(priv->dev,
+			 "the 2.5G jack's PHY: system side at 2500 Mbps; programming the lane to match\n");
+	} else {
+		iface = PHY_INTERFACE_MODE_SGMII;
+		speed_code = ZX279133_XMAC_SPEED_1G;
+		speed = SPEED_1000;
+	}
+
+	phy_power_off(priv->serdes);
+	ret = phy_set_mode_ext(priv->serdes, PHY_MODE_ETHERNET, iface);
+	if (ret)
+		return ret;
+	ret = phy_power_on(priv->serdes);
+	if (ret)
+		return ret;
+	priv->serdes_powered = true;
+	priv->usxgmii = false;
+
+	if (!priv->xpcs_mdiodev)
+		return -ENODEV;
+	if (speed == SPEED_2500)
+		ret = zx279133_switch_xpcs_2500basex(priv);
+	else
+		ret = zx279133_switch_xpcs_sgmii(priv);
+	if (ret)
+		return ret;
+	ret = zx279133_switch_xpcs_bypass(priv, true);
+	if (ret)
+		return ret;
+
+	zx279133_switch_xmac_set_speed(priv, speed_code);
+	priv->lane_class = speed == SPEED_2500 ?
+		ZX279133_SWITCH_OUTERPHY_SERDES_MODE_2G5 :
+		ZX279133_SWITCH_OUTERPHY_SERDES_MODE_1G;
+	if (speed == SPEED_2500)
+		dev_info(priv->dev,
+			 "the 2.5G jack: lane programmed for 2500BASE-X (speed 6)\n");
+	else
+		dev_info(priv->dev,
+			 "the 2.5G jack: lane programmed for 1G (speed 3)\n");
+	return 0;
+}
+
+static int zx279133_switch_outerphy_apply_speed(struct zx279133_switch *priv,
+						int speed)
+{
+	int ret;
+
+	mutex_lock(&priv->lane_lock);
+	ret = zx279133_switch_outerphy_apply_speed_locked(priv, speed);
+	if (ret && speed == SPEED_2500) {
+		dev_warn(priv->dev,
+			 "2.5G lane program failed (%d); falling back to 1G\n",
+			 ret);
+		ret = zx279133_switch_outerphy_apply_speed_locked(priv,
+								  SPEED_1000);
+	}
+	mutex_unlock(&priv->lane_lock);
+	return ret;
+}
+
 static int zx279133_switch_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
@@ -3398,8 +3566,6 @@ static int zx279133_switch_probe(struct platform_device *pdev)
 	struct device_node *mdio_np;
 	struct zx279133_switch *priv;
 	u32 status;
-	u32 link;
-	int an_ctrl;
 	int ret;
 
 	if (!dev->parent || !dev->parent->of_node)
@@ -3413,6 +3579,7 @@ static int zx279133_switch_probe(struct platform_device *pdev)
 
 	priv->dev = dev;
 	dev_set_drvdata(dev, priv);
+	mutex_init(&priv->lane_lock);
 	INIT_DELAYED_WORK(&priv->lane_work, zx279133_switch_lane_watch);
 	/*
 	 * The watcher reads the lane's PCS, so it has to be stopped before
@@ -3470,29 +3637,8 @@ static int zx279133_switch_probe(struct platform_device *pdev)
 	zx279133_switch_lane_snapshot(priv, "pre-serdes");
 
 	/*
-	 * The far end of this lane is the external RTL8226, and its SerDes
-	 * class is the one thing on this lane that nobody else sets.
-	 *
-	 * The vendor's own U-Boot configures it in its net bring-up, which
-	 * only runs when the loader is given a network to talk to - so a board
-	 * that boots from flash never gets it, and the far end sits in the
-	 * class it came out of the box in while the SoC side (which mainline
-	 * does put in the 1G class) waits for a 1000BASE-X partner that never
-	 * comes.  The write below is the same one the loader makes, and it is
-	 * made here, before the near end is programmed, in the order the
-	 * loader makes it: the far end first.
-	 *
-	 * It is made only when the chip is not already in that class, so a
-	 * board whose loader did configure it (a warm boot, or a boot after a
-	 * TFTP) is left alone.
-	 */
-	zx279133_switch_outerphy_serdes_set(priv, false);
-
-	/*
-	 * The Uni SerDes carries the lane to the 9132's CPU port.  It is the
-	 * parent's second PHY: phy-names = "serdes", "lan-serdes".  The lane
-	 * runs 1G, and the bootloader left the SerDes in that state, so the
-	 * driver's 1G profile inherits it rather than rewriting it.
+	 * Take the Uni SerDes handle before choosing the rate. The image is
+	 * written later, in place, once 1e:7580 is known.
 	 */
 	priv->serdes = devm_of_phy_get(dev, parent_np, "lan-serdes");
 	if (IS_ERR(priv->serdes)) {
@@ -3501,61 +3647,6 @@ static int zx279133_switch_probe(struct platform_device *pdev)
 		goto err_datapath_put;
 	}
 
-	/*
-	 * The lane's rate is not a free choice.  This board's vendor
-	 * bootloader runs XMAC0 in SGMII ("xmac 0 speed set 2 in sgmii") and
-	 * the 9132's CPU port is a 1G port, while the tree's RTL8372N driver
-	 * runs this very same XPCS0/Uni-SerDes lane at USXGMII 10G for the
-	 * RTL8372N's CPU port.  The Uni SerDes driver only accepts the
-	 * interface it implements, so ask for SGMII first and fall back to
-	 * USXGMII rather than losing the whole lane to a -EOPNOTSUPP.
-	 */
-	ret = phy_set_mode_ext(priv->serdes, PHY_MODE_ETHERNET,
-			       PHY_INTERFACE_MODE_SGMII);
-	if (ret) {
-		dev_warn(dev,
-			 "Uni SerDes does not take SGMII (%d); trying USXGMII\n",
-			 ret);
-		ret = phy_set_mode_ext(priv->serdes, PHY_MODE_ETHERNET,
-				       PHY_INTERFACE_MODE_USXGMII);
-		if (!ret)
-			priv->usxgmii = true;
-	}
-	if (ret) {
-		/*
-		 * Neither mode was accepted.  Do not give up: the driver
-		 * reported at probe that the SerDes is already in the 1G
-		 * profile the bootloader left ("Uni SerDes 1G inherited: mode
-		 * 0x1 already"), so powering it up untouched may still give
-		 * the 1G lane this board's 1G CPU port needs - and the XPCS0
-		 * status is the evidence either way.
-		 */
-		dev_warn(dev,
-			 "Uni SerDes takes neither SGMII nor USXGMII (%d); powering it up untouched\n",
-			 ret);
-	} else {
-		dev_info(dev, "Uni SerDes lane set to %s mode\n",
-			 priv->usxgmii ? "USXGMII" : "SGMII");
-	}
-
-	ret = phy_power_on(priv->serdes);
-	if (ret) {
-		dev_warn(dev, "Uni SerDes first lock attempt failed: %d; retrying\n",
-			 ret);
-		msleep(20);
-		ret = phy_power_on(priv->serdes);
-	}
-	if (ret) {
-		/*
-		 * Keep going.  The SerDes is what carries the lane, so a
-		 * failure here is the headline - but the XPCS0 status word is
-		 * still readable, and it is the only evidence this round can
-		 * produce.  Bailing out here would print nothing.
-		 */
-		dev_err(dev, "failed to power on Uni SerDes: %d\n", ret);
-	} else {
-		priv->serdes_powered = true;
-	}
 
 	pcs_np = of_parse_phandle(parent_np, "zte,lan-pcs-handle", 0);
 	if (!pcs_np) {
@@ -3586,208 +3677,24 @@ static int zx279133_switch_probe(struct platform_device *pdev)
 		return ret;
 
 	/*
-	 * The same lane, now with the XPCS0's own registers readable.
-	 *
-	 * If the PCS still says the link is up, the bootloader brought it up
-	 * and this driver has not broken it yet - and reprogramming it is
-	 * exactly what breaks it: the 1G profile below takes the PCS
-	 * from the bootloader's 0x380b to 0x280b, one bit of link status
-	 * short, and a lane that was carrying traffic stops carrying it.
-	 * So in that case the bootloader's configuration is adopted as it
-	 * is.
-	 *
-	 * The XMAC is a different matter, and this is where the board used to
-	 * stop.  The XMAC0 is the MAC on the far side of the lane - the one
-	 * that faces the 9132's CPU port - and the bootloader leaves it at
-	 * zero: every one of its control words reads 0x00000000, so the MAC
-	 * was never configured by anybody.  This driver used to skip the
-	 * XMAC along with the PCS, and a MAC that is not configured neither
-	 * sends nor receives: the frames the stack queued went into the IDM
-	 * and stopped there, the XMAC's own transmit counter stayed at zero,
-	 * and nothing at all crossed the lane in either direction.
-	 *
-	 * So the XMAC is programmed in this branch as well.  What used to be
-	 * left out here was the reset, on the grounds that "the soft reset
-	 * word is shared with the PCS, and the XMAC is at its reset state
-	 * already".  The word is shared, but the bit is not: XMAC0's reset
-	 * is bit 10 of it and pulsing that bit touches the XMAC alone, which
-	 * is why the non-inheriting branch below can pulse it without
-	 * touching the PCS.
-	 *
-	 * The reset is what the board was missing.  A MAC that has never
-	 * been reset since the bootloader handed it over has not attached
-	 * its output queue, and the vendor's own code says so: the MAC is
-	 * published only after its own "clear-over-ready" word says it is
-	 * ready, and on the live board that word for XMAC0 (NPPT + 0x342a4)
-	 * reads 0 while XMAC1's (0x342a8) reads 1.  A frame that the stack
-	 * queued therefore sat in the IDM's descriptor ring with nobody to
-	 * take it: the board's own counter said fifty-one packets sent,
-	 * the XMAC's transmit counter said zero, and nothing crossed the
-	 * lane in either direction.  The vendor's bootloader does reset
-	 * XMAC0 before it configures it ("xmac 0 speed set 2 in sgmii"), and
-	 * so does the vendor's own Linux, whose XMAC0 control words read
-	 * zero because they were reset and never programmed again.
+	 * Follow the RTL8226 system side. 1e:7580 low 6 bits are 0x16 for
+	 * 2500BASE-X and 0x02 for SGMII. Do not force the 1G option class
+	 * onto a PHY that is already at 2.5G.
 	 */
-	zx279133_switch_lane_snapshot(priv, "pre-pcs");
-	status = zx279133_switch_nppt_read(priv, ZX279133_NPPT_XPCS0_STATUS);
-	link = zx279133_switch_nppt_read(priv, ZX279133_NPPT_XMAC_LINK);
-	an_ctrl = zx279133_switch_xpcs_read(priv, MDIO_MMD_VEND2,
-					    ZX279133_XPCS_VR_MII_AN_CTRL);
-	/*
-	 * This status word is not a link indicator, and it is not a mode
-	 * indicator either - it is the signature of the work mode the PCS
-	 * was left in, and both of the modes this lane ever runs in have
-	 * their own value: 0x2c03 in the boots where the loader brought the
-	 * lane up at 1G, 0x380b in the boots where it brought it up at
-	 * 2.5G, and 0x280b in the boots where this driver had done its own
-	 * work on the PCS (docs/92 §96.14, judgment VV).
-	 *
-	 * So it is not used to decide anything here.  The two words that do
-	 * decide are read above.
-	 */
-	/*
-	 * Did the loader bring this lane up?
-	 *
-	 * One word says so, and it is the only one that does: the XMAC
-	 * link word (NPPT + 0x0084), which the loader's own net bring-up
-	 * sets when it configures the outerphy port.  Counted over the
-	 * 1163 boots in the serial log (docs/92 §96.14): in the 68 boots
-	 * where the loader took that port it reads 1, and in the 373 boots
-	 * where it did not it reads 0.  Measured again by hand on
-	 * 2026-10-29 05:11 at the loader's own prompt, before and after
-	 * its net init in one boot:
-	 *
-	 *	before:  0x19000084 = 0x00000000
-	 *	after:   0x19000084 = 0x00000001
-	 *
-	 * and the PCS's own status word (NPPT + 0x0090) reads 0x380b in
-	 * both - it says which work mode the lane is in, not whether it is
-	 * up (docs/92 §96.14, judgment VV).
-	 *
-	 * The PCS's AN_CTRL is NOT the criterion.  The loader's 2.5G
-	 * recipe leaves it at 0x0000 - that branch runs the lane at a
-	 * fixed rate with the auto-negotiation off - while its 1G recipe
-	 * leaves it at 0x0005 (docs/92 §96.15).
-	 *
-	 * When the loader left the lane up, this driver leaves the PCS
-	 * alone.  That is the whole of judgment TT.  The loader's
-	 * configuration is a working one - the far end of this lane says the
-	 * link was up when the loader left it (1e.0x758d = 0x801e,
-	 * 7.0x01 = 0x00e9, docs/92 §96.16) - and programming the PCS is what
-	 * destroys it.  (The loader's own image download did not go over this
-	 * lane: its log says "Using eth0 device", docs/92 §96.18.)
-	 * This driver's own image
-	 * is a 1G one, and the far end of this lane is in 2500BASE-X
-	 * (1e.0x7580 = 0x9416, the mode field 0x16), so a 1G near end
-	 * against a 2.5G far end negotiates nothing: the far end's status
-	 * word was read at 0x00e9 (locked) nineteen milliseconds after this
-	 * driver programmed the near end, and at 0x00ad (restarting) the
-	 * next time it was read.
-	 */
-	if (link) {
-		static const struct {
-			int reg;
-			const char *name;
-		} words[] = {
-			{ MII_BMCR, "BMCR" },
-			{ ZX279133_XPCS_VEND2_SR_MII_SPEED, "SR-MII speed" },
-			{ ZX279133_XPCS_VR_MII_DIG_CTRL1, "DIG_CTRL1" },
-			{ ZX279133_XPCS_VR_MII_AN_CTRL, "AN_CTRL" },
-		};
-		unsigned int i;
+	{
+		int cls = zx279133_switch_outerphy_class(priv);
+		int speed = SPEED_1000;
 
-		dev_info(dev,
-			 "the loader brought this lane up (XMAC link = 0x%04x, the PCS's AN_CTRL = 0x%04x); the PCS is left as it is\n",
-			 link, an_ctrl & 0xffff);
-
-		/*
-		 * The loader's four words for this block, saved word for
-		 * word.  The watch puts the lane back if the SerDes domain's
-		 * reset empties the block later on, and what it puts back
-		 * has to be the loader's configuration: this driver's own
-		 * image is a 1G one and this lane may be a 2.5G one.
-		 */
-		for (i = 0; i < ARRAY_SIZE(words); i++) {
-			int val = zx279133_switch_xpcs_read(priv, MDIO_MMD_VEND2,
-							    words[i].reg);
-
-			priv->lane_pcs_words[i] = val < 0 ? 0 : (u32)val;
-			dev_info(dev, "the loader's %s = 0x%04x\n",
-				 words[i].name, priv->lane_pcs_words[i] & 0xffff);
-		}
-		priv->lane_pcs_inherited = true;
-
-		zx279133_switch_xmac_configure(priv, false);
-		goto report;
-	}
-
-	dev_info(dev,
-		 "the NPPT PCS status word is 0x%04x; the lane is programmed here, not inherited\n",
-		 status);
-
-	ret = priv->usxgmii ? zx279133_switch_xpcs_usxgmii(priv) :
-			      zx279133_switch_xpcs_sgmii(priv);
-	if (ret) {
-		/*
-		 * Do not give up here.  The read-back below is the evidence
-		 * this round is after: a lane that was programmed wrongly and
-		 * a lane that was never programmed look the same from the
-		 * outside otherwise, and this is the only place the XPCS0
-		 * status word can be read at all.
-		 */
-		dev_err(dev, "failed to configure XPCS0 for %s mode: %d\n",
-			priv->usxgmii ? "USXGMII" : "SGMII", ret);
-		goto report;
-	}
-
-	ret = zx279133_switch_xpcs_bypass(priv, true);
-	if (ret) {
-		dev_err(dev, "failed to enable XPCS0 bypass: %d\n", ret);
-		goto report;
-	}
-
-	/*
-	 * No reset.
-	 *
-	 * zx279133_switch_xmac_configure()'s own comment says the reset is not
-	 * wanted on this board: the soft reset word is shared with the PCS, and
-	 * the PCS on this board was brought up by the bootloader and must not be
-	 * disturbed.  That was written when the function was written; the call
-	 * said otherwise, and the call is what runs.
-	 *
-	 * What the reset costs is measured.  docs/92 §15 wrote down a boot in
-	 * which this lane really carried frames - the loader had brought it up
-	 * and the kernel inherited it - and the near end's own PCS status word
-	 * (NPPT + 0x0090) read 0x2c03 in that boot and in every one of the
-	 * twelve such boots in the log, while the cold boots read 0x380b and the
-	 * boots in which the driver had done its own work read 0x280b:
-	 *
-	 *	lane pre-serdes: XPCS0 status=0x380b   (the loader's hand-over)
-	 *	lane after:      XPCS0 status=0x280b   (after the XMAC0 work)
-	 *
-	 * The XMAC0 reset is in the middle of that work, and the reset word is
-	 * the PCS's, so the lane's link state goes with it.  Writing the
-	 * loader's words back afterwards does not bring it back: the four PCS
-	 * registers read 0x1140 / 0x0020 / 0x2200 / 0x0005 either way, and the
-	 * status word stays 0x280b (measured on 2026-10-29, staging/ctl/
-	 * win131.log).
-	 *
-	 * The XMAC0 is programmed either way; it is at its reset state already,
-	 * every one of its control words reading zero.
-	 */
-	zx279133_switch_xmac_configure(priv, false);
-
-	if (!priv->usxgmii) {
-		/* Re-apply after the XMAC/SOPC work; the C45 AN bits are lost. */
-		ret = zx279133_switch_xpcs_program_lane(priv);
+		if (cls == ZX279133_SWITCH_OUTERPHY_SERDES_MODE_2G5)
+			speed = SPEED_2500;
+		else
+			zx279133_switch_outerphy_serdes_set(priv, false);
+		priv->lane_seen = cls;
+		ret = zx279133_switch_outerphy_apply_speed(priv, speed);
 		if (ret)
-			dev_err(dev,
-				"failed to re-apply the XPCS0 AN state: %d\n",
+			dev_err(dev, "failed to program the 2.5G jack lane: %d\n",
 				ret);
 	}
-	usleep_range(10000, 11000);
-
-report:
 	/*
 	 * Report what the lane says about itself.  This is the G2 evidence:
 	 * 0x0090 bits 11..13 are the XPCS0 link status the tree's RTL8372N
@@ -3835,7 +3742,7 @@ report:
 	 * The NPPT's prepare - which runs when eth0 is opened, thirteen
 	 * seconds into the boot - resets the SerDes domain this lane lives in,
 	 * and nothing has programmed the lane since this probe.  The watcher
-	 * puts the loader's values back when it finds the block empty.
+	 * programs the current rate again when it finds the block empty.
 	 */
 	if (!priv->usxgmii) {
 		/*

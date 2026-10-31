@@ -33,6 +33,12 @@
 #define ZX279133_UNI_SERDES_PROFILE_WORDS	49
 #define ZX279133_UNI_SERDES_MODE_CTRL		0x54
 #define ZX279133_UNI_SERDES_ENABLE		BIT(0)
+#define ZX279133_UNI_SERDES_1G_RATE		BIT(8)
+#define ZX279133_UNI_SERDES_MODE_2G5		0x00000409
+#define ZX279133_UNI_SERDES_IMAGE_WORD		0x50
+#define ZX279133_UNI_SERDES_IMAGE_MARK		0x34000003
+#define ZX279133_UNI_SERDES_SC_PLL		0xcc
+#define ZX279133_UNI_SERDES_SC_PLL_LOCK		0x7
 #define ZX279133_UNI_SERDES_PLL_STATUS		0xd0
 #define ZX279133_UNI_SERDES_PLL_LOCK		BIT(0)
 #define ZX279133_UNI_SERDES_RX_STATUS		0xe4
@@ -51,6 +57,8 @@ struct zx279133_uni_serdes {
 	/* Protects the powered state and clock/reset lifecycle. */
 	struct mutex lock;
 	bool powered;
+	/* power_off() asks the next power_on() to rewrite the rate in place. */
+	bool rate_pending;
 	int submode;
 	/* Which of the three images to write: 0 = the tree's own 1G one,
 	 * 1 = the loader's 2.5G one, 2 = the vendor's 2.5G one (see the
@@ -123,11 +131,11 @@ static_assert(ARRAY_SIZE(zx279133_uni_10g_profile) ==
  */
 static const u32 zx279133_uni_1g_profile[] = {
 	0xe0000004, 0x4fa840a3, 0x013e860f, 0x0210c073,
-	0x00000048, 0x00000000, 0x00ff8000, 0x00238620,
+	0x00000048, 0x00000000, 0x0b016100, 0x00238620,
 	0x80000000, 0x00050000, 0x0c633830, 0x00000007,
 	0x00000020, 0x00002000, 0x00000000, 0x00ff0000,
 	0xc5a85100, 0x00000000, 0x01045b2a, 0x66002200,
-	0x34000003, 0x00000101, 0x00000080, 0x00000000,
+	0x34000003, 0x00000100, 0x00000080, 0x00000000,
 	0x200554a8, 0x00648091, 0x01000000, 0x00003700,
 	0xa9004000, 0x10640002, 0x000000da, 0xf20000c8,
 	0x10371037, 0x01000200, 0x00020001, 0x10000000,
@@ -152,7 +160,7 @@ static_assert(ARRAY_SIZE(zx279133_uni_1g_profile) ==
  *
  *	word 0		0xe0000004 here and in the image above (0xe0001004 was
  *			the one that used to be wrong here)
- *	word 21	(mode)	0x00000409 here, 0x00000101 in the image above
+ *	word 21	(mode)	0x00000409 here, 0x00000100 in the image above (0x00000101 once enabled)
  *
  * Which image this is, settled by measurement on 2026-10-29 05:11 at the
  * loader's own prompt in a boot where the loader took its 2.5G branch
@@ -256,7 +264,8 @@ static const u32 *zx279133_uni_serdes_image(int sel)
 
 static void zx279133_uni_serdes_write_profile(struct zx279133_uni_serdes *priv)
 {
-	const u32 *profile = priv->submode == PHY_INTERFACE_MODE_SGMII ?
+	const u32 *profile = (priv->submode == PHY_INTERFACE_MODE_SGMII ||
+			      priv->submode == PHY_INTERFACE_MODE_2500BASEX) ?
 		zx279133_uni_serdes_image(priv->image_sel) :
 		zx279133_uni_10g_profile;
 	unsigned int i;
@@ -275,7 +284,8 @@ static int zx279133_uni_serdes_set_mode(struct phy *phy, enum phy_mode mode,
 
 	if (submode != PHY_INTERFACE_MODE_USXGMII &&
 	    submode != PHY_INTERFACE_MODE_10GBASER &&
-	    submode != PHY_INTERFACE_MODE_SGMII)
+	    submode != PHY_INTERFACE_MODE_SGMII &&
+	    submode != PHY_INTERFACE_MODE_2500BASEX)
 		return -EOPNOTSUPP;
 
 	/* nppt powers the SerDes off, sets the mode and powers it back on again, so
@@ -305,15 +315,128 @@ static int zx279133_uni_serdes_reset_pulse(struct zx279133_uni_serdes *priv)
 	return 0;
 }
 
+static bool zx279133_uni_serdes_rate_matches(struct zx279133_uni_serdes *priv)
+{
+	u32 mode = readl(priv->serdes + ZX279133_UNI_SERDES_MODE_CTRL);
+
+	if (priv->submode == PHY_INTERFACE_MODE_2500BASEX)
+		return mode == ZX279133_UNI_SERDES_MODE_2G5;
+	if (priv->submode == PHY_INTERFACE_MODE_SGMII)
+		return (mode & (ZX279133_UNI_SERDES_ENABLE |
+				ZX279133_UNI_SERDES_1G_RATE)) ==
+		       (ZX279133_UNI_SERDES_ENABLE |
+			ZX279133_UNI_SERDES_1G_RATE);
+	return false;
+}
+
+static void zx279133_uni_serdes_write_words(struct zx279133_uni_serdes *priv,
+					    const u32 *profile)
+{
+	unsigned int i;
+
+	for (i = 0; i < ZX279133_UNI_SERDES_PROFILE_WORDS; i++)
+		writel(profile[i], priv->serdes + i * 4);
+}
+
+/* In-place rate switch. Clocks are already on. No reset pulse. */
+static int zx279133_uni_serdes_program_rate(struct zx279133_uni_serdes *priv)
+{
+	u32 mode, word50, status = 0;
+	int ret;
+
+	mode = readl(priv->serdes + ZX279133_UNI_SERDES_MODE_CTRL);
+	if (priv->submode == PHY_INTERFACE_MODE_2500BASEX) {
+		zx279133_uni_serdes_write_words(priv,
+						zx279133_uni_1gbase_x_profile);
+		writel(ZX279133_UNI_SERDES_MODE_2G5,
+		       priv->serdes + ZX279133_UNI_SERDES_MODE_CTRL);
+		ret = readl_poll_timeout(priv->serdes + ZX279133_UNI_SERDES_SC_PLL,
+					 status,
+					 (status & ZX279133_UNI_SERDES_SC_PLL_LOCK) ==
+					 ZX279133_UNI_SERDES_SC_PLL_LOCK,
+					 ZX279133_UNI_SERDES_POLL_US,
+					 ZX279133_UNI_SERDES_TIMEOUT_US);
+		if (ret) {
+			dev_err(priv->dev, "2.5G SC PLL did not lock (0xcc=%#x)\n",
+				status);
+			return ret;
+		}
+		ret = readl_poll_timeout(priv->serdes + ZX279133_UNI_SERDES_RX_STATUS,
+					 status,
+					 status & ZX279133_UNI_SERDES_CDR_LOCK,
+					 ZX279133_UNI_SERDES_POLL_US,
+					 ZX279133_UNI_SERDES_TIMEOUT_US);
+		dev_info(priv->dev, "2.5G profile written: mode %#x, cdr %s (%#x)\n",
+			 readl(priv->serdes + ZX279133_UNI_SERDES_MODE_CTRL),
+			 ret ? "not locked" : "locked", status);
+		return 0;
+	}
+
+	word50 = readl(priv->serdes + ZX279133_UNI_SERDES_IMAGE_WORD);
+	if (!(mode & ZX279133_UNI_SERDES_1G_RATE) &&
+	    (word50 == ZX279133_UNI_SERDES_IMAGE_MARK ||
+	     (mode & ~ZX279133_UNI_SERDES_ENABLE) == 0)) {
+		zx279133_uni_serdes_write_words(priv, zx279133_uni_1g_profile);
+		if (word50 == ZX279133_UNI_SERDES_IMAGE_MARK &&
+		    (mode & ~ZX279133_UNI_SERDES_ENABLE) != 0)
+			dev_info(priv->dev,
+				 "1G: 2.5G image replaced in place\n");
+		else
+			dev_info(priv->dev, "1G profile written in place\n");
+	}
+	mode = readl(priv->serdes + ZX279133_UNI_SERDES_MODE_CTRL);
+	writel(mode | ZX279133_UNI_SERDES_ENABLE | ZX279133_UNI_SERDES_1G_RATE,
+	       priv->serdes + ZX279133_UNI_SERDES_MODE_CTRL);
+	ret = readl_poll_timeout(priv->serdes + ZX279133_UNI_SERDES_PLL_STATUS,
+				 status, status & ZX279133_UNI_SERDES_PLL_LOCK,
+				 ZX279133_UNI_SERDES_POLL_US,
+				 ZX279133_UNI_SERDES_TIMEOUT_US);
+	if (ret) {
+		dev_err(priv->dev, "1G PLL did not lock (%#x)\n", status);
+		return ret;
+	}
+	dev_info(priv->dev, "Uni SerDes 1G: mode %#x, pll %#x\n",
+		 readl(priv->serdes + ZX279133_UNI_SERDES_MODE_CTRL),
+		 readl(priv->serdes + ZX279133_UNI_SERDES_PLL_STATUS));
+	return 0;
+}
+
 static int zx279133_uni_serdes_power_on(struct phy *phy)
 {
 	struct zx279133_uni_serdes *priv = phy_get_drvdata(phy);
-	unsigned int i, mismatch = 0;
-	const char *how;
+	bool was_powered;
 	u32 status;
 	int ret;
 
 	mutex_lock(&priv->lock);
+	was_powered = priv->powered;
+
+	if (priv->submode == PHY_INTERFACE_MODE_SGMII ||
+	    priv->submode == PHY_INTERFACE_MODE_2500BASEX) {
+		if (!was_powered) {
+			ret = clk_bulk_prepare_enable(ARRAY_SIZE(priv->clocks),
+						      priv->clocks);
+			if (ret)
+				goto out_unlock;
+		} else if (!priv->rate_pending &&
+			   zx279133_uni_serdes_rate_matches(priv)) {
+			ret = 0;
+			goto out_unlock;
+		}
+
+		ret = zx279133_uni_serdes_program_rate(priv);
+		if (ret) {
+			if (!was_powered)
+				clk_bulk_disable_unprepare(ARRAY_SIZE(priv->clocks),
+							   priv->clocks);
+			goto out_unlock;
+		}
+		priv->powered = true;
+		priv->rate_pending = false;
+		ret = 0;
+		goto out_unlock;
+	}
+
 	if (priv->powered) {
 		ret = 0;
 		goto out_unlock;
@@ -322,180 +445,11 @@ static int zx279133_uni_serdes_power_on(struct phy *phy)
 	/*
 	 * Do not read this block before the clocks are on.  The registers live
 	 * behind the UNI SerDes CSR clock, and a readl() of them while that
-	 * clock is still gated is a bus abort, not a zero: run207 stopped the
-	 * board 0.38 s into the boot, right where this read used to be, with
-	 * no panic and no oops on the console.  The count further down runs
-	 * after clk_bulk_prepare_enable() and is safe.
+	 * clock is still gated is a bus abort, not a zero.
 	 */
 	ret = clk_bulk_prepare_enable(ARRAY_SIZE(priv->clocks), priv->clocks);
 	if (ret)
 		goto out_unlock;
-
-	if (priv->submode == PHY_INTERFACE_MODE_SGMII) {
-		/*
-		 * This lane's image is the vendor's 1000BASE-X one: the one its
-		 * xmac_1gbase_x_conf() reaches through uni_serdes_init(xmac, 7),
-		 * which is the image measured in the board's own U-Boot
-		 * (e0001004 4fa840a3 013e860f 0210c073 ..., mode word 0x101) and
-		 * the one in zx279133_uni_1g_profile[].
-		 *
-		 * The bootloader does not leave it behind.  In a normal boot
-		 * U-Boot never touches this lane at all - its banner does the PON
-		 * side and stops - and the Uni SerDes still holds its reset
-		 * default (mode word 0x01, image c0000004 50a840a7 012e064f
-		 * 1fd0c093 ...), read at the loader's prompt on 2026-10-28 07:12.
-		 * The "mode_eth_1gbase_x_cfg" and "uni serdes init succeed"
-		 * lines in the log come from the sessions where U-Boot's net init
-		 * ran, not from a normal boot.  So the image has to be written
-		 * here.
-		 *
-		 * The vendor's uni_serdes_init() writes it like this: reset the
-		 * datapath, write the 49 words, set the enable bit, then wait for
-		 * the PLL and the CDR.  Neither wait is fatal here.  The CDR only
-		 * locks once the far end of this lane is up, and that is the
-		 * switch driver's business, not this driver's; failing the
-		 * attach over a wait that has not timed out yet would take the
-		 * whole datapath down.
-		 *
-		 * The far end of this lane is **the 9132's CPU port**, not the
-		 * 2.5G jack's PHY.  The path across this board is:
-		 *
-		 *	PC --[1G jack]----- 9132 internal PHY   chip ports 1..4
-		 *	PC --[2.5G jack]--- RTL8226 --(1000BASE-X)-- 9132 chip port 5
-		 *	                                       9132 CPU port
-		 *	                                           |
-		 *	                         (this lane: Uni SerDes / XPCS0 /
-		 *	                          XMAC0, SGMII 1G)
-		 *	                                           |
-		 *	                                         SoC
-		 *
-		 * An earlier version of this comment said "the far end of
-		 * this lane - the RTL8226 on the 2.5G jack", and that was
-		 * wrong, and it was wrong in a way that cost a kernel build:
-		 * it made this lane's PCS mode look like the reason the 2.5G
-		 * jack was dead, and the PCS mode was programmed as 1000BASE-X
-		 * when the working state is SGMII.  This lane was never the
-		 * problem - the 1G jacks go through it, and they work
-		 * (docs/92 §81, §82).
-		 */
-		/*
-		 * The reset is only needed when the image has to be written.
-		 *
-		 * In a boot where the loader's net init ran, this block already
-		 * holds the right image and is already enabled - the count below
-		 * says "0/49 word(s) differ" - and the lane behind it is the one
-		 * the loader had brought up.  The reset pulse takes the SerDes
-		 * domain down, and that domain holds the lane's PCS
-		 * configuration too: the PCS's AN_CTRL reads 0x0000 right after
-		 * this call, and the four registers the lane needs (the loader's
-		 * own 0x1140 / 0x0020 / 0x2200 / 0x0005) are gone.  What is lost
-		 * is the PCS's state, not its registers: writing the image and
-		 * the four words back afterwards does not bring the link back
-		 * (measured 2026-10-29, staging/ctl/win130.log and win131.log).
-		 *
-		 * So: when the block already holds the image and is enabled, do
-		 * not touch it.
-		 */
-		{
-			/*
-			 * Is there anything in this block at all?
-			 *
-			 * The reset default of this block is the mode word 0x01
-			 * and a run of words this driver does not know.  Any
-			 * other mode word means somebody configured this
-			 * SerDes - and on this board that somebody is the
-			 * bootloader, whose net bring-up writes one of the
-			 * vendor's images into this block.
-			 *
-			 * Which image it is does not have to be known to
-			 * decide this.  The bootloader runs the vendor's own
-			 * U-Boot code, and its copy of an image is not
-			 * necessarily word for word the copy in np_133.ko -
-			 * the mode word is what says "configured", and the
-			 * three known images are only used to name it in the
-			 * log.
-			 *
-			 * Not touching this block matters more than writing
-			 * the right one: this block's reset takes the SerDes
-			 * domain down, and the lane's PCS lives in that
-			 * domain.  The reset is what emptied the PCS
-			 * (AN_CTRL 0x0000) in every boot measured on
-			 * 2026-10-29 (staging/ctl/win129.log).
-			 */
-			static const char *const names[] = {
-				"the tree's 1G image",
-				"the loader's 2.5G image",
-				"the vendor's 2.5G image",
-			};
-			const u32 *profile;
-			int match = -1;
-			int sel;
-
-			status = readl(priv->serdes + ZX279133_UNI_SERDES_MODE_CTRL);
-			for (sel = 0; sel < (int)ARRAY_SIZE(names); sel++) {
-				profile = zx279133_uni_serdes_image(sel);
-				for (i = 0; i < ZX279133_UNI_SERDES_PROFILE_WORDS; i++)
-					if (readl(priv->serdes + i * 4) != profile[i])
-						break;
-				if (i == ZX279133_UNI_SERDES_PROFILE_WORDS) {
-					match = sel;
-					break;
-				}
-			}
-			if ((status & ZX279133_UNI_SERDES_ENABLE) &&
-			    (status & ~ZX279133_UNI_SERDES_ENABLE)) {
-				dev_info(priv->dev,
-					 "Uni SerDes image inherited: mode %#x, %s, status %#x/%#x; the block is not reset\n",
-					 status,
-					 match >= 0 ? names[match] :
-					 "an image this driver does not know",
-					 readl(priv->serdes + ZX279133_UNI_SERDES_PLL_STATUS),
-					 readl(priv->serdes + ZX279133_UNI_SERDES_RX_STATUS));
-				priv->powered = true;
-				ret = 0;
-				goto out_unlock;
-			}
-		}
-
-		ret = zx279133_uni_serdes_reset_pulse(priv);
-		if (ret)
-			goto err_disable_clocks;
-
-		zx279133_uni_serdes_write_profile(priv);
-		status = readl(priv->serdes + ZX279133_UNI_SERDES_MODE_CTRL);
-		how = status & ZX279133_UNI_SERDES_ENABLE ? "already" : "set";
-		writel(status | ZX279133_UNI_SERDES_ENABLE,
-		       priv->serdes + ZX279133_UNI_SERDES_MODE_CTRL);
-
-		readl_poll_timeout(priv->serdes + ZX279133_UNI_SERDES_PLL_STATUS,
-				    status, status & ZX279133_UNI_SERDES_PLL_LOCK,
-				    ZX279133_UNI_SERDES_POLL_US,
-				    ZX279133_UNI_SERDES_TIMEOUT_US);
-		readl_poll_timeout(priv->serdes + ZX279133_UNI_SERDES_RX_STATUS,
-				    status,
-				    status & ZX279133_UNI_SERDES_CDR_LOCK,
-				    ZX279133_UNI_SERDES_POLL_US,
-				    ZX279133_UNI_SERDES_TIMEOUT_US);
-		/*
-		 * Count the image that is in there now.  It has to be 0/49: the
-		 * words above were just written from the same file.  A count
-		 * that is not zero says the block did not take the writes, and
-		 * that is worth seeing in the log.
-		 */
-		for (i = 0; i < ZX279133_UNI_SERDES_PROFILE_WORDS; i++)
-			if (readl(priv->serdes + i * 4) != zx279133_uni_1g_profile[i])
-				mismatch++;
-
-		dev_info(priv->dev,
-			 "Uni SerDes 1G profile written: mode %#x %s, image differs in %u/%d word(s), status %#x/%#x\n",
-			 readl(priv->serdes + ZX279133_UNI_SERDES_MODE_CTRL), how,
-			 mismatch, ZX279133_UNI_SERDES_PROFILE_WORDS,
-			 readl(priv->serdes + ZX279133_UNI_SERDES_PLL_STATUS),
-			 readl(priv->serdes + ZX279133_UNI_SERDES_RX_STATUS));
-		priv->powered = true;
-		ret = 0;
-		goto out_unlock;
-	}
 
 	ret = zx279133_uni_serdes_reset_pulse(priv);
 	if (ret)
@@ -547,10 +501,12 @@ static int zx279133_uni_serdes_power_off(struct phy *phy)
 	struct zx279133_uni_serdes *priv = phy_get_drvdata(phy);
 
 	mutex_lock(&priv->lock);
-	if (priv->submode == PHY_INTERFACE_MODE_SGMII) {
-		/* An ifdown must not tear down this lane: clearing the enable bit and gating the
-		 * clock here is how a configured SerDes gets lost between one command and the next.
+	if (priv->submode == PHY_INTERFACE_MODE_SGMII ||
+	    priv->submode == PHY_INTERFACE_MODE_2500BASEX) {
+		/* A rate change must not gate the clock or pulse the reset.
+		 * The next power_on() rewrites the 49 words in place.
 		 */
+		priv->rate_pending = true;
 		mutex_unlock(&priv->lock);
 		return 0;
 	}
