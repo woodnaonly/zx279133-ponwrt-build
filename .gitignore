@@ -54,3 +54,8 @@ restore_set/
 # Scratch commit messages written by the commit-message drafting step.  They are a
 # working aid, not source: one `git add -A` away from a public push otherwise.
 .commitmsg-*.txt
+
+# Local scratch used while reading a failed build: Actions JSON, fetched
+# upstream makefiles, drafted commit messages. Not source. A `git add -A`
+# would otherwise publish it.
+work/
