@@ -26,6 +26,13 @@ not have to:
      and which one the WAN takes is decided by a shell file that only ever
      runs on the board, so nothing here would notice if it took a LAN jack
      away again; tests/test_net_config_reach.sh runs it and is called.
+  8. a static function whose name one of the overlay's own headers has
+     already taken.  C keeps one namespace for both, so the compiler reads
+     the two as one function and stops with "conflicting types" and "too many
+     arguments" - which is what run 293 built.
+  9. a name used above the line that declares it.  A static object defined
+     further down the file than its first use is "'name' undeclared" to the
+     compiler, which is the other half of what run 293 built.
 
 Exit status 0 means clean.
 """
@@ -419,6 +426,9 @@ def use_before_decl_check():
     2026-10-30 the SerDes fix (commit 4f5fa5f) called two static functions
     from the lane watch and defined them eight hundred lines further down,
     with no prototype above the call: run #283 was spent finding that out.
+    Run 293 found the same thing about an object rather than a function -
+    "zxpon_family" was used at line 110 of zx279133-pon.c and declared at
+    line 222 - so the checker was widened to objects as well.
 
     The checker itself is tools/check-c-use-before-decl.py, and it is run as
     a separate process so that it can also be run on its own.
@@ -429,9 +439,49 @@ def use_before_decl_check():
     r = subprocess.run([sys.executable, t, REPO], capture_output=True, text=True)
     sys.stdout.write(r.stdout)
     if r.returncode != 0:
-        print("prepush: the overlay uses a static function before it is declared")
+        print("prepush: the overlay uses a name before it is declared")
         sys.stdout.write(r.stderr)
         return 1
+    return 0
+
+
+def name_collision_check():
+    """A static function whose name a header of this overlay has does not compile.
+
+    C keeps one namespace for the two, so the compiler reads the static
+    definition and the header's declaration as one function: "conflicting
+    types" at the definition, "too many arguments" at the call.  Run 293
+    built zx279133-pon.c with a static "zxpon_set_identity" while zxpon.h
+    declared one of its own, and the build produced no image.
+
+    The checker itself is tools/check-c-name-collision.py, and it is run as
+    a separate process so that it can also be run on its own.
+    """
+    t = os.path.join(REPO, "tools", "check-c-name-collision.py")
+    if not os.path.exists(t):
+        return 0
+    r = subprocess.run([sys.executable, t, REPO], capture_output=True, text=True)
+    sys.stdout.write(r.stdout)
+    if r.returncode != 0:
+        print("prepush: the overlay defines a static function under a name "
+              "one of its own headers has taken")
+        sys.stdout.write(r.stderr)
+        return 1
+    return 0
+
+
+def name_gates_selftest():
+    """The two name gates have to be right before the build can trust them."""
+    t = os.path.join(REPO, "tools", "test-check-c-gates.py")
+    if not os.path.exists(t):
+        return 0
+    r = subprocess.run([sys.executable, t], capture_output=True, text=True)
+    if r.returncode != 0:
+        print("prepush: the name gates' own test failed")
+        print(r.stdout)
+        print(r.stderr)
+        return 1
+    print(r.stdout.strip())
     return 0
 
 
@@ -446,12 +496,14 @@ def main():
     # gate that says "no" to a good build costs an hour, and a gate that
     # says "yes" to a bad one costs the same.
     bad += gate_selftest()
+    bad += name_gates_selftest()
     bad += repo_tests()
     bad += board_config_check()
     bad += gate_against_snapshot()
     bad += release_manifest_check()
     bad += overlay_modes_check()
     bad += use_before_decl_check()
+    bad += name_collision_check()
 
     defined = set()
     for f in files:
