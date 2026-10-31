@@ -14421,15 +14421,20 @@ datapath 是不是在活的 lane 上 arm 的。**
 
 **本版没做、留在树上的两件事**（都记在这里，免得下轮再查一遍）：
 
-> **2026-10-31 00:4x 复核：这两条都已经被 `staging/ctl/switch_selfheal_followup.diff` 收掉了，机主拍板先出 #287 再刷。**
-> 那张 diff 做了：`ZX279133_SWITCH_OUTERPHY_RESTART_MAX = 3` + `outerphy_restarts` 计数（打满时只说一次
-> 「no more auto-negotiation restarts this boot」）、`:896` 的节流改成 `time_after_eq(jiffies, priv->lane_heal_due)`
-> 配 15 s 冷却并把注释改成实测（快窗内 `lane:` 行也是 1.5 s 一条，所以 `% 25` 是 37 s 一次而不是 0.5 s）、
-> 我提的第 2 条也修了（写被拒绝时不再打「restarted」，改成 `restarted` 布尔 + 单独一条 `refused` 的 dev_warn，
-> 等 AN 那一段现在只在真重启过的时候才走）。
-> 它**没有**采纳我提的「needs_latch 里加对端存在位」，理由写在 diff 里并且我认：那个判断已经由
-> `outerphy_serdes_check()` 在所有自愈路径上做了，加在这里会顺带 gate 掉 probe 在 1.57 s 自己发起的那一次——
-> 而那一次正是本轮要读的判据。`:977` 那条同样形状的 `% 25`（控制 `lane:` 行的密度）**没在这张 diff 里**，仍然留着。
+> **2026-10-31 00:5x 复核更正（以 `17fe20f`/`ce52a7c` 之后的 HEAD 为准，别按这段的前半读）**：
+> 这两条**都已经落进代码了**，而且**本文和计划书里「一次采样约 1.5 s，所以 `% 25` ≈ 37 s」这句本身是错的**。
+> 实测：一次冷启动里 `lane:` 行从 4.400 s 到 31.450 s 共 41 条，间距 **0.75 s**，也就是 `25 × (20 ms + 约 10 ms 的 MDIO)`；
+> 那个 1.5 s 是在串口控制台正压着总线的时候量的（同一 boot 的 270 s 处），不是这个 work 的固有成本。
+> 现在两个 `% 25` 都没了：`:940` 的自愈改成 `time_after_eq(jiffies, priv->lane_heal_due)` 配 **15 s** 冷却，
+> rearm 处的密度改成 `priv->lane_log_due` 配 **750 ms**（注释里把「0.5 s 本意」改成了实测的 750 ms）。
+> 另外那张 diff 还做了：`ZX279133_SWITCH_OUTERPHY_RESTART_MAX = 3` + `outerphy_restarts` 计数
+> （打满只说一次「no more auto-negotiation restarts this boot」），以及我提的第 2 条——写被拒绝时不再打「restarted」，
+> 改成 `restarted` 布尔 + 单独一条 `refused` 的 dev_warn，等 AN 那一段现在只在真重启过的时候才走。
+> 它**没有**采纳「needs_latch 里加对端存在位」，理由写在代码里并且我认：那个判断已由
+> `outerphy_serdes_check()` 在所有自愈路径上做了，加在这里会顺带 gate 掉 probe 在 1.57 s 自己发起的那一次，
+> 而那一次正是本轮要读的判据。
+> **判据不受影响的声明**：cap=3 + 15 s 冷却只约束「重试」，不改变启动期那一次 restart 的位置，
+> 所以 G3 的 (a)/(b) 两条判据读的还是同一个变量——近端初始化之前远端是否已经锁档谈完。
 
 - `lane_watch` 的自愈节流还是 `if (period > 20 || !(priv->lane_samples % 25))`
   （现在在 `:896`；同一形状的另一处在 `:977` 决定 lane 状态行的密度）。一次采样本身约 1.5 s，
@@ -14446,7 +14451,9 @@ datapath 是不是在活的 lane 上 arm 的。**
 对照组是 `grep auto-negotiation` 有 212 次命中，全部来自旧 `ethtool` 输出的
 「Supports auto-negotiation: Yes」——所以这个零是真的零，不是模式写错。
 23:55:52 和 00:00:07 两次启动的 witness 仍是死态（`758d=0x0010`、`7580=0x9412`、`nppt 84=0`、`90=0x280b`，
-`ping 192.168.9.1` 0/2）⇒ **kernel 分区里是 10-26 那一版**。
+`ping 192.168.9.1` 0/2）⇒ 血缘被两头夹住：**板上这一版 ≥ `4f5fa5f`（10-30 12:39 —— 它打的 `the SerDes option is set to the 1G class` 那句话是这一笔才加进去的，
+23:55/00:00 两次启动都在 1.571 s 打了它）**，并且 **< `f5d573e`**（那三条 AN 句子 0 次）。
+先前这里写的「板上是 10-26 那一版」是**我自己的过度断言**：那个结论拿的是 banner 的编译日期，而 banner 日期正是本文说不能当血缘证据的量。
 因此 G3 的前置是**把 #285/#286 的 `flash-uImage` 刷进 kernel 分区**再走断电冷启动：
 TFTP/initramfs 起的都不算，因为走 TFTP 就会让 loader 跑 net bring-up，而那正是要绕开的东西。
 `tools/lan1sweep.sh` 已经把这三条句子和 `uname -r` + `/proc/uptime` 加进了固定命令表，
@@ -14573,3 +14580,670 @@ HIT   the lane's PCS was reset
 **驱动主动打的行**（`lane:` 这种由 work queue 打的），不能用**我通过控制台发起的读**的时间戳 —
 后者测的是往返延迟（`tools/concmd.sh` 的 `GAP=1.2 s` 就在里面）。这次两样被我混成一件事，
 一个错误的量化结论在文档、计划书和代码注释里连坐了三轮。
+
+### 96.53 复盘既有串口归档得出的两条（2026-10-31 01:00，全部离线，没有上板，不占用窗口）
+
+把 129 MB 的 `staging/ctl/serial.log` 里所有 `lane:` 行和所有 `packets received` 行按出现顺序对齐之后，得到两条对下一轮有用的结论。
+
+**一：`lane:` 行里没有第五个证人，别再在那 18 个字里找。**
+全归档的 `lane:` 行按内容去重只有六种稳定形状；关键在于「alive-witness 那一族」（`758d=0x801e 7580=0x9402`、`nppt 84=1`、`90=0x2c03`、
+`near bmcr=0x1140 anctrl=0x0005 dig=0x2200`、`xmac0 tx=0x60010001`）**内部还有两个亚型，只差 `nppt 8c` 一个字段**
+（`0x00000670` 613 行 / `0x00000071` 306 行），而这两个亚型在「有流量的那次启动」和「kick 出来零流量的那次」里都出现过
+⇒ `8c` 不是档位证人。另外 `nppt 88=0x00000c78` **只**与 2.5G 档那一族（`7580=0x9416`、`bmcr=0x2140 anctrl=0x0000 dig=0x2000`、
+`90=0x380b`）同时出现，1G 档从来没见过 ⇒ 它是**档位的影子，不是通不通的影子**。
+所以计划书 §96.49「witness 全对而流量为零」这条不会因为「再找一个字段」而被推翻：**判据必须是流量本身**。
+
+**二：`判据 (b)` 有一条更便宜、而且更严的证人——板子自己发 ping。**
+归档里板子侧的 `ping 192.168.9.25` 结果一直都在，两种结局都见过（例如同一条 `lane:` 形状下出现过
+`2 packets transmitted, 2 packets received, 0% packet loss`，也出现过 `2 packets transmitted, 0 packets received, 100% packet loss`）。
+`pcrxwatch` 只证明**PC 收到了板子的帧**；板子自己 ping 通 PC 要求**去和回两个方向都成立**（板 TX → 线 → PC → PC TX → 线 → 板 RX），
+所以它是 (b) 的更强形式，而且一条串口命令就够，不需要 PC 侧看守同时在线。
+⚠ 用这条时必须注意上面那个对齐的固有局限：`lane:` 行是**最后打印的那一条**，可能已经陈旧（这批命中全在 uptime 32 s 附近，
+而 ping 是之后跑的），所以「某一行的形状 ↔ 某一次 ping 的结果」在归档里**不是可靠配对**，
+这一条只是把「板子 ping 通/不通」这个证人本身证明为**可读且两种结局都出现过**；
+真正的配对要在轮里现场做：**读 witness → 立刻 `ping -c 4 192.168.9.25` → 再读 witness**。
+（这条局限的成因就是上一条 §96.52 里那条方法教训：**从归档里读驱动的节奏，只能用驱动主动打的行**；
+我用「最后一条 `lane:` 行」去给一次 ping 定性，中间隔着的可能正是若干秒的其它操作，所以配对不可靠。）
+
+### 96.54 #287 那一轮该看到什么：从既有启动时间锚点推出来的预测单（2026-10-31 01:0x，全部离线）
+
+**测到的锚点**（最近一次冷启动，pre-`f5d573e` 内核，`staging/ctl/serial.log`）：
+
+| uptime | 事件 |
+|---|---|
+| 1.571 679 s | `the SerDes option is set to the 1G class (75f3 030d->0002 …)` |
+| **1.581 692 s** | **同一句话再来一遍**，时间戳不同 |
+| 2.330 607 s | `Uni SerDes lane set to SGMII mode` |
+| 6.342 307 s | `16100000.phy: Uni SerDes 1G profile written: mode 0x101 already, image differs in 0/49` |
+| 19.761 924 s | `eth0: Link is Up - 1Gbps/Full` |
+| 20.601 066 s | `sk-nat: masquerade installed on eth0` |
+
+**#287 会改变的两件事**：`serdes_set()` 里多出 AN restart + 等 AN 谈完（实测一次要 **4.4 s**，上限 40 × 200 ms = 8 s），
+以及 restart 有了 **3 次上限** 与 **15 s 冷却**。⇒ `Uni SerDes 1G profile written` 那一行预计从 6.34 s 推到 **≈11–15 s**，
+`eth0 Link is Up` 跟着后移；这是设计意图（近端在远端已锁档之后才初始化），**不是回归**。
+
+**这一轮必须读的三样，第一样就是判据本身**：
+
+1. **`attempt %u/%d` 这个数字**。上面那两行相隔 10 ms 的重复句，有两种解释：真跑了两次，或者只是串口/日志的重放。
+   驱动里 probe 只有**一个** `serdes_set(priv, false)` 调用点（`17fe20f` 之后在 `:3489`），
+   所以按代码只该有一次。#287 会把次数打出来：
+   - 若两行分别是 `attempt 1/3` 和 `attempt 2/3` ⇒ **probe 一次就吃掉 2 个额度**，整轮只剩 1 次，
+     15 s 冷却下三次会在 **≈32 s** 用完（probe、watch 首轮 ≈probe+2 s、+17 s、+32 s），
+     那 `no more auto-negotiation restarts this boot` 会来得很早，后面的自愈实际是哑的 —— 这一版就白测了；
+   - 若两行都是 `attempt 1/3` ⇒ 重复是日志重放，额度还剩 2，行为按上面预测走。
+
+     **01:3x 把「watch 首轮」的时间从代码里钉死（这条把上面的 ≈probe+2 s 改窄）**：`lane_heal_due` 全文件只在
+     `:941` 被赋值，所以它的初值是 0，而 `time_after_eq(jiffies, 0)` 在开机之后**永远为真** —— 首轮**不受 15 s 冷却管**，
+     这是设计如此（第一次「看一眼再修」本来就该尽早），不是冷却失效。
+     真正的时刻来自 `:3847-3848`：`lane_start = jiffies` 和 `schedule_delayed_work(2000)` 都在 probe 那次
+     `serdes_set()` **返回之后**才执行，而那次返回前面还要等 AN（实测 4.4 s，上限 8 s）。
+     ⇒ 首轮 ≈ **1.57 + (AN 等待) + 2 s ≈ 8 s**（AN 谈得完）或 ≈ **1.57 + 8 + 2 ≈ 11.6 s**（AN 顶到超时），
+     三次额度的预期时间线是 **[1.6 s, ≈8 s, ≈23 s]**，不是 [1.6, 3.6, 18.6]。
+     读表时按前者判「额度烧得早不早」；若 `attempt 2/3` 落在 ≈3.6 s 而不是 ≥8 s，那说明 probe 那次 `serdes_set`
+     根本没等到 AN 结束就返回了，是另一条要查的路径。
+2. **`auto-negotiation is complete … after N ms` 的 N**。4.4 s 是实测值；如果 N 顶到 8 000 ms（超时），
+   说明远端在这版里谈不完，近端初始化又回到「对着一个没谈完的远端」，判据 (a) 的失败原因就换了个人。
+3. **witness 之后立刻板侧 `ping -c 4 -I eth0 192.168.9.25`**（§96.53 那条）。`0% packet loss` 是 (b) 的强形式。
+
+**判据与下一步的对应关系**（别让一轮变成没有出口的猜测）：
+- (a) 成立且 (b) 成立 ⇒ 顺序假设成立，进 M3 的 G3 复验（第二次冷启动）与 M4。
+- (a) 成立、(b) 不成立 ⇒ 与 §96.49 的运行期结果同形，下一个要分离的变量才是计划书 §5 第 4 条（XPCS0 那四个 `xpcsw` 字）。
+- (a) 不成立 ⇒ 先看第 1 条有没有把额度烧光；额度烧光造成的 (a) 不成立**不能算顺序假设被证伪**，那是限流的代价。
+
+### 96.55 #287 的产物已在板外验完（2026-10-31 01:4x，全程离线，没上板）
+
+**发布这一步怎么证的**：这台机器的匿名 API 配额在 01:39 打光（`5.175.188.69`），所以不能用 API 判断 release 在不在。
+改用非 API 探针 `releases/tag/<tag>`：`skd840n_flash_287_41094189517` → **HTTP 200，published 2026-10-30T17:40:05Z**；
+同一探针打一个不存在的 tag（`skd840n_flash_999_00000000000`）→ **HTTP 404**。两向都有控，200 不是假信。
+资源清单也不走 API：`releases/expanded_assets/<tag>`，八项齐（`flash-uImage`、`flash-dtb.bin`、`flash-rootfs.jffs2`、
+`flash-sysupgrade.bin`、`flash-set.tgz`、`flash-sk-d840n.sh`、`sha256sums`、`sha256sums-release`）。
+
+**字节层面**（下到 `staging/lineage287/`，**故意不碰 `staging/trial`**，那目录是串口轮的）：
+
+| 文件 | 大小 | sha256 对清单 | md5 |
+|---|---|---|---|
+| `flash-uImage` | 8 131 868 B | **MATCH** `6d61e33f99f9d55f…` | `6cc34d4a97d1631192a3f39f13503a04` |
+| `flash-dtb.bin` | 13 357 B | **MATCH** `96cad0e5fb259c59…` | `2b2855f98718397635ec99c0b8ff4476` |
+
+⇒ 两点直接改变这一轮的形状：**dtb 与仓库根 `staging/trial` 里 10-30 14:47 那份是同一个 md5**，
+所以这轮真正换掉的字节只有内核一个文件（staged 那份是 8 131 213 B / `b960592dc3…`）；
+而 `gate.src` 仍然必须在新 uImage 落回 `staging/trial` **之后**重新生成，因为它记的是 `uimage_md5`。
+
+**血缘判据（就是 §96.54 第 1 条那把刀）**：`python ci-build-repo/tools/checkimagestrings.py staging/lineage287/flash-uImage`
+→ inflated 20 637 704 B、`ih_name='OpenWrt mainline 6.18.38 sk-d840'`、**四句 needle 全 HIT**，
+包括 #286 缺的那句 `no more auto-negotiation restarts this boot`（#286 实测 3 HIT + cap MISS → exit 1）。
+所以 #287 确实带 `2093f82` 的上限与冷却，不需要拿 banner 的编译时间去猜。
+（`ih_time=1793381988` 换算是 17:39:48Z，和发布时刻吻合 —— 但这只是**一致**，不是证据，理由见 §96.50 那段撤回。）
+
+**这一节顺带记一个工具的错，因为它差点把结论编出来**：`tools/waitrun.sh` 的第一版在 API 返回限流包
+（只有 `message`/`documentation_url`，**没有 `status` 字段**）时，把 `None None sha= started=None` 当成了终态，
+于是打了一次 `FINAL` 并 exit 0 —— 而那一轮还在编。已改成：`status` 不在已知值集合里一律算 `UNKNOWN`，
+退避（默认 300 s，`SKD_WAIT_BACKOFF` 可调）继续等，只有已知终态才打 `FINAL`；
+轮数上限用 `SKD_WAIT_POLLS` 可调，好让「限流不许编结论」这条能在不等两小时的情况下被控测。
+教训与既有那条「只会打 0 的闸门等于没有闸门」同源：**一个只会打印的监视器，比没有监视器更糟，因为它的输出会被读成答案。**
+
+### 96.56 「gate round 这条路今天走不通」——两条实测，一条**推翻兄弟会话给的理由**，一条**把我自己的探针也判为无效**（2026-10-31 01:5x，全程离线）
+
+刷机链的 §6 ⑤ 依赖「从正在跑的系统 kexec 进 gate 载荷」。兄弟会话的结论是这条路已死、活的门是 U-Boot + waiver。
+我去核他给的证据，结果是**结论可能仍然对，但他写在记录里的那条理由不成立**，而我自己补的探针同样不够：
+
+**1. 他的字符串判据在 #287 上直接被推翻。** 他的记录说 mainline 各代 `flash-uImage` 里
+`kernel/kexec.c` 独有的三句是 **0 hits**、只有 `kexec_file: Could not`。我把 #287 和厂商 4.19 两个 Image 都解出来数同一批串：
+
+| Image | inflated | `Could not allocate control_code_buffer` | `kexec_file: Could not` | `Crash kernel` |
+|---|---|---|---|---|
+| #287 mainline | 20 637 704 B | **1** | 2 | 0 |
+| 厂商 4.19（`flash-uImage.runrollback`） | 10 676 232 B | 1 | **0** | 1 |
+
+⇒ 「mainline 没有那句」这一条**不成立**：#287 里就有。他的结论也许还是对的（另外两条理由独立成立），
+但这一条不能作为依据，记在这儿免得下一轮拿它当证据用。
+
+**2. 我自己的符号判据无效，因为我给的 0 hits 两边都是 0。** 我改数 `/proc/kallsyms` 里应该出现的那些名字
+（`__arm64_sys_kexec_load` / `__arm64_sys_kexec_file_load` / `kimage_file_alloc_load`…）在两个 Image 里的出现次数：
+**两边全是 0**（连确定跑过 gate round 的厂商 4.19 也是 0）。0 hits 在「两个本该不同的样本上都为 0」时说的是**探针错了**，
+不是东西不存在 —— 厂商 4.19（LTS 4.19）的 arm64 符号前缀方案跟 6.18 不是一套，而 Image 里的 kallsyms 块能不能被
+朴素的字节串命中本来就没验过。**所以这一条不许作为任何结论的根据**（同 §96.55 那条同源：没有正控的 0 不是答案）。
+
+**3. 板上一次就能定生死，而且便宜。** 活系统的串口里打一条：
+
+	grep -c 'sys_kexec_load' /proc/kallsyms
+
+一次跑在 **mainline**（现在板上那版）、一次跑在**厂商 4.19**（gate 载荷本来就要跳进去的那个内核）。
+4.19 那一侧是**正控**：过去好几轮 gate round 就是从它 kexec 出去的，所以它必须非 0。
+mainline 那一侧为 0 ⇒ 「从 mainline 起 gate round」确实不可能，U-Boot + waiver 是唯一门；
+非 0 ⇒ 他这条理由作废，链子回到 §6 ⑤。两种结果都只花一条命令，比任何串数都硬。
+
+**4. 一条今天就可用的硬事实（它决定 waiver 上该写什么）**：`dtb` **在四个来源里逐字节相同**。
+
+	md5 2b2855f98718397635ec99c0b8ff4476 / sha256 96cad0e5fb259c59…
+	= staging/trial/flash-dtb.bin（#287）= flash-dtb.bin.run280 = .run282 = .run284 = .pre287-10-30-1447
+
+⇒ **#287 相对 10-30 那套 staged 图，唯一变化的字节在内核里**，这一条是证稳的（同一把尺：md5/sha256 两边都对过清单）。
+
+**但「所以现在 flash 里的 dtb 就是这一份」这句我当时判成「没证」，先前写太快，方向也是反的 —— 更正见本节末尾。**
+我当时只找了 `staging/ctl/` 里的 `bootflash-*.log`（10-27 的八个，含 run194/195/196，READ_OK 确实全 0）和 10-13 那批
+带 READ_OK 的 `round-K*.log`（dtb 是另一份 `5dc270ea…`），**没去找 U-Boot 那一侧的回读痕迹**，所以错在「凭据不在我看见的那两个文件里」
+被写成了「凭据不存在」。真正的凭据与它的语义：
+
+- `tools/ubflash.sh` 的 `stage()` 顺序是 `mtd write` → `waitfor WROTE-$part` → `mtd read $RB 0x0 $len` →
+  `crc_gate "$RB" "$len" "$want" … "$part read-back"` → **然后**才 `marker DONE-$part`（`:296-301` 实测逐行读过）。
+  ⇒ `DONE-dtb` 的含义是「按 pad 长度整片读回、crc32 与 PC 侧 pad 相等」，不是「命令发出去了」。
+- `staging/ctl/serial.log`（129 458 307 B）里 `FLASH-START-280/282/284` 各 3 个回显，`DONE-dtb` 共 15 处，
+  三处成簇落在字节偏移 **7 366 450 / 12 640 815 / 126 892 304**（每簇 3 行同偏移 = 回显 + `printenv mk` + 重放，与计划书 §7.10 一致，
+  那个 126 892 304 也和他引的 `DONE-dtb@126892304` 逐位相同）。
+- 尺子对得上：我这边 `sh tools/ubflash.sh 287` 的 PC 侧预演出 `flash-dtb.bin … padcrc=cfda7eac`，
+  pad md5 `a0f1b0e4…` —— **与 280/282/284 三张 waiver 记的 `dtb=` 同一个值**。
+
+⇒ **板上 dtb 已被回读 crc 证明等于 #287 的 dtb**。所以 §7.9 里「写前把 dtb 读回来比」这一读，性质从**取证**降为**确认**；
+`stages=kernel` 不是省面积的冒险，而是有据的最小擦除面。
+
+### 96.57 两道门说的是**两种许可证方言**，而 #287 的 dtb 补好后与 280/282/284 那三张**同一个 md5**（2026-10-31 02:0x，全程 PC 侧）
+
+把 `gatecheck.sh` 从头读了一遍，再拿两条只差字段名的假 permit 做对照，结论是**两道门互不相通**：
+
+| 门 | 谁检查 | 认哪种行 | 匹配的是 |
+|---|---|---|---|
+| Linux 侧（`flash-round.sh` / `flash-direct.sh`） | `tools/gatecheck.sh` | `grep -F "uimage_md5=<md5>"` + `grep -F "dtb_md5=<md5>"` | **原始文件 md5** |
+| U-Boot 侧（`tools/ubflash.sh`） | 自己读 `run=<N>` 那一行 | `^ts=… run=287` 且 `uimage=`/`dtb=`/`root=` 三个字段 | **补齐后的 pad md5** |
+
+对照实验（同一对 md5，只差字段名，`PERMIT=` 是它支持的）：
+`padded_md5 uimage=<M> dtb=<M>` 这一行喂给 gatecheck ⇒ **REFUSE，exit 1**；
+`uimage_md5=<M> dtb_md5=<M>` 同一对 md5 ⇒ **ALLOWED，exit 0**。
+⇒ **10-19 之后所有 waiver 那种写法，gatecheck 根本看不见**（10-13 那批 `proven=live-partition-match` 才是它认的方言）。
+所以「走 waiver」和「走 Linux 侧的门」这两件事**不能混着点**：`preflight.sh` 末尾那段 heredoc 恰恰让操作者在 gate round 之后去跑
+`flash-direct.sh write` —— 拿一张 waiver 配这条链，会在窗口里被 gatecheck 拒绝。这不是 bug，是**两条互斥的路**，得先选一条。
+
+**#287 的 pad 值（`sh tools/ubflash.sh 287` 在 PC 侧算出来的，它到 permit 那步就 HALT，什么都没发给板子）**：
+
+```
+ub-flash-uImage.pad        f44e0a742898cc8602adf270e06c5602
+ub-flash-dtb.bin.pad       a0f1b0e442c3e4de76d977994506683d   ← 与 run=280/282/284 三张 waiver 的 dtb= **逐字相同**
+ub-flash-rootfs.jffs2.pad  937130f377268cded0b501f0a7ecc369
+```
+
+三条能读出来的东西：
+1. **dtb 这一份已经连续四轮是同一对字节**（原始 `2b2855f9…`、pad `a0f1b0e4…`）。
+   本节先前问「284 那次写入到底落了没有」，答案在 §96.56 第 4 条末尾补齐了：`ubflash.sh` 的 `DONE-dtb` 打在**整片回读 + crc 相等之后**
+   （`:296-301`），而 serial.log 里 280/282/284 三段的这个 marker 都在（偏移 7 366 450 / 12 640 815 / 126 892 304）
+   ⇒ **板上 dtb 就是这一对字节，已由回读证明**；于是「再擦一遍 dtb」确实是在擦相同内容，`stages=kernel` 是有据的最小擦除面，
+   窗口里那一读只是确认。
+2. **root 每轮都不一样**：三张 waiver 的 `root=` 分别是 `e5d9758e…` / `b0b43013…` / `bd36388f…`，#287 是第四个值 `937130f3…`。
+   也就是说这三次「顺手把 root 也擦了」每次都换了一遍 240 MiB 的文件系统 —— 与本案 §0 的非目标正面冲突，
+   而且这正是为什么 `stages=` 必须由许可写死、`STAGES` 永远不能超出它（`ubflash.sh:189-198`）。
+3. kernel 是新值（`f44e0a74…` vs 284 的 `99724c8f…`），与「本轮唯一变化的就是内核」一致。
+
+**可签的一行（我没有写进 permit —— waiver 是机主的决定，不是我的）**：
+
+	sh tools/permit-waiver.sh 287 "kernel" "<机主原话>"
+
+它需要 `ub-*.pad` 三个文件（现在都在）和 `.run287` 逐字节副本（已放好），写出的就是上面那三个 pad md5。
+
+### 96.58 一次现成的「前」基线：02:03 的冷启动是**板上那一版旧内核**，lane 全线钉死在 `758d=0x0010`（2026-10-31 02:1x，只读日志，没发命令）
+
+`staging/ctl/serial.log` 在我 01:49 读过的位置（129 458 307）之后又长了 63 018 B，截止 02:03:45。
+这一段是一次**完整冷启动**（`SPI NAND / start read bootloader / autoboot: 02:03:03 / U-Boot 2021.01-svn308776 / Jump`），
+所以它不是我先前引用过的那几次，是新一轮的现场。要点：
+
+- **身份**：`Linux version 6.18.38+ (runner@runnervmcwoy2)` —— CI 那台构建机出来的 mainline。
+  **但它是 `attempt` 0 次、`auto-negotiation` 0 次**：整段里这两句一个字都没有。
+  ⇒ 这不是 #287（#287 两句都会打，`checkimagestrings.py` 的四句 needle 已证它们在里面），
+  **板上跑的仍是没带 AN restart 的那一版** —— 与「#287 从来没有被刷进去」（`flash.permit` 最后一行还是 `run=284`，
+  `ubflash.sh 287` 在 permit 那步 HALT）完全一致。banner 里那个 `6.18.38+` 分不开这两版，
+  这正是 §96.50 里撤回过的老问题，今天又现场演示了一遍。
+- **lane 的字**（21 条，从 7.408 s 到 37.920 s，全部逐字相同）：
+
+      lane: far an=0x002d 758d=0x0010 7580=0x9412 | near bmcr=0x1140
+
+  `758d` 的 bit2（码字）= 0 ⇒ 远端还没送出码字，就是本计划书要扳的那个死态；
+  `an=0x002d` 却已经带 link / complete / partner 三位 —— **谈完了但没有码字**。
+  `7580 & 0x3f = 0x12`，既不是活态的 `0x02`（1000BASE-X）也不是 2.5G 的 `0x16`。
+- 同一版里 `eth0: Link is Up - 1Gbps/Full` 仍然打出来（近端认为链路在），而 PC 侧 `ping 192.168.9.1` 在 02:15:52 仍是 False。
+  ⇒ **近端的 Link Up 不是承载证据**；判据必须是收到帧（§96.53 那条板侧 `ping -I eth0` 或 PC 侧 `pcrxwatch`）。
+- **节奏核对**：34.920 / 36.420 / 37.920 相隔 **1.5 s**，与判决 AO 改口后的「一次采样实测 ~1.5 s」一致，
+  也与 §96.54 用它做锚点的理由一致（不能拿我自己轮询的时间戳去量驱动的 worker）。
+
+**用处**：这是 #287 上场前**最新、带时间戳的死态快照**，从偏移 129 458 307 起可原样复现；
+#287 那一轮要对照的「witness 有没有扳起来」就以这行 `758d=0x0010 / 7580&0x3f=0x12` 为零点。
+
+**台面算术**：02:03:03 的 autoboot 说明通电边沿在 ≈02:02:5x；插座约定通电 20 分钟 ⇒ 本段 ON 大约到 **02:22–02:24**（边沿会漂，不是精确值），
+下一个冷启动边沿在其后 30 s。这一段读日志时**没有向 `sercmd.txt` 发过任何命令**，串口那一轮没被插队。
+
+### 96.59 `=== >>> autoboot` **不是启动计数器**；插座节奏要用「内核 uptime + 文件 mtime」来量。顺带给 `lan1roundcheck.sh` 补两道会说话的硬门（2026-10-31 10:3x–10:4x，全程 PC 侧只读，没发命令）
+
+**触发点**：给 `tools/lan1roundcheck.sh` 加「插座还在不在循环」这道门时，我把 §7.11 用过的那条 grep 原样搬了进去，
+它打印 `1852 in the tail window` —— 而那个 16 MB 窗口里真正的边沿只有 **3 个**。一个只会 PASS 的门不是门，所以先查计数。
+
+**计数拆开**（同一个 `tail -c 16000000` 窗口，逐条 `grep -ac`）：
+
+| 串 | 次数 |
+|---|---|
+| `=== >>>` | 18323 |
+| `sent:` | 16336 |
+| `a boot is starting` | 923 |
+| `the loader is at its prompt` | 875 |
+| `the kernel is up` | 109 |
+| `Linux version` | 167 |
+| 单词 `bootloader` | 525 |
+
+⇒ `=== >>>` 的绝大多数是中继自己写的 `=== >>> HH:MM:SS sent: …`（启动标记和发送标记共用前缀），
+我那条 `=== >>> <time> autoboot` 正则本身没错；**但 `a boot is starting` 自己也被灌了约 300 倍**。
+
+**灌它的不是我的命令回显，是板子自己的话。** 日志里有 `start read bootloader`、`enter bootloader...`，
+而 [tools/serrelay.ps1:127](file:///c/UGit/openwrt/SK-D840N/tools/serrelay.ps1#L127) 的相位判据是
+`$banner -cmatch 'bootloader|DDR3|pll init|Hit any key|U-Boo'`（4 KB 滚动尾巴，只在 `$phase -ne 'boot'` 时打标记）：
+一次启动过程中 U-Boot 反复说 `bootloader`，相位就被一次次从 `prompt`/`linux` 拽回 `boot`，每拽一次打一条 `autoboot`。
+`the kernel is up` 同理，判据是 `$txt -match 'Linux version'`，任何含该词的行（包括回显）都触发。
+
+- **撤回一条方法**：以后凡是「数 `=== >>> autoboot` 来断定启动了几次 / 插座还在不在切电」的写法都不成立。
+- **§7.11 的结论保留，但它的证据不是计数，是间隔**：08:53:03、09:13:33、09:34:03、09:54:33、10:15:03、10:35:33
+  严格等差 **20 m 30 s**（夜里 02:23:33 起那 23 条同样等差）。污染不会刚好落在等差上。
+- **换掉的量法**（伪造不了，且误差可测）：`minutes_since_boot = (now − mtime(serial.log)) + 最后一条 `[   NNN.NNNNNN]` 的 N`。
+  现测 mtime 440 s 前 + uptime 37.981 s ⇒ 折算启动时刻 **10:35:37**，与中继自己的标记 **10:35:33** 差 4 s。
+  门里取最后 8 MB（该窗口打印 684 条标记，正说明不能用它做计数），阈值默认 `EDGE_MAX_MIN=25`。
+
+**新门一（`=== 1b`）：staging 那三段是不是 CI 发的那三段。**
+之前 §1 全是「文件和 8 分钟前我自己抄的副本相比」，一个下载时就错/被截断的 kit 能一路 PASS。
+现在从 `flash-uImage.run287.source` 第一行读 tag `skd840n_flash_287_41094189517`，
+`curl -L`（**必须带 -L，asset 走 302**；我第一次漏了，拿回 0 字节）取 `sha256sums-release` 逐条比：
+
+- `flash-uImage` → manifest `6d61e33f99f9d55f6d9377dff4b8d20bb0982f667ac981d92374fa30e803d6fb`，staging 实测**同一个**；
+- `flash-dtb.bin` → manifest `96cad0e5fb259c592fd14f0f7c639b585a0125a80737bb89a834f8761d1b004c`，staging 实测**同一个**；
+- 再用 `releases.atom` 取 `skd840n_flash_<n>` 的最大 n（现测 287），n>RUN 就 FAIL：CI 出了更新的一版，计划书里的 kit 过期。
+- 控制：把 flash-uImage **砍掉最后 1 个字节**塞进临时树 `staging/.ckctl` 跑，得到
+  `HARD FAIL flash-uImage sha256 03da9727f710... != manifest 6d61e33f99f9...` 和
+  `HARD FAIL CI published run 287 after 280 - this plan's kit is stale`，退出码 1。临时树是我自己的草稿，已删。
+- 只有显式 `OFFLINE=1` 才跳过，且会打印「没有对 CI 复验」。
+
+**新门二（`=== 7`）：仪表还剩多少命。**
+读中继进程的 `CreationDate` 和它命令行里的 `-Seconds`，算还剩几分钟捕获，低于 `RELAY_MIN`（默认 3600 s）就 FAIL，
+并给出重举命令 `powershell -NoProfile -ExecutionPolicy Bypass -File tools/relayctl.ps1 start 21600`，附「`stop` 会放掉 COM3 句柄，绝不在捕获中途做」。
+现测 pid 58552 / 07:25:33 起 / 21600 s ⇒ 还剩 ~160 min，**约 13:25 到点**。
+控制：`RELAY_MIN=999999` ⇒ 该门 FAIL；`EDGE_MAX_MIN=0` ⇒ 插座门 FAIL；`RUN=284` ⇒ §1 与 §1b 双双 FAIL；都退出码 1。
+
+**踩到的 Windows 坑（它差点让我判成「新门从来不 FAIL」）**：本 Git Bash 里 `env FOO=1 sh -c 'echo hi'` **一个字节都不输出、退出码 0** ——
+`env` 把整条命令吃了。第一轮 7 个控制「无输出 + rc=0」读起来正是「门没生效」。
+改成赋值前缀 `FOO=1 sh tools/lan1roundcheck.sh`，六条 FAIL 如期出现。和 `timeout` 不能吃 shell 函数是同一家族的坑。
+
+**用处**：#287 上场前，`sh tools/lan1roundcheck.sh` 现在是唯一一条同时回答
+「staging 是不是 CI 的那三段 / 有没有更新的一版 / 插座还在不在切 / 串口还能录多久」的命令；
+它仍然不写 flash、不碰 `flash.permit`、不给控制台发一个字节。
+
+### 96.60 差点把「一个字节窗口」读成「一个时间窗口」：76 条 banner 看着像启动风暴，逐条挂上墙上时钟之后是 **每 1230 s 恰好一次冷启动**（2026-10-31 10:5x，只读日志）
+
+§96.59 之后我顺手做了个反向检查：取 `serial.log` 最后 6 000 000 B 数 `Linux version` —— **76 条**，
+每条前面都是 `CPU ON: Target cpu = 00000001 entry = 0x812574E8` / `CPU1: Jump to linux kernel entry`，
+`Kernel panic` 0 条、`Restarting system with command` 0 条。
+按「一个周期才 5 MB 日志」的直觉，这就是**板子在一个 ON 段里重启了 76 次**，那么 G4 的「冷启动 → ping → ssh」要抢一个几十秒的缝，整个无人值守设计都得改。
+
+**这个读法是错的，错在把字节窗口当成了时间窗口。** 给每条 banner 挂上它后面第一条中继墙上时钟（`the kernel is up` / `a boot is starting` 的 `HH:MM:SS`），
+74 个成对启动的间隔分布是：
+
+```
+1230 s × 42   ← 众数，正好是插座的 20 min 30 s
+其余是配对噪声（293 / 626 / 856 / 1254 / 1328 / 1687 / 2185 / 3367 / 5673 s 各 1）
+```
+
+⇒ **一个 ON 段恰好一次冷启动**，没有启动风暴。字节口径也对得上：6 MB / 74 次 ≈ **81 KB 一次启动**，
+而今天实测日志增速 ≈ 100 KB/h（63 KB / 38 min）⇒ 那 6 MB 覆盖的是 **≈25 小时、74 个边沿**，不是 25 分钟。
+`attempt [0-9]*/` 在这 6 MB 里仍是 **0 条** —— 与「#287 从未上板」一致。
+
+**留下的两条规矩**（写这里是因为它们各自骗了我一次）：
+1. 数日志之前先**给窗口定年**：用 `文件增量 ÷ 单位时间增速` 或直接把行挂到墙上时钟上，再谈「多少次」。
+   `staging/ctl/serial.log` 里没有任何行级时间戳，中继标记是唯一的时间源。
+2. 「每 ON 段一次冷启动」现在有**两种独立证据**：§7.11 的 23 条等差时间戳，和这里 42 对 banner↔时钟间隔的众数 1230 s。
+   后者不依赖任何计数，也不受 §96.59 那条污染影响。
+
+**顺带**：G4 的按边沿取样本来要人守着（+20.5 min 一次），新增 [tools/lan1rounds.sh](../../tools/lan1rounds.sh)：
+它只认**这个脚本开始之后**新出现的字节里 `[    0.xxxxxx] Linux version` 这种带 uptime 的真 banner
+（中继标记不能用，理由见 §96.59），抓到后等 `POST_BOOT` 秒，再把 `acceptlan1.ps1 -PingCount 25`、
+`lan1sweep-ssh.sh` 和 `attempt/758d` 的见证一起落到 `staging/ctl/lan1rounds*.{log,txt}`；
+`DRY=1` 只探测不碰板子（10:5x 就在用这个跑排练，板子上仍是 pre-#287，所以那一轮**必须**报 ping 不应答）。
+它对板子只读：不写 flash、不进 `sercmd.txt`、不发 `reboot`。
+
+### 96.61 一次真实写轮的时间预算：**dtb+kernel = 60 s，整套 dtb+kernel+root 也只有 92 s**（2026-10-31 11:1x，只读 `serial.log`）
+
+§7.9 那张执行卡里「一个 ON 段够不够写完」一直是**上界推算**。这个数其实早就在板上留过：run 284 那一轮
+（10-30 写的，`stages=dtb kernel root`）在日志里留下四个可定位的字节锚点，每个锚点取它**后面第一条**中继墙上时钟：
+
+```
+FLASH-START-284 @127 530 696 -> 15:03:49
+DONE-dtb        @127 537 630 -> 15:04:23      +34 s
+DONE-kernel     @127 540 606 -> 15:04:49      +60 s
+DONE-root       @127 543 176 -> 15:05:21      +92 s
+```
+
+⇒ **本轮真正要做的 `dtb kernel` 两阶段约 60 s**（含把 8.1 MB TFTP 进 RAM、擦、写、按 pad 长度整片回读比 crc32），
+连 240 MiB 的 root 一起写也只要 92 s。而 `DONE-<part>` 是放在回读 crc 闸**之后**的（§7.10（二）），
+所以这 60 s 是「写完并且验完」的时间，不是「发起写」的时间。
+
+**用处（把 §7.9 的算术钉死）**：一个 ON 段实测 1200 s、断电 30 s ⇒ 写轮用掉 60 s 后**同一段还剩 ≈19 min**，
+够再做一次 prompt 侧的读回确认或一次 ssh 取样。反过来，如果哪一轮「写完就到断点」，那不是窗口不够，而是**流抢 prompt 抢晚了**，
+要查的是 `ARM=1` 起在边沿之前还是之后（§7.10（四））。取样侧的数也一起钉住：`lan1rounds.sh` 在 boot+`POST_BOOT`=45 s 取样，
+`acceptlan1.ps1 -PingCount 25` 约 25-30 s，`lan1sweep-ssh.sh` 一条会话约 1 s ⇒ **一轮 G4 取样落在 boot+80 s 左右**，离断点很远。
+
+### 96.62 一份**带 IP 层的「前」基线**（11:19 从串口现取）+ 中继换班后重新验过全双工（2026-10-31 11:1x–11:2x）
+
+**先补仪器**：中继按 §7.9 的正规渠道换班（`relayctl.ps1 stop` ⇒ `remaining: 0`；`start 21600` ⇒ 新 **pid 7752**，
+从 11:18:32 起 **到点 17:18:32**）。换班前先确认了两件事才敢动手：`status` 只有 1 个中继、`serstop`/`sercmd.txt` 都 False（**没有别的发送者**），
+以及 [tools/serrelay.ps1:44](file:///c/UGit/openwrt/SK-D840N/tools/serrelay.ps1#L44) 用的是 `StreamWriter($logPath, **$true**)` —— **追加**模式，
+所以 131 MB 历史不会被第二次打开清掉（换班后文件从 131 210 253 只增不减，实测 131 213 980）。
+换班后**没有假设它活着**：`serrelay.ps1` 自己的注释就写过「停止记录、停止发送、却仍然占着 COM3」这种看起来活着的样子，
+所以走了一次 `sh tools/concmd.sh 'echo RELAY-CHECK-1118' …` 的**全双工**验证 —— 命令送进去、回声和答复都出现在 `serial.log` 偏移 131 212 127，exit 0。
+
+**这份基线值得单独记，因为它把嫌疑压到 IP 层以下**（同一批命令、uptime 143.59 s，即 11:16:37 那次冷启动的同一版 pre-#287）：
+
+```
+ip -br addr
+  br-lan        UP   192.168.9.1/24  fd8a:adc9:1b52::1/60
+  eth0          UP   fe80::d245:8dff:fe84:900/64
+  lan-cpu0      UP   fe80::…
+  lan1@lan-cpu0 …    LOWERLAYERDOWN        lan2 lan3 lan4 同
+  lan5@lan-cpu0 UP                          ← 启动时那句 `switch lan5: Link is Up - 2.5Gbps/Full`
+dmesg | tail -2（36.43 s / 37.93 s 两条逐字相同）
+  far an=0x002d 758d=0x0010 7580=0x9412 | near bmcr=0x1140 anctrl=0x0005 dig=0x2200
+  nppt 84=0 88=0x670 8c=0x670 90=0x0000280b | xmac0 tx=0x60010001 rx=0x3e8000c7 …
+```
+
+同时 PC 侧 `ping 192.168.9.1` 不应答（`lan1roundcheck.sh` 现测 False，`tcp/22 closed`）。⇒ **地址配置不是嫌疑**：
+`br-lan` 上确实挂着 `192.168.9.1/24`（`02_network` 那个默认值真的生效了），链路在 DSA 侧也报了 2.5G 的 link up，
+但帧就是过不去 ⇒ 本案的失败在 **MAC/交换/CPU 通路**，不是 IP/桥配置。这条以前只是推断，现在是同一台板子上同时刻的两条读数。
+原样存在 **`staging/ctl/lan1-before-20261031-1119.clean`**（5 052 B，就是那批命令的整段串口往返）。
+
+**一条仪器脾气（差点读成缺陷）**：那一批里 `uname -a` **一个字都没答**，而它前后的 `cat /proc/uptime`、`ip -br addr`、`dmesg | tail -2` 全都答了
+（`=== >>> 11:18:59 sent: uname -a ===` 后面直接是下一条的提示符）。⇒ **半双工串口会整条吃掉某个命令的答复**，
+所以「某条见证是空的」不能读成「那个东西不存在」；身份这件事要从**启动 banner**（`serial.log` 里 `[ 0.000000] Linux version 6.18.38+ (runner@runnervmcwoy2)`）
+和**新版才会打的句子缺席**（`attempt N/3` = 0）这两条来定，不是靠一条 `uname`。
+顺手把 `ip -br addr` 加进见证表（[tools/lan1sweep.sh:66](file:///c/UGit/openwrt/SK-D840N/tools/lan1sweep.sh#L66) 之后），
+`lan1sweep-ssh.sh` 那边 `DRY=1` 重新数过：**27 条、一次会话**，`ip -br addr` 在解析出来的集合里 ⇒ #287 那两轮会直接产出与这份基线**逐字可比**的同一条读数。
+
+**这条 `dmesg` 副作用把插座门自己也照出来了，并已改硬（11:2x）**：`lan1roundcheck.sh` 的插座门原来只信 uptime 公式，
+而 `uname/dmesg` 这类**把旧 uptime 重新打印一遍**的命令会让它把启动时刻算晚（实测晚 110 s）。
+改法：uptime 公式与「中继最近一条 boot 标记」两个年龄一起算，**取较不利的那个**（标记被灌只会显得太新，公式被 reprints 影响会显得太晚，
+取 max 落在两者都骗不了的方向）。两条控制：
+① 造一份合成日志（标记 01:00:00 + 最后一行 `[30.000000]`）⇒ 打印 `booted 624.8 min ago` 并 FAIL（原来会被公式判成 0.5 min 而放行）；
+② `EDGE_MAX_MIN=0` 对真日志 ⇒ FAIL。改的过程中我自己写错过一次单位：把标记的「当天秒数」去减 POSIX epoch，
+得到 `29 889 607 min`，**正常跑一次就直接红了** —— 这条正好证明「一个控制都不缺的门」为什么会当场抓住写门的人；
+修完真日志读数是 `newest boot 11:16:33T = 7.9 min ago（公式 6.0、取不利者）`，全绿 exit 0。
+
+### 96.63 **`lan5: Link is Up - 2.5Gbps` 是 DTB 声明的固定链路，不是量到的 PHY link** —— G4 不能拿它当承载证据（2026-10-31 11:2x，全部离线：日志 + `flash-dtb.bin`）
+
+11:16:37 那次启动里 phylink 自己把语义说尽了（`serial.log` 偏移 131 150 000 之后，逐字）：
+
+```
+switch lan1: configuring for fixed/internal link mode
+switch lan2/lan3/lan4: configuring for fixed/internal link mode
+switch lan5: configuring for fixed/2500base-x link mode      ← 面板 LAN1 那只口
+switch lan5: Link is Up - 2.5Gbps/Full - flow control off
+```
+
+`fixed/…` 就是 **phylink 的 fixed-link 模式：这个口没有挂任何 PHY**，速率与 up/down 都来自设备树里的声明，
+所以那句 `Link is Up` **无论外面的 RTL8226 有没有谈成都永远打**。旁证：`flash-dtb.bin` 的串表里
+`2500base-x` 只有 **1 处**、`phy-mode` 属性名 1 处、`fixed` 14 处，`lan1..lan5` 各 1 个 label —— 五只口全是固定链路。
+⇒ RTL8226 在 mainline 下**只被我们的 `lane_watch` 用 MDIO 旁路操作**，它的链路状态从来不进 phylink。
+
+**这条对 #287 那一轮的读法有三层影响**：
+1. **`ip -br addr` 里 lan5 UP 不算证据**，它在死态和活态都长一样；§96.62 那份基线里我特意把它列出来，是为了证明
+   **`br-lan` 上挂着 `192.168.9.1/24`（IP 层配置不是嫌疑）**，不是证明链路。⇒ G4 判据维持 `ping 4/4 + ssh 登录`，**不要加「lan5 carrier=up」这一项**。
+2. 就算 #287 的 AN restart 把码字扳起来（`758d` bit2 从 `0x0010` 变起），`ip -br addr` 也**不会有可见变化** ——
+   会变的只有 MDIO 字（`758d`/`7580`）、XMAC0 的 `rx=`、以及 PC 侧是否真收到帧（`pcrxwatch` 的 `rx_delta`）。
+   兄弟会话那轮如果只看 netdev 状态，会得出「witness 扳动了但口还是那样」的错误结论。
+3. **承载判据只有两台**：PC 侧网卡自计数（现已在跑，见下）与板侧 `ping -I eth0`；其余都是代理。
+
+**`pcrxwatch` 已经提前架好**（不必等轮开始再举仪器）：`Start-Process … pcrxwatch.ps1 -Seconds 21600 -Every 10`，
+日志 `staging/ctl/pcrxwatch-20261031.log`，`survivor PID 36324`（第一次调用超时后被我重放了一次，出现两个实例同写一个文件，
+已 `Stop-Process -Id 44696` 杀掉旧的那个，`grep -c 'start rx='` = **1** 才算数）。
+起点 `rx=741 705 852 tx=845 114 358`，头 100 s 的读数 `rx_delta=0 / tx_delta=42…2916` —— 与「PC 在问、板子没答」一致，
+这就是轮里要看的差分基线：**任何一个非零的 `rx_delta` 都是板子真的发出过帧的证据**。
+（同一轮 `lan1rounds.sh` 把它按轮接上了，11:38 在**已知死态**的板上读出 `max rx_delta=0 sum=0` ⇒ 这是一次合格的负控。）
+
+### 96.64 三条 run 的 Image **banner 一字不差**（CI 把时间戳钉住了）⇒「刷完 banner 没变」不是失败证据（2026-10-31 11:4x，离线：把各条 uImage inflate 之后直接比）
+
+`lan1rounds.sh` 在 11:37:14 抓到那个边沿（比预报的 11:37:07 晚 7 s），完整打出活体的 banner：
+`Linux version 6.18.38+ (runner@runnervmcwoy2) … #0 SMP **Mon Oct 26 04:58:01 2026**`。
+日期是 10-26，可 `kernel` 分区是 10-30 15:04 由 run 284 写完并回读验过的（`DONE-kernel@127 540 606`）。把 staged 的几条各自解开头再比，原因就出来了：
+
+| 文件 | uImage md5 | inflate 后 md5 | inflate 后大小 | `#0 SMP` |
+|---|---|---|---|---|
+| `flash-uImage`（= #287） | `6cc34d4a97d1…` | **`3762c24ada3a…`** | 20 637 704 | `Mon Oct 26 04:58:01 2026` |
+| `flash-uImage.run284` | `b960592dc33b…` | **`4d83f3c37f9a…`** | 20 637 704 | **同一字** |
+| `flash-uImage.run280` | `2153fd68a28c…` | **`7486800f49d5…`** | 20 637 704 | **同一字** |
+
+⇒ **CI 钉住了 `KBUILD_BUILD_TIMESTAMP`**（三条 run 的 `#0 SMP` 完全相同、大小也相同）。
+§96.56 那条「banner 不是血缘证据」从今天起有**机制级理由**，不再只是谨慎说法：
+1. **写完重启后 banner 会和今天一模一样** ⇒ 看到 `Mon Oct 26 04:58:01` **不能**读成「没刷进去」。
+   写成功的凭据只有 `DONE-kernel`（它在整片回读 crc32 之后才打）与新版才会打的句子。
+2. banner 相同也不代表字节相同：三条 inflate md5 两两不同、大小相同 ⇒ 只能靠 md5 + `checkimagestrings.py` 的句子（§1b 的板外 sha256 也在这条链上）。
+3. 「板上到底是哪条 run」banner 无权回答；能回答的是**行为与 marker**：本次捕获里 `attempt N/3` / `auto-negotiation restarted` / `no more … restarts` 全 0，
+   而 `FLASH-START-*` 只有 `61 / 280 / 282 / 284`，**`FLASH-START-287` 计数 = 0** ⇒ #287 从未上板，这条现在有三路独立证据。
+
+**顺带一条冷启动前置（不是 interlock，别当旗子删）**：`staging/ctl/ser-nostop` 自 10-30 17:34 起存在，
+[tools/serrelay.ps1:145](file:///c/UGit/openwrt/SK-D840N/tools/serrelay.ps1#L145) 靠它决定要不要向那 1 秒倒计时灌空格；
+**它被删掉 ⇒ 每次冷启动停在 `=>` ⇒ 刚写进去的镜像根本不会被启动**，而其他闸全绿（这正是 §96.56 那类「仪器说没事」的形状）。
+写轮不受它影响：`armu.sh` 是靠打 `u` 抢 prompt 的（run 284 15:03:51 就是这么到 `=>`）。
+`lan1roundcheck.sh` 已把它做成 HARD 门，控制：`NOSTOP=一个不存在的文件` ⇒ `HARD FAIL … create it before G4: touch staging/ctl/ser-nostop`，exit 1。
+
+### 96.65 读代码清掉一个「#287 会不会根本进不去」的怀疑，并因此把取样时刻改成 boot+90 s + 二次见证（2026-10-31 11:4x–11:5x，纯读源码）
+
+§96.63 说 lan5 是 `fixed/2500base-x`、phylink 里没有 PHY，我据此怀疑过一件会直接毁掉本轮的事：
+**如果自愈的触发条件是「链路没起来」，那么 phylink 永远报 up 的这块板子上，#287 的 restart 代码一次都不会跑** ——
+刷进去也白刷，而且失败形态与「修复无效」长得一模一样。读源码把它排掉了：
+
+- 自愈在 [zx279133-switch.c:940-944](file:///c/UGit/openwrt/SK-D840N/ci-build-repo/kernel-overlays/drivers/net/ethernet/zte/zx279133-switch.c#L940)：
+  `if (time_after_eq(jiffies, priv->lane_heal_due)) { …; if (!serdes_check()) serdes_set(priv, true); }` ——
+  **没有 phylink / carrier / link 状态的判断**，只看时间闸（15 s 一跳）。
+- 整条路**不被设备树属性门控**：文件里 `of_property_read*` / `of_get_named*` 一个都不在这个路径上；
+  唯一的 `module_param_named` 是早就存在的 `wan_type`（:2834），与自愈无关。⇒ **不需要改 bootargs、不需要 DT 属性**，
+  §7.9 那句「不动 U-Boot 环境（除 bootargs 外）」这一轮本来就没被触碰的必要。
+- `lane_work` 每次跑完都在 :1042 `schedule_delayed_work(..., period)` 自我续期，只有设备清理时才 `cancel_delayed_work_sync`（:3930）
+  ⇒ **这颗 delayed work 一直在跑**，日志里 `lane:` 停在 37.9 s 只是**打印条件**（词变了才打，见 :905-908 的注释），不是工停了。
+
+**由此改了我自己工具的两个数**（都是会让人把成功读成失败的）：
+1. `lan1rounds.sh` 原来 `POST_BOOT=45` 取样，比 §7.9 实测的可用窗（boot+90 s）**早**，可能在 LAN1 还没配好时就判 ping。默认改成 **90**。
+2. 上限 3 次 = bring-up 自己那次 + 两次自愈（`ZX279133_SWITCH_OUTERPHY_RESTART_MAX = 3`，:423），
+   而一次自愈 pass 里面要等 8 s 谈成 + 2 s 载码（:929 引的实测 269.9 s → 274.3 s），15 s 一跳 ⇒ **第三次 `attempt` 可能落在 boot+45~55 s**，
+   单次见证会只数到 `2/3` 就把这一轮定成「试了没用」。现在每轮**两次见证**（boot+90 s 与 boot+165 s），
+   并把 `attempt/auto-negotiation/no more` 的**原行**（带 uptime）一起落到 `staging/ctl/lan1rounds.log`，
+   时间线能直接对 §96.54 的预测单读，不用再靠计数。控制：`DRY=1` 在 11:37 那个边沿上已跑通一遍管路（抓到 banner、见证提取正常），
+   新的两趟版本正对着 **11:57:37** 那个边沿排练。
+
+### 96.66 判据的**退出码**才是判据：`acceptlan1.ps1` 落到脚本末尾 ⇒ 打印 FAILED 也返回 0（2026-10-31 11:54–12:16，全在 PC 侧，板没动）
+
+**触发**：11:54:01 那次正控制（`-BoardIP 192.168.9.25` = 本机网卡自己的地址，答 ping、没有 dropbear）
+先打印 `ssh login: FAILED (ssh exit 255, 0 line(s) back) - a board with the port open but no login does not pass G4.`，
+再打印 `rc=0`。原因在文件里找不到一条 `exit`——脚本跑完就返回 0。
+G4 的自动化（`lan1rounds.sh`）正好读这个返回码，于是**一台登录不进去的板子可以被记成一次通过的轮次**。
+（同一条控制还顺手露了第二个坑：`pwsh … | tail -8` 之后取 `$?` 拿到的是 `tail` 的 0；12:02:16 的「rc=0」有一半是这么来的。
+先把 `$?` 存进变量，再打印，才看得见返回码。）
+
+**改了三处**（`tools/acceptlan1.ps1`）：
+1. 末尾加判据块，把结论同时写进**文本**和**退出码**：
+   `VERDICT: PASS` ⇒ `exit 0`；`VERDICT: PARTIAL`（ping 够、ssh 不登录，即 §7.12 的密钥缺口）⇒ `exit 2`；
+   `VERDICT: FAIL`（ping 本身不够）⇒ `exit 1`。新增 `-MinReplies`，`0` 表示「每一 ping 都要答」，就是计划里「4/4」的读法。
+2. ssh 判据从「rc 0 且有输出」改成「rc 0 **且回显 `G4-LOGIN-OK` 标记**」，标记由 `$remote` 末尾追加的 `echo G4-LOGIN-OK` 产生。
+   这条堵的是**假阴性**：远程串的最后一条原本是 `dmesg | grep "lane:" | tail -1`，
+   一次**成功**的登录如果 dmesg 里没有 `lane:` 行，管道退 1 → ssh 退 1 → 读成「登录失败」，
+   而 `lane:` 在驱动里只有 6 处、且是状态变化才打，不是每次启动必打。
+   不加标记的话，G4 的第二条判据可能永远无法成立——而且失败的样子恰好像是「工具没问题，板子不行」。
+3. `arp:` 查不到条目时明说「没有邻居条目」，不再打印一个空 `state=`（空会被读成某种状态）。
+
+**控制（每条都要能 FAIL 才算数）**：
+- 12:02:48 `.25`：ping 2/2、22 关 ⇒ `VERDICT: PARTIAL … => rc 2`，实测 `CONTROL A rc=2`。**旧的假 0 现在是 2。**
+- 12:03:36 `.99`（无人应答）：`arp: no neighbour entry` ⇒ `VERDICT: FAIL - ping 0/3 replies, need 3, ssh login => rc 1`，实测 `rc=1`。
+- 12:16:23 **真板（当前 flashed 镜像，LAN1 已知死态）**：`arp: 192.168.9.1 state=Incomplete`、`ping: 0/2 replies - THE LINK DID NOT ANSWER`、
+  `tcp/22 (dropbear): CLOSED`、`rc=1`。这就是 §96.62 那条「先有基线」的仪器版：判据在死态下明确不通过，
+  并且把计划里点名的那个失败特征（ARP `Incomplete` = 帧根本没到板子的栈）原样打在日志里。
+- 管路端到端：`SERIAL`、`CTL`、`LOG`、`POST_BOOT`、`WITNESS_LATER`、`PCX` 现在都可覆盖（默认值不变），
+  所以整轮次能在一份**临时假捕获**上跑，不碰 `staging/ctl/serial.log` 一个字节。
+  12:08:03 注入 `[    0.000000] Linux version 6.18.38+ …` ⇒ 抓到 banner、见证数出
+  `attempt=1 autoneg=1 codeword_values=758d=0x0010`（说明见证的 grep 对新行真的有反应，不是只会印 0）、
+  `rc=1 → VERDICT FAIL`、末行 `G4 NOT met - 0 of 1 rounds passed both criteria`。
+- 12:10:43 把 `pwsh` 换成一条 `exit 127` 的假 shim ⇒ `rc=127 → no verdict was printed; the judge did not run to its end`，
+  这一轮不进 `G4PASS`。**这条控制还抓出一个真 bug**：`verdict-lines` 读 `$CTL/lan1rounds-accept$r.log`，
+  文件名只带轮号，于是**上一轮遗留的文件被当成本轮的判据打印出来**（12:10:59 那一行正是 12:09 那轮的 FAIL 文本）。
+  现在文件名带上 `$(date +%Y%m%d-%H%M%S)`；12:12:52 用同一条件重跑 ⇒
+  `verdict-lines: (none: the judge wrote no verdict into …/lan1rounds-accept1-20261031-121236.log; rc=127)`。
+
+**两趟见证在真边沿上验过了**：11:57:41 抓到 banner（`6.18.38+ … #0 SMP Mon Oct 26 04:58:01 2026`，即钉住的 banner，见 §96.64），
+11:59:12 打 `witness_pass boot+90s`、12:00:29 打 `boot+165s`，两次都读 `758d=0x0010`、`attempt=0`、`autoneg=0`，
+`pcrxwatch: max rx_delta=0` —— 全是当前 flashed 镜像的死态，仪器把它如实报成死态，这就是它能在 #287 上认出活态的前提。
+
+**还差一条正控制，明说**：`VERDICT: PASS`（`rc 0`）需要一次**真实**的 ssh 登录。
+板上 LAN1 现在不通，而能通的那条路上 root 信任的是 CI 烘进去的密钥，要先跑一次 `tools/serialkey.sh`（§7.12）。
+所以 rc 0 这条分支第一次被走通的时刻，就是 G4 第 1 轮本身——在那之前不能声称「判据已两面验过」。
+
+### 96.67 链上第二环同一个病：`serialkey.sh` 的 SSH-PROOF 失败也只打印、不返回（2026-10-31 12:29–12:37，全程假 CTL，真控制台一个字节都没收到）
+
+§7.11 把链改成四条命令之后，`serialkey.sh` 就成了「G4 能不能到 rc=0」的唯一前置，于是按同一把尺子读它，三处补：
+1. **没有 `cd` 锚点**（和 §96 前面给 `ubflash.sh`/`permit-waiver.sh` 补的是同一个病）：它所有路径都是相对 `staging/ctl`，
+   从别处调用时 `send()` 的临时文件写不进、`mv` 五次全失败且**不报错**，最后只留下一句「no shell on serial」——把工具的调用错误算到板子头上。
+2. **判据不进退出码**：ssh 失败那支只 `echo`，脚本落到末尾返回 **0**。现在 `exit 0` 需要两件事同时成立——
+   `ssh` 退 0 **且**回显里有 `WRITE-OK`（那条探针是 `echo probe > /etc/.serialkey-probe`）。
+   加 `WRITE-OK` 不是顺手：内核命令行是 `CONFIG_CMDLINE_FORCE=y` 的 `root=… ro`，
+   「装进去的 key 能不能活过下一次切电」在文件头本来就写着是未决问题；能登录但根写不进 = 下一次冷启动又回到 `Permission denied`
+   = 两轮都 rc=2，看起来又像「#287 把 ssh 弄坏了」。
+3. **补了一次裸 Enter**（`sendnl`）：中继对「只含一个换行的命令文件」正是走 `EndsWith("`n") → 替换成 CR` 那一支
+   （[tools/serrelay.ps1:222-223](../../tools/serrelay.ps1) 实测读到），而 `ser-nostop` 把倒计时空格关掉之后，
+   原本"顺带免费"把控制台叫醒的那一下没有了；procd 那句 `Please press Enter to activate this console`
+   在近 200 KB 的真日志里仍出现 3 次（同一窗口里 `root@ImmortalWrt:~#` 出现 7 次，说明这板的控制台确实会醒，但醒的时机不由这条链控制）。
+   裸换行打到活 shell 只是多打一个提示符，所以是安全的。
+
+**控制（都要求能 FAIL，且都不碰真控制台）**：`CTL`/`LOG` 现在可覆盖，于是整条链跑在 `staging/ctl/skctl/` 里。
+- 12:31:34 空捕获 + `WAIT=2` ⇒ `serialkey: no shell on serial within 2s - stopping`，**rc=1**。
+- 12:36:24 预置一个空格、启动后 2 s 往假捕获里追加 `=== KEYPROOF-A ===` ⇒ waitfor 命中并继续往下发；
+  `IP=192.168.9.99` 让 ssh 必然 255 ⇒ 打印 `SSH-PROOF failed (ssh exit 255)` 且 **rc=1**（**这一条正是旧代码返回 0 的那一支**）。
+- 两次控制之后 `staging/ctl/sercmd.txt` 都仍是 `NO`，而 scratch 目录里确实落了 `sercmd.txt` ⇒ 发送管路走的是假目录，真控制台没被动过。
+- `rc=0` 那一支同样要等真板（登录 + 根可写）才会第一次走到，和 §96.66 最后一条是同一个未覆盖面。
+
+**踩到自己的一条规矩**（记下来，因为它伪装成"工具的 bug"）：头两次控制我写成 `( … ; echo rc=$? >> out &)`，
+`&` 在括号**里面** ⇒ 括号整体其实是在前台跑脚本，我的 `sleep 3; 追加标记` 排在它后面，于是标记在 12 s 窗口**之后**才落盘——
+`sh -x` 的 trace 里 tail/grep 反复跑却永不命中，看起来像 `tail -c +1 | tr | grep` 这条管路坏了。
+手工用同样的字节跑同一条管道：`pipeline rc=0`，当场否掉那个怀疑。修法是把整个括号后台化 `) &`，并在两边打 epoch。
+**How to apply:** 控制没能命中时，先证明「管道本身能命中这串字节」，再怀疑被测代码；`&` 放的位置决定控制信号是不是发生在窗口之内。
+
+### 96.68 G4 之前先问「板上到底是不是 #287」：`lan1rounds.sh` 加了镜像门（2026-10-31 12:41–12:42，五个方向全在假捕获上验）
+
+**为什么这条必须存在**：链上前面每一步都补好了判据，但 `lan1rounds.sh 2` 本身**不问板子上跑的是哪个镜像**。
+今天直接跑它，它会忠实地观察两次冷启动（都是 pre-#287，lane 已知死），然后打印
+`G4 NOT met - 0 of 2 rounds passed both criteria` —— 那一行**看起来就像对 #287 的判决**，而 #287 根本没上过板。
+浪费两个边沿（41 min）是小事，留下一条假的负证据是大事（§96.64 那条「banner 三条 run 一字不差」正是同一件事的另一半：
+靠 banner 分辨镜像在这块板上不成立）。
+
+**门用的凭据是刷机器自己的标记**：[tools/ubflash.sh:272](../../tools/ubflash.sh) 发 `setenv mk FLASH-START-$RUN; printenv mk`
+⇒ 捕获里是 `mk=FLASH-START-287`；`stage()` 的 `mk=DONE-$part`（:307）**排在 read-back crc 通过之后**。
+所以判据写成「**本轮 START 之后**，每个 stage 都出现自己的 DONE」——用 `grep -aob` 取最后一次
+`mk=FLASH-START-287` 的字节偏移，再 `tail -c +offset+1 | grep -q mk=DONE-<part>`，
+于是**上一轮遗留的 DONE 不能替本轮作证**。默认 `EXPECT_STAGES="dtb kernel"`（= §7.11 签的那个上界），`RUN` 与
+`EXPECT_STAGES` 可覆盖；`ALLOW_PREV_IMAGE=1` 是留着看当前镜像的（会大声写明「这一轮的结论不是对 run 287 的结论」）。
+
+**五个方向都验过（全在 `staging/ctl/skctl/` 的假捕获上，真捕获只读）**：
+- 12:42:17 真捕获 ⇒ `HARD STOP - no 'mk=FLASH-START-287' … Run 287 has never been written`，**rc=1**（今天的真实状态）。
+- 12:42:19 只给 `DONE-dtb` ⇒ `never reported DONE: kernel`，rc=1。
+- 12:42:21 **把 `DONE-dtb`/`DONE-kernel` 放在本轮 START 之前** ⇒ 仍然 `never reported DONE: dtb kernel`，rc=1 —— 这条是专门验「偏移锚点」真的锚住了，而不是全文件里数一数。
+- 12:42:33 两个 DONE 都在 START 之后 ⇒ `image gate OK … (from byte 0)` 并**继续往下跑**（后面 `NO-BOOT` rc=2，说明门确实放行了）。
+- 12:42:39 `ALLOW_PREV_IMAGE=1` + 真捕获 ⇒ 跳过门、明写不是对 run 287 的结论。
+⇒ rc 的读法从此分得开：**1 = 镜像不对，2 = 捕获里没等到启动，G4 的结论只在跑完两轮之后才有**。
+
+### 96.69 「引用集里没有执行者」是半张文件上得出的结论（2026-10-31 12:46–12:51）
+
+给 PLAN §6 那条硬门槛做审计时，翻回 11:1x 自己写的句子：「`grep -rln flash-sk-d840n tools/*.sh` 命中的六处里**没有一个执行它**，
+`tools/flashpush.sh:81` 只是把模板拷到板子上」。把 `flashpush.sh` **从头读到尾**才看见 `:89`：
+`$SSH "cd $D && sh flash-sk-d840n.sh --write"` —— **就在同一行往下八行的地方**，而且它的 `--write` 擦 root+dtb+kernel。
+另一半：release 资产里那份不是我搬走的那种"历史遗留"，而是**每次构建都会重新生成**
+（workflow `:1486` 把它 `cp` 进 release、`:1764` `cp` 进 `trial/`）⇒ 11:12 那次「移出可达范围」只动了眼前一份。
+
+**为什么这种错发生在一句「审过」的话里**：那次审计按**命中行**读文件（grep 给了 `:81`，就读 `:81` 附近几行），
+没有把命中所在文件整份读完；`-l` 只给文件名，本来就不给全部命中位置。**How to apply:** 引用集审计的产出必须是
+「每个命中文件的**完整命中行列表**＋每处是 copy/execute/comment 的判定」，判定只能基于列出来的**全部**行；
+只报"哪些文件提到它"等于没审。凡是写进永久记录的"没有一个 / 都不 / 没有任何一步"这类**全称否定**，
+落笔前要用一条能列出所有命中的命令再数一遍（`grep -n` 逐文件，不是 `grep -l`）。
+
+**补的两条闸，都两面验过**（细节与 rc 见 PLAN §6 同条）：`flashpush.sh` 在拷贝与 ssh **之前**挡 `--write`（要 `I_WILL_ERASE_ROOT=1`，
+12:50:49 不带 ⇒ rc=1 且零 ssh；带 ⇒ 走到连板子那步才 255），`lan1roundcheck.sh` 新增 `=== 5b`（本轮镜像目录里有这份文件 ⇒ HARD FAIL；
+12:51:37 现状 rc=0 全绿，把原 md5 那份复制回去 ⇒ HARD FAIL、summary 变红、rc=1，验完删除）。
+顺带一条对照：`lan1roundcheck.sh` 的退出码是**诚实的**（有 HARD FAIL 就 1），而同一天里 `acceptlan1.ps1` 与 `serialkey.sh` 都是"只打印不返回"（§96.66/§96.67）
+——同一族工具里判据的编码方式并不一致，**每个工具的返回码都要单独问一遍，不能按族的印象推**。
+
+### 96.70 板上那份 root 信的是**本机这把钥匙**：`serialkey.sh` 从必跑降为条件步（2026-10-31 12:5x，全部离线取字节）
+
+PLAN §7.12 在 11:0x 写下「G4 的 ssh 那一支在今天的板上**必然** `Permission denied`」，理由是**release 里烤的**那把
+`sk-d840n-flash-operator` 本机没有私钥。那句话的前提一直没被验过：**它说的是发布件里的文件，不是板子上真正挂载的那份 root**。
+12:5x 把它验了，全部离线，对象是 `backups/root-20261020-2045.bin.gz`（解开 252 706 816 B）：
+
+| 探针 | 结果 |
+|---|---|
+| `grep -aF "$(cut -d' ' -f2 ~/.ssh/id_onu.pub)"`（整段 base64，逐字节） | **4 次**，首处字节 59 999 576 |
+| 首处上下文（`dd bs=1 skip=… count=140 | tr -cd '\40-\176'`） | `authorized_keys…` / `ssh-ed25519 AAAA…YYOC pc-to-onu-openwrt` |
+| `grep -ac 'sk-d840n-flash-operator'` | **0** |
+| 尺子的活体对照（同一文件） | `ssh-ed25519` 5、`authorized_keys` 6、`dropbear` 45 ⇒ 那个 0 是「真的没有」 |
+
+⇒ 板上的 root 信的就是这台 PC 的 `~/.ssh/id_onu`（注释 `pc-to-onu-openwrt` 正是 `serialkey.sh` 文件头描述的那把）。
+道理也自洽：10-20 20:33 那次修复跑过 `serialkey.sh`，之后**没人擦过 root**（§0 非目标守住，`flash-sk-d840n.sh --write` 又被 §6 的门挡住），
+jffs2 上的 `/root/.ssh/authorized_keys` 就一直活着。行为侧旁证：`flashpush.sh`、`lan1sweep-ssh.sh` 都用 `-i ~/.ssh/id_onu`，
+10-25/10-26/10-27 真取到过 shell 和寄存器 dump。
+**因此作废两句**：§96.66 末尾「要先跑一次 `tools/serialkey.sh`」与 §96.67 的「`rc=0` 那一支要等 `serialkey.sh`」——
+`rc=0` 的**唯一**前置现在只是「LAN1 真的把帧送到」，也就是 #287 上板本身；`serialkey.sh` 留在链上但**只在 `acceptlan1.ps1` 报 rc=2 时**才跑。
+链从 4 个边沿回到 **3 个 ≈ 61 min**。
+
+**这条错路的形状值得记**：一个「必然失败」的判据建立在**发布件里的一份文件**上，而没有去查**设备上真正挂载的那一份**；
+两者中间隔着一次已经生效的安装（10-20 的 `serialkey.sh`）。凡是「板上一定会 X」这类断言，先问一句
+「X 落在哪个分区、那个分区最后一次被谁写过、之后有没有被擦」——然后拿**设备那份**的字节回答，别拿发布件那份。
+⚠ 仍然要说清的边界：dump 时间戳是 10-20 20:45，此后 mainline 往同一块 jffs2 写过东西（只是没人擦 root），
+所以「钥匙此刻还在」是**推断**，G4 第 1 轮那次 ssh 就是它的判决；判决若是 `Permission denied`，跑一次 `serialkey.sh` 是正当回归，不是新问题。
+（分析用的解压件在 `scratch/rootaudit/root.bin`，252 MB，是我这次取的中间产物，可随时删。）
+
+### 96.71 G4 的数据面 witness 是一台**死了 99 分钟的气压表**：`pcrxwatch` 加新鲜度闸（2026-10-31 13:06–13:10）
+
+**怎么发现的**：13:06 例行去问「采样器还活着吗」，因为 §7.11 说 `rx_delta` 是**唯一**能替代 `lan5` carrier 的数据面凭据。
+`staging/ctl/pcrxwatch-20261031.log` 只有 **4 行**（`start rx=… for 21600s` + `t=+10s/+40s/+100s`），mtime **11:28:02**
+⇒ 那个承诺跑 6 小时的采样器**在 11:28 之后就死了**，而 11:59 的排练打印的
+`pcrxwatch: max rx_delta=0` —— 那是**一块 99 min 前的表**，不是 11:57:41 那次启动的证据。
+死掉的原因基本可定：它是从一个会退出的 shell 里前台启动的（工具进程随父 shell 一起没了；`for 21600s` 只是它自己打印的承诺，不是存活证明）。
+
+**⚠ 更正一条已写下的读法**：§96.66 末尾把「`pcrxwatch max rx_delta=0`」列进 11:57 排练的观测里，那句**作为那次启动的证据是错的**；
+数字本身没抄错，但它属于 11:26 那次启动。改法不是删字，而是把凭据挂到它真正的来源上（下面 13:10 的重启才是现在这块表）。
+
+**做了两件事**
+1. **重启采样器，这次脱离 shell**：`nohup pwsh -File tools/pcrxwatch.ps1 -Seconds 21600 -Every 10 >> … 2>&1 & disown`
+   （13:08:16 起，头一行 `start rx=741705852 tx=845371003`）。启动后立刻数 `grep -c 'start rx='`：
+   现在是 **2**（11:26 死的 + 现在活的）——这条计数就是 §96 前面那次「重复写者」教训的探测器，只是它的基线随重启而上移，别再当「必须为 1」读。
+   **重启后第一次真读数**：`rx_total` 从 11:26 到现在**一个字节没涨（741705852）**，而 `tx` 从 845 114 358 涨到 845 371 003
+   ⇒ 这台 PC 在发，板子没回 ⇒ 这才是**当前**的死态基线（之前那条也是 0，但它是块停了的表）。
+2. **`tools/lan1rounds.sh` 加新鲜度闸**：先算 `now − mtime`，超过 **300 s** 就打
+   `pcrxwatch: STALE - … The rx numbers below are NOT this boot's` + 重启命令，然后**照旧**打印数字（但读者已经知道它不属于这一轮）。
+   阈值为什么是 300 s 而不是一个采样周期：**重定向下的 pwsh 会攒批**——13:08:16 启动、13:09:28 一次落盘，
+   样本从 `t=+10s` 直接跳到 `t=+70s`，所以活表也可能几十秒不碰文件。300 s 既能抓到 99 min 的死表，又远在攒批抖动之上。
+
+**两面控制**：13:09:10 拿一块 26 min 前的旧文件（`staging/ctl/skctl/w.log`）⇒ `STALE - … for 26 min` 触发；
+13:09:26 拿刚重启的活文件 ⇒ 不打 STALE，只报 `last write 57s ago; max rx_delta=0`。
+**How to apply:** 任何"读数恰好等于失败形状"的仪表（0 计数、无增长、无应答），先证明**它自己在动**，再解释它为什么是 0 ——
+这块表停在 11:28，而我把它的 0 当成 11:57 那次启动的证据写进了记录。
+
+### 96.72 TFTP 那条闸原来只证明过**回环**：补「U-Boot 要调的那个地址」这一维（2026-10-31 13:13–13:16）
+
+**为什么这是窗口内不可挽回的一步**：`tools/ubflash.sh` 在控制台流里钉死
+`setenv ipaddr 192.168.9.1` / `setenv serverip 192.168.9.25`（:274-275），而那两行落在 **`mtd erase` 之后**——
+如果 `.25` 这时候不在这台机器上（这块网卡的 .25 以前被 ICS 抢过），`tftpboot` 会挂在擦完之后的位置上，
+这一轮**没有可回退的半边**。而 §7 那条已有的仪器闸是用 `python tools/tftpget.py <file>`（默认 127.0.0.1）拉的，
+**回环永远答**，所以它结构上证明不了这件事。
+
+**补的三条（`tools/lan1roundcheck.sh` 第 7 节里）**：
+`SERVERIP` 与 `tools/ubflash.sh` 里读出来的常量**必须相等**（漂移就 FAIL，防止闸和被证的东西各说各话）；
+`Get-NetIPAddress` 确认这台 PC 上真有这个地址（并打印 ifIndex）；
+再按 `SERVERIP` 本体重拉一次 pad，md5 仍要等于 §5 那个 `EXPECT_PAD_D`。
+
+**控制（三面，全 13:16 前实测）**：
+- 默认（`.25`）⇒ 三条 HARD PASS：`ubflash pins serverip=192.168.9.25`、`this PC holds 192.168.9.25 (ifIndex 19)`、
+  `served 14336 B md5=a0f1b0e4… (from 192.168.9.25:49982)`，整体 **rc=0**。
+  ⇒ **顺带一条今天的实况**：刷机链的地址维度**此刻是好的**，不需要为它做任何改动。
+- `SERVERIP=192.168.9.26` ⇒ **三条一起 FAIL**（drift / no interface / did not serve）+ `at least one HARD item FAILED` + **rc=1**。
+- `SERVERIP=127.0.0.1` ⇒ **只有 drift FAIL**，`holds 127.0.0.1 (ifIndex 1)` 与 `answers at 127.0.0.1` 都 PASS
+  ——这条控制才是关键：它证明**「回环能答」和「U-Boot 要调的地址能用」是两件事**，旧闸绿的时候后一件完全可能是红的。
+- 下一次边沿按 13:16 的读数是 ≈13:19（插座仍在 20.5 min 循环里，最新一次启动 12:59:03）。
+
+**两条自己踩到的**：(1) 第一次跑「反面控制」时我用 `if/else` 套了 `env $s timeout … > sv2.out`，结果两次的 rc 都是**循环里最后一条命令**的、输出文件 0 字节，
+看起来像"闸没触发"——和 §96.66 的管道 `$?` 是同一族：**控制的 rc 必须直接取自那一次运行**，且先确认输出文件非空。(2) 加这段时我把相邻一行
+`tftpsrv.py` 打错成 `tftpserv.py`（那是给人照抄的启动命令），落盘后立刻发现并改回——**改闸时相邻行的文案也是产物**，不只是代码。
+
+
+
+
