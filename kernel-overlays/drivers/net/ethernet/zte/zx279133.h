@@ -683,6 +683,14 @@ extern u16 zx279133_tx_port;
 #define ZX279133_PPU_CLUSTER_INST_HI	0x90d10
 #define ZX279133_PPU_CLUSTER_ME_TABLE	0x90350
 #define ZX279133_PPU_CLUSTER_ME_WORDS	16
+/*
+ * Sixteen words of four 8-bit engine selectors each: 64 flows, which is the
+ * "8 cores, 64 threads" the chip is described as.  The layout is the
+ * vendor's own (np_133.ko's ppu_cluster_set_me_val_by_flow_num): a flow's
+ * engine sits at bit (flow & 3) * 8 of word (flow >> 2).
+ */
+#define ZX279133_PPU_CLUSTER_ME_SLOTS	64
+#define ZX279133_PPU_CLUSTER_ME_BITS	8
 #define ZX279133_PPU_CLUSTER_PKT_TYPE_DETAIL	0x9045c
 #define ZX279133_PPU_CLUSTER_PC_MASK	GENMASK(12, 0)
 #define ZX279133_PPU_CLUSTER_HI_MASK	GENMASK(26, 0)
@@ -712,6 +720,13 @@ extern u16 zx279133_tx_port;
  */
 #define ZX279133_NPPT_BASE		0x19000000
 #define ZX279133_NPPT_WINDOW_SIZE	0x1000000
+/*
+ * The PPS window: 0x18000000, 16 MiB, the block the PPU's own machinery
+ * lives in - the ME table, the cluster's instruction memory, the
+ * algorithm block's hash registers.
+ */
+#define ZX279133_PPS_BASE		0x18000000
+#define ZX279133_PPS_WINDOW_SIZE	0x1000000
 #define ZX279133_SMMU0_CMD		0x48004
 #define ZX279133_SMMU0_ADDR		0x48008
 #define ZX279133_SMMU0_WDATA		0x4800c

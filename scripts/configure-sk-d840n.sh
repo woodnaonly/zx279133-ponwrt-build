@@ -414,6 +414,15 @@ grep -hE "^(CONFIG_|# CONFIG_)(NETFILTER|NETFILTER_ADVANCED|NF_CONNTRACK|NF_NAT|
 # masquerade is a router that only works on the bench.
 printf 'CONFIG_PACKAGE_nftables=y\n' >>.config
 
+# The flower client, for the same reason nft is there.  The NPPT's flow
+# table offload is a TC flower interface - zx279133-offload.c answers
+# TC_SETUP_BLOCK, TC_SETUP_FT and TC_SETUP_CLSFLOWER - and without a
+# client there is no way to put a rule on it: the kernel side can be
+# perfect and the board still cannot ask for the offload.  The image
+# already carries ip-full; tc is the other half of iproute2, from the same
+# package, and it is what "tc filter add dev eth0 ingress flower ..." needs.
+printf 'CONFIG_PACKAGE_tc=y\n' >>.config
+
 # The overview row is not a package. luci-mod-status already owns
 # 29_ports.js, and a second package installing that path is rejected while
 # the image is assembled. base-files carries the view, and 99-sk-ports
@@ -462,6 +471,17 @@ grep -qx 'CONFIG_PACKAGE_nftables=y' .config || {
 	echo "CONFIG_PACKAGE_nftables did not survive defconfig - is overlays/package/network/utils/nftables/Makefile in the tree?" >&2
 	ls -d package/network/utils/nftables 2>/dev/null || echo "package/network/utils/nftables is NOT in the tree" >&2
 	grep -i 'nftables' .config || echo "(nothing at all)" >&2
+	exit 1; }
+
+# The same assertion for the flower client.  iproute2 is in the tree (the
+# image has carried ip-full all along), so this is about the subpackage
+# being selectable, not about a missing Makefile: a tc that defconfig
+# dropped means an image whose offload has no client, which is the same
+# failure as an offload driver with no rules to install.
+grep -qx 'CONFIG_PACKAGE_tc=y' .config || {
+	echo "CONFIG_PACKAGE_tc did not survive defconfig - is package/network/utils/iproute2 in the tree?" >&2
+	ls -d package/network/utils/iproute2 2>/dev/null || echo "package/network/utils/iproute2 is NOT in the tree" >&2
+	grep 'PACKAGE_tc' .config || echo "(no PACKAGE_tc line at all)" >&2
 	exit 1; }
 
 grep -qx 'CONFIG_PACKAGE_zxpond=y' .config || {

@@ -181,11 +181,64 @@ zx279133_ppu_inst_block(struct zx279133_eth *eth, u32 pc, const u32 *lo, const u
 }
 
 /*
+ * The ME table: which microcode engine runs which of the PPU's flows.
+ *
  * CPU133's factory PPU image assigns every fourth flow to ME0.  The reset
  * value leaves the cluster with no executable ME for the CPU-TX flow, which
  * is reported later as a DMA drop.  This is the runtime table used by
  * ppu_cluster_set_me_val_by_flow_num(), not PPU microcode.
+ *
+ * The layout is the vendor's own, read out of that function (np_133.ko
+ * @0x829dc, aarch64): sixteen 32-bit words, four flows to a word, and a
+ * flow's engine is eight bits at bit (flow & 3) * 8 of word (flow >> 2).
+ * The function refuses flow_num > 63 and me_val > 255, which is this
+ * table's 64 slots - the "8 cores, 64 threads" the chip is described as.
+ *
+ * What a flow number is, is worth being precise about, because it is not a
+ * software flow number: the vendor's microcode blob carries 64 PORT_FLOW
+ * entries (tag 0xbbbbbbbb) in exactly this order, and the board's own
+ * port-flow table - which this driver applies in place of the blob's - is
+ * indexed the same way.  A flow here is one of the PPU's own 64 entries.
+ * The TC flower path is a different one: it writes the ZCAM and the SE hash
+ * tables, and never comes through here.
  */
+static u32 zx279133_ppu_me_word(struct zx279133_eth *eth, u32 word)
+{
+	return readl(eth->pps_base + ZX279133_PPU_CLUSTER_ME_TABLE + 4 * word);
+}
+
+static void zx279133_ppu_me_word_set(struct zx279133_eth *eth, u32 word,
+				     u32 val)
+{
+	writel(val, eth->pps_base + ZX279133_PPU_CLUSTER_ME_TABLE + 4 * word);
+}
+
+/* The vendor's ppu_cluster_set_me_val_by_flow_num(), in this driver's terms. */
+static int zx279133_ppu_set_me_val(struct zx279133_eth *eth, u32 flow_num,
+				   u32 me_val)
+{
+	u32 word, shift, val;
+
+	if (flow_num >= ZX279133_PPU_CLUSTER_ME_SLOTS)
+		return -EINVAL;
+	if (me_val > 0xff)
+		return -EINVAL;
+
+	word = flow_num >> 2;
+	shift = (flow_num & 3) * ZX279133_PPU_CLUSTER_ME_BITS;
+	val = zx279133_ppu_me_word(eth, word);
+	val &= ~(0xffu << shift);
+	val |= (me_val & 0xff) << shift;
+	zx279133_ppu_me_word_set(eth, word, val);
+	return 0;
+}
+
+static u32 zx279133_ppu_get_me_val(struct zx279133_eth *eth, u32 flow_num)
+{
+	return (zx279133_ppu_me_word(eth, flow_num >> 2) >>
+		((flow_num & 3) * ZX279133_PPU_CLUSTER_ME_BITS)) & 0xff;
+}
+
 static void zx279133_ppu_cluster_runtime_prepare(struct zx279133_eth *eth)
 {
 	unsigned int i;
@@ -195,6 +248,23 @@ static void zx279133_ppu_cluster_runtime_prepare(struct zx279133_eth *eth)
 			readl(eth->pps_base + ZX279133_PPU_CLUSTER_ME_TABLE + 4 * i);
 	eth->ppu_cluster_pkt_type_saved =
 		readl(eth->pps_base + ZX279133_PPU_CLUSTER_PKT_TYPE_DETAIL);
+
+	/*
+	 * The factory assignment, printed before this driver replaces it.
+	 * This is the only place it can be read: the table is overwritten
+	 * right below, the values are captured once, and the vendor's own
+	 * console - the tm_debug ppu command, which takes a raw flow number
+	 * and a raw engine number - is the only other way to see it, and that
+	 * needs a vendor boot.  What the print answers on any given boot is
+	 * the value the driver inherits, which after a mainline boot is the
+	 * value the previous mainline boot wrote - only a vendor boot shows
+	 * the factory's own assignment.
+	 */
+	for (i = 0; i < ZX279133_PPU_CLUSTER_ME_WORDS; i++)
+		dev_info(eth->dev, "ppu: factory ME word %u = 0x%08x\n", i,
+			 eth->ppu_cluster_me_saved[i]);
+	dev_info(eth->dev, "ppu: factory pkt-type detail = 0x%08x\n",
+		 eth->ppu_cluster_pkt_type_saved);
 
 	for (i = 0; i < ZX279133_PPU_CLUSTER_ME_WORDS; i++)
 		writel(0x00000001,
@@ -1878,6 +1948,44 @@ static ssize_t zx279133_9132_write(struct file *file, const char __user *ubuf,
 	}
 
 	/*
+	 * The PPS window (0x18000000), read directly.
+	 *
+	 * The ME table (PPS + 0x90350), the cluster's instruction memory
+	 * (PPS + 0x90d0c) and the PPU's interrupt status all live here, and
+	 * until this verb existed none of them could be looked at from Linux
+	 * at all: the driver reached them only through its own helpers, and
+	 * the only other way in was the vendor's 4.19 tm_debug console.
+	 *
+	 *	"pr 90350 16"	read sixteen words from PPS + 0x90350
+	 */
+	if (!strcmp(tok, "pr")) {
+		u32 off, n = 1, i;
+
+		tok = zx279133_9132_next_token(&p);
+		if (!tok || kstrtou32(tok, 0, &off))
+			return -EINVAL;
+		tok = zx279133_9132_next_token(&p);
+		if (!tok || kstrtou32(tok, 0, &n))
+			return -EINVAL;
+		if (!n || n > 256)
+			return -EINVAL;
+		/*
+		 * off comes from kstrtou32() and can be up to 0xffffffff, so
+		 * the bound is written as "does the last word still fit" and
+		 * not as "off + 4 * n > size": the sum would wrap around and
+		 * let a four gigabyte offset through into a readl().
+		 */
+		if (off > ZX279133_PPS_WINDOW_SIZE ||
+		    n > (ZX279133_PPS_WINDOW_SIZE - off) / 4)
+			return -EINVAL;
+
+		for (i = 0; i < n; i++)
+			pr_info("pps reg 0x%06x = 0x%08x\n", off + 4 * i,
+				readl(eth->pps_base + off + 4 * i));
+		return count;
+	}
+
+	/*
 	 * The NPPT's ERAM, which is where the tables the switch needs live:
 	 * the multi-forward extension table, the VLAN action table, the port
 	 * type table, the flood destination table and the port isolation
@@ -1969,6 +2077,110 @@ static ssize_t zx279133_9132_write(struct file *file, const char __user *ubuf,
 			return ret;
 		pr_info("mf eram mem %u = %08x %08x %08x %08x\n",
 			mem_id, data[0], data[1], data[2], data[3]);
+		return count;
+	}
+
+	/*
+	 * The PPU's ME table: which microcode engine runs which of the PPU's
+	 * 64 flows.  This is the one table the NPU's own dispatch rests on,
+	 * and until this verb existed there was no way to look at it from
+	 * Linux at all - the driver's only contact with it was the blind
+	 * overwrite at probe time.
+	 *
+	 * The layout is the vendor's: a word holds four flows, and a flow's
+	 * engine is eight bits at bit (flow & 3) * 8 of word (flow >> 2).
+	 *
+	 *	"me"			print the table, with the flows decoded
+	 *	"mes 7 3"		put flow 7 on engine 3, then read it back
+	 *
+	 * "mes" is the vendor's own ppu_cluster_set_me_val_by_flow_num(),
+	 * which in the vendor's system is reachable only through the
+	 * tm_debug console and only with a raw flow number - so this is the
+	 * same operation, with the same limits (flow_num < 64, me_val < 256).
+	 */
+	if (!strcmp(tok, "me") || !strcmp(tok, "mes")) {
+		bool is_set = !strcmp(tok, "mes");
+		u32 flow, me, i;
+
+		if (is_set) {
+			tok = zx279133_9132_next_token(&p);
+			if (!tok || kstrtou32(tok, 0, &flow))
+				return -EINVAL;
+			tok = zx279133_9132_next_token(&p);
+			if (!tok || kstrtou32(tok, 0, &me))
+				return -EINVAL;
+			ret = zx279133_ppu_set_me_val(eth, flow, me);
+			if (ret)
+				return ret;
+		}
+
+		for (i = 0; i < ZX279133_PPU_CLUSTER_ME_WORDS; i++)
+			pr_info("ppu me word %u = 0x%08x  flows %u:%u %u:%u %u:%u %u:%u\n",
+				i, zx279133_ppu_me_word(eth, i),
+				i * 4 + 0, zx279133_ppu_get_me_val(eth, i * 4 + 0),
+				i * 4 + 1, zx279133_ppu_get_me_val(eth, i * 4 + 1),
+				i * 4 + 2, zx279133_ppu_get_me_val(eth, i * 4 + 2),
+				i * 4 + 3, zx279133_ppu_get_me_val(eth, i * 4 + 3));
+		pr_info("ppu pkt-type detail = 0x%08x\n",
+			readl(eth->pps_base + ZX279133_PPU_CLUSTER_PKT_TYPE_DETAIL));
+		return count;
+	}
+
+	/*
+	 * The 9132's MAC table, read as the raw buckets the hash block keeps
+	 * them in.
+	 *
+	 * The table is SDT 0x32 - a type-3 (hash) table, not one of the ERAM
+	 * tables the "er"/"ew" commands speak to - so it is not reachable
+	 * through them.  It lives in the SE hash window (the 16 MiB "se-hash"
+	 * reserved memory), and the algorithm block that owns it says where
+	 * it is: the CRC the buckets are keyed by, the bulk region's base and
+	 * its depth.
+	 *
+	 * Which bucket a MAC lands in is the hardware's own CRC, and the
+	 * layout inside a bucket is not written down anywhere yet (docs/37
+	 * §2.4), so this command decodes nothing.  It prints the algorithm
+	 * block's registers and the raw words of the window, which is enough
+	 * to answer the question the "the switch never learned a MAC" claim
+	 * rests on: is there anything in there at all.
+	 *
+	 *	"cam"			the algorithm block's registers
+	 *	"cam <offset> <count>"	raw words of the SE hash window
+	 */
+	if (!strcmp(tok, "cam")) {
+		u32 off = 0, n = 0, i;
+		bool window = false;
+		char *arg = zx279133_9132_next_token(&p);
+
+		if (arg) {
+			if (kstrtou32(arg, 0, &off))
+				return -EINVAL;
+			arg = zx279133_9132_next_token(&p);
+			if (!arg || kstrtou32(arg, 0, &n))
+				return -EINVAL;
+			if (!n || n > 256)
+				return -EINVAL;
+			/* Same wrapping-around trap as the "pr" command. */
+			if (off > ZX279133_SE_HASH_REQUIRED_SIZE ||
+			    n > (ZX279133_SE_HASH_REQUIRED_SIZE - off) / 4)
+				return -EINVAL;
+			window = true;
+		}
+
+		pr_info("cam: alg crc 0x%08x bulk 0x%08x depth0 0x%08x depth1 0x%08x smmu1 0x%08x\n",
+			readl(eth->pps_base + ZX279133_SE_ALG_HASH_CRC),
+			readl(eth->pps_base + ZX279133_SE_ALG_HASH_BULK),
+			readl(eth->pps_base + ZX279133_SE_ALG_HASH_DEPTH0),
+			readl(eth->pps_base + ZX279133_SE_ALG_HASH_DEPTH1),
+			readl(eth->pps_base + ZX279133_SE_SMMU1_HASH_BASE));
+		if (!window)
+			return count;
+
+		if (!eth->se_hash_mem)
+			return -ENODEV;
+		for (i = 0; i < n; i++)
+			pr_info("cam window 0x%06x = 0x%08x\n", off + 4 * i,
+				readl(eth->se_hash_mem + off + 4 * i));
 		return count;
 	}
 
