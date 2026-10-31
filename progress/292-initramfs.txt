@@ -1,26 +1,6 @@
-=== 16:03:30 beat 2 log=1826 frozen=0 wrote=unknown ===
---- signals: quiet=0s writes=1800s newproc=900s hard=5400s cmp=-cnewer proc=unknowns ---
+=== 16:05:32 beat 3 log=2509 frozen=0 wrote=yes ===
+--- signals: quiet=0s writes=1800s newproc=900s hard=5400s cmp=-cnewer proc=2s ---
 --- the last 30 lines of the build's own log ---
-WARNING: Makefile 'package/network/services/dnsmasq/Makefile' has a dependency on 'nftables-json', which does not exist
-WARNING: Makefile 'package/network/config/firewall4/Makefile' has a dependency on 'nftables-json', which does not exist
-WARNING: Makefile 'package/feeds/packages/gst1-plugins-base/Makefile' has a dependency on 'libmesa', which does not exist
-WARNING: Makefile 'package/feeds/packages/gst1-plugins-base/Makefile' has a dependency on 'libwayland', which does not exist
-WARNING: Makefile 'package/feeds/packages/gst1-plugins-base/Makefile' has a dependency on 'libgraphene', which does not exist
-WARNING: Makefile 'package/feeds/packages/pbr/Makefile' has a dependency on 'nftables-json', which does not exist
-WARNING: Makefile 'package/feeds/packages/prometheus-node-exporter-lua/Makefile' has a dependency on 'nftables-json', which does not exist
-WARNING: Makefile 'package/feeds/packages/uspot/Makefile' has a dependency on 'nftables-json', which does not exist
-make[2]: Entering directory '/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/config'
-make[2]: 'conf' is up to date.
-make[2]: Leaving directory '/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/config'
- make[1] world
- make[2] tools/compile
- make[2] package/cleanup
- make[3] -C tools/libdeflate compile
- make[3] -C tools/flock compile
- make[3] -C tools/zstd compile
- make[3] -C tools/sed compile
- make[3] -C tools/patch compile
- make[3] -C tools/tar compile
  make[3] -C tools/ninja compile
  make[3] -C tools/autoconf-archive compile
  make[3] -C tools/m4 compile
@@ -31,35 +11,57 @@ make[2]: Leaving directory '/home/runner/work/zx279133-ponwrt-build/zx279133-pon
  make[3] -C tools/cpio compile
  make[3] -C tools/lzma compile
  make[3] -C tools/make-ext4fs compile
+ make[3] -C tools/mtools compile
+ make[3] -C tools/patch-image compile
+ make[3] -C tools/squashfs4 compile
+ make[3] -C tools/sstrip compile
+ make[3] -C tools/zip compile
+ make[3] -C tools/autoconf compile
+ make[3] -C tools/meson compile
+ make[3] -C tools/pkgconf compile
+ make[3] -C tools/lz4 compile
+ make[3] -C tools/missing-macros compile
+ make[3] -C tools/libressl compile
+ make[3] -C tools/automake compile
+ make[3] -C tools/libtool compile
+ make[3] -C tools/dosfstools compile
+ make[3] -C tools/flex compile
+ make[3] -C tools/fakeroot compile
+ make[3] -C tools/gengetopt compile
+ make[3] -C tools/mklibs compile
+ make[3] -C tools/patchelf compile
+ make[3] -C tools/gmp compile
 --- the build's own processes ---
-    670 Ss   /usr/bin/python3 /usr/bin/networkd-dispatcher --run-startup-triggers
-    670 Ss   /usr/bin/python3 -u /usr/sbin/waagent -daemon
-    669 Sl   /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
-    122 S    timeout --kill-after=60s 280m bash -c echo $$ > ../compile-make.pid; exec make -j"$(nproc)"
-    122 S    tee ../compile-parallel.log
-    122 S    make -j4
-    111 S    /bin/sh -c _limit=`ulimit -n`; [ "$_limit" = "unlimited" -o "$_limit" -ge 1024 ] || ulimit -n 1024; umask 022; cmd() { >/dev/null 2>&1 make -s "$@" < /dev/null || { echo "make $*: build failed. Please re-run make with -j1 V=s or V=sc for a higher verbosity level to see what's going on"; false; } } 8>&1 9>&2; cmd -r world 
-    111 S    make -s -r world
-    109 S    make --no-print-directory tools/compile
-     49 S    bash -c /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/time.pl "time: tools/m4/compile" make  -r -C tools/m4 BUILD_SUBDIR="tools/m4" BUILD_VARIANT="" ALL_VARIANTS="" compile  || ?(?{ printf "%s\n" "    ERROR: tools/m4 failed to build." >&8 || printf "%s\n" "    ERROR: tools/m4 failed to build."; } 2>/dev/null;   exit 1;) 
-     49 S    bash -c /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/time.pl "time: tools/ninja/compile" make  -r -C tools/ninja BUILD_SUBDIR="tools/ninja" BUILD_VARIANT="" ALL_VARIANTS="" compile  || ?(?{ printf "%s\n" "    ERROR: tools/ninja failed to build." >&8 || printf "%s\n" "    ERROR: tools/ninja failed to build."; } 2>/dev/null;   exit 1;) 
-     49 S    perl /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/time.pl time: tools/m4/compile make -r -C tools/m4 BUILD_SUBDIR=tools/m4 BUILD_VARIANT= ALL_VARIANTS= compile
-     49 S    perl /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/time.pl time: tools/ninja/compile make -r -C tools/ninja BUILD_SUBDIR=tools/ninja BUILD_VARIANT= ALL_VARIANTS= compile
-     49 S    make -r -C tools/m4 BUILD_SUBDIR=tools/m4 BUILD_VARIANT= ALL_VARIANTS= compile
+    793 Ss   /usr/bin/python3 /usr/bin/networkd-dispatcher --run-startup-triggers
+    793 Ss   /usr/bin/python3 -u /usr/sbin/waagent -daemon
+    792 Sl   /usr/bin/python3 -u bin/WALinuxAgent-2.16.0.2-py3.12.egg -run-exthandlers
+    245 S    timeout --kill-after=60s 280m bash -c echo $$ > ../compile-make.pid; exec make -j"$(nproc)"
+    245 S    tee ../compile-parallel.log
+    245 S    make -j4
+    234 S    /bin/sh -c _limit=`ulimit -n`; [ "$_limit" = "unlimited" -o "$_limit" -ge 1024 ] || ulimit -n 1024; umask 022; cmd() { >/dev/null 2>&1 make -s "$@" < /dev/null || { echo "make $*: build failed. Please re-run make with -j1 V=s or V=sc for a higher verbosity level to see what's going on"; false; } } 8>&1 9>&2; cmd -r world 
+    234 S    make -s -r world
+    232 S    make --no-print-directory tools/compile
+     33 S    bash -c /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/time.pl "time: tools/flex/compile" make  -r -C tools/flex BUILD_SUBDIR="tools/flex" BUILD_VARIANT="" ALL_VARIANTS="" compile  || ?(?{ printf "%s\n" "    ERROR: tools/flex failed to build." >&8 || printf "%s\n" "    ERROR: tools/flex failed to build."; } 2>/dev/null;   exit 1;) 
+     33 S    bash -c /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/time.pl "time: tools/fakeroot/compile" make  -r -C tools/fakeroot BUILD_SUBDIR="tools/fakeroot" BUILD_VARIANT="" ALL_VARIANTS="" compile  || ?(?{ printf "%s\n" "    ERROR: tools/fakeroot failed to build." >&8 || printf "%s\n" "    ERROR: tools/fakeroot failed to build."; } 2>/dev/null;   exit 1;) 
+     33 S    perl /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/time.pl time: tools/flex/compile make -r -C tools/flex BUILD_SUBDIR=tools/flex BUILD_VARIANT= ALL_VARIANTS= compile
+     33 S    bash -c /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/time.pl "time: tools/gengetopt/compile" make  -r -C tools/gengetopt BUILD_SUBDIR="tools/gengetopt" BUILD_VARIANT="" ALL_VARIANTS="" compile  || ?(?{ printf "%s\n" "    ERROR: tools/gengetopt failed to build." >&8 || printf "%s\n" "    ERROR: tools/gengetopt failed to build."; } 2>/dev/null;   exit 1;) 
+     33 S    perl /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/scripts/time.pl time: tools/fakeroot/compile make -r -C tools/fakeroot BUILD_SUBDIR=tools/fakeroot BUILD_VARIANT= ALL_VARIANTS= compile
 --- the oldest processes that are not kernel threads ---
-    679 Ss   /sbin/init
-    677 S<s  /lib/systemd/systemd-journald
-    677 SLsl /sbin/multipathd -d -s
-    677 Ss   /lib/systemd/systemd-udevd
-    675 Ss   /usr/lib/linux-tools/6.8.0-1070-azure/hv_kvp_daemon -n
-    675 Ss   /usr/sbin/haveged --Foreground --verbose=1
-    674 Ss   /lib/systemd/systemd-networkd
-    674 Ss   /lib/systemd/systemd-resolved
+    802 Ss   /sbin/init
+    800 S<s  /lib/systemd/systemd-journald
+    800 SLsl /sbin/multipathd -d -s
+    800 Ss   /lib/systemd/systemd-udevd
+    798 Ss   /usr/lib/linux-tools/6.8.0-1070-azure/hv_kvp_daemon -n
+    798 Ss   /usr/sbin/haveged --Foreground --verbose=1
+    797 Ss   /lib/systemd/systemd-networkd
+    797 Ss   /lib/systemd/systemd-resolved
 --- what is running under the build ---
+      4 S    make -j1 -C /home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/build_dir/host/fakeroot-1.37.1.2/.
+      4 S    bash -c fail=; \ if (target_option=k; case ${target_option-} in ?) ;; *) echo "am__make_running_with_option: internal error: invalid" "target option '${target_option-}' specified" >&2; exit 1;; esac; has_opt=no; sane_makeflags=$MAKEFLAGS; if { if test -z '5'; then false; elif test -n 'x86_64-pc-linux-gnu'; then true; elif test -n '4.3' && test -n '/home/runner/work/zx279133-ponwrt-build/zx279133-ponwrt-build/openwrt/build_dir/host/fakeroot-1.37.1.2'; then true; else false; fi; }; then sane_makeflags=$MFLAGS; else case $MAKEFLAGS in *\\[\ \?]*) bs=\\; sane_makeflags=`printf '%s\n' "$MAKEFLAGS" | sed "s/$bs$bs[$bs $bs?]*//g"`;; esac; fi; skip_next=no; strip_trailopt () { flg=`printf '%s\n' "$flg" | sed "s/$1.*$//"`; }; for flg in $sane_makeflags; do test $skip_next = yes && { skip_next=no; continue; }; case $flg in *=*|--*) continue;; -*I) strip_trailopt 'I'; skip_next=yes;; -*I?*) strip_trailopt 'I';; -*O) strip_trailopt 'O'; skip_next=yes;; -*O?*) strip_trailopt 'O';; -*l) strip_trailopt 'l'; skip_next=yes;; -*l?*) strip_trailopt 'l';; -[dEDm]) skip_next=yes;; -[JT]) skip_next=yes;; esac; case $flg in *$target_option*) has_opt=yes; break;; esac; done; test $has_opt = yes); then \   failcom='fail=yes'; \ else \   failcom='exit 1'; \ fi; \ dot_seen=no; \ target=`echo all-recursive | sed s/-recursive//`; \ case "all-recursive" in \   distclean-* | maintainer-clean-*) list='scripts test' ;; \   *) list='scripts test' ;; \ esac; \ for subdir in $list; do \   echo "Making $target in $subdir"; \   if test "$subdir" = "."; then \     dot_seen=yes; \     local_target="$target-am"; \   else \     local_target="$target"; \   fi; \   (CDPATH="${ZSH_VERSION+.}:" && cd $subdir && make  $local_target) \   || eval $failcom; \ done; \ if test "$dot_seen" = "no"; then \   make  "$target-am" || exit 1; \ fi; test -z "$fail"
 --- the directories the build touched lately ---
 host
 target-aarch64_cortex-a53_musl
 --- how big the root filesystem is getting ---
 --- memory and load ---
-Mem:           15988        1495        3877          50       10614       14095
- 00:03:30 up 11 min,  0 users,  load average: 5.06, 2.48, 1.17
+Mem:           15988         935        4108          50       10944       14655
+ 00:05:32 up 13 min,  0 users,  load average: 4.16, 3.06, 1.56
