@@ -412,6 +412,27 @@ CI 每暴露一类编译期错误，就在本地加一道门禁，免得再花�
 - **怎么验的**：两个门禁都拿 **3bfadd1（run 293 真正编的那棵树）** 和当前 HEAD 对照跑：
   3bfadd1 报出 `zxpon_set_identity`（`zx279133-pon.c:127`）和 `zxpon_family`
   （`zx279133-pon.c:110`）—— 正是 CI 的那两条错；当前 HEAD 报 0 条。
+- **门禁在 CI 里也跑过了**：CI 的 step 7 跑的就是 `tools/prepush.py`，所以这两道门禁
+  在下一个 run 里就会在构建开始前先过一遍，而不是等一小时后才知道。
+
+**五、run 293 的那两条编译错已经不存在了**
+
+- 修法在 `b90081c`（handler 改名 + `zxpon_family` 前置 tentative definition）。
+  本地没有 gcc，能做的只有上面那条 MSVC + 桩头的对照编译；真正的证据来自 CI：
+  - **run 296 / 297 / 298 / 300 的 Compile 全过**，四个 run 全绿；
+  - **run 298 是自 run 292 之后第一个全绿的 run**：两个 job、每一个 step 都 success，
+    从 Compile 一路走到「Package flash images」「Publish release」。
+  - run 300 带上了本轮新加的两道门禁（CI 的 step 7 跑的就是 `tools/prepush.py`），
+    两个 job 也都全绿 —— 也就是说，那两道门禁在 CI 里跑过了，而且没有误报。
+- 产物在 release `skd840n_flash_298_41225913440` 与 `skd840n_initramfs_298_41225913440`：
+  `flash-uImage`（8.3 MB）、`flash-dtb.bin`、`flash-rootfs.jffs2`（4.8 MB）、
+  `flash-sysupgrade.bin`（13.5 MB）、`sk-d840n-initramfs.itb`（12.6 MB）、`trial-set.tgz`。
+- 顺带核了发布出来的 flash rootfs 里有什么：`zxpond` 在里面，`mdread` / `rdreg` /
+  `wrreg` 都在，而 `zrec` **不在** —— 这正是 workflow 定的规矩（flash 版不得带刷写器，
+  只有 initramfs 版带）。
+- ⇒ 顺带解决了一个悬着的问题：`zxpon.c`（800 行）和 `zx279133-pon.c`（357 行）都是
+  `3bfadd1` 带进来的，**同样一次都没有被编译过**（run 293 死在编内核之前）。现在两个都
+  编过了，run 293 报的那两条错也不复存在。
 
 ---
 
@@ -426,7 +447,13 @@ CI 每暴露一类编译期错误，就在本地加一道门禁，免得再花�
 
 ## 6. 下一轮要什么
 
-1. **CI build + kexec 试跑**（本轮做不了：本地没有 kernel build tree，产物只能由 CI 出），验收清单：
+1. **CI build + kexec 试跑**，验收清单：
+   - **CI build 这一半已经做完**：run 298 全绿（见 §4.8 第五条），产物在 release
+     `skd840n_flash_298_41225913440` / `skd840n_initramfs_298_41225913440`：
+     `flash-uImage` / `flash-dtb.bin` / `flash-rootfs.jffs2` / `flash-sysupgrade.bin` /
+     `flash-set.tgz` / `sk-d840n-initramfs.itb` / `trial-set.tgz`。剩下的是把它写进
+     板子：先用 kexec 试 RAM 镜像（不写 flash，断电即回原系统），确认 SSH 通了再谈刷写；
+   - 剩下的（要在板上做）：
    - 合并后的 kernel `.config` 含 `CONFIG_DYNAMIC_DEBUG=y` **与** `CONFIG_DYNAMIC_DEBUG_CORE=y`（门禁两个都卡，见 §4.7）；
    - `dmesg | grep -c 'switch: lane'` = 0；`dynamic_debug/control` 的 `+p` 后原样复现；
    - 板上 `/sys/kernel/debug/dynamic_debug/control` 存在；
