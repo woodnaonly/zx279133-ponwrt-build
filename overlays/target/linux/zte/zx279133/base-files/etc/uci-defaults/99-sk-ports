@@ -1,0 +1,21 @@
+#!/bin/sh
+# The overview's port row. luci-mod-status owns 29_ports.js, and a second
+# package that installs the same path is rejected while the image is built.
+# The file therefore lives with base-files, and this copies it over the
+# stock view once the root is actually running.
+#
+# A build runs every uci-defaults inside the package root. Nothing is copied
+# there: the copy would race luci-mod-status, and the runner has no such
+# path. The first boot of a flashed root and of a RAM trial both reach this
+# with the packages already installed. The script then removes itself, and
+# the copied view stays.
+if [ -n "${IPKG_INSTROOT:-}" ] || [ -n "${PKG_ROOT:-}" ] || [ -n "${CI:-}" ]; then
+	exit 0
+fi
+
+src=/usr/share/sk-port-status/29_ports.js
+dst=/www/luci-static/resources/view/status/include/29_ports.js
+[ -f "$src" ] || exit 0
+mkdir -p "$(dirname "$dst")"
+cp "$src" "$dst"
+exit 0

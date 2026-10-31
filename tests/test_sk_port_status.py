@@ -12,8 +12,8 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SW = ROOT / "kernel-overlays/drivers/net/ethernet/zte/zx279133-switch.c"
 DTS = ROOT / "kernel-overlays/arch/arm64/boot/dts/zte/zx279133-sk-d840n.dts"
-JS = ROOT / "overlays/package/utils/sk-port-status/files/29_ports.js"
-MK = ROOT / "overlays/package/utils/sk-port-status/Makefile"
+JS = ROOT / "overlays/target/linux/zte/zx279133/base-files/usr/share/sk-port-status/29_ports.js"
+BOOT = ROOT / "overlays/target/linux/zte/zx279133/base-files/etc/uci-defaults/99-sk-ports"
 
 SPEED_MASK = 0x630  # GENMASK(5, 4) | GENMASK(10, 9)
 SPEEDS = {0x0000: 10, 0x0010: 100, 0x0020: 1000, 0x0210: 2500}
@@ -95,8 +95,12 @@ panel = js.find("SK_PANEL=")
 check(req != -1 and panel != -1 and req < panel,
       "require statements stay before any other string, or LuCI drops the class")
 
-mk = MK.read_text(encoding="utf-8")
-check("DEPENDS:=+luci-mod-status" in mk, "the view is installed after luci-mod-status")
-check("29_ports.js" in mk, "the package ships 29_ports.js")
+boot = BOOT.read_text(encoding="utf-8")
+check("cp \"$src\" \"$dst\"" in boot, "first boot copies the view over luci-mod-status")
+check("/usr/share/sk-port-status/29_ports.js" in boot, "the view is not a second package")
+check("IPKG_INSTROOT" in boot and "exit 0" in boot, "the image build does not run the copy")
+check("setsid" not in boot and "&" not in boot, "the defaults script does not background anything")
+check(not (ROOT / "overlays/package/utils/sk-port-status/Makefile").exists(),
+      "no package installs the same path as luci-mod-status")
 
 sys.exit(1 if fail else 0)
