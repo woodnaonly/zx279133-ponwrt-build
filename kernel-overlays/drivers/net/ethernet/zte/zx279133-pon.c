@@ -38,6 +38,14 @@ static DEFINE_MUTEX(zx_pon_lock);
 static struct net_device *zx_wan;
 static struct net_device *zx_omci;
 static struct led_classdev *zx_green;
+
+/*
+ * The family is filled in further down, next to the ops table that has to
+ * exist before it can be named - and the reply path below needs the family
+ * before that.  A tentative definition is the C way of saying "it comes
+ * later": the tentative one here, the real one next to zxpon_ops.
+ */
+static struct genl_family zxpon_family;
 static struct delayed_work zx_tick;
 static int zx_alive;
 static int zx_family_ok;
@@ -124,7 +132,14 @@ static int zxpon_get_state(struct sk_buff *skb, struct genl_info *info)
 	return genlmsg_reply(msg, info);
 }
 
-static int zxpon_set_identity(struct sk_buff *skb, struct genl_info *info)
+/*
+ * The netlink handler, not the setter: zxpon.c already owns
+ * zxpon_set_identity(zxpon *, sn, regid), and a handler with the same name
+ * made the two one function - the call below then read as "too many
+ * arguments to function 'zxpon_set_identity'" and the definition as a
+ * conflicting type.  The nl_ prefix says which of the two this is.
+ */
+static int zxpon_nl_set_identity(struct sk_buff *skb, struct genl_info *info)
 {
 	const uint8_t *sn, *regid;
 
@@ -191,7 +206,7 @@ static const struct genl_ops zxpon_ops[] = {
 		.cmd = ZXPON_CMD_SET_IDENTITY,
 		.flags = GENL_ADMIN_PERM,
 		.policy = zxpon_policy,
-		.doit = zxpon_set_identity,
+		.doit = zxpon_nl_set_identity,
 	},
 	{
 		.cmd = ZXPON_CMD_ADD_TCONT,

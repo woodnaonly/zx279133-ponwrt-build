@@ -441,7 +441,19 @@ printf 'CONFIG_PACKAGE_nftables=y\n' >>.config
 # perfect and the board still cannot ask for the offload.  The image
 # already carries ip-full; tc is the other half of iproute2, from the same
 # package, and it is what "tc filter add dev eth0 ingress flower ..." needs.
-printf 'CONFIG_PACKAGE_tc=y\n' >>.config
+#
+# The symbol is tc-full, not tc, and the difference is not cosmetic: this
+# tree's iproute2 (cnjn/ImmortalWrt sr1010-zx279133) has no Package/tc at
+# all.  It has Package/tc-tiny, Package/tc-bpf and Package/tc-full, each
+# with "PROVIDES:=tc", so "tc" is a *virtual* package - a name the three of
+# them provide - and a virtual package cannot be selected on its own: the
+# line "CONFIG_PACKAGE_tc=y" is dropped by defconfig in silence, exactly the
+# way a config line for a symbol that does not exist is.  Asking for the
+# real package is what survives.  tc-full is the one to ask for: it carries
+# libbpf and the xtables family, and the variant switch in iproute2's
+# Makefile only turns XT and IPSET on or off - the flower classifier is in
+# every variant.
+printf 'CONFIG_PACKAGE_tc-full=y\n' >>.config
 
 # The overview row is not a package. luci-mod-status already owns
 # 29_ports.js, and a second package installing that path is rejected while
@@ -497,9 +509,11 @@ grep -qx 'CONFIG_PACKAGE_nftables=y' .config || {
 # image has carried ip-full all along), so this is about the subpackage
 # being selectable, not about a missing Makefile: a tc that defconfig
 # dropped means an image whose offload has no client, which is the same
-# failure as an offload driver with no rules to install.
-grep -qx 'CONFIG_PACKAGE_tc=y' .config || {
-	echo "CONFIG_PACKAGE_tc did not survive defconfig - is package/network/utils/iproute2 in the tree?" >&2
+# failure as an offload driver with no rules to install.  The symbol
+# checked is tc-full - the real package - and not the virtual "tc" the
+# three variants provide, which defconfig drops without a word.
+grep -qx 'CONFIG_PACKAGE_tc-full=y' .config || {
+	echo "CONFIG_PACKAGE_tc-full did not survive defconfig - is package/network/utils/iproute2 in the tree?" >&2
 	ls -d package/network/utils/iproute2 2>/dev/null || echo "package/network/utils/iproute2 is NOT in the tree" >&2
 	grep 'PACKAGE_tc' .config || echo "(no PACKAGE_tc line at all)" >&2
 	exit 1; }
