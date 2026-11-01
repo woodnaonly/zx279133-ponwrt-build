@@ -12,6 +12,9 @@ PKG_SOURCE_VERSION:=b6e5157527d361f99ad52eaa6da273cb0f2dfd59
 PKG_MIRROR_HASH:=fb563b493411922a8fbddf6a5a6766cffa47f87621e056b8dcf38309091835eb
 PKG_MAINTAINER:=Jo-Philipp Wich <jo@mein.io>
 PKG_LICENSE:=ISC
+# The final-image rule/RPC tests need the recipe's native interpreter as well
+# as the target runtime. Selecting +ucode alone builds only the target binary.
+PKG_BUILD_DEPENDS:=ucode/host
 # Do not silently inherit a changing patch directory from the base checkout.
 # Keep the base tree's macvlan/multicast/per-device fixes. Fullcone and its
 # implicit offload defaults are not part of this hardware-unverified port.
