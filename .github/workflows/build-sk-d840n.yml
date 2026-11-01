@@ -137,9 +137,10 @@ jobs:
           } 2>&1 | tee sk-pon-tests.log
           rc=${PIPESTATUS[0]}
           if [ "$rc" != 0 ]; then
-            tail -n 45 sk-pon-tests.log | while IFS= read -r line; do
-              echo "::error::$(printf '%s' "$line" | sed 's/%/%25/g' | tr -d '\r')"
-            done
+            # GitHub caps annotations per step. One escaped multi-line message
+            # preserves the actual final error instead of the first ten lines.
+            message=$(tail -n 65 sk-pon-tests.log | sed 's/%/%25/g' | tr -d '\r' | awk '{printf "%s%%0A", $0}')
+            echo "::error::$message"
           fi
           exit "$rc"
 
@@ -1253,9 +1254,8 @@ jobs:
           sh scripts/check-sk-d840n-management.sh openwrt 2>&1 | tee sk-management-gate.log
           rc=${PIPESTATUS[0]}
           if [ "$rc" != 0 ]; then
-            tail -n 45 sk-management-gate.log | while IFS= read -r line; do
-              echo "::error::$(printf '%s' "$line" | sed 's/%/%25/g' | tr -d '\r')"
-            done
+            message=$(tail -n 65 sk-management-gate.log | sed 's/%/%25/g' | tr -d '\r' | awk '{printf "%s%%0A", $0}')
+            echo "::error::$message"
           fi
           exit "$rc"
 
