@@ -180,6 +180,7 @@ echo 'file zx279133-switch.c +p' > /sys/kernel/debug/dynamic_debug/control
   - `pr <offset> [count]` —— **新增**：直接读 PPS 窗口（0x18000000）。ME 表
     （+0x90350）、簇指令存储（+0x90d0c）、PPU 中断状态都在这个窗口里，而在它
     之前这些寄存器在 Linux 侧**完全不可见**（驱动只用自己的 helper 碰它们）。
+    偏移必须写成 **`0x90350`** 这样的十六进制（见 §4.2 末尾「本轮被证伪的一条」）。
 - `zx279133.h`：新增 `ZX279133_PPU_CLUSTER_ME_SLOTS 64` / `_ME_BITS 8` /
   `ZX279133_PPS_BASE` / `_PPS_WINDOW_SIZE`。
 - 边界检查按「最后一个字还在窗口内」写，不写成 `off + 4 * n > size`：`off` 由
@@ -198,6 +199,14 @@ echo 'file zx279133-switch.c +p' > /sys/kernel/debug/dynamic_debug/control
    `reg = 0x18000000 0x1000000`（16 MiB），与 `ZX279133_PPS_WINDOW_SIZE` 对得上，
    `pr` 的上界按这个值卡。SE hash 窗口另有一份映射（`devm_ioremap_wc(...,
    0x1000000)`），所以 `cam` 的上界用 `ZX279133_SE_HASH_REQUIRED_SIZE`。
+
+**本轮被证伪的一条（本文件下面两处示例原本是错的，已改）**：上面写的
+`pr 90350 16` 里的 `90350` 会被 `kstrtou32(tok, 0, ...)` 按**十进制**读成 90350
+（= 0x160ee），而不是常量 `ZX279133_PPU_CLUSTER_ME_TABLE` 写的那个 **0x90350**。
+两者差了一个数量级，而十进制那一个**连字对齐都不是** —— 11-01 那次实机验收里
+`pr 90350 4` 直接把板子读崩了（`FSC = 0x21: alignment fault`，调用链是
+`readl → zx279133_9132_write`）。正确的写法是 `pr 0x90350 16`。
+细节与同族动词的审计见 `docs/96`。
 
 **没有做的**（证据不支持，见 §1.7）：把 TC flower 条目映射到 ME 槽。计划里那
 条「按流表条目索引线性映射到 0..63」被本轮的证据否掉了 —— 厂商的 flow 号是
@@ -458,7 +467,7 @@ CI 每暴露一类编译期错误，就在本地加一道门禁，免得再花�
    - `dmesg | grep -c 'switch: lane'` = 0；`dynamic_debug/control` 的 `+p` 后原样复现；
    - 板上 `/sys/kernel/debug/dynamic_debug/control` 存在；
    - `echo me > /sys/kernel/debug/zx279133-9132` 打出 16 行 ME 表与 64 个 flow 的引擎号；
-   - `echo pr 90350 16 > /sys/kernel/debug/zx279133-9132` 读回 ME 表；
+   - `echo pr 0x90350 16 > /sys/kernel/debug/zx279133-9132` 读回 ME 表（偏移是十六进制）；
    - `echo cam > /sys/kernel/debug/zx279133-9132` 打出算法块寄存器；
    - `tc filter add dev eth0 ingress flower ...` 可执行（客户端是 `tc-full`，见 §4.8），`zx279133-flows` 非空；
    - 板子 br-lan / eth0 正常，ping 通。
@@ -475,7 +484,7 @@ CI 每暴露一类编译期错误，就在本地加一道门禁，免得再花�
 # 板上（只读）
 echo fg  > /sys/kernel/debug/zx279133-9132   # flood group 表
 echo me  > /sys/kernel/debug/zx279133-9132   # ME 表（本轮新增）
-echo pr 90350 16 > /sys/kernel/debug/zx279133-9132   # PPS 窗口（本轮新增）
+echo pr 0x90350 16 > /sys/kernel/debug/zx279133-9132   # PPS 窗口（本轮新增；偏移要写十六进制）
 echo cam > /sys/kernel/debug/zx279133-9132   # CAM/算法块（本轮新增）
 grep -i -e 19000000 -e 18000000 /proc/interrupts
 ```
