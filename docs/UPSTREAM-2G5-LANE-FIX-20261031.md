@@ -617,7 +617,60 @@ mii 45read 5 1e 758d => 801E                     <- lane 自己的字：bit2 在
 **没有动**：apply 路径、端口字、ME 表、任何中断语义；
 **没有新增 CI 门禁**（`ci-build-repo/tests/README.md:70`）。
 
-### 12.7 这一轮的账
+### 12.7 上板实测：成了（2026-11-01 20:52）—— **没有刷机**
+
+CI 的 initramfs release 里就是 run313 的内核，于是不必等 flash 包，
+在 U-Boot 的提示符下把它 tftp 进 RAM 直接 `bootm` —— **flash 一个字没动**，
+就拿到了这一版驱动：
+
+```
+=> setenv ipaddr 192.168.9.1; setenv serverip 192.168.9.25; ping 192.168.9.25
+host 192.168.9.25 is alive
+=> tftpboot 0x89000000 sk-d840n-initramfs.itb
+Bytes transferred = 12562740 (bfb134 hex)        5.7 MiB/s
+=> bootm 0x89000000
+## Loading kernel from FIT Image at 89000000 ...
+```
+
+内核里的三条关键行：
+
+```
+[    1.609409] the 2.5G jack: the lane's BMCR was 0x0140 and is 0x1140 after the loader's words were written again
+[    2.649497] lane after: XPCS vend2 BMCR = 0x1140
+[    2.650555] the 2.5G jack's PHY: SerDes ctrl (devad 0x1e reg 0x758d) = 0x801e
+```
+
+⇒ **BMCR 的 bit 12 这次保住了**（写进去了，1 秒后仍是 0x1140）；
+⇒ **lane 自己的 bit 2 也回来了**（0x8018 → 0x801e）；
+⇒ **驱动不再重启 AN**（这一轮日志里没有 `auto-negotiation restarted`）——
+`needs_latch` 现在是 false，因为它判的那个状态位现在真的置位了。
+
+**判据是流量，不是状态字**：
+
+```
+C:\>ping -n 5 192.168.9.1
+Reply from 192.168.9.1: bytes=32 time=1ms TTL=64
+Packets: Sent = 5, Received = 5, Lost = 0 (0% loss)
+
+C:\>arp -a
+  192.168.9.1           d0-45-8d-84-09-00     dynamic
+```
+
+板上：`br-lan rx=196 包`、`lan-cpu0 rx=204 包`。
+**PC 的线只插在 2.5G 口上**（四个 GE 口 carrier=0），**所以这个流量走的就是那条 lane**。
+
+⇒ **2.5G 口在 Linux 里第一次通了。**
+
+### 12.8 一条要改的判断
+
+驱动那句 `the lane carries no code`（依据远端 PCS 状态字的 `0x40` bit）在 4.72 s
+**仍然打印了**，而**流量是通的** ⇒ 那个 bit 不是「lane 有没有码」的判据，
+或者它自己会掉。
+
+**判据应当是流量，不是那四个字。** 这一条记在这里，
+免得下一轮又拿 `0x0029` 去判「lane 死了」。
+
+### 12.9 这一轮的账
 
 **做了**：
 - env 补上 `ping`（§11），U-Boot 阶段真的通了（§12.1）；
@@ -626,11 +679,14 @@ mii 45read 5 1e 758d => 801E                     <- lane 自己的字：bit2 在
 - 实测 `0x758d` 是状态位、写不进去（§12.4）；
 - **在 loader 的提示符下量到了它的原始状态**（§12.5），把差异缩到**一个字**：
   XPCS0 的 VEND2 BMCR 的 bit 12；
-- 据此改了驱动（§12.6），并给这一改配了判据。
+- 据此改了驱动（§12.6），并给这一改配了判据；
+- **上板验了**（§12.7）：不刷机，tftp + bootm run313 的 initramfs，
+  **2.5G 口在 Linux 里第一次通了**（PC 5/5 全通、0% 丢包、1 ms）。
 
-**没做**：这一改**还没上板**（要等 CI + 刷机）；**2.5G 口在 Linux 里仍然不通**。
+**没做**：这一改**还没刷进 flash**（板上现在跑的是 run309 的 kernel，
+下一次冷启动就会退回「不通」）；**二层转发那件事仍然卡在物理条件上**。
 
 **还缺一个物理条件**：PC 的网线在 2.5G 口上，四个 GE 口空着。
 二层转发那件事（docs/99 §6）要判 UNI↔UNI 需要 PC 插到 GE 口上，
 而 lane 这件事要判「Linux 里通不通」需要 PC 留在 2.5G 口上 ——
-**两个实验互相抢这根线**，而这一轮只能做后者。
+**两个实验互相抢这根线**，而这一轮做完了后者。
