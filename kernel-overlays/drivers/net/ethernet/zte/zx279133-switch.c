@@ -3649,6 +3649,61 @@ zx279133_switch_outerphy_apply_speed_locked(struct zx279133_switch *priv,
 		return ret;
 
 	zx279133_switch_xmac_set_speed(priv, speed_code);
+
+	/*
+	 * The loader's four words, once more, and last.
+	 *
+	 * Measured on 2026-11-01, on the board, with the loader's own net bring-up
+	 * (the env now carries the `ping` that makes it run, so the loader
+	 * configures the RTL8226 and the lane carries traffic before Linux is
+	 * even started):
+	 *
+	 *	loader, at its prompt	0x1a7c0000 = 0x1140 ...	BMCR bit 12 on
+	 *				0x1a7e0000 = 0x2200 0x0005 ...
+	 *				1e:0x758d   = 0x801e		the lane's own bit 2 on
+	 *				0x16100000  = the 1G image, 49/49
+	 *
+	 * this driver, after its own programming (its "lane after" snapshot):
+	 *
+	 *				AN_CTRL = 0x0005	 same
+	 *				DIG_CTRL1 = 0x2200	 same
+	 *				BMCR = 0x0140		 bit 12 OFF
+	 *				1e:0x758d = 0x8018	 the lane's own bit 2 off
+	 *
+	 * So the only word that differs from the loader's working state is the
+	 * BMCR's bit 12 - the auto-negotiation enable of the base-X side - and
+	 * the lane's own bit 2 follows it.  xpcs_program_lane() already writes
+	 * that BMCR whole, with the loader's value; whatever runs after it in
+	 * this sequence (the auto-negotiation restart in the bring-up, the
+	 * bypass, the XMAC's speed word) takes the bit down again, and the
+	 * lane never negotiates.
+	 *
+	 * The bit is writable in both directions - the loader's own `mw` on that
+	 * address puts it back and it reads back set (measured 2026-11-01) - so
+	 * writing the loader's words last is enough to make the lane's final
+	 * state the state that is known to carry bytes.
+	 *
+	 * The two words are printed before and after, because this is a test:
+	 * if the write sticks, the BMCR reads 0x1140 and the lane comes back; if
+	 * it does not, the log says so and the next question is what takes it
+	 * down.
+	 */
+	if (speed != SPEED_2500) {
+		int before = zx279133_switch_xpcs_read(priv, MDIO_MMD_VEND2,
+							MII_BMCR);
+		int after;
+
+		ret = zx279133_switch_xpcs_program_lane(priv);
+		if (ret)
+			return ret;
+		after = zx279133_switch_xpcs_read(priv, MDIO_MMD_VEND2,
+						  MII_BMCR);
+		dev_info(priv->dev,
+			 "the 2.5G jack: the lane's BMCR was 0x%04x and is 0x%04x after the loader's words were written again\n",
+			 before < 0 ? 0xffff : before,
+			 after < 0 ? 0xffff : after);
+	}
+
 	priv->lane_class = speed == SPEED_2500 ?
 		ZX279133_SWITCH_OUTERPHY_SERDES_MODE_2G5 :
 		ZX279133_SWITCH_OUTERPHY_SERDES_MODE_1G;

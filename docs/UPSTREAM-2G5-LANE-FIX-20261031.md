@@ -427,3 +427,210 @@ U-Boot 阶段从「PHY 根本没被初始化」变成「完整初始化，且 PC
 
 **回滚**：`staging/trial/env-orig-0x180000.bin`（逐字节备份），
 TFTP 写回 `mtd1+0x180000` 即恢复原 env。
+
+---
+
+## 12 继续追：内核把它弄坏的那一刀（2026-11-01 夜）
+
+§11 把 env 补上以后，U-Boot 那一段已经全对，剩下的是**内核把 lane 弄坏**。
+这一节记的是这一段追查的结论。
+
+### 12.1 先确认一件事：U-Boot 阶段那条 lane 真的通了
+
+不是「状态字好看」，是**真的过了字节**：
+
+```
+mode_eth_1gbase_x_cfg
+xmac 0 speed set 2 in sgmii(xmac speed 3)
+mac 4 phy status changed: 1000M full-duplex
+host 192.168.9.25 is alive
+```
+
+板上四个 GE 口与 2.5G 口的载波状态（实测）：
+
+```
+eth0      carrier=0
+lan0      carrier=0        <- 4 个 GE 口都没插线
+lan2      carrier=0
+lan3      carrier=0
+lan4      carrier=0
+lan1      carrier=1        <- 只有 2.5G 口插着线
+lan-cpu0  carrier=1
+```
+
+⇒ PC 只可能挂在 2.5G 口上，**U-Boot 那次 ping 的往返走的正是这条 lane**。
+（这也是 §11 那条「ping 只是触发 eth bring-up」的补充：它不只触发了，**它还通了**。）
+
+### 12.2 内核的时间线：2.65 s 还是好的，4.71 s 就坏了
+
+同一轮启动（19:08:04 的插座冷启动）：
+
+| 时刻 | 谁在动 | `1e:0x758d` | 四个 bit（`7:0x01 & 0x69`） |
+|---|---|---|---|
+| U-Boot 阶段 | loader 初始化 RTL8226 | 0x801e | 0x0069（全在） |
+| 1.581 s | 驱动读 loader 的 XMAC0（"lane pre-serdes"） | — | — |
+| 1.608 s | "lane programmed for 1G (speed 3)" | — | — |
+| 2.648 s | 驱动写完 XPCS0（"lane after"） | **0x8018** | **0x0069**（还全在） |
+| 4.711 s | —（内核日志这 2 秒里一条消息都没有） | 0x8018 | **0x0029**（丢 0x40） |
+| 4.712 s | 驱动："auto-negotiation restarted (attempt 1/3)" | | |
+| 9.141 s | 驱动："the lane's word is 0x8018 … the lane carries no code" | | |
+| 19.7 / 34.7 s | 驱动：attempt 2/3、3/3 | | |
+| 41.75 s | 驱动读回 | | 0x0069（AN 窗口内又全在） |
+| 43.83 s | 驱动读回 | | 0x0029（又丢） |
+| 247 s（活板直读） | | **0x8018** | 0x002d |
+
+⇒ `0x758d` 的 **bit2 在内核起来 2.65 s 时就已经没了**（loader 留下的是 `0x801e`），
+而远端的四个 bit 是 4.71 s 才丢的 —— **近端先坏，远端后坏**。
+
+**这一形态在两次独立的插座冷启动上逐毫秒复现**（19:08:04 与 19:28:34）：
+
+| 时刻 | 19:08:04 轮 | 19:28:34 轮 |
+|---|---|---|
+| U-Boot 阶段 | `host 192.168.9.25 is alive` | `host 192.168.9.25 is alive` |
+| 四个 bit 全在 | 2.648832 s | 2.648913 s |
+| `0x758d` = 0x8018 | 2.649791 s | 2.649870 s |
+| 四个 bit 丢 0x40 | 4.710734 s | 4.710805 s |
+| attempt 1/3 | 4.712314 s | 4.712359 s |
+| attempt 2/3 | 19.721920 s | 19.712071 s |
+| attempt 3/3 | 34.721937 s | 34.722172 s |
+| 四个 bit 又全在 | 41.750609 s | 41.110746 s |
+| 又丢 0x40 | 43.830606 s | 43.190741 s |
+
+### 12.3 驱动里有一处自伤：把状态位当配置位
+
+`zx279133_switch_outerphy_serdes_check()`（`zx279133-switch.c`）的判定链：
+
+```c
+	mode = read(0x7580);                       /* SerDes mode */
+	if ((mode & MODE_MASK) == MODE_2G5) return true;   /* 2.5G 档不管 */
+	...                                       /* 三个寄存器要是对不上 1G class 就得改 */
+	an = read(7:0x01);
+	if (!(an & AN_PARTNER)) return true;       /* 没对端就不动 */
+	if ((mode & MODE_MASK) != MODE_1G) return false;
+	link = read(0x758d);
+	if (link & SERDES_LINK_BIT) return true;   /* bit2：lane 有码，算了 */
+	return false;                              /* <- 落到这里就要"修" */
+```
+
+最后那一支（**"已经是 1G class 但 lane 没码"**）是假的：bit2 是**状态位**
+（§12.4 实测过，写不进去），它反映的是近端 SerDes 有没有在送码，
+**不是"配置对不对"**。于是 `needs_latch` 判成 true →
+`zx279133_switch_outerphy_serdes_set()` 重写一遍 1G class → **顺带重启 AN** →
+远端刚恢复的 0x40 当场又掉。
+
+⇒ 无论近端为什么没码，这个循环**不可能把它修好**，只会反复打断远端。
+（这就是日志里 0x0069 / 0x0029 来回跳的原因。）
+
+### 12.4 实测：`0x758d` 写不进去，它是状态位
+
+在活板上直接写（`m45w 5 0x1e 0x758d 0x801e`）：
+
+```
+sent: m45w 5 0x1e 0x758d 0x801e
+outer phy 5 devad 0x1e reg 0x758d = 0x8010     <- 写进去只剩 0x8010
+```
+
+写 `0x801e` 回读 `0x8010`：bit1、bit2 不留，bit3 也掉了。
+再写回 `0x8018` 仍然只回 `0x8010` ⇒ **bit3 也是状态位，写不回去**。
+（写这个寄存器还会把 SerDes 域带进复位：随后 XPCS0 的 VEND2 整块读成 0，
+这正是驱动注释里说的 "An empty block is the SerDes domain's reset"。）
+
+⇒ 既然 bit2 写不进去，**"让内核把 0x758d 写成 0x801e" 这条路根本不存在**；
+能动的只有「为什么近端不再送码」。
+
+### 12.5 loader 的原始状态：在 U-Boot 提示符下量到了（2026-11-01 19:49）
+
+插座断电后再上电，用抢占流把 U-Boot 停在提示符，**在 bootcmd 执行之前**手动跑一遍
+loader 自己的 net bring-up（和 bootcmd 里那一步完全相同）：
+
+```
+=> setenv ipaddr 192.168.9.1; setenv serverip 192.168.9.25; ping 192.168.9.25
+...
+mode_eth_1gbase_x_cfg
+xmac 0 speed set 2 in sgmii(xmac speed 3)
+mac 4 phy status changed: 1000M full-duplex
+host 192.168.9.25 is alive
+```
+
+（**注意**：第一次去读的时候两个窗口全是 0 —— 因为我们在 bootcmd 之前就打断了它，
+loader 还没跑 net init，XPCS0 自然是空的。必须在提示符下先触发一次 net init。）
+
+然后读 loader 留下的三个块：
+
+```
+1a7c0000: 00001140 00000139 00007996 0000ced0    <- VEND2 BMCR = 0x1140（bit12 = AN enable，开）
+1a7c0010: 00000020 0000d000 00000002 00000000    <- VEND2 SR-MII speed = 0x0020
+1a7e0000: 00002200 00000005 0000001a 00000000    <- VEND2 DIG_CTRL1 = 0x2200, AN_CTRL = 0x0005
+mii 45read 5 1e 758d => 801E                     <- lane 自己的字：bit2 在（"lane 有码"）
+16100000..161000c0: 49 个字                      <- Uni SerDes 镜像
+```
+
+把 loader 的与内核写完之后的快照逐项对齐：
+
+| 项 | loader（能过字节） | 本驱动写完之后 | 差？ |
+|---|---|---|---|
+| VEND2 BMCR | **0x1140** | **0x0140** | **差：bit12 被清** |
+| VEND2 AN_CTRL | 0x0005 | 0x0005 | 同 |
+| VEND2 DIG_CTRL1 | 0x2200 | 0x2200 | 同 |
+| VEND2 SR-MII speed | 0x0020 | （未打印） | — |
+| Uni SerDes 49 字 | 见上 | 逐字相同（49/49） | 同 |
+| 外侧 PHY 的 class（`1e:0x7580`） | 0x9402 | 0x9402 | 同 |
+| 外侧 PHY 的 option（`1e:0x697a`） | 0x0000 | 0x0000 | 同（驱动发现已经是对的，一个字都没写） |
+| `1e:0x758d` lane 字 | **0x801e** | **0x8018** | **差：bit2 丢** |
+
+⇒ **被实测到的差异只有一个：XPCS0 的 VEND2 BMCR 的 bit 12（base-X 那侧的 AN enable）。**
+它一丢，lane 自己的 bit 2 就跟着丢，远端随后丢 0x40。
+
+**这个 bit 是可写的**（在 loader 的提示符下实测，两个方向都灵）：
+
+```
+1a7c0000: 00001140 ...        <- 原值
+=> mw 0x1a7c0000 0x0140
+1a7c0000: 00000140 ...        <- bit12 清掉了
+=> mw 0x1a7c0000 0x1140
+1a7c0000: 00001140 ...        <- 又写回来了
+=> mii 45read 5 1e 758d => 801E   <- lane 字没动
+```
+
+⇒ 「内核把 0x758d 写成 0x801e」这条路不通（§12.4），**但「让内核把 BMCR 的 bit12
+留在开着」是通的** —— 只要最后再写一次 loader 那四个字就行。
+
+**本轮改的就是这个**：在 lane 编程的**最后**（XMAC0 的速度写完之后）把 loader 的
+四个字整组再写一遍，并把写前/写后的 BMCR 打进日志：
+
+```c
+	int before = zx279133_switch_xpcs_read(priv, MDIO_MMD_VEND2, MII_BMCR);
+	ret = zx279133_switch_xpcs_program_lane(priv);
+	after  = zx279133_switch_xpcs_read(priv, MDIO_MMD_VEND2, MII_BMCR);
+	dev_info(..., "the 2.5G jack: the lane's BMCR was 0x%04x and is 0x%04x ...");
+```
+
+这是一个**带判据的试验**：写进去 ⇒ BMCR 读回 0x1140 且 lane 回来；
+写不住 ⇒ 日志会直接说写不住，下一个问题就是「谁把它拉下去的」。
+
+### 12.6 本轮改了什么
+
+**驱动**（`zx279133-switch.c`，一处）：在 1G 这条 lane 的编程**最后**，
+把 loader 的四个字再写一遍，并把写前/写后的 BMCR 打进日志（§12.5 的代码）。
+2.5G 那条分支不动（loader 的 2.5G 镜像与 1G 不同，不能用同一组字）。
+
+**没有动**：apply 路径、端口字、ME 表、任何中断语义；
+**没有新增 CI 门禁**（`ci-build-repo/tests/README.md:70`）。
+
+### 12.7 这一轮的账
+
+**做了**：
+- env 补上 `ping`（§11），U-Boot 阶段真的通了（§12.1）；
+- 把内核弄坏 lane 的时间线钉到 0.1 s，两次冷启动逐毫秒复现（§12.2）；
+- 找出驱动的自伤判定：`needs_latch` 把 lane 的**状态位**当配置位（§12.3）；
+- 实测 `0x758d` 是状态位、写不进去（§12.4）；
+- **在 loader 的提示符下量到了它的原始状态**（§12.5），把差异缩到**一个字**：
+  XPCS0 的 VEND2 BMCR 的 bit 12；
+- 据此改了驱动（§12.6），并给这一改配了判据。
+
+**没做**：这一改**还没上板**（要等 CI + 刷机）；**2.5G 口在 Linux 里仍然不通**。
+
+**还缺一个物理条件**：PC 的网线在 2.5G 口上，四个 GE 口空着。
+二层转发那件事（docs/99 §6）要判 UNI↔UNI 需要 PC 插到 GE 口上，
+而 lane 这件事要判「Linux 里通不通」需要 PC 留在 2.5G 口上 ——
+**两个实验互相抢这根线**，而这一轮只能做后者。
