@@ -30,6 +30,11 @@ for resource in PACKAGE.rglob("*"):
     if resource.name.startswith("luci.skd840n"):
         assert not re.search(r"\b(system|popen|exec|writefile)\s*\(", source), resource
 configure = (ROOT / "scripts/configure-sk-d840n.sh").read_text(encoding="utf-8")
+# include/scan.mk scans recipe text before evaluating luci.mk. Without this
+# signature a custom LuCI package disappears entirely, not merely as '=n'.
+for relative in ("luci-app-sk-d840n-pon/Makefile", "libs/libzxpon-omci/Makefile", "network/config/firewall4/Makefile"):
+    recipe = ROOT / "overlays/package" / relative
+    assert re.search(r"call (Build/DefaultTargets|BuildPackage|KernelPackage)", recipe.read_text(encoding="utf-8")), recipe
 for package in ("firewall4", "luci-app-sk-d840n-pon", "luci-theme-argon"):
     assert "CONFIG_PACKAGE_" + package + "=y" in configure
 assert "539e3e1db56b2348c3655615540e45638b797c73" in (ROOT / "scripts/prepare-sk-d840n-ui.sh").read_text(encoding="utf-8")

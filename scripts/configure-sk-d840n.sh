@@ -477,7 +477,7 @@ printf '%s\n' CONFIG_PACKAGE_luci-app-sk-d840n-pon=y CONFIG_PACKAGE_luci-theme-a
 	CONFIG_PACKAGE_firewall4=y CONFIG_PACKAGE_luci-app-firewall=y CONFIG_PACKAGE_luci-i18n-firewall-zh-cn=y >>.config
 
 make defconfig
-for package in zxpond libzxpon-omci luci-app-sk-d840n-pon luci-theme-argon firewall4 luci-app-firewall; do
+for package in zxpond libzxpon-omci luci-app-sk-d840n-pon luci-theme-argon luci-i18n-base-zh-cn luci-i18n-argon-config-zh-cn firewall4 luci-app-firewall luci-i18n-firewall-zh-cn rpcd-mod-ucode ucode-mod-fs; do
 	grep -qx "CONFIG_PACKAGE_$package=y" .config || {
 		echo "Required ONU/firewall package lost after defconfig: $package" >&2; exit 1;
 	}

@@ -141,7 +141,7 @@ jobs:
           if [ "$rc" != 0 ]; then
             # GitHub caps annotations per step. One escaped multi-line message
             # preserves the actual final error instead of the first ten lines.
-            message=$(tail -n 65 sk-pon-tests.log | sed 's/%/%25/g' | tr -d '\r' | awk '{printf "%s%%0A", $0}')
+            message=$(tail -n 65 sk-pon-tests.log | python3 -c 'import sys; s=sys.stdin.read()[-2600:]; print(s.replace("%","%25").replace("\r","").replace("\n","%0A"))')
             echo "::error::$message"
           fi
           exit "$rc"
@@ -700,7 +700,7 @@ jobs:
           ) 2>&1 | tee sk-configure.log
           rc=${PIPESTATUS[0]}
           if [ "$rc" != 0 ]; then
-            message=$(tail -n 65 sk-configure.log | sed 's/%/%25/g' | tr -d '\r' | awk '{printf "%s%%0A", $0}')
+            message=$(tail -n 65 sk-configure.log | python3 -c 'import sys; s=sys.stdin.read()[-2600:]; print(s.replace("%","%25").replace("\r","").replace("\n","%0A"))')
             echo "::error::$message"
             exit "$rc"
           fi
@@ -1267,7 +1267,7 @@ jobs:
           sh scripts/check-sk-d840n-management.sh openwrt 2>&1 | tee sk-management-gate.log
           rc=${PIPESTATUS[0]}
           if [ "$rc" != 0 ]; then
-            message=$(tail -n 65 sk-management-gate.log | sed 's/%/%25/g' | tr -d '\r' | awk '{printf "%s%%0A", $0}')
+            message=$(tail -n 65 sk-management-gate.log | python3 -c 'import sys; s=sys.stdin.read()[-2600:]; print(s.replace("%","%25").replace("\r","").replace("\n","%0A"))')
             echo "::error::$message"
           fi
           exit "$rc"

@@ -9,3 +9,5 @@ PKG_LICENSE:=GPL-2.0-only
 CONFIG_LUCI_CSSTIDY:=
 
 include $(TOPDIR)/feeds/luci/luci.mk
+
+# call BuildPackage - OpenWrt buildroot scan signature
