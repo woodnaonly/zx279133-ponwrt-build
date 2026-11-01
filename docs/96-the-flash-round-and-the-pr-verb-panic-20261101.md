@@ -69,14 +69,27 @@ root 分区整段读会搞挂板子，所以按 **4 MiB 分块**、每块一次�
 | `/sys/kernel/debug/dynamic_debug/control` | ✅ 存在（`-rw-r--r-- 0 root root`） |
 | `/sys/kernel/debug/zx279133-9132` | ✅ 存在（`-rw-------`） |
 | `/sbin/tc`、`/usr/sbin/nft` | ✅ 都在 |
-| `dmesg \| grep -c 'switch: lane'` | ✅ **0**（周期刷屏归零） |
+| `dmesg \| grep -c 'switch: lane: far'` | ✅ **0**（周期刷屏归零） |
 | `me` | ✅ rc=0，16 个 `ppu me word` + `ppu pkt-type detail` |
 | `cam` | ✅ rc=0，`cam: alg crc 0x00000000 bulk 0x00000002 depth0 0x00000012 depth1 0x00000000 smmu1 0x0009e100` |
 | `mes 7 3` | ✅ rc=0（写入是否生效另说，见 §4） |
 | `pr 90350 4` | ❌ **kernel panic**（见 §3） |
 
-`switch: lane` 那 15 条 dmesg 是**不同字符串**的一次性诊断行
-（`lane pre-serdes:` / `lane after:`），不是周期刷屏。
+⚠️ **订正（2026-11-01，见 docs/98 §4）**：上面那行命令原先写成 `grep -c 'switch: lane'`，
+**0 其实是周期刷屏模式 `switch: lane: far` 的计数**——刷屏行长这样：
+
+```
+[    1.608262] zx279133-switch 19000000.ethernet:switch: lane: far an=0x00ad 758d=0x801e 7580=0x9416
+```
+
+整个串口日志里这条模式一共 5033 行，分布在大量早期启动里。
+
+`switch: lane` 本身**不是 0**，而是 **15 条一次性诊断行**：4 条 `lane pre-serdes:` +
+11 条 `lane after:`，全部落在 t=1.59..2.66 s。它们与刷屏行**共享 `switch: lane` 前缀**，
+不同的只是后缀（`pre-serdes:` / `after:` vs `: far`）——所以「15 条是不同字符串」这句
+说法也不准确，区分它们要靠后缀，不能靠 `switch: lane` 这个前缀。
+
+⇒ 刷屏归零的正确判据是 `grep -c 'switch: lane: far'` == 0。
 
 ---
 
@@ -206,7 +219,7 @@ base-0 惯例是对的（`0x90350` 是十六进制、`90350` 是十进制），�
 
 ---
 
-## 6. `mes` 写进去的值没有回读出来（**未判定**）
+## 6. `mes` 写进去的值没有回读出来（**已定案 → docs/97**）
 
 `mes 7 3` rc=0，但回读 flow 7 的引擎号仍是 0：
 
@@ -238,6 +251,26 @@ ppu me word 1 = 0x00000001  flows 4:1 5:0 6:0 7:0
 
 ---
 
+### 6.1 结论（2026-11-01 补，见 [docs/97](97-the-me-table-is-read-only-20261101.md)）
+
+上面那轮实验做完了，**上面列的两个可能都不是原因**：
+
+* ME 表那 16 个字（PPS + 0x90350..0x9038C）**不是 CPU 可写的配置寄存器**，
+  而是 PPU cluster 自己那张「flow → ME」分派表在 CPU 侧的**只读镜像**。
+  写入值在任何一次采样里都没出现过；同一窗口的邻居（0x9045c，pkt-type detail）
+  写进去就读得出来，所以「PPS 窗口整体只读」被排除。
+* 位布局也不是问题：厂商 `ppu_cluster_set_me_val_by_flow_num()` 的布局与本实现
+  逐位一致（字 = `flow>>2`、槽 = `(flow&3)*8`、8 位/槽）。
+* 厂商自己那条赋值路径**够不着这张表**：它在寄存器描述符表里用的是 id 66，
+  而 id 66 那一行是**整行全 0 的占位行**，访问层要求 `row->id == id`，直接被拒。
+* 引擎分派真正的落点在 **PPU 微码 blob 里的 64 条 PORT_FLOW（tag 0xbbbbbbbb）**，
+  不在这个寄存器窗口。
+
+⇒ `mes`（可编程）在这组寄存器上做不到；`me`（可观测）成立。要让引擎分派可编程，
+得动微码 blob 的 PORT_FLOW 注入，那需要改驱动并重新出 CI。
+
+---
+
 ## 7. 复现
 
 ```sh
@@ -247,11 +280,16 @@ echo me  > /sys/kernel/debug/zx279133-9132        # ME 表
 echo pr 0x90350 16 > /sys/kernel/debug/zx279133-9132   # PPS 窗口（偏移是十六进制！）
 echo cam > /sys/kernel/debug/zx279133-9132        # CAM/算法块
 grep -i -e 19000000 -e 18000000 /proc/interrupts
-dmesg | grep -c 'switch: lane'
+dmesg | grep -c 'switch: lane: far'
 ```
 
 ⚠️ 修复前，**`pr` 的偏移必须带 `0x` 且是 4 字节对齐的**，否则板子会 panic：
 `pr 0x90350 16` 安全，`pr 90350 4` 会崩（见 §3）。
+
+ℹ️ **该缺陷已修复**（提交 `fa6f99e`，随 run 302 的镜像上板）：对齐守卫统一到
+`zx279133_9132_off_aligned()`，`pr` / `nr` / `nd` / `nw` / `nwp` / `soc` / `socw` /
+`cam` / `xbasex` 九个出口共用。现在未对齐的偏移被拒在门口并返回 `-EINVAL`，
+板子不会崩——run 302 实测 `pr 0x90351 1` 与 `pr 90350 1` 都是 rc=1（见 docs/98 §3.1）。
 
 ---
 
