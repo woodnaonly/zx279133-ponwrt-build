@@ -695,6 +695,18 @@ C:\>arp -a
 `arp -d *` 清掉缓存后再 ping 就 0% 丢包。⇒ **判据必须是流量**，
 一次 ping 的结果不足以下结论（§12.8 那条规矩的又一个例子）。
 
+**最后是插座自己的冷启动**（21:31:34 断电再上电，不是 reset）：
+
+```
+host 192.168.9.25 is alive
+[    1.609449] the 2.5G jack: the lane's BMCR was 0x0140 and is 0x1140 after the loader's words were written again
+[    2.649754] AN status 0x0069, the lane's four bits are 0x0069
+[    2.650680] SerDes ctrl (0x758d) = 0x801e
+```
+
+PC 侧：**10/10，0% 丢包，0–5 ms**。
+⇒ **flash 里的这个状态在冷启动后照样成立**，不是 reset 的假象。
+
 ### 12.8 一条要改的判断
 
 驱动那句 `the lane carries no code`（依据远端 PCS 状态字的 `0x40` bit）在 4.72 s
