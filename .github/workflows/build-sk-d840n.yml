@@ -689,11 +689,22 @@ jobs:
       - name: Configure
         if: steps.pick.outputs.run == 'true'
         run: |
-          sh scripts/prepare-sk-d840n-ui.sh "$GITHUB_WORKSPACE/openwrt"
-          sh scripts/configure-sk-d840n.sh \
-            "$GITHUB_WORKSPACE/openwrt" \
-            "$GITHUB_WORKSPACE/linux-mainline-zte-zxslc-sr1010/linux-$KVER" \
-            "${{ matrix.mode }}"
+          set +e
+          (
+            set -e
+            sh scripts/prepare-sk-d840n-ui.sh "$GITHUB_WORKSPACE/openwrt"
+            sh scripts/configure-sk-d840n.sh \
+              "$GITHUB_WORKSPACE/openwrt" \
+              "$GITHUB_WORKSPACE/linux-mainline-zte-zxslc-sr1010/linux-$KVER" \
+              "${{ matrix.mode }}"
+          ) 2>&1 | tee sk-configure.log
+          rc=${PIPESTATUS[0]}
+          if [ "$rc" != 0 ]; then
+            message=$(tail -n 65 sk-configure.log | sed 's/%/%25/g' | tr -d '\r' | awk '{printf "%s%%0A", $0}')
+            echo "::error::$message"
+            exit "$rc"
+          fi
+          set -e
           # Only now does .config exist, and the mode is what decides the rule: the RAM
           # image is the recovery image, a released root must not ship a page that can
           # erase kernel and root. The script asserts the symbol resolved at all; this
@@ -1846,11 +1857,13 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: logs-${{ matrix.mode }}
+          include-hidden-files: true
           path: |
             openwrt/logs
             openwrt/.config
             sk-pon-tests.log
             sk-management-gate.log
+            sk-configure.log
             compile-parallel.log
             compile-v1.log
             compile-watchdog.log

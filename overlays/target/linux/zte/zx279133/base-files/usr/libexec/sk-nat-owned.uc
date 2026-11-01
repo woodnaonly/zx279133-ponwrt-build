@@ -25,7 +25,7 @@ for (let item in document?.nftables || []) {
 		if (length(keys(expressions[0])) != 1 || match?.op != '==' || match?.left?.meta?.key != 'oifname' ||
 			type(match?.right) != 'string' || !match.right ||
 			length(keys(expressions[1])) != 1 || !exists(expressions[1], 'counter') ||
-			length(keys(expressions[2])) != 1 || !exists(expressions[2], 'masq') || expressions[2].masq != null) exit(1);
+			length(keys(expressions[2])) != 1 || !exists(expressions[2], 'masquerade') || expressions[2].masquerade != null) exit(1);
 		rules++;
 	}
 	else exit(1);

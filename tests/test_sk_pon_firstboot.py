@@ -62,7 +62,8 @@ def nat_test(ucode):
                    'hook': 'postrouting', 'prio': 100, 'policy': 'accept'}},
         {'rule': {'family': 'ip', 'table': 'nat', 'chain': 'postrouting', 'expr': [
             {'match': {'op': '==', 'left': {'meta': {'key': 'oifname'}}, 'right': 'eth0'}},
-            {'counter': {'packets': 0, 'bytes': 0}}, {'masq': None}]}}]}
+            # nftables 1.1.6 tests/py/ip/masquerade.t.json uses this exact key.
+            {'counter': {'packets': 0, 'bytes': 0}}, {'masquerade': None}]}}]}
 
     def result(document):
         return subprocess.run([ucode, str(script)], input=json.dumps(document), text=True,
@@ -77,7 +78,7 @@ def nat_test(ucode):
     for added in ({'rule': copy.deepcopy(old['nftables'][-1]['rule'])},
                   {'set': {'family': 'ip', 'table': 'nat', 'name': 'user'}}):
         assert result({'nftables': [*old['nftables'], added]}) == 1
-    for expression in ({'accept': None}, {'masq': {'flags': ['random']}}, {'drop': None}):
+    for expression in ({'accept': None}, {'masquerade': {'flags': ['random']}}, {'masq': None}, {'drop': None}):
         altered = copy.deepcopy(old)
         altered['nftables'][-1]['rule']['expr'][-1] = expression
         assert result(altered) == 1
