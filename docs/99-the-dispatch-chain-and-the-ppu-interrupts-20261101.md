@@ -61,7 +61,7 @@ reg = (reg & ~GENMASK(23, 0)) | 0x463;
 
 和注释里写的「start PC 10, flow number 1」「Tbl Vld + start Pc 561」**逐字对得上**。
 注意这两处都是 `GENMASK(23, 0)`，也就是 **bits 0..23 是一个整体**，
-bits 24 以上另有字段 —— 这与 blob 的解码公式（见 §1.2）也一致。
+bits 24 以上另有字段 —— 这与 blob 的解码公式（见下面 ②）也一致。
 
 **② 厂商 blob 的 `PORT_FLOW` 解码公式**
 
@@ -78,22 +78,20 @@ word  = 1                       （bit 0 = Tbl Vld）
 
 blob 的三个字段和 word 的三个字段一一对应，**位置完全吻合**。
 
-**③ 厂商写 ME 表的指令**（`np_133.ko` 的 `ppu_cluster_set_me_val_by_flow_num`，`0x829dc`）
+**③ 厂商 blob 里那 64 条 `PORT_FLOW` 与主线的 64 项表同序**
 
-```asm
-lsr    w23, w20, #2          ; word = flow_num >> 2
-ubfiz  w2, w20, #3, #2       ; shift = (flow_num & 3) * 8
-mov    w1, #0xff             ; 8 bit 掩码
-bic    w4, w4, w1            ; 清掉这 8 bit
-lsl    w1, w22, w2           ; me_val 放进去
-orr    w1, w4, w1
-```
+docs/95 §1.7 已经对上了「同序」；这一轮把「同序」升级成
+「**逐位相同**」—— `staging/ctl/portflow-cmp.py` 把 blob 的 64 条按上面这个公式
+解码，和主线硬编码的 `zx279133_9132_port_flow[64]` 逐项对比，
+**48 个端口一致，0 个不同**（blob 没命名的 16 个端口，主线写 0 并跳过）。
 
-⇒ **flow 号的槽位是「每字 4 个 flow，每个 8 bit」，和 §1.1 的 6 bit flow 号互不冲突**：
-flow 号是「跑哪个 flow」，ME 值是「这个 flow 归哪个核」，两张表都以 64 为槽数。
+**⇒ 结论：端口字 0 的 bits 15..20 是一个 6 bit 的编号（0..63），
+它把端口接到 PPU 的 64 个条目之一上。**
+这个 6 bit 字段就叫「flow 号」—— 主线一直这么叫，厂商的注释
+（"flow number 1"）也这么叫。
 
-**⇒ 结论：端口字 0 的 bits 15..20 就是 flow 号（0..63），它把端口接到 PPU 的 64 个 flow 上；
-ME 表（`PPS+0x90350`）再把每个 flow 接到 8 个 ME 核之一上。**
+**至于那 64 个 flow 各自归哪个核，CPU 侧没有一手依据** ——
+厂商唯一给出这个映射的函数是坏的，详见 §1.3 与 §7.1。
 
 ### 1.2 板上的实测：ME 表是**活的**，两次观测两个值
 
@@ -393,9 +391,9 @@ ppu me 7: flag=0 enabled=1
 
 ```
 ppu pf port  0 = 0x00000463  vld=1 start_pc=  561 flow= 0 attr4=0
-ppu pf port  5 = 0x0000a6a5  vld=1 start_pc= 21330 flow= 5 attr4=5
-ppu pf port  8 = 0x00039b11  vld=1 start_pc=  7560 flow= 7 attr4=1
-ppu pf port 49 = 0x00e52825  vld=1 start_pc=  5138 flow=10 attr4=7
+ppu pf port  5 = 0x0000a6a5  vld=1 start_pc= 4914 flow= 1 attr4=0
+ppu pf port  8 = 0x00039b11  vld=1 start_pc= 7560 flow= 8 attr4=1
+ppu pf port 49 = 0x00e52825  vld=1 start_pc= 5138 flow=10 attr4=7
 ```
 
 **这一行里没有「哪个核」那一列**，是有原因的：`flow → 核` 那一段
