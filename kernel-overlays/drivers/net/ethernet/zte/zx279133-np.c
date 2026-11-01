@@ -2208,6 +2208,137 @@ static ssize_t zx279133_9132_write(struct file *file, const char __user *ubuf,
 	}
 
 	/*
+	 * The ME's interrupt words, and the cluster's own registers.
+	 *
+	 * The vendor's register-descriptor table (np_133.ko's
+	 * ppu_cluster_reg_table) puts the three words that carry the ME's
+	 * interrupts here:
+	 *
+	 *	id 12	PPS + 0x90000	8 bits
+	 *	id 13	PPS + 0x90004	8 bits
+	 *	id 14	PPS + 0x90008	8 bits
+	 *	id 26	PPS + 0x90014	1 bit
+	 *
+	 * and the vendor's debug helpers say which is which: id 13 is read
+	 * by ppu_debug_get_me_int_stat(), id 14 by
+	 * ppu_debug_get_me_int_mask() and written by
+	 * ppu_debug_set_me_int_mask(), id 12 by
+	 * ppu_debug_get_me_int_flag().  The last one is the one with a
+	 * per-core reading: ppu_debug_get_spec_me_int_flag(me) shifts it
+	 * right by the core number and refuses a core above 7, so bit N of
+	 * id 12 is ME N's flag and the chip has eight MEs.  The mask is the
+	 * same width and is the word the vendor writes to switch a core's
+	 * interrupts on and off, but which of its bits belongs to which core
+	 * is not read out of the vendor code the way the flag's is - it is
+	 * the same order by inference from the width.
+	 *
+	 * The device tree gives this block five interrupt lines (nppt, rx,
+	 * idm, buffer-release, local-test) and the driver asks for none of
+	 * them, so nothing in Linux ever sees an ME interrupt and this is
+	 * the only way to look at one.  On the board the flag word reads
+	 * zero and the mask word reads 0xff - all eight cores enabled, none
+	 * pending - which is what idle MEs should read.
+	 *
+	 *	"mi"		the interrupt words and the cluster's PC
+	 */
+	if (!strcmp(tok, "mi")) {
+		u32 flag, stat, mask, sel, tsw, pc, rdy, inst, me;
+
+		flag = readl(eth->pps_base + ZX279133_PPU_ME_INT_FLAG);
+		stat = readl(eth->pps_base + ZX279133_PPU_ME_INT_STAT);
+		mask = readl(eth->pps_base + ZX279133_PPU_ME_INT_MASK);
+		sel = readl(eth->pps_base + ZX279133_PPU_ME_SELECT_EN);
+		tsw = readl(eth->pps_base + ZX279133_PPU_THREAD_SWITCH_EN);
+		pc = readl(eth->pps_base + ZX279133_PPU_CLUSTER_PC);
+		rdy = readl(eth->pps_base + ZX279133_PPU_CLUSTER_RDY);
+		inst = readl(eth->pps_base + ZX279133_PPU_CLUSTER_INST_BLOCK);
+
+		pr_info("ppu me int flag = 0x%08x  stat = 0x%08x  mask = 0x%08x\n",
+			flag, stat, mask);
+		pr_info("ppu me select en = 0x%08x  thread switch en = 0x%08x\n",
+			sel, tsw);
+		pr_info("ppu cluster pc = 0x%08x  rdy = 0x%08x  inst block = 0x%08x\n",
+			pc, rdy, inst);
+		for (me = 0; me < ZX279133_PPU_ME_CORES; me++)
+			pr_info("ppu me %u: flag=%u enabled=%u\n", me,
+				(flag >> me) & 1, (mask >> me) & 1);
+		return count;
+	}
+
+	/*
+	 * The SPA port attribute word 0: the program a port's traffic
+	 * enters the PPU on, and the PPU flow it then runs on.
+	 *
+	 * The word is packed:
+	 *
+	 *	bit 0		Tbl Vld
+	 *	bits 1..14	start PC
+	 *	bits 15..20	flow number (0..63)
+	 *	bits 21..23	SPA attribute 4
+	 *
+	 * The flow number is what makes this the dispatch table's first
+	 * half.  The PPU's 64 flows are each run by one of the eight ME
+	 * cores, and the ME table - the "me" command - says which.  So a
+	 * port's word 0 is port to flow, and the ME table is flow to
+	 * engine; the two together are the whole dispatch chain, and this
+	 * command prints both ends of it.
+	 *
+	 * The port side is writable.  The driver writes it at probe from the
+	 * board's own table, and the vendor's loader wrote the same words
+	 * from the microcode blob's PORT_FLOW tags.  The flow side is not:
+	 * the ME table is the cluster's read-only mirror (docs/97), so
+	 * changing which engine runs a flow means changing the microcode,
+	 * not a register.
+	 *
+	 *	"pf"			all 64 ports
+	 *	"pf <port>"		one port
+	 *	"pf <port> <val>"	write the word and read it back
+	 *
+	 * The write is the data plane: the port's traffic starts entering
+	 * the PPU on a different program, and on a different flow, from the
+	 * next frame on.  The value is the whole word, so the fields have
+	 * to be rebuilt by hand - see the bit layout above.
+	 */
+	if (!strcmp(tok, "pf")) {
+		u32 port = 0, newval, word, flow, i, nports;
+		bool one = false;
+		char *arg = zx279133_9132_next_token(&p);
+
+		if (arg) {
+			if (kstrtou32(arg, 0, &port))
+				return -EINVAL;
+			if (port >= ZX279133_9132_PORT_COUNT)
+				return -EINVAL;
+			one = true;
+			arg = zx279133_9132_next_token(&p);
+			if (arg) {
+				if (kstrtou32(arg, 0, &newval))
+					return -EINVAL;
+				ret = zx279133_spa_indirect_write(eth, port, 0, newval);
+				if (ret)
+					return ret;
+			}
+		}
+
+		nports = one ? 1 : ZX279133_9132_PORT_COUNT;
+		for (i = 0; i < nports; i++) {
+			u32 p = one ? port : i;
+
+			ret = zx279133_spa_indirect_read(eth, p, 0, &word);
+			if (ret)
+				return ret;
+			flow = (word & ZX279133_SPA_PORT_WORD_FLOW) >> 15;
+			pr_info("ppu pf port %2u = 0x%08x  vld=%u start_pc=%5u flow=%2u attr4=%u me=%u\n",
+				p, word,
+				(word & ZX279133_SPA_PORT_WORD_VLD) ? 1u : 0u,
+				(word & ZX279133_SPA_PORT_WORD_PC) >> 1, flow,
+				(word & ZX279133_SPA_PORT_WORD_ATTR4) >> 21,
+				zx279133_ppu_get_me_val(eth, flow));
+		}
+		return count;
+	}
+
+	/*
 	 * The 9132's MAC table, read as the raw buckets the hash block keeps
 	 * them in.
 	 *
@@ -3745,7 +3876,8 @@ static int zx279133_9132_port_init(struct zx279133_eth *eth)
  *	PPU 1   a0 0x0000a6a5  a10 0x0fa0000e  a13 0x00008008
  *	        a17 0x04400410  a18 0x00400840  a19 0x96040001
  *
- * 0x00008015 is the SR1010's entry program, 0x01f4000c is the PON port's
+ * 0x00008015 is the factory's own entry program for this board's memory 5
+ * (start PC 10, flow 1), 0x01f4000c is the PON port's
  * (PPU 0) a10, and a17/a18 are zero, so the port is in no flood group at all.
  * The vendor's port has a flood group of its own; this one has none.
  *
@@ -5659,46 +5791,29 @@ static int zx279133_ppu_rx_hash_prepare(struct zx279133_eth *eth,
  * The PPU microcode carries a port-flow table of its own, and the loader
  * applies it to the SPA port attributes as it installs the code.  That table
  * is *board* configuration - it says which of the SoC's internal ports is
- * the WAN, which four are the UNI jacks, which one the CPU talks to - and the
- * blob this driver is given carries the one for the board the blob was taken
- * from.
+ * the WAN, which four are the UNI jacks, which one the CPU talks to.
  *
  * The blob in the tree (target/linux/zte/zx279133/firmware/zte/zx279133/
- * mcode_intel.bin) is the SR1010's.  Its table and this board's differ on
- * 55 of the 64 ports:
+ * mcode_intel.bin) is this board's own, not another board's: it is byte for
+ * byte the vendor's etc/mcode/mcode_133.bin read out of this board's flash,
+ * and the table it carries decodes to exactly the words below.  All 48 ports
+ * the blob names agree with this array and none differ
+ * (staging/ctl/portflow-cmp.py).  So this array is a copy of the blob's own
+ * table, kept here so that the port setup does not depend on the blob's tag
+ * parser - and the blob's tags are skipped anyway
+ * (case ZX279133_MCODE_TAG_PORT_FLOW: break), so writing this array is what
+ * puts the same words in the hardware.
  *
- *	port	SR1010		this board
- *	0	0x00000463	0x0000a6a5
- *	1..4	0x00008015	0x0000a6a5
- *	5	0x00008015	0x0000a6a5	(XMAC0: the CPU's conduit)
- *	6, 7	0x00008015	0x0000a6a5
- *	8	-		0x00039b11
- *	10	0x00c0800b	0x0000a6a5
- *	12	0x00ef8445	0x00009f99
- *	14	0x00c00459	0x0000a6a5
- *	15	0x00008001	0x0000a767	(the CPU trap port)
- *	16..48	0x0000a4d3	0x0000a6a5
- *	49	0x0000a86d	0x00052825
- *	50	0x0000a86d	0x00052827
- *	51..54, 63	0x0000a86d / 0x00008009	- (the vendor configures none)
+ * It is not the last word on any port, though.  Three places write word 0
+ * again after this table is applied - the WAN bringup puts start PC 561 on
+ * the CPU port and copies it to the WAN port, the LAN bringup puts start PC
+ * 10 on the LAN port, and the per-port attribute init sets attribute 4 on
+ * the PON-side ports 49..54 - so the word a port ends up with is not always
+ * the one in this table.  The "pf" command reads what the ports hold.
  *
- * The board's own table is the vendor's, and it is the one the vendor's own
- * board runs: the vendor's blob (etc/mcode/mcode_133.bin, read out of this
- * board's own flash) carries it, and it agrees with the SPA memory the
- * vendor's live board has - the four jacks read 0x0000a6a5 and the CPU trap
- * port reads 0x0000a767 out of the vendor's own tm_debug.
- *
- * The driver's own port setup (zx279133_9132_port_words_vendor()) already
- * writes the vendor's words for the four jacks and for the CPU trap port, so
- * those were right; every other port kept the SR1010's entry program.  The
- * port that matters most is 5: XMAC0 is the conduit the CPU talks to the
- * 9132 through, and it was running an entry program that belongs to another
- * board.
- *
- * So the blob's port-flow tags are not applied at all, and this table is
- * written instead.  A port the vendor's table does not name keeps whatever
- * the chip reset left in it, which is what the vendor's board has too - the
- * vendor's own table does not touch ports 9, 11, 13 or 51..63 either.
+ * A port the blob's table does not name keeps whatever the chip reset left
+ * in it, which is what the vendor's board has too - the vendor's own table
+ * does not touch ports 9, 11, 13 or 51..63 either.
  */
 static const u32 zx279133_9132_port_flow[64] = {
 	/* 0: PON0, the WAN.  1..4: the four UNI jacks. */

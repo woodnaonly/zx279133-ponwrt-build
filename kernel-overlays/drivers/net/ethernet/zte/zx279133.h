@@ -696,6 +696,25 @@ extern u16 zx279133_tx_port;
 #define ZX279133_PPU_CLUSTER_HI_MASK	GENMASK(26, 0)
 #define ZX279133_PPU_IKEY_AFULL		0x9043c
 #define ZX279133_PPU_IKEY_AFULL_MASK	GENMASK(4, 0)
+/*
+ * The ME's interrupt words, as the vendor's own register-descriptor table
+ * has them (np_133.ko's ppu_cluster_reg_table; its "base" is a word index,
+ * so the byte offset is base * 4).
+ *
+ *	id 12	0x90000	8 bits, one bit per ME core
+ *	id 13	0x90004	8 bits
+ *	id 14	0x90008	8 bits
+ *	id 26	0x90014	1 bit
+ *	id 49	0x90458	1 bit
+ */
+#define ZX279133_PPU_ME_INT_FLAG	0x90000
+#define ZX279133_PPU_ME_INT_STAT	0x90004
+#define ZX279133_PPU_ME_INT_MASK	0x90008
+#define ZX279133_PPU_THREAD_SWITCH_EN	0x90014
+#define ZX279133_PPU_ME_SELECT_EN	0x90458
+#define ZX279133_PPU_ME_CORES		8
+/* The word the cluster last took its program counter from, in words. */
+#define ZX279133_PPU_CLUSTER_INST_BLOCK	0x90d08
 #define ZX279133_PPU_BLOCK_RDY		0x800d0
 #define ZX279133_PPU_BLOCK_INDEX	0x800d4
 #define ZX279133_PPU_BLOCK_DATA	0x800d8
@@ -711,6 +730,25 @@ extern u16 zx279133_tx_port;
  */
 #define ZX279133_SPA_WINDOW_BASE	0x8000
 #define ZX279133_SPA_WINDOW_SIZE	0x1000
+/*
+ * The SPA port attribute word 0: the port's way into the PPU.
+ *
+ *	bit 0		Tbl Vld
+ *	bits 1..14	start PC - the entry program the port runs
+ *	bits 15..20	the PPU flow the port's traffic runs on (0..63)
+ *	bits 21..23	SPA attribute 4
+ *
+ * The flow number is what makes the word the dispatch table's first half:
+ * the PPU's 64 flows are each run by one of the eight ME cores, and the ME
+ * table (the "me" command) says which.  The port side is writable, the flow
+ * side is not - the ME table is the cluster's read-only mirror.
+ */
+#define ZX279133_SPA_PORT_WORD_VLD	BIT(0)
+#define ZX279133_SPA_PORT_WORD_PC	GENMASK(14, 1)
+#define ZX279133_SPA_PORT_WORD_FLOW	GENMASK(20, 15)
+#define ZX279133_SPA_PORT_WORD_ATTR4	GENMASK(23, 21)
+/* The PPU's ports are its SPA memory ids, 0 to 63. */
+#define ZX279133_9132_PORT_COUNT	64
 /*
  * The whole network processing block: the device tree maps it at
  * 0x19000000 with a size of 16 MiB, and every block in it is reachable
