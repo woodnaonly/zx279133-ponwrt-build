@@ -85,7 +85,10 @@ establish offload acceptance.
 netlink sender, descriptor words and Rust/C transaction rollback.
 `test_sk_pon_rpc.py` executes the production ucode RPCs with isolated
 proc/sysfs fixtures. `test_sk_pon_firstboot.py` checks one-time theme choice
-and conservative NAT ownership matching.
+and conservative NAT ownership matching. These also run before the long
+build with a small native interpreter at the base tree's pinned ucode revision.
+`test_sk_pon_target.py` runs the shipped AArch64/musl daemon under QEMU to
+check real libuci parsing, byte limits and Rust initialization without a device.
 
 The Actions management gate checks the actual staged root and image
 manifest, runs the RPC fixtures with the build's ucode, and runs the pinned

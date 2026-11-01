@@ -112,6 +112,11 @@ int main(int argc, char **argv)
 		return zx_migrate("/etc/config/pon", "/etc/pon/identity") ? 1 : 0;
 	if (argc == 3 && !strcmp(argv[1], "--check")) {
 		result = zx_config_load(&config, argv[2]);
+		if (!result && config.enabled && config.has_identity) {
+			agent = zxpon_omci_new(&config.identity);
+			if (!agent) result = -ENOMEM;
+			else zxpon_omci_free(agent);
+		}
 		memset(&config, 0, sizeof(config));
 		return result ? 1 : 0;
 	}

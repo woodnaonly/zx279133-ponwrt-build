@@ -25,6 +25,7 @@ UCODE="$TREE/staging_dir/hostpkg/bin/ucode"
 [ -x "$UCODE" ] || { echo 'No build host ucode interpreter'; exit 1; }
 python3 tests/test_sk_pon_rpc.py "$UCODE"
 python3 tests/test_sk_pon_firstboot.py --ucode "$UCODE"
+python3 tests/test_sk_pon_target.py "$ROOT"
 FIREWALL=$(find "$TREE/build_dir" -maxdepth 2 -type d -name 'firewall4-*' | head -1)
 [ -n "$FIREWALL" ] || { echo 'No firewall4 source to test'; exit 1; }
 # Upstream tests exercise the shipped rule generator with real ucode and mock ubus/UCI.
