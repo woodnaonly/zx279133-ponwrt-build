@@ -1,0 +1,54 @@
+From: SK-D840N port
+Subject: [PATCH] tests: retain strict ruleset/trace assertions for the base-tree fixes
+
+The multicast exclusion emits one rule per IP family. Per-device hardware
+probing adds two calls before the combined eth0/eth1 probe. Keep the full
+expected output and call trace; do not skip or normalize either test.
+
+--- a/tests/01_configuration/01_ruleset
++++ b/tests/01_configuration/01_ruleset
+@@ -123,5 +123,6 @@
+ 		type filter hook forward priority filter; policy drop;
+ 
+-		meta l4proto { tcp, udp } flow offload @ft;
++		meta nfproto ipv4 meta l4proto { tcp, udp } ip daddr != 224.0.0.0/4 flow offload @ft;
++		meta nfproto ipv6 meta l4proto { tcp, udp } ip6 daddr != ff00::/8 flow offload @ft;
+ 		ct state vmap { established : accept, related : accept } comment "!fw4: Handle forwarded flows"
+ 		iifname "br-lan" jump forward_lan comment "!fw4: Handle lan IPv4/IPv6 forward traffic"
+@@ -317,12 +318,28 @@
+ [call] fs.opendir path </sys/class/net/eth0>
+ [call] fs.opendir path </sys/class/net/eth1>
+-[call] system command </usr/sbin/nft -c '
+-		add table inet fw4-hw-offload-test;
+-		add flowtable inet fw4-hw-offload-test ft {
+-			hook ingress priority 0;
+-			devices = { "eth0", "eth1" };
+-			flags offload;
+-		}
+-	' 2>/dev/null> timeout <null>
++[call] system command </usr/sbin/nft -c '
++		add table inet fw4-hw-offload-test;
++		add flowtable inet fw4-hw-offload-test ft {
++			hook ingress priority 0;
++			devices = { "eth0" };
++			flags offload;
++		}
++	' 2>/dev/null> timeout <null>
++[call] system command </usr/sbin/nft -c '
++		add table inet fw4-hw-offload-test;
++		add flowtable inet fw4-hw-offload-test ft {
++			hook ingress priority 0;
++			devices = { "eth1" };
++			flags offload;
++		}
++	' 2>/dev/null> timeout <null>
++[call] system command </usr/sbin/nft -c '
++		add table inet fw4-hw-offload-test;
++		add flowtable inet fw4-hw-offload-test ft {
++			hook ingress priority 0;
++			devices = { "eth0", "eth1" };
++			flags offload;
++		}
++	' 2>/dev/null> timeout <null>
+ [call] fs.popen cmdline </usr/sbin/nft --terse --json list flowtables inet> mode <r>
+ [call] fs.readfile path </sys/class/net/br-lan/flags> limit <null>

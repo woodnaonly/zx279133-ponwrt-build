@@ -39,6 +39,10 @@ for package in ("firewall4", "luci-app-sk-d840n-pon", "luci-theme-argon"):
     assert "CONFIG_PACKAGE_" + package + "=y" in configure
 assert "539e3e1db56b2348c3655615540e45638b797c73" in (ROOT / "scripts/prepare-sk-d840n-ui.sh").read_text(encoding="utf-8")
 assert "1.96.1" in (ROOT / ".github/workflows/build-sk-d840n.yml").read_text(encoding="utf-8")
+fw4 = ROOT / "overlays/package/network/config/firewall4"
+assert "PATCH_DIR:=./sk-patches" in (fw4 / "Makefile").read_text(encoding="utf-8")
+assert sorted(p.name[:3] for p in (fw4 / "sk-patches").glob("*.patch")) == ["002", "003", "004", "005"]
+assert "bash run_tests.sh" in (ROOT / "scripts/check-sk-d840n-ucode.sh").read_text(encoding="utf-8")
 kernel = ROOT / "kernel-overlays/drivers/net/ethernet/zte"
 assert "ZXPON_CMD_OMCI_TX" in (kernel / "zx279133-pon.c").read_text(encoding="utf-8")
 assert "GENL_ADMIN_PERM" in (kernel / "zx279133-pon.c").read_text(encoding="utf-8")

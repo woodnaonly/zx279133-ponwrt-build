@@ -1,0 +1,7 @@
+firewall4: https://github.com/openwrt/firewall4
+Source: b6e5157527d361f99ad52eaa6da273cb0f2dfd59 (2025-03-17), ISC
+Patches 002..004: cnjn/ImmortalWrt 1b50aaf4ed9cf042df6207564555b244d6ced517
+Original subjects/authorship are preserved. Patch 005 updates strict upstream
+test expectations for the multicast exclusion and per-device probe changes.
+SK-D840N uses normal NAT; no fullcone expression or automatic hardware-offload
+enablement is added. Hardware offload must be verified separately.

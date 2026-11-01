@@ -21,3 +21,13 @@ cmake --build "$BUILD/build" -j2
 cmake --install "$BUILD/build"
 python3 tests/test_sk_pon_rpc.py "$BUILD/install/bin/ucode"
 python3 tests/test_sk_pon_firstboot.py --ucode "$BUILD/install/bin/ucode"
+
+# Exercise exactly the firewall4 source/patches that will reach the image,
+# before committing the runner to a long toolchain and kernel compilation.
+git init -q "$BUILD/firewall"
+git -C "$BUILD/firewall" fetch -q --depth 1 https://github.com/openwrt/firewall4.git b6e5157527d361f99ad52eaa6da273cb0f2dfd59
+git -C "$BUILD/firewall" checkout -q --detach FETCH_HEAD
+for patchfile in overlays/package/network/config/firewall4/sk-patches/*.patch; do
+	patch -p1 -d "$BUILD/firewall" --input="$PWD/$patchfile"
+done
+(cd "$BUILD/firewall" && PATH="$BUILD/install/bin:$PATH" bash run_tests.sh)

@@ -45,6 +45,7 @@ fi
         subprocess.run([bash, str(script)], env=env, check=True, capture_output=True)
         batch = (directory / 'batch').read_text(encoding='utf-8')
         assert "set luci.main.mediaurlbase='/luci-static/argon'" in batch
+        assert "set luci.main.lang='zh_cn'" in batch
         (directory / 'batch').unlink()
         # A later user-selected theme is left untouched once the marker exists.
         subprocess.run([bash, str(script)], env=env, check=True, capture_output=True)

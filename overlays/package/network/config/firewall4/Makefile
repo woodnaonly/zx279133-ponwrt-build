@@ -4,7 +4,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=firewall4
-PKG_RELEASE:=5
+PKG_RELEASE:=6
 PKG_SOURCE_PROTO:=git
 PKG_SOURCE_URL:=https://git.openwrt.org/project/firewall4.git
 PKG_SOURCE_DATE:=2025-03-17
@@ -12,6 +12,10 @@ PKG_SOURCE_VERSION:=b6e5157527d361f99ad52eaa6da273cb0f2dfd59
 PKG_MIRROR_HASH:=fb563b493411922a8fbddf6a5a6766cffa47f87621e056b8dcf38309091835eb
 PKG_MAINTAINER:=Jo-Philipp Wich <jo@mein.io>
 PKG_LICENSE:=ISC
+# Do not silently inherit a changing patch directory from the base checkout.
+# Keep the base tree's macvlan/multicast/per-device fixes. Fullcone and its
+# implicit offload defaults are not part of this hardware-unverified port.
+PATCH_DIR:=./sk-patches
 
 include $(INCLUDE_DIR)/package.mk
 define Package/firewall4

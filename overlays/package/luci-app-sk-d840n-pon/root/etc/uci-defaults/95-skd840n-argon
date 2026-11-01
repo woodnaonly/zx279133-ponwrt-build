@@ -6,6 +6,7 @@
 uci batch <<'EOF'
 set luci.themes.Argon='/luci-static/argon'
 set luci.main.mediaurlbase='/luci-static/argon'
+set luci.main.lang='zh_cn'
 set luci.main.skd840n_argon_migrated='1'
 commit luci
 EOF

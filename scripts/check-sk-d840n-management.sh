@@ -8,9 +8,10 @@ ROOT=$(find "$TREE/build_dir" -maxdepth 3 -type d -name root-zte | head -1)
 [ -n "$ROOT" ] || { echo 'No staged root-zte image'; exit 1; }
 MANIFEST=$(find "$TREE/bin/targets" -name '*.manifest' | head -1)
 [ -n "$MANIFEST" ] || { echo 'No target image manifest'; exit 1; }
-for package in zxpond libzxpon-omci luci-app-sk-d840n-pon luci-theme-argon luci-i18n-base-zh-cn firewall4 nftables luci-app-firewall; do
+for package in zxpond libzxpon-omci luci-app-sk-d840n-pon luci-theme-argon luci-i18n-base-zh-cn luci-i18n-argon-config-zh-cn firewall4 nftables luci-app-firewall luci-i18n-firewall-zh-cn rpcd-mod-ucode ucode-mod-fs; do
 	grep -q "^$package " "$MANIFEST" || { echo "Image manifest is missing $package"; exit 1; }
 done
+[ -L "$ROOT/etc/rc.d/S96zxpond" ] || { echo 'Protocol daemon is not enabled in the image'; exit 1; }
 for file in usr/sbin/zxpond etc/init.d/zxpond sbin/fw4 etc/init.d/firewall etc/config/firewall \
 	usr/sbin/nft usr/share/rpcd/ucode/luci.skd840n-pon usr/share/rpcd/ucode/luci.skd840n-system \
 	usr/share/rpcd/acl.d/luci-app-sk-d840n-pon.json usr/share/luci/menu.d/luci-app-sk-d840n-pon.json \
