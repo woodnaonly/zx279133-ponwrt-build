@@ -251,3 +251,179 @@ U-Boot 的 `ping` 只发一轮（默认 5 个包、超时 1 s 量级），一次
 
 因此保留 `ping` 对启动时间的代价可以忽略（< 1 s），A/B 结论与耗时结论不冲突：
 **保留 `ping` 是对的**。
+
+---
+
+## 11 B 方案实测：把 `ping` 放回 `bootcmd`（2026-11-01）
+
+§10 的结论是「`ping` 必须保留」，但当时**没有改 flash 里的 env**：
+community `boot.bin` 把厂商那套 `bc0`/`bc1`/`bc2` + `bootstate` 整体换成了
+`bootcmd=mtd read kernel ...; mtd read dtb ...; bootm ...`，
+那条路径里**没有任何网络命令** ⇒ 冷启动时 U-Boot 从不初始化 RTL8226。
+这一节把这一步补上，并给出实测。
+
+### 11.1 症状（另一会话的只读取证，结论已复核）
+
+冷启动后 `1e:758d = 0x0010`（bit2=0，不送码），
+PCS/AN status 的四个 bit 只有 `0x0029`（缺 0x40），
+铜侧协商正常（link up / 1 Gbps）但**帧一个都进不来**：
+PC 侧 ping `192.168.9.1` 100% 丢包，板上 `lan1 rx=0`、`lan-cpu0 rx=0`。
+
+### 11.2 动手前必须查清的三件事（都查清了，且都是活板实测）
+
+**① env 落在 NAND 哪里。**
+`mtdparts` 只有六项（whole/boot/kernel/dtb/parameter tags/root），没有 env 分区；
+内核 `/proc/mtd` 也看不到 env（boot/kernel/dtb/parameter tags/root/scratch）。
+这版 U-Boot（2021.01-svn308776）的 `bdinfo` **不打印 env 位置**
+（`flashstart=0`、`flashsize=0`），`env` 命令也没有 `location` 子命令。
+⇒ 只能板上实测：
+
+```
+=> mtd read boot 0x89000000 0x180000 0x20000
+Reading 131072 byte(s) (64 page(s)) at offset 0x00180000
+=> crc32 0x89000004 0x1fffc
+crc32 for 89000004 ... 8901ffff ==> 3c568477
+```
+
+`0x180000` 处第一个字就是 `3c568477`（LE），后面紧跟
+`baudrate=115200\0bootargs=...\0bootcmd=mtd read kernel 0x88000000; ...\0`。
+⇒ **env = mtd1 "boot" 内的 `0x180000..0x1a0000` 这一个 128 KiB 擦除块**，
+与 docs/01 §6.5 / docs/03 §5.1 记的 community env 一致（CRC 都是 `3c568477`）。
+
+**② 这个块会不会压到 U-Boot 本体。**
+community `boot.bin` 的前 1.5 MiB（`0x0..0x180000`）是 U-Boot 本体，
+env 块紧接在它后面，**不重叠**。`saveenv` 的实测擦除日志也印证了这个边界：
+
+```
+Saving Environment to NAND... Erasing NAND...
+Erasing at 0x180000 --  33% complete.
+Erasing at 0x1a0000 --  66% complete.
+Erasing at 0x1c0000 -- 100% complete.
+Writing to NAND... OK
+```
+
+（它按扇区擦除 `0x180000..0x200000`，但 env 数据只落在第一块 `0x180000..0x1a0000`。）
+
+**③ 写坏了能不能救回来。** 能，两条退路：
+- env CRC 坏了 ⇒ U-Boot 丢弃 env、改用默认 env（**默认 env 没有分区表**，
+  docs/01 §6.4）⇒ 板子起不来 Linux，但 **U-Boot 提示符与固件本体都还在**，
+  串口在就能重写 —— 这与「mtd1 整体损坏」那种真砖不是一回事；
+- 写之前先把 env 块**逐字节**备份到 PC（见 §11.3）。
+
+### 11.3 备份：逐字节精确
+
+按 docs/01 §6.5 的配方在 PC 上重建整个 128 KiB 块
+（`[u32 LE crc32][name=value\0 …][0x00 padding]`，CRC 取 `buf[4:0x20000]`），
+内容用板上 `printenv` 的 17 个变量，重算 CRC = `0x3c568477`，
+与板上存储值**逐位相同** ⇒ 重建块与板上原块**逐字节一致**。
+
+- 备份：`staging/trial/env-orig-0x180000.bin`（131072 B）
+- 回滚：TFTP 拉回 RAM，`mtd erase boot 0x180000 0x20000;
+  mtd write boot 0x89000000 0x180000 0x20000`
+- 写入前的 permit 行：`staging/ctl/flash.permit`（`run=envsave`）
+
+### 11.4 写进去的三行
+
+```
+setenv bootcmd 'ping 192.168.9.25; mtd read kernel 0x88000000; mtd read dtb 0x88800000; bootm 0x88000000 - 0x88800000'
+setenv ipaddr 192.168.9.1
+setenv serverip 192.168.9.25
+saveenv
+```
+
+- `bootcmd` 前面加一次 `ping`：**目的只是触发 U-Boot 的 eth bring-up**，不指望它通
+  （§10.4 实测失败也只要 0.99 s）；
+- `ipaddr`/`serverip` 从厂商遗留的 `192.168.1.x` 改成台面在用的 `192.168.9.x`
+  （`tools/ubflash.sh` 每轮本来就在运行时设这两个，改成持久值不改变流程）。
+
+**写完当场对账**：板上再读一遍同一块，再算一次 CRC：
+
+```
+=> mtd read boot 0x89000000 0x180000 0x40000
+=> crc32 0x89000004 0x1fffc
+crc32 for 89000004 ... 8901ffff ==> ff04fcb9
+```
+
+`ff04fcb9` **等于** PC 侧按预期内容算出来的 CRC ⇒ 板上那块就是要的那一块。
+
+### 11.5 冷启动实测：U-Boot 这一段现在对了
+
+**插座断电再上电**（19:08:04 那一轮，真正的冷启动）的 U-Boot 段：
+
+```
+Loading Environment from NAND... OK
+...
+enter outerphy info init!
+get board_info_id by fdt,the phy_id is 0x5
+--->phy identifier is [0xc849]        <- 认到 RTL8226
+xmac0 is used.
+...
+mode_eth_1gbase_x_cfg
+xmac 0 speed set 2 in sgmii(xmac speed 3)
+mac 4 phy status changed: 1000M full-duplex
+host 192.168.9.25 is alive             <- PC 真的应答了 ping
+```
+
+⇒ **U-Boot 阶段的 eth bring-up 完整跑通，PC 真的回了 ping** ——
+这正是 §10 那个 A/B 里「跑过 outerphy init」那一列的形态。
+（18:56:47 那轮用 `reset` 重启，形态完全一样。）
+
+板侧读数的前后对照（本板实测，同一份内核，只差 env）：
+
+| 启动轮次 | `1e:758d` | PCS 四个 bit | 说明 |
+|---|---|---|---|
+| 17:46:04 冷启动 | **0x0010** | 0x0029 | U-Boot 没初始化 PHY，lane 不送码 |
+| 18:06:34 冷启动 | **0x0010** | 0x0029 | 同上 |
+| 18:27:04 冷启动 | **0x0010** | 0x0029 | 同上 |
+| 18:56:47（改 env 后，`reset`） | **0x8018** | **0x0069**（@2.65 s，全在） | 继承到 U-Boot 的状态，lane 有码 |
+| 19:08:04 冷启动（改 env 后） | **0x8018** | **0x0069**（@2.65 s，全在） | 同上 |
+
+### 11.6 但 Linux 里还是不通 —— 根因是**两个**，不是一个
+
+内核起来后 lane 又被打回去（19:08:04 那一轮冷启动）：
+
+| 时刻 | `1e:758d` | 四个 bit | 说明 |
+|---|---|---|---|
+| 2.65 s | 0x8018 | **0x0069**（全在） | 继承 U-Boot 的状态，lane 有码 |
+| 4.71 s | 0x8018 | 0x0029（缺 0x40） | 被打回（紧接着 4.712 s 是 attempt 1/3 的 AN 重启） |
+| 41.03 s | 0x8018 | 0x0069 | AN 重启窗口内又全在 |
+| 43.11 s | 0x8018 | 0x0029 | 又被打回 |
+| 247 s（18:56 轮，活板直读） | **0x8018** | 0x002d | 终态：PCS 缺 0x40 |
+
+PC 侧仍然 100% 丢包。
+
+⇒ **另一会话给的根因（「U-Boot 从不初始化 RTL8226」）是必要条件，不是充分条件。**
+U-Boot 现在把 PHY 配好了，可**主线驱动随后用自己的 1G class SerDes 编程
+和 AN 重启循环把它覆盖掉**：
+
+```
+the 2.5G jack's PHY: auto-negotiation restarted (attempt 2/3, AN control was 0x3000, class 0x9402, lane word 0x8018)
+the 2.5G jack's PHY: auto-negotiation is complete (status 0x0049) after 1800 ms
+```
+
+每重启一次 AN，PCS 就掉一次 0x40。
+
+另外与「好会话」的 `0x801e` 比，现在内核读到的是 `0x8018`（差 bit1）；
+那个好会话的内核打印的是
+`the 2.5G jack's MAC (XMAC0) runs at 1G; the loader's TX_CTRL speed field was 3`
+与 `lan5:`，**当前驱动打印的却是** `lane pre-serdes:` 与 `lan1:`。
+⇒ 那次 A/B 的两侧**不是同一份驱动代码**，「同一内核、同一驱动」这个前提本身不成立
+（内核版本串相同，但驱动补丁不同）。
+
+⇒ **下一刀在驱动侧**：内核必须保持 U-Boot 留下的 base-X image
+（`0x7580=0x9402`、PCS 四个 bit 全在），而不是自己再写一遍 1G class 的
+SerDes option 再做 AN 重启。这正是 §10.3 第 3 条预留的那件事
+（「把 vendor 的 `outerphy_phy_init` 完整移植到内核」）。
+
+### 11.7 这一轮的账
+
+**做了**：flash 里的 env 补上 `ping`（一处 128 KiB 块，可回滚）；
+U-Boot 阶段从「PHY 根本没被初始化」变成「完整初始化，且 PC 应答 ping」。
+
+**没做**：内核侧那一刀（要改驱动代码，走 CI + 刷机）；
+**2.5G 口在 Linux 里仍然不通。**
+
+**代价**：每次冷启动多一次 ping（§10.4 实测 < 1 s）。
+
+**回滚**：`staging/trial/env-orig-0x180000.bin`（逐字节备份），
+TFTP 写回 `mtd1+0x180000` 即恢复原 env。
