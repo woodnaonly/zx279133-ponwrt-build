@@ -18,6 +18,13 @@ int zx_backend_dispatch(struct omci_agent *agent, const uint8_t *input, size_t l
 	uint8_t broadcast[18];
 	int result = 0;
 	if (!agent || !input || !output || length > 2048) return -EINVAL;
+	/* The reusable codec also decodes unflagged fixtures. The production ONU
+	 * boundary accepts requests only, not replayed responses or bad trailers.
+	 */
+	if (length < 4 || (input[2] & 0xe0) != 0x40) return -EBADMSG;
+	if (input[3] == 0x0a &&
+	    ((length != 44 && length != 48) || input[40] || input[41] || input[42] || input[43] != 0x28))
+		return -EBADMSG;
 	/* Incomplete hardware MEs can still serialize as an empty graph. Reject
 	 * mutations before staging them instead of ACKing a T-CONT/GEM/key/port
 	 * update merely because the graph has not become connected yet. Only an

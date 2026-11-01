@@ -22,6 +22,10 @@ int main(void)
 	assert(zx_backend_dispatch(agent, get, sizeof(get), response) > 0);
 	assert(response[0] == 0x12 && response[1] == 0x34 && response[2] == 0x29 && !response[8]);
 	assert(!memcmp(response + 11, identity.serial, 8));
+	memcpy(frame, get, sizeof(get)); frame[43] = 0;
+	assert(zx_backend_dispatch(agent, frame, 44, response) == -EBADMSG);
+	frame[43] = 0x28; frame[2] = 0x29;
+	assert(zx_backend_dispatch(agent, frame, 44, response) == -EBADMSG);
 	/* Empty graph has no side effects; unsupported hardware graph is rejected. */
 	int length = zxpon_omci_paths(agent, paths);
 	assert(length == 12 && !zx_backend_apply(NULL, paths, (size_t)length));

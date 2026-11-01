@@ -17,7 +17,7 @@ static int receive_kernel(int fd, void *buffer, size_t capacity, unsigned int se
 	int length = recvfrom(fd, buffer, capacity, 0, (struct sockaddr *)&peer, &size);
 	if (length < 0) return -errno;
 	if (size < sizeof(peer) || peer.nl_family != AF_NETLINK || peer.nl_pid ||
-	    length < (int)NLMSG_HDRLEN || message->nlmsg_len < NLMSG_HDRLEN ||
+	    (size_t)length > capacity || length < (int)NLMSG_HDRLEN || message->nlmsg_len < NLMSG_HDRLEN ||
 	    message->nlmsg_len > (unsigned int)length || message->nlmsg_seq != sequence) return -EPROTO;
 	return (int)message->nlmsg_len;
 }

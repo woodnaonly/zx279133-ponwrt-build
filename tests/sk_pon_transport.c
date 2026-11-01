@@ -68,6 +68,9 @@ ssize_t __wrap_recvfrom(int fd, void *buffer, size_t capacity, int flags,
 		if (fault == 2) peer->nl_pid = 42;
 		if (fault == 3) message->nlmsg_len = 4097;
 		if (fault == 4) { errno = EAGAIN; return -1; }
+		/* A forged header length is not the number of bytes copied by recvfrom. */
+		if (fault == 3) return NLMSG_LENGTH(sizeof(struct nlmsgerr));
+		if (fault == 5) return (ssize_t)capacity + 1;
 	}
 	return (ssize_t)message->nlmsg_len;
 }
@@ -82,7 +85,7 @@ int main(void)
 	assert(zx_transport_send(frame, 48) == -EBADMSG && !commands);
 	frame[43] = 0x28;
 	assert(zx_transport_send(frame, 48) == 0 && commands == 1);
-	for (int i = 1; i <= 4; i++) {
+	for (int i = 1; i <= 5; i++) {
 		fault = i;
 		assert(zx_transport_send(frame, 48) == (i == 4 ? -EAGAIN : -EPROTO));
 	}

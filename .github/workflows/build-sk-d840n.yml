@@ -1847,6 +1847,8 @@ jobs:
           path: |
             openwrt/logs
             openwrt/.config
+            sk-pon-tests.log
+            sk-management-gate.log
             compile-parallel.log
             compile-v1.log
             compile-watchdog.log
