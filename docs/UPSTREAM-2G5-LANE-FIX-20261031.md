@@ -661,6 +661,40 @@ C:\>arp -a
 
 ⇒ **2.5G 口在 Linux 里第一次通了。**
 
+**随后把它刷进了 flash**（run313，head `13faaac`，只写 mtd2 的 kernel）：
+dtb 与板上 run309 逐字节相同（md5 `ee287b5c...`）不重刷；
+rootfs 的镜像 md5 变了（重新封装，解包后文件清单与内容一致），而驱动在内建的
+内核里不在 rootfs 里，rootfs 又是单向门分区，所以也不重刷。
+permit 行：`staging/ctl/flash.permit`（`run=313 stages=kernel`）。
+三道 crc 全过：download `5ba60df3`、erase 头尾 `f154670a`、read-back `5ba60df3`。
+
+刷完 `reset`，同一套判据再看一遍：
+
+```
+[    1.609439] the 2.5G jack: the lane's BMCR was 0x0140 and is 0x1140 after the loader's words were written again
+[    2.649551] lane after: XPCS vend2 BMCR = 0x1140
+[    2.650607] the 2.5G jack's PHY: SerDes ctrl (0x758d) = 0x801e
+[    2.649676] AN status 0x0069, the lane's four bits are 0x0069
+```
+
+**流量（PC 的线只在 2.5G 口上）**：
+
+```
+C:\>arp -d *
+C:\>ping -n 20 -w 20 192.168.9.1
+Packets: Sent = 20, Received = 20, Lost = 0 (0% loss)
+Minimum = 0ms, Maximum = 3ms, Average = 1ms
+C:\>arp -a
+  192.168.9.1           d0-45-8d-84-09-00     dynamic
+```
+
+板上：`lan-cpu0 rx=338 包`、`br-lan rx=240 包`、lan1 carrier=1。
+
+**一条插曲，也是判据**：第一次 ping 是 100% 丢包、PC 的 arp 表是空的 ——
+那次 ARP 请求板子收到了（板子侧 lan-cpu0 的 rx 在涨），但**板的 ARP 应答没到 PC**；
+`arp -d *` 清掉缓存后再 ping 就 0% 丢包。⇒ **判据必须是流量**，
+一次 ping 的结果不足以下结论（§12.8 那条规矩的又一个例子）。
+
 ### 12.8 一条要改的判断
 
 驱动那句 `the lane carries no code`（依据远端 PCS 状态字的 `0x40` bit）在 4.72 s
@@ -683,8 +717,10 @@ C:\>arp -a
 - **上板验了**（§12.7）：不刷机，tftp + bootm run313 的 initramfs，
   **2.5G 口在 Linux 里第一次通了**（PC 5/5 全通、0% 丢包、1 ms）。
 
-**没做**：这一改**还没刷进 flash**（板上现在跑的是 run309 的 kernel，
-下一次冷启动就会退回「不通」）；**二层转发那件事仍然卡在物理条件上**。
+**没做**：**二层转发那件事仍然卡在物理条件上**（PC 的线只能在 2.5G 口与 GE 口之间二选一）。
+
+**已经落进 flash**：这一改已随 run313 刷进板子的 mtd2（只写 kernel），
+板上现在跑的就是带修复的内核；冷启动后 20/20 全通、1 ms。
 
 **还缺一个物理条件**：PC 的网线在 2.5G 口上，四个 GE 口空着。
 二层转发那件事（docs/99 §6）要判 UNI↔UNI 需要 PC 插到 GE 口上，
