@@ -440,7 +440,7 @@ ppu me 0: flag=0 enabled=1
 ppu me 7: flag=0 enabled=1
 ```
 
-（上面是按 §4.3 的实测换算的**预期输出**；板上真机输出见 §11 的验收记录。）
+（上面这段是 run309 镜像上的**真机输出**，与 §4.3 的实测换算逐字一致；完整实录见 §11。）
 
 ### 5.2 `pf` —— 64 个端口的分派字（可读，**可写**）
 
@@ -454,8 +454,8 @@ ppu me 7: flag=0 enabled=1
 
 ```
 ppu pf port  0 = 0x00000463  vld=1 start_pc=  561 flow= 0 attr4=0
-ppu pf port  5 = 0x0000a6a5  vld=1 start_pc= 4914 flow= 1 attr4=0
-ppu pf port  8 = 0x00039b11  vld=1 start_pc= 7560 flow= 8 attr4=1
+ppu pf port  5 = 0x0000a6a5  vld=1 start_pc= 4946 flow= 1 attr4=0
+ppu pf port  8 = 0x00039b11  vld=1 start_pc= 3464 flow= 7 attr4=0
 ppu pf port 49 = 0x00e52825  vld=1 start_pc= 5138 flow=10 attr4=7
 ```
 
@@ -463,8 +463,12 @@ ppu pf port 49 = 0x00e52825  vld=1 start_pc= 5138 flow=10 attr4=7
 **至今没有一手定论**（§1.2 / §7.1），拿一个没人确认过的模型印在板上没有意义。
 ME 那张表有自己的动词（`me`）。
 
-（端口字本身是稳的；上面是按本轮实测的端口字换算的**预期输出**。
-板上真机输出见 §11 的验收记录。）
+（端口字本身是稳的；上面是 run309 镜像上的**真机输出**，
+64 行的全表见 §11。）
+
+**这三行样例值以前写错过**：端口 5 的 start PC 一度写成 4914（真值 **4946**），
+端口 8 写成 7560 / flow 8 / attr4 1（真值 **3464 / 7 / 0**）——
+手算 bits 1..14 时算错了，已按真机输出订正。
 
 **写是数据面**：端口的流量从下一帧起就换一个入口程序、换一个 flow 进去。
 值是**整个字**，字段要自己拼（位布局见 §1.1）。
@@ -476,13 +480,16 @@ ME 那张表有自己的动词（`me`）。
 
 ### 5.3 验收口径
 
-| 项 | 期望 |
-|---|---|
-| `mi` | rc=0；`flag=0x00000000`、`mask=0x000000ff`；8 行 per-ME，`enabled=1` |
-| `pf` | rc=0；64 行；端口 0 = `0x00000463`、端口 5 = `0x0000a6a5`、端口 49 = `0x00e52825` |
-| `pf 5` | rc=0；一行；与 `pf` 全量里的端口 5 一致 |
-| `pf 64` | rc=1（`Invalid argument`），**不 panic** |
-| `pf 5 0x0000a6a5` | rc=0；回读值与写入值相同（写回原值，不改变数据面） |
+| 项 | 期望 | run309 实测 |
+|---|---|---|
+| `mi` | rc=0；`flag=0x00000000`、`mask=0x000000ff`；8 行 per-ME，`enabled=1` | ✅ 与 §5.1 的样例**逐字一致** |
+| `pf` | rc=0；64 行；端口 0 = `0x00000463`、端口 5 = `0x0000a6a5`、端口 49 = `0x00e52825` | ✅ 64 行；**与刷机前基线逐字节相同**；行内**无 `me=` 列** |
+| `pf 5` | rc=0；一行；与 `pf` 全量里的端口 5 一致 | ✅ |
+| `pf 64` / `pf 999` / `pf 0x40` | rc=1（`Invalid argument`），**不 panic** | ✅ 三次都 rc=1，板子活着 |
+| `pf 5 <板子自报的数>` | rc=0；回读值与写入值相同（写回原值，不改变数据面） | ✅ 写回 `0x0000a6a5` |
+| `pf 55 0x00000002` | rc=0；回读 `0x00000002`（vld 仍为 0，不会有流量经过） | ✅ 写进去当场读得出来；再写 `0x00000000` 复原 |
+| `lane: far` 规则 | 在 `dynamic_debug/control` 里，且是禁用状态 | ✅ 1 条，状态 `=_`；dmesg 里 `switch: lane: far` = **0** |
+| `tc` / `nft` | 可用 | ✅ iproute2-6.18.0 / nftables v1.1.6 |
 
 ---
 
@@ -711,10 +718,181 @@ dmesg | grep -e 'ppu me int' -e 'ppu pf port' -e 'ppu cluster' -e 'pps reg 0x090
 
 | 文件 | 改动 |
 |---|---|
-| `kernel-overlays/drivers/net/ethernet/zte/zx279133-np.c` | 新增 `mi` / `pf` 两个动词；订正「blob 是 SR1010 的」那段注释；订正「0x00008015 是 SR1010 的入口程序」那句 |
-| `kernel-overlays/drivers/net/ethernet/zte/zx279133.h` | 新增 PPS 中断三字、thread-switch、mf-protect-detail、cluster inst-block 的常量；新增 SPA 端口字 0 的位域常量；新增 `ZX279133_9132_PORT_COUNT` |
-| `docs/95-the-npu-is-there-but-nothing-drives-it-20261031.md` | §1.1 的来源说明改成一手证据（§8） |
+| `kernel-overlays/drivers/net/ethernet/zte/zx279133-np.c` | 新增 `mi` / `pf` 两个动词；订正「blob 是 SR1010 的」那段注释；订正「0x00008015 是 SR1010 的入口程序」那句；**把「ME 表 = cluster 的只读镜像」从注释里拿掉**（该模型已被 §1.2 证伪） |
+| `kernel-overlays/drivers/net/ethernet/zte/zx279133.h` | 新增 PPS 中断三字、thread-switch、mf-protect-detail、cluster inst-block 的常量；新增 SPA 端口字 0 的位域常量；新增 `ZX279133_9132_PORT_COUNT`；`ME_SELECT_EN` → `MF_PROTECT_DETAIL` |
+| `docs/95-the-npu-is-there-but-nothing-drives-it-20261031.md` | §1.1 的来源说明改成一手证据（§8）；开头加订正横幅；§1.4/§1.5/§1.7 就地标注 |
+| `docs/97-the-me-table-is-read-only-20261101.md` | 开头加订正横幅：「ME 表在 CPU 侧根本不存在」 |
+| `docs/99-the-dispatch-chain-and-the-ppu-interrupts-20261101.md` | §1.2 重写（`0x90350` 不是表）；§5.2 样例值订正；§5.3 验收口径换成实测值；**新增 §11 run309 验收实录** |
 
 **没有新增 CI 门禁**（`ci-build-repo/tests/README.md:70` 已定「收敛，不再加新门禁」），
 **没有动 apply 路径**（端口分派表的写入时机和内容一字未改），
-**没有动 ME 表的写路径**（docs/97 的结论不变）。
+**没有动 ME 表的写路径** —— 但 docs/97 的**结论本身变了**：
+「ME 表是只读镜像」这句话被 §1.2 证伪，已经改成「那个地址根本不是表」。
+
+**本轮刷了机**：run309（head `154034c`）的 kernel + root（dtb 与板上逐字节相同，未刷），
+板侧验收结果见 §11。
+
+---
+
+## 11. run309 验收实录（2026-11-01）
+
+本节是**板子上的实测记录**，不是推演。镜像：CI run #41288921286（run309，
+head `154034c`），release `skd840n_flash_309_41288921286`。
+
+### 11.1 刷了什么
+
+| 项 | 值 |
+|---|---|
+| 刷的分区 | kernel + root（**dtb 没刷**：与板上 mtd3 逐字节相同，md5 `ee287b5c1bc47c26c35cdaa2a462176d`） |
+| 刷机时刻 | 17:25:34 拿到 U-Boot 提示符 → 17:26:54 全部写完，**80 秒** |
+| kernel | 下载 crc `50393251` ✓；擦除后头尾 0xFF crc `f154670a` ✓；写后回读 `50393251` ✓ |
+| root | 下载 crc `73eb4d36` ✓；写后回读 ✓；`mk=DONE-root` |
+| 刷机后的启动 | 17:28:31 U-Boot `autoboot: a boot is starting` → 17:28:35 内核 |
+| 插座冷启动 | **17:46:04**（与 17:25:34 相隔 1230 s，节拍严格对上）→ 17:46:08 内核 |
+
+**产物预检救了一命**：run305 的 initramfs `.itb` 解出来的内核里，
+`pf` 那行仍带 `me=` 列、`mi` 里仍有 `ppu me select en` ——
+那与本文档 §5.2「没有 `me=` 列」直接矛盾。**因此放弃 run305，改刷 run309。**
+
+### 11.2 版本
+
+```
+root@ImmortalWrt:~# uname -a
+Linux ImmortalWrt 6.18.38+ #0 SMP Mon Oct 26 04:58:01 2026 aarch64 GNU/Linux
+root@ImmortalWrt:~# md5sum /etc/openwrt_release
+c389ce2c7a45d4246ed85c8e99a8d8a2  /etc/openwrt_release
+```
+
+### 11.3 `mi`（只读）—— 与 §5.1 的预测逐字一致
+
+```
+[   42.062889] ppu me int flag = 0x00000000  stat = 0x00000000  mask = 0x000000ff
+[   42.062930] ppu mf protect detail = 0x00000000  thread switch en = 0x00000000
+[   42.062940] ppu cluster pc = 0x00000001  rdy = 0x00000001  inst block = 0x00000bff
+[   42.062949] ppu me 0: flag=0 enabled=1
+...
+[   42.063008] ppu me 7: flag=0 enabled=1
+```
+
+rc=0。**没有 `ppu me select en` 那一行**（`dmesg | grep -c 'ppu me select en'` = 0）。
+
+### 11.4 `pf`（可读可写）
+
+- 全量 rc=0，**64 行**；
+- 行内**没有 `me=` 列**（`dmesg | grep 'ppu pf port' | grep -c 'me='` = **0**）；
+- **与刷机前基线逐字节一致**（基线是 `staging/ctl/baseline-20261101.md` 里那 64 口的 word 0 全表）：
+  端口 0 = `0x00000463`、6 = `0x00000463`、5 = `0x0000a6a5`、8 = `0x00039b11`、
+  10 = `0x00c0800b`、12 = `0x00009f99`、15 = `0x0000a767`、49 = `0x00e52825`、
+  50 = `0x00e52827`、51..54 = `0x00e00000`、55..63 = `0x00000000`；
+- `pf 5` rc=0，一行，与全量里的端口 5 一致。
+
+**越界守卫**（端口号必须 < 64）：
+
+```
+root@ImmortalWrt:~# echo "pf 64" > /sys/kernel/debug/zx279133-9132
+ash: write error: Invalid argument      rc=1
+root@ImmortalWrt:~# echo "pf 999" > /sys/kernel/debug/zx279133-9132
+ash: write error: Invalid argument      rc=1
+root@ImmortalWrt:~# echo "pf 0x40" > /sys/kernel/debug/zx279133-9132
+ash: write error: Invalid argument      rc=1
+```
+
+三次都 rc=1，**板子没 panic**（`0x40` = 64，同样被挡）。
+
+**写路径分两级验**：
+
+1. **零风险**：把板子自己报的数写回去 —— `pf 5 0x0000a6a5` → rc=0，回读 `0x0000a6a5`。
+2. **证可编程**：空闲口 **55**（word 0 恒 0，vld=0，不会有任何流量经过它）：
+
+```
+[   62.225221] ppu pf port 55 = 0x00000002  vld=0 start_pc=    1 flow= 0 attr4=0
+[   62.250691] ppu pf port 55 = 0x00000000  vld=0 start_pc=    0 flow= 0 attr4=0
+```
+
+写进去当场读得出来；写回 `0x00000000` 即复原。端口 5 未受影响。
+
+### 11.5 PPS 原始读数（`pr`）
+
+```
+[   73.125745] pps reg 0x090000 = 0x00000000    ME int flag
+[   73.125798] pps reg 0x090004 = 0x00000000    ME int stat
+[   73.125807] pps reg 0x090008 = 0x000000ff    ME int mask（8 个核全开）
+[   73.125834] pps reg 0x090014 = 0x00000000    thread switch en
+[   73.125886] pps reg 0x09002c = 0x00000303
+[   73.125950] pps reg 0x090d00 = 0x00000001    cluster pc
+[   73.125962] pps reg 0x090d04 = 0x00000001    cluster rdy
+[   73.125970] pps reg 0x090d08 = 0x00000bff    cluster inst block
+[   73.125979] pps reg 0x090d0c = 0x00000180    INST_LO
+[   73.125987] pps reg 0x090d10 = 0x00180000    INST_HI
+[   73.125996] pps reg 0x090d14 = 0x000001a0
+[   73.126005] pps reg 0x090d18 = 0x00180000
+[   73.126013] pps reg 0x090d1c = 0x000001c0
+[   73.126059] pps reg 0x090350 = 0x000001c0
+[   73.126069] pps reg 0x090354 = 0x000001c0
+[   73.126078] pps reg 0x090358 = 0x000001c0
+[   73.126086] pps reg 0x09035c = 0x000001c0
+```
+
+⇒ **§1.2 的结论在冷启动的新镜像上再次复现**：`0x90350` 这一片读出来
+不是表，而是一个跟着 cluster 走的活值 —— 此刻是 `0x000001c0`（与 `0x90d1c` 相等），
+而前一次暖启动的同一地址读到的是 `0x00000180`，`me`/`mes` 读到的是 `0x00000303`。
+（这一批读数是**顺序**采的，cluster 在读的当口还在往前走，
+所以具体配到哪个 INST 寄存器会随时刻漂移；**变的是它本身**这件事才是结论。）
+四个相邻的字地址读到**同一个值**，与「每个槽位各有内容的表」不相容。
+
+### 11.6 `cam` 与 `me`/`mes`
+
+```
+[   90.574441] cam: alg crc 0x00000000 bulk 0x00000002 depth0 0x00000012 depth1 0x00000000 smmu1 0x0009e100
+```
+
+rc=0。`mes 7 3` 也是 rc=0，但 16 个字读回来全是同一个活值 `0x00000303`
+（`ppu me word 0 = 0x00000303  flows 0:3 1:3 2:0 3:0` …）——
+**「CPU 写不进去」这条负结果在冷启动上照样复现。**
+
+### 11.7 dynamic_debug 与 lane 刷屏
+
+- `/sys/kernel/debug/dynamic_debug/control` 存在，**2772 行**；
+- `lane: far` 规则**在**里面（1 条，状态 `=_` 即禁用）；
+- `dmesg | grep -c 'switch: lane: far'` = **0**；`dmesg | grep -c 'switch: lane'` = **15**（一次性转储）。
+
+⇒ 刷屏归零这件事在冷启动上照样成立。
+
+### 11.8 用户态
+
+```
+root@ImmortalWrt:~# tc -V
+tc utility, iproute2-6.18.0
+root@ImmortalWrt:~# nft -v
+nftables v1.1.6 (Commodore Bullmoose #7)
+```
+
+`tc qdisc show dev br-lan` 正常；`nft list ruleset` 列出 nat/dnsmasq 表。
+
+### 11.9 网络状态（与刷机前基线一致）
+
+```
+  eth0:       0       0    0    0    0     0          0         0      260       2    0    5    0     0       0          0
+br-lan:       0       0    0    0    0     0          0         0     1364      10    0    0    0     0       0          0
+```
+
+`eth0` 仍是 `NO-CARRIER … state DOWN`（板上没有 PON 链路、没有 2.5G 链路），
+`/proc/interrupts` 里 `zx279133-idm-local` 计数 **0**（9132 的 ethernet 中断没有申请过）。
+
+### 11.10 这一轮验到了什么、没验到什么
+
+**验到了**：
+
+- `mi` / `pf` 两个新动词在**冷启动的新镜像**上工作正常，输出与预测逐字一致；
+- `pf` 的写路径真的能把端口字写进硬件（写进去当场读得出来）；
+- 越界守卫生效，不 panic；
+- 64 个端口的属性字与刷机前**逐字节一致** ⇒ 换内核没有动数据面；
+- `switch: lane: far` 刷屏归零；`tc` / `nft` 可用。
+
+**没验到**：
+
+- **UNI↔UNI 二层转发**（§6）：需要两个 UNI 口插线 + 第二台主机，这个台面只有一根网卡；
+- **flow → 核**这一段：CPU 侧没有可写对象（§1.2 / §7.1），`mes` 的负结果依旧；
+- **PPU 的 ME 中断**：`mask = 0x000000ff`（8 个核全开）但 `flag = 0` ——
+  中断使能是开的，可是一根也没来。这与 §4.4「DT 给了 5 条 IRQ，主线一条都没申请」一致：
+  **中断语义定了，但中断还没接上。**
