@@ -1278,12 +1278,39 @@ static bool zx279133_soc_block_ok(u32 addr, u32 len)
 	};
 	unsigned int i;
 
+	/*
+	 * The comparison is written as "the distance from the block's start
+	 * still fits in it" rather than as "addr + len <= start + size",
+	 * because addr comes from the user and can be 0xffffffff: the sum
+	 * wraps around to a small value and lets an address that is nowhere
+	 * near the block through.
+	 */
 	for (i = 0; i < ARRAY_SIZE(blocks); i++)
 		if (addr >= blocks[i].start &&
-		    addr + len <= blocks[i].start + blocks[i].size)
+		    len <= blocks[i].size &&
+		    addr - blocks[i].start <= blocks[i].size - len)
 			return true;
 
 	return false;
+}
+
+/*
+ * Every offset the console takes from the user ends up in a readl() or a
+ * writel(), and every window it reaches is device memory: on this bus an
+ * unaligned access is an alignment fault, and the kernel dies with it -
+ * the board does not come back without a power cycle.  Round 133 read one
+ * at +0x40002 and the board panicked in the middle of the round; round
+ * 140 read the PPS window at 90350 and panicked the same way, because the
+ * offset was not even word aligned.
+ *
+ * The offsets are parsed with kstrtou32(tok, 0, ...), so the base is
+ * decided by the text: "0x90350" is the hex the ME table constant is
+ * written in, and "90350" is the decimal 90350, which is 0x160ee and is
+ * not word aligned either.
+ */
+static bool zx279133_9132_off_aligned(u32 off)
+{
+	return !(off & 3);
 }
 
 static ssize_t zx279133_9132_write(struct file *file, const char __user *ubuf,
@@ -1382,7 +1409,7 @@ static ssize_t zx279133_9132_write(struct file *file, const char __user *ubuf,
 		 * here instead: round 133 read one at +0x40002 and the board
 		 * panicked in the middle of the round.
 		 */
-		if (off & 3)
+		if (!zx279133_9132_off_aligned(off))
 			return -EINVAL;
 		if (off >= ZX279133_NPPT_WINDOW_SIZE)
 			return -EINVAL;
@@ -1463,7 +1490,18 @@ static ssize_t zx279133_9132_write(struct file *file, const char __user *ubuf,
 			return -EINVAL;
 		if (speed >= ARRAY_SIZE(speed_code))
 			return -EINVAL;
-		if (base + 0x7e0004 + 4 > ZX279133_NPPT_WINDOW_SIZE)
+		/*
+		 * The base is the user's and can be up to 0xffffffff, so the
+		 * bound is written as "does the last word still fit" and not
+		 * as "base + 0x7e0004 + 4 > size": the sum wraps around and
+		 * lets a base that is nowhere near the window through into a
+		 * readl().
+		 */
+		if (base >= ZX279133_NPPT_WINDOW_SIZE ||
+		    0x7e0004 + 4 > ZX279133_NPPT_WINDOW_SIZE - base)
+			return -EINVAL;
+		/* Device memory: an unaligned access is an alignment fault. */
+		if (!zx279133_9132_off_aligned(base))
 			return -EINVAL;
 
 		zx279133_9132_xbasex_word(eth, base + 0x0c001c, 0, 1,
@@ -1763,6 +1801,13 @@ static ssize_t zx279133_9132_write(struct file *file, const char __user *ubuf,
 			return -EINVAL;
 		if (!n || n > 256)
 			return -EINVAL;
+		/*
+		 * These blocks are device memory, so the address has to be
+		 * word aligned: an unaligned read is an alignment fault and
+		 * it takes the kernel down with it.
+		 */
+		if (!zx279133_9132_off_aligned(addr))
+			return -EINVAL;
 		if (!zx279133_soc_block_ok(addr, n * 4))
 			return -EINVAL;
 
@@ -1800,6 +1845,9 @@ static ssize_t zx279133_9132_write(struct file *file, const char __user *ubuf,
 			return -EINVAL;
 		tok = zx279133_9132_next_token(&p);
 		if (!tok || kstrtou32(tok, 0, &val))
+			return -EINVAL;
+		/* Device memory: an unaligned write is an alignment fault. */
+		if (!zx279133_9132_off_aligned(addr))
 			return -EINVAL;
 		if (!zx279133_soc_block_ok(addr, 4))
 			return -EINVAL;
@@ -1889,6 +1937,16 @@ static ssize_t zx279133_9132_write(struct file *file, const char __user *ubuf,
 		if (off < ZX279133_SPA_WINDOW_BASE ||
 		    off >= ZX279133_SPA_WINDOW_BASE + ZX279133_SPA_WINDOW_SIZE)
 			return -EINVAL;
+		/*
+		 * The NPPT window is device memory: an unaligned read or
+		 * write is an alignment fault and it takes the kernel down
+		 * with it.  The SPA window starts at 0x8000, which is
+		 * aligned, so the offsets inside it are aligned too - but
+		 * only if they are word offsets, and the user gives the
+		 * offset in bytes.
+		 */
+		if (!zx279133_9132_off_aligned(off))
+			return -EINVAL;
 
 		if (is_dump) {
 			tok = zx279133_9132_next_token(&p);
@@ -1924,6 +1982,8 @@ static ssize_t zx279133_9132_write(struct file *file, const char __user *ubuf,
 				    at >= ZX279133_SPA_WINDOW_BASE +
 					     ZX279133_SPA_WINDOW_SIZE)
 					return -EINVAL;
+				if (!zx279133_9132_off_aligned(at))
+					return -EINVAL;
 				if (at >= ZX279133_SPA_IND_CMD &&
 				    at <= ZX279133_SPA_IND_DATA)
 					return -EINVAL;
@@ -1956,7 +2016,14 @@ static ssize_t zx279133_9132_write(struct file *file, const char __user *ubuf,
 	 * at all: the driver reached them only through its own helpers, and
 	 * the only other way in was the vendor's 4.19 tm_debug console.
 	 *
-	 *	"pr 90350 16"	read sixteen words from PPS + 0x90350
+	 *	"pr 0x90350 16"	read sixteen words from PPS + 0x90350
+	 *
+	 * The offset is a PPS offset, so the ME table is at 0x90350 and the
+	 * offset is written with a 0x prefix: the offsets are read with
+	 * kstrtou32(tok, 0, ...), so base 0 means "90350" is the decimal
+	 * 90350 (0x160ee) and "0x90350" is the hex the constant is written
+	 * in.  The decimal reading is what round 140 typed, and it is not
+	 * even word aligned - see the alignment note below.
 	 */
 	if (!strcmp(tok, "pr")) {
 		u32 off, n = 1, i;
@@ -1970,12 +2037,26 @@ static ssize_t zx279133_9132_write(struct file *file, const char __user *ubuf,
 		if (!n || n > 256)
 			return -EINVAL;
 		/*
+		 * The PPS window is device memory, so a read that is not
+		 * four-byte aligned is an alignment fault, and it takes the
+		 * kernel down with it.  Round 140 read this at 90350 - the
+		 * decimal reading of the ME table's offset, 0x160ee - and the
+		 * board panicked in the middle of the round with "FSC = 0x21:
+		 * alignment fault" and a readl() in the call trace.
+		 */
+		if (!zx279133_9132_off_aligned(off))
+			return -EINVAL;
+		/*
 		 * off comes from kstrtou32() and can be up to 0xffffffff, so
 		 * the bound is written as "does the last word still fit" and
 		 * not as "off + 4 * n > size": the sum would wrap around and
 		 * let a four gigabyte offset through into a readl().
+		 *
+		 * The window is the size the device tree gives the pps
+		 * resource - 16 MiB - and the mapping is of exactly that
+		 * resource, so this is the mapped size and not a nominal one.
 		 */
-		if (off > ZX279133_PPS_WINDOW_SIZE ||
+		if (off >= ZX279133_PPS_WINDOW_SIZE ||
 		    n > (ZX279133_PPS_WINDOW_SIZE - off) / 4)
 			return -EINVAL;
 
@@ -2161,8 +2242,15 @@ static ssize_t zx279133_9132_write(struct file *file, const char __user *ubuf,
 			if (!n || n > 256)
 				return -EINVAL;
 			/* Same wrapping-around trap as the "pr" command. */
-			if (off > ZX279133_SE_HASH_REQUIRED_SIZE ||
+			if (off >= ZX279133_SE_HASH_REQUIRED_SIZE ||
 			    n > (ZX279133_SE_HASH_REQUIRED_SIZE - off) / 4)
+				return -EINVAL;
+			/*
+			 * The window is mapped with ioremap_wc(), so it is
+			 * device memory: an unaligned read is an alignment
+			 * fault and it takes the kernel down with it.
+			 */
+			if (!zx279133_9132_off_aligned(off))
 				return -EINVAL;
 			window = true;
 		}
