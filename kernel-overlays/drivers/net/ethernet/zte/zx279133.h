@@ -684,10 +684,17 @@ extern u16 zx279133_tx_port;
 #define ZX279133_PPU_CLUSTER_ME_TABLE	0x90350
 #define ZX279133_PPU_CLUSTER_ME_WORDS	16
 /*
- * Sixteen words of four 8-bit engine selectors each: 64 flows, which is the
- * "8 cores, 64 threads" the chip is described as.  The layout is the
- * vendor's own (np_133.ko's ppu_cluster_set_me_val_by_flow_num): a flow's
- * engine sits at bit (flow & 3) * 8 of word (flow >> 2).
+ * The ME window the "me" command reads: sixteen words at PPS+0x90350.
+ *
+ * It used to be documented here as 64 flow -> engine selectors, four flows
+ * to a word, an engine eight bits at bit (flow & 3) * 8 of word (flow >> 2)
+ * - the layout the vendor's ppu_cluster_set_me_val_by_flow_num() uses.  The
+ * hardware does not bear that out (docs/99 §1.2): the words are a live value
+ * that changes with no writer, the whole 0x902c0..0x9041c block reads as one
+ * and the same value, and the vendor's own writer for it cannot reach it at
+ * all (docs/99 §7).  The layout the driver decodes is the vendor's intent,
+ * kept so the decoding stays comparable - it is not a confirmed layout of
+ * this window.
  */
 #define ZX279133_PPU_CLUSTER_ME_SLOTS	64
 #define ZX279133_PPU_CLUSTER_ME_BITS	8
@@ -739,9 +746,11 @@ extern u16 zx279133_tx_port;
  *	bits 21..23	SPA attribute 4
  *
  * The flow number is what makes the word the dispatch table's first half:
- * the PPU's 64 flows are each run by one of the eight ME cores, and the ME
- * table (the "me" command) says which.  The port side is writable, the flow
- * side is not - the ME table is the cluster's read-only mirror.
+ * the PPU's 64 flows are each run by one of the eight ME cores.  The port
+ * side is writable; which core runs which flow is not - the window the "me"
+ * command reads holds a live value with no confirmed table shape
+ * (docs/99 §1.2), and the vendor's own writer for it cannot reach it at all
+ * (docs/99 §7).
  */
 #define ZX279133_SPA_PORT_WORD_VLD	BIT(0)
 #define ZX279133_SPA_PORT_WORD_PC	GENMASK(14, 1)

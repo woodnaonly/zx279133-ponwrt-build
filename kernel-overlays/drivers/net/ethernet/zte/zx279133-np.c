@@ -2162,22 +2162,28 @@ static ssize_t zx279133_9132_write(struct file *file, const char __user *ubuf,
 	}
 
 	/*
-	 * The PPU's ME table: which microcode engine runs which of the PPU's
-	 * 64 flows.  This is the one table the NPU's own dispatch rests on,
-	 * and until this verb existed there was no way to look at it from
-	 * Linux at all - the driver's only contact with it was the blind
-	 * overwrite at probe time.
+	 * The PPU's ME window: the words the vendor's own reader calls a
+	 * per-core state.  This used to be described here as the table that
+	 * says which microcode engine runs which of the PPU's 64 flows, and
+	 * the hardware does not bear that out (docs/99 §1.2): the sixteen
+	 * words are a live value that changes with no writer, the whole
+	 * 0x902c0..0x9041c block reads as one and the same value, and the
+	 * vendor's own writer for the flow -> core mapping cannot reach it
+	 * at all (docs/99 §7).
 	 *
-	 * The layout is the vendor's: a word holds four flows, and a flow's
-	 * engine is eight bits at bit (flow & 3) * 8 of word (flow >> 2).
+	 * The layout decoded below is the vendor's, not a confirmed layout
+	 * of this window: a word holds four flows, and a flow's engine is
+	 * eight bits at bit (flow & 3) * 8 of word (flow >> 2).
 	 *
-	 *	"me"			print the table, with the flows decoded
+	 *	"me"			print the words, with the flows decoded
 	 *	"mes 7 3"		put flow 7 on engine 3, then read it back
 	 *
 	 * "mes" is the vendor's own ppu_cluster_set_me_val_by_flow_num(),
 	 * which in the vendor's system is reachable only through the
 	 * tm_debug console and only with a raw flow number - so this is the
 	 * same operation, with the same limits (flow_num < 64, me_val < 256).
+	 * On this board it does not take: the value read back is the value
+	 * that was there before (docs/99 §1.2).
 	 */
 	if (!strcmp(tok, "me") || !strcmp(tok, "mes")) {
 		bool is_set = !strcmp(tok, "mes");
