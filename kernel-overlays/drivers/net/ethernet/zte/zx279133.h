@@ -705,13 +705,13 @@ extern u16 zx279133_tx_port;
  *	id 13	0x90004	8 bits
  *	id 14	0x90008	8 bits
  *	id 26	0x90014	1 bit
- *	id 49	0x90458	1 bit
+ *	id 48	0x90458	1 bit
  */
 #define ZX279133_PPU_ME_INT_FLAG	0x90000
 #define ZX279133_PPU_ME_INT_STAT	0x90004
 #define ZX279133_PPU_ME_INT_MASK	0x90008
 #define ZX279133_PPU_THREAD_SWITCH_EN	0x90014
-#define ZX279133_PPU_ME_SELECT_EN	0x90458
+#define ZX279133_PPU_MF_PROTECT_DETAIL	0x90458
 #define ZX279133_PPU_ME_CORES		8
 /* The word the cluster last took its program counter from, in words. */
 #define ZX279133_PPU_CLUSTER_INST_BLOCK	0x90d08

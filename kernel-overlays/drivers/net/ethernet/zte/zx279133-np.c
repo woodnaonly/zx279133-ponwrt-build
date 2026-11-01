@@ -2218,6 +2218,7 @@ static ssize_t zx279133_9132_write(struct file *file, const char __user *ubuf,
 	 *	id 13	PPS + 0x90004	8 bits
 	 *	id 14	PPS + 0x90008	8 bits
 	 *	id 26	PPS + 0x90014	1 bit
+	 *	id 48	PPS + 0x90458	1 bit
 	 *
 	 * and the vendor's debug helpers say which is which: id 13 is read
 	 * by ppu_debug_get_me_int_stat(), id 14 by
@@ -2232,6 +2233,11 @@ static ssize_t zx279133_9132_write(struct file *file, const char __user *ubuf,
 	 * is not read out of the vendor code the way the flag's is - it is
 	 * the same order by inference from the width.
 	 *
+	 * id 48 is the one the vendor writes through
+	 * ppu_cluster_set_mf_protect_detail(), so that is what it is called
+	 * here.  The vendor's own ppu_cluster_set_me_select_en() asks for id
+	 * 49, which is a different row - and a broken one, see docs/99 §7.
+	 *
 	 * The device tree gives this block five interrupt lines (nppt, rx,
 	 * idm, buffer-release, local-test) and the driver asks for none of
 	 * them, so nothing in Linux ever sees an ME interrupt and this is
@@ -2242,12 +2248,12 @@ static ssize_t zx279133_9132_write(struct file *file, const char __user *ubuf,
 	 *	"mi"		the interrupt words and the cluster's PC
 	 */
 	if (!strcmp(tok, "mi")) {
-		u32 flag, stat, mask, sel, tsw, pc, rdy, inst, me;
+		u32 flag, stat, mask, mfp, tsw, pc, rdy, inst, me;
 
 		flag = readl(eth->pps_base + ZX279133_PPU_ME_INT_FLAG);
 		stat = readl(eth->pps_base + ZX279133_PPU_ME_INT_STAT);
 		mask = readl(eth->pps_base + ZX279133_PPU_ME_INT_MASK);
-		sel = readl(eth->pps_base + ZX279133_PPU_ME_SELECT_EN);
+		mfp = readl(eth->pps_base + ZX279133_PPU_MF_PROTECT_DETAIL);
 		tsw = readl(eth->pps_base + ZX279133_PPU_THREAD_SWITCH_EN);
 		pc = readl(eth->pps_base + ZX279133_PPU_CLUSTER_PC);
 		rdy = readl(eth->pps_base + ZX279133_PPU_CLUSTER_RDY);
@@ -2255,8 +2261,8 @@ static ssize_t zx279133_9132_write(struct file *file, const char __user *ubuf,
 
 		pr_info("ppu me int flag = 0x%08x  stat = 0x%08x  mask = 0x%08x\n",
 			flag, stat, mask);
-		pr_info("ppu me select en = 0x%08x  thread switch en = 0x%08x\n",
-			sel, tsw);
+		pr_info("ppu mf protect detail = 0x%08x  thread switch en = 0x%08x\n",
+			mfp, tsw);
 		pr_info("ppu cluster pc = 0x%08x  rdy = 0x%08x  inst block = 0x%08x\n",
 			pc, rdy, inst);
 		for (me = 0; me < ZX279133_PPU_ME_CORES; me++)
@@ -2276,19 +2282,19 @@ static ssize_t zx279133_9132_write(struct file *file, const char __user *ubuf,
 	 *	bits 15..20	flow number (0..63)
 	 *	bits 21..23	SPA attribute 4
 	 *
-	 * The flow number is what makes this the dispatch table's first
-	 * half.  The PPU's 64 flows are each run by one of the eight ME
-	 * cores, and the ME table - the "me" command - says which.  So a
-	 * port's word 0 is port to flow, and the ME table is flow to
-	 * engine; the two together are the whole dispatch chain, and this
-	 * command prints both ends of it.
+	 * The flow number is what makes this the dispatch table's first half.
+	 * The PPU's 64 flows are each run by one of the eight ME cores, and
+	 * the "me" command reads the array the vendor's
+	 * ppu_debug_get_me_state() indexes by core number.  What that array
+	 * *means* is not settled - the vendor's own reader calls it a per-core
+	 * state and the vendor's own writer (ppu_cluster_set_me_val_by_flow_num,
+	 * the one that gives the flow -> core mapping) cannot reach it at all
+	 * (docs/99 §7) - so this command prints the port's own word and stops
+	 * there rather than carrying a mapping that no one has confirmed.
 	 *
 	 * The port side is writable.  The driver writes it at probe from the
 	 * board's own table, and the vendor's loader wrote the same words
-	 * from the microcode blob's PORT_FLOW tags.  The flow side is not:
-	 * the ME table is the cluster's read-only mirror (docs/97), so
-	 * changing which engine runs a flow means changing the microcode,
-	 * not a register.
+	 * from the microcode blob's PORT_FLOW tags.
 	 *
 	 *	"pf"			all 64 ports
 	 *	"pf <port>"		one port
@@ -2328,12 +2334,11 @@ static ssize_t zx279133_9132_write(struct file *file, const char __user *ubuf,
 			if (ret)
 				return ret;
 			flow = (word & ZX279133_SPA_PORT_WORD_FLOW) >> 15;
-			pr_info("ppu pf port %2u = 0x%08x  vld=%u start_pc=%5u flow=%2u attr4=%u me=%u\n",
+			pr_info("ppu pf port %2u = 0x%08x  vld=%u start_pc=%5u flow=%2u attr4=%u\n",
 				p, word,
 				(word & ZX279133_SPA_PORT_WORD_VLD) ? 1u : 0u,
 				(word & ZX279133_SPA_PORT_WORD_PC) >> 1, flow,
-				(word & ZX279133_SPA_PORT_WORD_ATTR4) >> 21,
-				zx279133_ppu_get_me_val(eth, flow));
+				(word & ZX279133_SPA_PORT_WORD_ATTR4) >> 21);
 		}
 		return count;
 	}
