@@ -1,0 +1,18 @@
+{
+  "luci-app-sk-d840n-pon": {
+    "description":"Manage SK-D840N ONU configuration and read bounded status",
+    "read": {
+      "ubus": {
+        "luci.skd840n-pon":["status"],"system":["board"],
+        "luci-rpc":["getBoardJSON","getHostHints","getNetworkDevices"],
+        "network":["get_proto_handlers"],"network.device":["status"],"network.interface":["dump"]
+      },
+      "uci":["pon","network","firewall"]
+    },
+    "write":{"uci":["pon","network"]}
+  },
+  "luci-skd840n-system": {
+    "description":"Read SK-D840N CPU and thermal state; no frequency writes",
+    "read":{"ubus":{"luci.skd840n-system":["status"]}}
+  }
+}

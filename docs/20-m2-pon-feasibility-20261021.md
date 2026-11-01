@@ -1,5 +1,13 @@
 # 补百二十：M2（PON/OMCI）可行性——厂商状态机在，但 OMCI 的发送门是厂商自己留的空桩
 
+> Correction (2026-11-01): the stub below is not the installed OMCI netdev TX
+> entry. `np_133.ko` installs `idm_net_cpu_tx`; its private-type-2 branch
+> submits OMCI through IDM queue 0. The inference that the vendor never
+> transmitted OMCI is withdrawn. See [the management-port note](100-sk-d840n-onu-management-port.md)
+> for the recovered descriptor layout, the new TX implementation and the
+> remaining activation/RX/integrity-key limitations. The original analysis
+> below is retained as historical evidence, not a current TX conclusion.
+
 日期：2026-10-21，离线反汇编（`pon/vendor-modules/*.ko`，18 个模块，全部 AARCH64）。
 工具：`tools/ponDis.py`、`tools/ponelf.py`、`staging/kocalls.py`（capstone 5.0.7）。
 本文件是计划里 G5 的交付物：**可行性报告 + 决策**。结论先说，再给证据。

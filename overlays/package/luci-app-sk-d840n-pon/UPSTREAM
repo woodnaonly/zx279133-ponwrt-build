@@ -1,0 +1,5 @@
+UI/layout/CSS: LeoooChen/PonWRT-TYFZA1, local source snapshot 0.8.4-beta.
+License: GPL-2.0-only; see LICENSE and COPYING.
+The native WAN and bridge forms and responsive Argon card styling are adapted.
+Platform RPC, capabilities, configuration and all other views target SK-D840N.
+No RTL9617C drivers, calibration, factory identities or register writes imported.

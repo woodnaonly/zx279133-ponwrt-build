@@ -30,6 +30,10 @@ on:
       - overlays/**
       - configs/sk-d840n*
       - scripts/configure-sk-d840n.sh
+      - scripts/prepare-sk-d840n-ui.sh
+      - scripts/check-sk-d840n-management.sh
+      - tests/*sk_pon*
+      - tests/sk_omci*
       - templates/**
       # The trial files go into the RAM image (the initramfs mode copies
       # trial-files/ into openwrt/files/), so a change to them changes the
@@ -116,6 +120,28 @@ jobs:
             python3-pyelftools bc dwarves qemu-utils re2c rsync scons squashfs-tools subversion swig texinfo \
             uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev zstd
           sudo -E timedatectl set-timezone "Asia/Shanghai"
+
+      - name: Rust 1.96.1 and offline ONU regression tests
+        if: steps.pick.outputs.run == 'true'
+        run: |
+          rustup toolchain install 1.96.1 --profile minimal
+          rustup target add --toolchain 1.96.1 aarch64-unknown-linux-musl
+          export ZX_CARGO="$(rustup which --toolchain 1.96.1 cargo)"
+          echo "ZX_CARGO=$ZX_CARGO" >> "$GITHUB_ENV"
+          set +e
+          {
+            node tests/test_sk_pon_ui.js &&
+            python3 tests/test_sk_pon_contract.py &&
+            python3 tests/test_sk_pon_firstboot.py &&
+            sh tests/test_sk_pon_host.sh
+          } 2>&1 | tee sk-pon-tests.log
+          rc=${PIPESTATUS[0]}
+          if [ "$rc" != 0 ]; then
+            tail -n 45 sk-pon-tests.log | while IFS= read -r line; do
+              echo "::error::$(printf '%s' "$line" | sed 's/%/%25/g' | tr -d '\r')"
+            done
+          fi
+          exit "$rc"
 
       - name: Clone sources
         if: steps.pick.outputs.run == 'true'
@@ -233,26 +259,13 @@ jobs:
           if [ "$CRCOUNT" != 0 ]; then
             echo "::error::02_network carries $CRCOUNT CR byte(s) - it is a shell script and CRLF breaks its continuation"; exit 1
           fi
-          # The NAT of the FLASHED image.
-          #
-          # This build has no feed packages, so firewall4 is not in the tree
-          # at all: the nftables userspace comes from the overlay in
-          # overlays/package/network/utils/nftables and the firewall itself
-          # does not exist.  The flashed image then comes up, serves LuCI,
-          # hands out DHCP leases and cannot route - there is nothing to
-          # masquerade with.  Measured on the board on 2026-10-25: one nft
-          # table ("inet dnsmasq"), no fw4 table, and no /etc/init.d/firewall
-          # at all.
-          #
-          # So the one rule the router needs is put in by
-          # base-files/etc/init.d/sk-nat, which
-          # base-files/etc/uci-defaults/99-sk-nat links into /etc/rc.d on the
-          # first boot.  All three files have to reach the tree, all three
-          # have to parse, and none may carry a CR: they are shell scripts
-          # and the device runs them.
+          # Legacy NAT compatibility for images predating firewall4.
+          # Current images use fw4; both legacy entry points exit when it is
+          # installed. Keep their old rule valid for older images, and check
+          # the ownership-checked migration script as well.
           NAT=openwrt/target/linux/zte/zx279133/base-files/etc/init.d/sk-nat
           NATD=openwrt/target/linux/zte/zx279133/base-files/etc/uci-defaults/99-sk-nat
-          for f in "$NAT" "$NATD"; do
+          for f in "$NAT" "$NATD" openwrt/target/linux/zte/zx279133/base-files/etc/uci-defaults/98-sk-firewall4; do
             test -f "$f" || { echo "::error::$f did not reach the tree"; exit 1; }
             sh -n "$f" || { echo "::error::$f does not parse"; exit 1; }
             CR=$(tr -cd '\r' < "$f" | wc -c)
@@ -673,6 +686,7 @@ jobs:
       - name: Configure
         if: steps.pick.outputs.run == 'true'
         run: |
+          sh scripts/prepare-sk-d840n-ui.sh "$GITHUB_WORKSPACE/openwrt"
           sh scripts/configure-sk-d840n.sh \
             "$GITHUB_WORKSPACE/openwrt" \
             "$GITHUB_WORKSPACE/linux-mainline-zte-zxslc-sr1010/linux-$KVER" \
@@ -1162,7 +1176,7 @@ jobs:
           # every run below so the next reader gets the answer without another round:
           # if the seed says =y and the merge says otherwise, the question is which of
           # the three config-* fragments is last, not whether the pin ran.
-          required="REALTEK_PHY LEDS_GPIO GPIO_ZX279133 GPIO_SYSFS PSTORE PSTORE_CONSOLE PSTORE_RAM MAGIC_SYSRQ MAGIC_SYSRQ_SERIAL DYNAMIC_DEBUG DYNAMIC_DEBUG_CORE"
+          required="REALTEK_PHY LEDS_GPIO GPIO_ZX279133 GPIO_SYSFS PSTORE PSTORE_CONSOLE PSTORE_RAM MAGIC_SYSRQ MAGIC_SYSRQ_SERIAL DYNAMIC_DEBUG DYNAMIC_DEBUG_CORE NETFILTER NF_CONNTRACK NF_CONNTRACK_MARK NF_NAT NF_TABLES NF_TABLES_INET NF_TABLES_IPV4 NF_TABLES_IPV6 NFT_CT NFT_NAT NFT_MASQ NFT_REDIR NFT_REJECT NFT_REJECT_INET NFT_REJECT_IPV4 NFT_REJECT_IPV6 NFT_FIB NFT_FIB_INET NFT_FIB_IPV4 NFT_FIB_IPV6 NFT_LOG NFT_LIMIT NFT_QUOTA NFT_NUMGEN NF_FLOW_TABLE NF_FLOW_TABLE_INET NFT_FLOW_OFFLOAD"
           reported="DEVMEM STRICT_DEVMEM IO_STRICT_DEVMEM DETECT_HUNG_TASK SOFTLOCKUP_DETECTOR IKCONFIG IKCONFIG_PROC NETFILTER NETFILTER_ADVANCED NF_CONNTRACK NF_NAT NF_TABLES NF_TABLES_IPV4 NFT_NAT NFT_MASQ VETH"
           SEED=$( { ls openwrt/target/linux/zte/zx279133/config-* 2>/dev/null || true; } | head -1 )
           echo "kernel config seed: ${SEED:-none}"
@@ -1231,6 +1245,19 @@ jobs:
             echo "UM19A1HISW is not in the built kernel" >&2
             ls -l "$SPI" 2>/dev/null || echo "no $SPI" >&2
             exit 1; }
+
+      - name: "Gate: ONU UI, protocol service and firewall4 reached the image"
+        if: steps.pick.outputs.run == 'true'
+        run: |
+          set +e
+          sh scripts/check-sk-d840n-management.sh openwrt 2>&1 | tee sk-management-gate.log
+          rc=${PIPESTATUS[0]}
+          if [ "$rc" != 0 ]; then
+            tail -n 45 sk-management-gate.log | while IFS= read -r line; do
+              echo "::error::$(printf '%s' "$line" | sed 's/%/%25/g' | tr -d '\r')"
+            done
+          fi
+          exit "$rc"
 
       - name: "Gate: the recovery service reached the image"
         if: steps.pick.outputs.run == 'true'

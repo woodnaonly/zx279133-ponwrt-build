@@ -417,7 +417,7 @@ printf 'CONFIG_PACKAGE_wrreg=y\n' >>.config
 # statement for a symbol, so a "# CONFIG_X is not set" left in an earlier
 # fragment decides the outcome unless it is taken out, and the DEVMEM round
 # already lost once to exactly that.
-NF_SYMS="NETFILTER NETFILTER_ADVANCED NF_CONNTRACK NF_NAT NF_TABLES NF_TABLES_IPV4 NFT_NAT NFT_MASQ VETH"
+NF_SYMS="NETFILTER NETFILTER_ADVANCED NETFILTER_INGRESS NETFILTER_EGRESS NETFILTER_NETLINK NF_CONNTRACK NF_CONNTRACK_MARK NF_CONNTRACK_ZONES NF_CONNTRACK_EVENTS NF_NAT NF_TABLES NF_TABLES_INET NF_TABLES_IPV4 NF_TABLES_IPV6 NF_TABLES_NETDEV NFT_CT NFT_NAT NFT_MASQ NFT_REDIR NFT_REJECT NFT_REJECT_INET NF_REJECT_IPV4 NF_REJECT_IPV6 NFT_REJECT_IPV4 NFT_REJECT_IPV6 NFT_FIB NFT_FIB_INET NFT_FIB_IPV4 NFT_FIB_IPV6 NF_LOG_SYSLOG NFT_LOG NFT_LIMIT NFT_QUOTA NFT_NUMGEN NFT_FWD_NETDEV NF_FLOW_TABLE NF_FLOW_TABLE_INET NFT_FLOW_OFFLOAD VETH"
 for f in target/linux/generic/config-6.18 \
 	 target/linux/zte/config-6.18 \
 	 target/linux/zte/zx279133/config-6.18; do
@@ -472,8 +472,16 @@ printf 'CONFIG_PACKAGE_tc-tiny=y\n' >>.config
 # the image is assembled. base-files carries the view, and 99-sk-ports
 # copies it into place on the first boot.
 printf 'CONFIG_PACKAGE_zxpond=y\n' >>.config
+printf '%s\n' CONFIG_PACKAGE_luci-app-sk-d840n-pon=y CONFIG_PACKAGE_luci-theme-argon=y \
+	CONFIG_PACKAGE_luci-i18n-argon-config-zh-cn=y CONFIG_LUCI_LANG_zh_Hans=y \
+	CONFIG_PACKAGE_firewall4=y CONFIG_PACKAGE_luci-app-firewall=y CONFIG_PACKAGE_luci-i18n-firewall-zh-cn=y >>.config
 
 make defconfig
+for package in zxpond libzxpon-omci luci-app-sk-d840n-pon luci-theme-argon firewall4 luci-app-firewall; do
+	grep -qx "CONFIG_PACKAGE_$package=y" .config || {
+		echo "Required ONU/firewall package lost after defconfig: $package" >&2; exit 1;
+	}
+done
 # The same rule that this file already states twice: a config line for a symbol
 # that does not exist is dropped by defconfig in silence. Assert the outcome.
 if [ "$MODE" = initramfs ]; then

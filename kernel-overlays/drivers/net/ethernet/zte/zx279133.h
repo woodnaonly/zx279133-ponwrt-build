@@ -1360,6 +1360,15 @@ struct zx279133_eth {
 	spinlock_t rx_buffer_lock;
 	atomic_t rx_poll_active;
 	struct zx279133_tx_ring tx[ZX279133_CPU_TX_QUEUES];
+	/* Queue 0 management traffic: single-flight, retained across timeouts. */
+	void *omci_buffer;
+	dma_addr_t omci_dma;
+	u16 omci_done;
+	u16 omci_producer;
+	bool omci_pending;
+	u64 omci_submitted;
+	u64 omci_completed;
+	int omci_error;
 	u32 idm_tx_base_saved;
 	u64 tx_doorbell_writes;
 	u64 tx_doorbell_descs;
@@ -1611,6 +1620,10 @@ void zx279133_pon_note_rxsd(int light);
 void zx279133_pon_carrier_kick(struct net_device *ndev);
 void zx279133_pon_attach(struct net_device *ndev);
 void zx279133_pon_stop(void);
+void zx279133_omci_reclaim(struct zx279133_eth *eth);
+int zx279133_omci_prepare(struct zx279133_eth *eth);
+int zx279133_omci_send(struct zx279133_eth *eth, u16 gem,
+			const u8 *frame, size_t length);
 
 int zx279133_ptp_init(struct zx279133_eth *eth);
 void zx279133_ptp_start(struct zx279133_eth *eth);

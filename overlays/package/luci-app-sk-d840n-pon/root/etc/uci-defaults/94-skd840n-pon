@@ -1,0 +1,5 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-only
+[ -n "${IPKG_INSTROOT:-}${PKG_ROOT:-}" ] && exit 1
+/usr/sbin/zxpond --migrate || exit 1
+chmod 600 /etc/config/pon

@@ -31,6 +31,7 @@ static const struct nla_policy zxpon_policy[ZXPON_A_MAX] = {
 	[ZXPON_A_GEM] = { .type = NLA_U16 },
 	[ZXPON_A_OMCC] = { .type = NLA_U8 },
 	[ZXPON_A_KEY] = NLA_POLICY_EXACT_LEN(ZXPON_KEY_LEN),
+	[ZXPON_A_OMCI_FRAME] = NLA_POLICY_EXACT_LEN(ZXPON_OMCI_LEN),
 };
 
 static struct zxpon zx_state;
@@ -106,6 +107,35 @@ static ssize_t pon_state_show(struct device *dev, struct device_attribute *attr,
 }
 static DEVICE_ATTR_RO(pon_state);
 
+static bool zxpon_omci_channel(u16 *gem)
+{
+	bool ready;
+
+	mutex_lock(&zx_pon_lock);
+	ready = zxpon_state(&zx_state) == ZXPON_O5 &&
+		zxpon_omcc_gem(&zx_state, gem);
+	mutex_unlock(&zx_pon_lock);
+	return ready;
+}
+
+static ssize_t omci_transport_show(struct device *dev,
+				   struct device_attribute *attr, char *buf)
+{
+	struct zx279133_eth *eth = netdev_priv(to_net_dev(dev));
+	u16 gem;
+	bool ready = zxpon_omci_channel(&gem);
+	ssize_t length;
+
+	mutex_lock(&eth->datapath_lock);
+	ready = ready && eth->tx_prepared && !eth->tx_stopping;
+	length = sysfs_emit(buf, "implemented=1 ready=%u rx_ready=0 mic_ready=0 submitted=%llu completed=%llu error=%d\n",
+		ready, eth->omci_submitted, eth->omci_completed,
+		ready ? eth->omci_error : -ENOLINK);
+	mutex_unlock(&eth->datapath_lock);
+	return length;
+}
+static DEVICE_ATTR_RO(omci_transport);
+
 static int zxpon_get_state(struct sk_buff *skb, struct genl_info *info)
 {
 	struct sk_buff *msg;
@@ -156,47 +186,46 @@ static int zxpon_nl_set_identity(struct sk_buff *skb, struct genl_info *info)
 
 static int zxpon_add_tcont_cmd(struct sk_buff *skb, struct genl_info *info)
 {
-	u16 alloc, gem = 0;
-	u8 omcc = 0;
-
-	if (!info->attrs[ZXPON_A_ALLOC])
-		return -EINVAL;
-	alloc = nla_get_u16(info->attrs[ZXPON_A_ALLOC]);
-	if (info->attrs[ZXPON_A_GEM])
-		gem = nla_get_u16(info->attrs[ZXPON_A_GEM]);
-	if (info->attrs[ZXPON_A_OMCC])
-		omcc = nla_get_u8(info->attrs[ZXPON_A_OMCC]);
-	mutex_lock(&zx_pon_lock);
-	zxpon_add_tcont(&zx_state, alloc, omcc, gem);
-	mutex_unlock(&zx_pon_lock);
-	return 0;
+	/* No ZX279133 T-CONT table backend yet: do not ACK a software-only write. */
+	return -EOPNOTSUPP;
 }
 
 static int zxpon_map_cmd(struct sk_buff *skb, struct genl_info *info)
 {
-	u16 gem;
-	int rc;
-
-	if (!info->attrs[ZXPON_A_GEM])
-		return -EINVAL;
-	gem = nla_get_u16(info->attrs[ZXPON_A_GEM]);
-	mutex_lock(&zx_pon_lock);
-	rc = zxpon_map_gem(&zx_state, gem);
-	mutex_unlock(&zx_pon_lock);
-	return rc;
+	return -EOPNOTSUPP;
 }
 
 static int zxpon_set_key_cmd(struct sk_buff *skb, struct genl_info *info)
 {
-	if (!info->attrs[ZXPON_A_KEY])
+	return -EOPNOTSUPP;
+}
+
+static int zxpon_omci_tx_cmd(struct sk_buff *skb, struct genl_info *info)
+{
+	const u8 *frame;
+	u16 gem;
+
+	if (!info->attrs[ZXPON_A_OMCI_FRAME])
 		return -EINVAL;
-	mutex_lock(&zx_pon_lock);
-	zxpon_set_key(&zx_state, nla_data(info->attrs[ZXPON_A_KEY]));
-	mutex_unlock(&zx_pon_lock);
-	return 0;
+	frame = nla_data(info->attrs[ZXPON_A_OMCI_FRAME]);
+	/* Baseline response/notification with an already supplied MIC. Extended
+	 * frames and physical-mode/key changes are not part of this transport.
+	 */
+	if (frame[3] != 0x0a || (frame[2] & 0xc0) ||
+	    frame[40] || frame[41] || frame[42] || frame[43] != 0x28)
+		return -EBADMSG;
+	if (!zx_wan || !zxpon_omci_channel(&gem))
+		return -ENOLINK;
+	return zx279133_omci_send(netdev_priv(zx_wan), gem, frame, ZXPON_OMCI_LEN);
 }
 
 static const struct genl_ops zxpon_ops[] = {
+	{
+		.cmd = ZXPON_CMD_OMCI_TX,
+		.flags = GENL_ADMIN_PERM,
+		.policy = zxpon_policy,
+		.doit = zxpon_omci_tx_cmd,
+	},
 	{
 		.cmd = ZXPON_CMD_GET_STATE,
 		.policy = zxpon_policy,
@@ -244,19 +273,21 @@ static struct genl_family zxpon_family = {
 	.module = THIS_MODULE,
 };
 
-/* Userspace OMCI frames have nowhere traced to go on the wire. Count
- * them and drop them rather than invent a PON MAC write.
+/* This netdev is the raw RX endpoint. TX uses the privileged zxpon OMCI_TX
+ * command, whose ACK follows IDM completion instead of packet-socket enqueue.
  */
 static netdev_tx_t zxpon_omci_xmit(struct sk_buff *skb, struct net_device *dev)
 {
 	dev_kfree_skb(skb);
 	dev->stats.tx_dropped++;
+	dev->stats.tx_errors++;
 	return NETDEV_TX_OK;
 }
 
 static int zxpon_omci_open(struct net_device *dev)
 {
-	netif_carrier_on(dev);
+	/* No Ethernet carrier is invented for the management endpoint. */
+	netif_carrier_off(dev);
 	netif_start_queue(dev);
 	return 0;
 }
@@ -320,6 +351,8 @@ void zx279133_pon_attach(struct net_device *ndev)
 	zx_wan = ndev;
 	if (device_create_file(&ndev->dev, &dev_attr_pon_state))
 		dev_warn(&ndev->dev, "pon_state sysfs not created\n");
+	if (device_create_file(&ndev->dev, &dev_attr_omci_transport))
+		dev_warn(&ndev->dev, "omci_transport sysfs not created\n");
 	zx_omci = alloc_netdev(0, "omci", NET_NAME_UNKNOWN, zxpon_omci_setup);
 	if (zx_omci) {
 		zx_omci->dev.parent = ndev->dev.parent;
@@ -358,8 +391,10 @@ void zx279133_pon_stop(void)
 		unregister_netdevice_notifier(&zxpon_net_nb);
 		zx_nb_ok = 0;
 	}
-	if (zx_wan)
+	if (zx_wan) {
 		device_remove_file(&zx_wan->dev, &dev_attr_pon_state);
+		device_remove_file(&zx_wan->dev, &dev_attr_omci_transport);
+	}
 	if (zx_omci) {
 		unregister_netdev(zx_omci);
 		zx_omci = NULL;

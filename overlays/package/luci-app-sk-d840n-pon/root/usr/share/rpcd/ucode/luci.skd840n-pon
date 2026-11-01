@@ -1,0 +1,68 @@
+#!/usr/bin/env ucode
+// SPDX-License-Identifier: GPL-2.0-or-later
+'use strict';
+import { readfile } from 'fs';
+
+function text(path) {
+	let value = readfile(path);
+	return value == null ? null : trim(value);
+}
+function number(path) {
+	let value = text(path);
+	return value != null && match(value, /^[0-9]+$/) ? +value : null;
+}
+function transport() {
+	let raw = text('/sys/class/net/eth0/omci_transport');
+	if (raw == null) return null;
+	let fields = {};
+	for (let word in split(raw, /\s+/)) {
+		let pair = split(word, '=');
+		if (length(pair) == 2 && match(pair[1], /^-?[0-9]+$/)) fields[pair[0]] = +pair[1];
+	}
+	return { implemented: fields.implemented == 1, channel_ready: fields.ready == 1,
+		rx_ready: fields.rx_ready == 1, mic_ready: fields.mic_ready == 1,
+		submitted: fields.submitted, completed: fields.completed, error: fields.error };
+}
+function service(now) {
+	let raw = readfile('/var/run/zxpond-status.json'), state;
+	try { state = raw == null ? null : json(raw); } catch (error) { return null; }
+	if (type(state) != 'object' || state.schema != 1 || type(state.pid) != 'int' || state.pid <= 0 ||
+		type(state.updated_s) != 'int' || now == null || state.updated_s > now || now - state.updated_s > 12)
+		return null;
+	let process = text('/proc/' + state.pid + '/stat');
+	if (process == null) return null;
+	let end = rindex(process, ')');
+	if (end == null || end < 0) return null;
+	let fields = split(trim(substr(process, end + 1)), /\s+/);
+	if (length(fields) <= 19 || fields[0] == 'Z' || fields[0] == 'X' || fields[19] != state.process_start) return null;
+	// Explicit allowlist: never forward arbitrary daemon fields into diagnostics.
+	return { live: true, enabled: state.enabled == true,
+		configuration_valid: state.configuration_valid == true,
+		identity_configured: state.identity_configured == true,
+		engine_ready: state.engine_ready == true, transport_ready: false,
+		error: type(state.error) == 'int' ? state.error : null,
+		kernel_identity_error: type(state.kernel_identity_error) == 'int' ? state.kernel_identity_error : null };
+}
+function status() {
+	let uptime = text('/proc/uptime');
+	let now = uptime != null && match(uptime, /^[0-9]+\.[0-9]+ /) ? +split(uptime, ' ')[0] : null;
+	let ports = [];
+	for (let name in ['lan1', 'lan2', 'lan3', 'lan4', 'eth0']) {
+		let root = '/sys/class/net/' + name + '/';
+		if (text(root + 'ifindex') == null) continue;
+		let carrier = number(root + 'carrier'), speed = number(root + 'speed');
+		push(ports, { name, role: name == 'eth0' ? 'PON 数据侧' : '面板 LAN',
+			carrier: carrier == null ? null : carrier == 1, speed_mbps: speed,
+			mac: text(root + 'address'), rx_packets: number(root + 'statistics/rx_packets'),
+			tx_packets: number(root + 'statistics/tx_packets'), rx_errors: number(root + 'statistics/rx_errors'),
+			rx_dropped: number(root + 'statistics/rx_dropped') });
+	}
+	return { schema: 1, queried_at: time(), platform: { model: 'SK-D840N', soc: 'ZX279133' },
+		capabilities: { identity_configuration: true, generic_omci: true, pon_transport: false,
+			hardware_offload_control: false, cpu_frequency_control: false },
+		service: service(now), transport: transport(), pon: { software_state: text('/sys/class/net/eth0/pon_state'),
+			transport_ready: false, optical: null, registered: null },
+		acceleration: { firewall4: readfile('/sbin/fw4') != null, hardware_verified: false, flows: null },
+		ports };
+}
+return { 'luci.skd840n-pon': { status: { call: status } } };

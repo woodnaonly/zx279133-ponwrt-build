@@ -15,7 +15,8 @@
 #define ZXPON_A_GEM		5
 #define ZXPON_A_OMCC		6
 #define ZXPON_A_KEY		7
-#define ZXPON_A_MAX		8
+#define ZXPON_A_OMCI_FRAME	8
+#define ZXPON_A_MAX		9
 
 #define ZXPON_CMD_GET_STATE	1
 #define ZXPON_CMD_SET_IDENTITY	2
@@ -23,7 +24,8 @@
 #define ZXPON_CMD_ADD_GEM	4
 #define ZXPON_CMD_MAP_GEM	5
 #define ZXPON_CMD_SET_KEY	6
-#define ZXPON_CMD_MAX		7
+#define ZXPON_CMD_OMCI_TX		7
+#define ZXPON_CMD_MAX		8
 
 /* XG-PON activation (G.987.3) and the small G.988 MIB this ONU answers.
  * The SerDes image and the PON MAC registers are not programmed here.

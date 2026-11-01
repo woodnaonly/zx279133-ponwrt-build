@@ -12,15 +12,13 @@
 # feed's nftables package is unusable as it stands and the NAT the plan asks
 # for would have neither a kernel half nor a userspace half.
 #
-# The rest of the file is the feed's recipe verbatim (version 1.1.6, its
-# source hash, its configure arguments, its install layout), with the variants
-# dropped: there is one package here, named nftables, and it is the one
-# CONFIG_PACKAGE_nftables=y selects.
+# Keep the feed's version/hash and install layout. Enable libnftables JSON
+# and jansson for firewall4; the concrete package also provides nftables-json.
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=nftables
 PKG_VERSION:=1.1.6
-PKG_RELEASE:=2
+PKG_RELEASE:=3
 
 PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).tar.xz
 PKG_SOURCE_URL:=https://netfilter.org/projects/$(PKG_NAME)/files
@@ -44,14 +42,16 @@ CONFIGURE_ARGS += \
         --disable-man-doc \
         --with-mini-gmp \
         --without-cli \
-        --disable-python
+        --disable-python \
+        --with-json
 
 define Package/nftables
   SECTION:=net
   CATEGORY:=Network
   SUBMENU:=Firewall
   TITLE:=nftables userspace utility
-  DEPENDS:=+libnftnl
+  DEPENDS:=+libnftnl +jansson
+  PROVIDES:=nftables-json
   URL:=http://netfilter.org/projects/nftables/
 endef
 

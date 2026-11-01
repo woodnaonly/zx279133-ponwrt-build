@@ -1,0 +1,24 @@
+#!/bin/sh
+# Retire only the startup link and NAT table owned by the former sk-nat script.
+[ -n "${IPKG_INSTROOT:-}${PKG_ROOT:-}" ] && exit 1
+[ -x /sbin/fw4 ] || exit 1
+# Do not unlink an unrelated user-owned service at the same startup name.
+owned=0
+case "$(readlink /etc/rc.d/S96sk-nat 2>/dev/null)" in
+	../init.d/sk-nat|/etc/init.d/sk-nat) owned=1; rm -f /etc/rc.d/S96sk-nat ;;
+esac
+# An upgrade may still have the old shell loop running. Match its complete
+# command line, not an arbitrary process containing the word "nat".
+for process in /proc/[0-9]*/cmdline; do
+	command=$(tr '\000' ' ' <"$process" 2>/dev/null) || continue
+	case "$command" in
+		'/bin/sh /etc/rc.d/S96sk-nat boot '|'/bin/sh /etc/init.d/sk-nat boot '|'/bin/sh /etc/init.d/sk-nat start ')
+			owned=1; pid=${process#/proc/}; pid=${pid%/cmdline}; kill -TERM "$pid" 2>/dev/null ;;
+	esac
+done
+# A table named "nat" is not necessarily ours. Preserve extended/custom
+# tables; only the old single-rule signature is eligible for removal.
+if [ "$owned" = 1 ] && nft -j list table ip nat 2>/dev/null | ucode /usr/libexec/sk-nat-owned.uc; then
+	nft delete table ip nat || exit 1
+fi
+exit 0

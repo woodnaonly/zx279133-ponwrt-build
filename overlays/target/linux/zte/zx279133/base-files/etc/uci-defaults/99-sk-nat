@@ -1,4 +1,5 @@
 #!/bin/sh
+[ -x /sbin/fw4 ] && exit 0
 # Put the NAT of this image in place.
 #
 # The image has no firewall4 (there are no feed packages in this build), so

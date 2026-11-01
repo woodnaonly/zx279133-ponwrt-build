@@ -1,4 +1,7 @@
 #!/bin/sh
+# firewall4 owns policy and NAT in current images. This compatibility script
+# remains only for old images and never runs a second NAT loop alongside fw4.
+[ -x /sbin/fw4 ] && exit 0
 # Put the masquerade rule on the WAN of this image.
 #
 # WHY THIS FILE EXISTS

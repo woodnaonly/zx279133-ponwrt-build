@@ -1,0 +1,26 @@
+#!/usr/bin/env ucode
+// SPDX-License-Identifier: GPL-2.0-or-later
+'use strict';
+import { readfile, glob } from 'fs';
+function number(path, signed) {
+	let value = readfile(path);
+	return value != null && match(trim(value), signed ? /^-?[0-9]+$/ : /^[0-9]+$/) ? +trim(value) : null;
+}
+return { 'luci.skd840n-system': { status: { call: function() {
+	let cores = 0, temperature = null, frequency = null;
+	for (let line in split(readfile('/proc/stat') || '', '\n'))
+		if (match(line, /^cpu[0-9]+\s/)) cores++;
+	for (let path in glob('/sys/class/thermal/thermal_zone*') || []) {
+		let name = readfile(path + '/type');
+		if (name != null && match(trim(name), /^(soc|cpu)-thermal$/)) {
+			temperature = number(path + '/temp', true); break;
+		}
+	}
+	for (let path in glob('/sys/devices/system/cpu/cpufreq/policy*') || []) {
+		frequency = number(path + '/cpuinfo_cur_freq');
+		if (frequency == null) frequency = number(path + '/scaling_cur_freq');
+		if (frequency != null) break;
+	}
+	return { cpu: { cores: cores || null, current_khz: frequency, frequency_control: false },
+		temperature_mC: temperature };
+} } } };

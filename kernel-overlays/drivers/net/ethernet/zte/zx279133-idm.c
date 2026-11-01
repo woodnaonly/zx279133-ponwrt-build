@@ -1833,7 +1833,8 @@ bool zx279133_idm_tx_drain(struct zx279133_eth *eth)
 		spin_lock_bh(&eth->tx_lock);
 		zx279133_idm_tx_flush_locked(eth);
 		zx279133_idm_tx_reclaim_locked(eth);
-		if (!zx279133_idm_tx_pending(eth)) {
+		zx279133_omci_reclaim(eth);
+		if (!zx279133_idm_tx_pending(eth) && !eth->omci_pending) {
 			spin_unlock_bh(&eth->tx_lock);
 			return true;
 		}
@@ -2042,13 +2043,16 @@ int zx279133_idm_tx_prepare(struct zx279133_eth *eth)
 	size_t size = sizeof(*eth->tx_descs) * ZX279133_IDM_TX_QUEUES *
 		      ZX279133_IDM_TX_DEPTH;
 	u32 ready;
-	int i;
+	int i, ret;
 
 	ready = readl(eth->base + ZX279133_NP_READY);
 	if ((ready & ZX279133_NP_READY_MASK) != ZX279133_NP_READY_MASK)
 		return dev_err_probe(eth->dev, -EIO,
 				     "NPPT handoff is not ready: %#x\n", ready);
 
+	ret = zx279133_omci_prepare(eth);
+	if (ret)
+		return ret;
 	memset(eth->tx_descs, 0, size);
 
 	eth->idm_tx_base_saved = readl(eth->base + ZX279133_IDM_BASE +
