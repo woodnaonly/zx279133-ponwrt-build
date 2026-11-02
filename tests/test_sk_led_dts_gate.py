@@ -109,11 +109,12 @@ def reporting_tests(steps):
     python = shlex.quote(Path(sys.executable).as_posix())
     for statuses in ((0, 0), (7, 0), (0, 9)):
         with tempfile.TemporaryDirectory(prefix='sk-led-report-') as tmp:
-            script = source
+            # Replace the diagnostic interpreter before adding mock commands;
+            # otherwise /usr/bin/python3 -c would be replaced a second time.
+            script = source.replace('python3 -c ', python + ' -c ')
             for index, (command, status) in enumerate(zip(commands, statuses)):
                 program = f'print("gate{index}: 50%\\nline2"); raise SystemExit({status})'
                 script = script.replace(command, python + ' -c ' + shlex.quote(program))
-            script = script.replace('python3 -c ', python + ' -c ')
             result = run(script, tmp)
             assert result.returncode == (statuses[0] or statuses[1]), result.stdout + result.stderr
             log = (Path(tmp) / 'sk-panel-led-gate.log').read_text(encoding='utf-8')
