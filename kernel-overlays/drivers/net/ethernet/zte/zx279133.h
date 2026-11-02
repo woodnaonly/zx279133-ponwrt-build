@@ -18,7 +18,7 @@
 #include "zx279133-lan.h"
 
 struct gpio_desc;
-struct led_classdev;
+struct led_trigger;
 
 #define ZX279133_NUM_CLOCKS	6
 #define ZX279133_NUM_IRQS	5
@@ -1424,12 +1424,12 @@ struct zx279133_eth {
 	struct work_struct rx_mode_work;
 	/*
 	 * The vendor's pon_plat puts the optical RX signal detect on gpio2
-	 * pin 1.  The work polls it and drives the red LOS lamp: low means
-	 * loss of signal, high means light present (docs/91).
+	 * pin 1. The work polls it and publishes the optional LOS trigger:
+	 * low means loss of signal, high means light present (docs/91).
 	 */
 	struct delayed_work pon_led_work;
 	struct gpio_desc *opsd_gpio;
-	struct led_classdev *los_led;
+	struct led_trigger *los_trigger;
 	struct ptp_clock_info ptp_info;
 	struct ptp_clock *ptp_clock;
 	u32 ptp_agc_saved;
@@ -1614,8 +1614,6 @@ void zx279133_xmac_set_enabled(struct zx279133_eth *eth, bool enabled);
 int zx279133_xpcs_set_bypass(struct zx279133_eth *eth, bool enabled);
 extern const struct phylink_mac_ops zx279133_phylink_ops;
 
-struct led_classdev;
-void zx279133_pon_set_led(struct led_classdev *led);
 void zx279133_pon_note_rxsd(int light);
 void zx279133_pon_carrier_kick(struct net_device *ndev);
 void zx279133_pon_attach(struct net_device *ndev);

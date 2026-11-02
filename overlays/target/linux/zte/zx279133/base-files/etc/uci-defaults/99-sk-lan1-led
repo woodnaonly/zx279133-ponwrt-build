@@ -5,26 +5,54 @@
 
 . /lib/functions.sh
 [ "$(board_name)" = "skyworth,sk-d840n" ] || exit 0
+. /lib/functions/sk-d840n-leds.sh
 
-lan1_configured=0
-check_lan1_led() {
+configured=' '
+commands=''
+check_panel_led() {
 	local sysfs
 	config_get sysfs "$1" sysfs
-	[ "$sysfs" != "skyworth:green:lan1" ] || lan1_configured=1
+	case "$sysfs" in
+	skyworth:green:wps)
+		# This SKU has no WPS lamp. Only remove sections for that exact LED.
+		commands="$commands
+delete system.$1"
+		;;
+	*) configured="$configured$sysfs " ;;
+	esac
 }
 config_load system || exit 1
-config_foreach check_lan1_led led
-# Any existing owner wins, including a user who deliberately disabled this LED.
-[ "$lan1_configured" = 0 ] || exit 0
+config_foreach check_panel_led led
 
-# An anonymous section avoids overwriting a user's section with the same name.
-section=$(uci add system led) || exit 1
+# Keep the filename so upgrades of the original LAN1-only image run this too.
+skd840n_led() {
+	local port
+	# Any existing owner wins, even a disabled LED or a custom trigger/device.
+	case "$configured" in *" $3 "*) return 0 ;; esac
+	# Anonymous sections cannot overwrite a user section with the same name.
+	commands="$commands
+add system led
+set system.@led[-1].name='$2'
+set system.@led[-1].sysfs='$3'
+set system.@led[-1].trigger='$4'
+set system.@led[-1].default='$5'"
+	case "$4" in
+	netdev)
+		commands="$commands
+set system.@led[-1].dev='$6'
+set system.@led[-1].mode='$7'"
+		;;
+	usbport)
+		for port in $8; do
+			commands="$commands
+add_list system.@led[-1].port='$port'"
+		done
+		;;
+	esac
+}
+skd840n_led_defaults || exit 1
+[ -n "$commands" ] || exit 0
 uci batch <<EOF
-set system.$section.name='LAN1'
-set system.$section.sysfs='skyworth:green:lan1'
-set system.$section.trigger='netdev'
-set system.$section.dev='lan1'
-set system.$section.mode='link tx rx'
-set system.$section.default='0'
+$commands
 commit system
 EOF

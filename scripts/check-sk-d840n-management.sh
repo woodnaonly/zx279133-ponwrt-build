@@ -10,7 +10,7 @@ ROOT=$(find "$TREE/build_dir" -maxdepth 3 -type d -name root-zte | head -1)
 [ -n "$ROOT" ] || { echo 'No staged root-zte image'; exit 1; }
 MANIFEST=$(find "$TREE/bin/targets" -name '*.manifest' | head -1)
 [ -n "$MANIFEST" ] || { echo 'No target image manifest'; exit 1; }
-for package in zxpond libzxpon-omci luci-app-sk-d840n-pon firewall4 nftables tc-tiny luci-app-firewall rpcd-mod-ucode ucode-mod-fs; do
+for package in zxpond libzxpon-omci luci-app-sk-d840n-pon luci-mod-system firewall4 nftables tc-tiny luci-app-firewall rpcd-mod-ucode ucode-mod-fs; do
 	grep -q "^$package " "$MANIFEST" || { echo "Image manifest is missing $package"; exit 1; }
 done
 skd840n_check_theme_image "$ROOT" "$MANIFEST"

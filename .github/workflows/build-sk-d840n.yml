@@ -37,6 +37,7 @@ on:
       - scripts/check-sk-d840n-ucode.sh
       - tests/*sk_pon*
       - tests/*sk_lan1_led*
+      - tests/*sk_led*
       - tests/*sk_offload*
       - tests/test_sysupgrade.py
       - tests/sk_omci*
@@ -152,6 +153,8 @@ jobs:
             python3 tests/test_sk_pon_firstboot.py &&
             python3 tests/test_sk_pon_theme.py &&
             python3 tests/test_sk_lan1_led.py &&
+            python3 tests/test_sk_led_triggers.py &&
+            node tests/test_sk_led_ui.js &&
             python3 tests/test_sk_offload.py &&
             sh tests/test_sk_pon_host.sh &&
             sh scripts/check-sk-d840n-ucode.sh
@@ -588,7 +591,7 @@ jobs:
             [ "$rc" -eq 0 ] || exit 1
           fi
 
-      - name: "Gate: compiled LAN1 LED wiring and negative controls"
+      - name: "Gate: complete panel LED wiring and negative controls"
         if: steps.pick.outputs.run == 'true'
         run: |
           python3 tools/check-sk-lan1-led.py --dtb /tmp/zx279133-sk-d840n.dts.dtb

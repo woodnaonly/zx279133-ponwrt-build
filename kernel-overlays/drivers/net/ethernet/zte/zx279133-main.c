@@ -796,6 +796,16 @@ static void zx279133_pon_led_cancel(void *data)
 	struct zx279133_eth *eth = data;
 
 	cancel_delayed_work_sync(&eth->pon_led_work);
+	led_trigger_unregister_simple(eth->los_trigger);
+}
+
+static void zx279133_pon_cleanup(void *data)
+{
+	struct zx279133_eth *eth = data;
+
+	/* Stop optical callbacks before tearing down the PON trigger/state. */
+	cancel_delayed_work_sync(&eth->pon_led_work);
+	zx279133_pon_stop();
 }
 
 static void zx279133_pon_led_work(struct work_struct *work)
@@ -805,13 +815,12 @@ static void zx279133_pon_led_work(struct work_struct *work)
 			     pon_led_work);
 	int rxsd;
 
-	if (!eth->opsd_gpio || !eth->los_led)
+	if (!eth->opsd_gpio)
 		return;
 
 	rxsd = gpiod_get_value_cansleep(eth->opsd_gpio);
 	if (rxsd >= 0) {
-		led_set_brightness(eth->los_led,
-				   rxsd ? LED_OFF : eth->los_led->max_brightness);
+		led_trigger_event(eth->los_trigger, rxsd ? LED_OFF : LED_FULL);
 		zx279133_pon_note_rxsd(rxsd > 0);
 	}
 
@@ -832,7 +841,6 @@ static int zx279133_eth_probe(struct platform_device *pdev)
 	struct reserved_mem *idm_rmem;
 	unsigned int i;
 	int ret;
-	struct led_classdev *pon_led;
 
 	ndev = devm_alloc_etherdev_mqs(dev, sizeof(*eth),
 				       ZX279133_CPU_TX_QUEUES, ZX279133_CPU_RX_QUEUES);
@@ -886,8 +894,8 @@ static int zx279133_eth_probe(struct platform_device *pdev)
 
 	/*
 	 * The optical RX signal detect is optional: without it the red LOS
-	 * lamp keeps its fail-safe "on" state.  Both lookups may defer until
-	 * the GPIO controller and the gpio-leds device exist.
+	 * trigger keeps its fail-safe "on" state. Optical detection must keep
+	 * running when a user disables the LED or chooses a different trigger.
 	 */
 	eth->opsd_gpio = devm_gpiod_get_optional(dev, "opsd", GPIOD_IN);
 	if (IS_ERR(eth->opsd_gpio)) {
@@ -898,28 +906,16 @@ static int zx279133_eth_probe(struct platform_device *pdev)
 		eth->opsd_gpio = NULL;
 	}
 
-	eth->los_led = devm_led_get(dev, "los");
-	if (IS_ERR(eth->los_led)) {
-		ret = PTR_ERR(eth->los_led);
-		if (ret == -EPROBE_DEFER)
-			return ret;
-		dev_warn(dev, "no LOS LED: %d\n", ret);
-		eth->los_led = NULL;
-	}
-	pon_led = devm_led_get(dev, "pon");
-	if (IS_ERR(pon_led)) {
-		ret = PTR_ERR(pon_led);
-		if (ret == -EPROBE_DEFER)
-			return ret;
-		pon_led = NULL;
-	}
-	zx279133_pon_set_led(pon_led);
+	led_trigger_register_simple("zx279133-los", &eth->los_trigger);
+	if (!eth->los_trigger)
+		dev_warn(dev, "LOS LED trigger unavailable\n");
+	led_trigger_event(eth->los_trigger, LED_FULL);
 
 	ret = devm_add_action_or_reset(dev, zx279133_pon_led_cancel, eth);
 	if (ret)
 		return ret;
 
-	if (eth->opsd_gpio && eth->los_led)
+	if (eth->opsd_gpio)
 		schedule_delayed_work(&eth->pon_led_work, 0);
 
 	eth->base = devm_platform_ioremap_resource(pdev, 0);
@@ -1333,6 +1329,9 @@ static int zx279133_eth_probe(struct platform_device *pdev)
 	if (ret)
 		return dev_err_probe(dev, ret, "failed to register netdev\n");
 	zx279133_pon_attach(ndev);
+	ret = devm_add_action_or_reset(dev, zx279133_pon_cleanup, eth);
+	if (ret)
+		return ret;
 
 	eth->lan_service.ops = &zx279133_lan_service_ops;
 	platform_set_drvdata(pdev, &eth->lan_service);
@@ -1361,10 +1360,11 @@ static int zx279133_eth_probe(struct platform_device *pdev)
 static void zx279133_eth_shutdown(struct platform_device *pdev)
 {
 	struct zx279133_lan_service *service = platform_get_drvdata(pdev);
-	zx279133_pon_stop();
+	struct zx279133_eth *eth = container_of(service, struct zx279133_eth,
+					      lan_service);
 
-	zx279133_shutdown(container_of(service, struct zx279133_eth,
-				       lan_service));
+	zx279133_pon_cleanup(eth);
+	zx279133_shutdown(eth);
 }
 
 static const struct of_device_id zx279133_eth_of_match[] = {

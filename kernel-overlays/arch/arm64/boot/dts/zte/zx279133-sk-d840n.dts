@@ -176,8 +176,8 @@
 	 * names itself, left to right:
 	 *   电源=led_power=gpio-10   注册=led_pon=gpio-63   光信号(red)=led_los=gpio-9
 	 *   上网=led_wan=gpio-24      lan1..lan4=led_lan0..3  usb1=led_usb1=gpio-21
-	 * led_wps and led_phone1 are GPIO-backed in the vendor's list but were never
-	 * identified on the case, and **led_wlan is not described at all: this board has no
+	 * led_phone1 is the FXS lamp. There is no WPS lamp on this SKU; the vendor's
+	 * led_wps entry is not a fitted LED. **led_wlan is not described at all: this board has no
 	 * wireless and no WLAN lamp** (owner, 2026-10-12) - the vendor reserves gpio-65 under
 	 * that name the way it reserves led_usb2 (led-id 0x35), which also has no lamp here.
 	 *
@@ -188,7 +188,7 @@
 	 * Stock led_lan0 (panel LAN1) names gpio4 pin 2, active-low. gpio4's gpio-ranges
 	 * maps offsets 0..5 to pinctrl pins 60..65, so offset 2 is pin 62 = p4-6, the
 	 * very pin named by stock lan_led0_pins. gpio-leds requests the GPIO mux through
-	 * the existing pinctrl driver. Only LAN1 is enabled here; LAN2..4 are unchanged.
+	 * the existing pinctrl driver. LAN2..4 use GPIO4 offsets 3..5 (p4-7..9).
 	 */
 	leds {
 		compatible = "gpio-leds";
@@ -199,6 +199,30 @@
 			function = LED_FUNCTION_LAN;
 			gpios = <&gpio4 2 GPIO_ACTIVE_LOW>;
 			label = "skyworth:green:lan1";
+		};
+
+		led-lan2 {
+			color = <LED_COLOR_ID_GREEN>;
+			default-state = "off";
+			function = LED_FUNCTION_LAN;
+			gpios = <&gpio4 3 GPIO_ACTIVE_LOW>;
+			label = "skyworth:green:lan2";
+		};
+
+		led-lan3 {
+			color = <LED_COLOR_ID_GREEN>;
+			default-state = "off";
+			function = LED_FUNCTION_LAN;
+			gpios = <&gpio4 4 GPIO_ACTIVE_LOW>;
+			label = "skyworth:green:lan3";
+		};
+
+		led-lan4 {
+			color = <LED_COLOR_ID_GREEN>;
+			default-state = "off";
+			function = LED_FUNCTION_LAN;
+			gpios = <&gpio4 5 GPIO_ACTIVE_LOW>;
+			label = "skyworth:green:lan4";
 		};
 
 		led-power {
@@ -216,22 +240,25 @@
 			label = "skyworth:green:power";
 		};
 
-		led_pon: led-pon {
+		led-pon {
 			color = <LED_COLOR_ID_GREEN>;
-			default-state = "keep";
+			default-state = "off";
+			linux,default-trigger = "zx279133-pon";
 			function = LED_FUNCTION_WAN;
 			gpios = <&gpio3 15 GPIO_ACTIVE_LOW>;
 			label = "skyworth:green:pon";
 		};
 
-		los_led: led-los {
+		led-los {
 			color = <LED_COLOR_ID_RED>;
 			/* "on" is the fail-safe, not the final state: with no fiber the
 			 * panel has to be red before the NPPT driver's first poll.  The
 			 * NPPT owns opsd-gpio (the optical RX signal detect, gpio2 pin 1)
-			 * and turns this lamp off when that line reports light.
+			 * and publishes its state through an optional LED trigger. A user
+			 * selecting "none" must not be overridden by the polling worker.
 			 */
 			default-state = "on";
+			linux,default-trigger = "zx279133-los";
 			function = LED_FUNCTION_WAN;
 			gpios = <&gpio0 9 GPIO_ACTIVE_LOW>;
 			label = "skyworth:red:los";
@@ -239,7 +266,7 @@
 
 		led-wan {
 			color = <LED_COLOR_ID_GREEN>;
-			default-state = "keep";
+			default-state = "off";
 			function = LED_FUNCTION_LAN;
 			gpios = <&gpio1 8 GPIO_ACTIVE_LOW>;
 			label = "skyworth:green:wan";
@@ -247,7 +274,7 @@
 
 		led-usb1 {
 			color = <LED_COLOR_ID_GREEN>;
-			default-state = "keep";
+			default-state = "off";
 			function = LED_FUNCTION_USB;
 			gpios = <&gpio1 5 GPIO_ACTIVE_LOW>;
 			label = "skyworth:green:usb1";
@@ -255,17 +282,10 @@
 
 		led-phone1 {
 			color = <LED_COLOR_ID_GREEN>;
-			default-state = "keep";
+			default-state = "off";
+			function = "phone";
 			gpios = <&gpio2 3 GPIO_ACTIVE_LOW>;
 			label = "skyworth:green:phone1";
-		};
-
-		led-wps {
-			color = <LED_COLOR_ID_GREEN>;
-			default-state = "keep";
-			function = LED_FUNCTION_WPS;
-			gpios = <&gpio0 13 GPIO_ACTIVE_LOW>;
-			label = "skyworth:green:wps";
 		};
 	};
 
@@ -383,11 +403,10 @@
 	 * The panel's red LOS lamp follows the optical RX signal detect, not
 	 * the PON SerDes.  On this board the vendor's pon_plat puts the
 	 * optical RX_SD on gpio2 pin 1, and its PON thread treats a low level
-	 * as loss of signal.  The NPPT driver polls it and drives los_led;
+	 * as loss of signal. The NPPT driver polls it even when the LOS LED's
+	 * automatic trigger is disabled; optical detection is not a lamp setting.
 	 * see docs/91.
 	 */
-	leds = <&los_led &led_pon>;
-	led-names = "los", "pon";
 	opsd-gpios = <&gpio2 1 GPIO_ACTIVE_HIGH>;
 	pcs-handle = <&xpcs1>;
 	/* The NP's own memory. Not a guess and not a leftover: in the one U-Boot session

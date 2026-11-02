@@ -19,8 +19,17 @@ zte,zx279133-sr1010)
 	ucidef_set_led_netdev "lan4" "LAN4" "sr1010:lan4" "lan4" "link"
 	;;
 skyworth,sk-d840n)
-	# The panel LAN1 jack is DSA lan1, not the PON netdev or the LAN bridge.
-	ucidef_set_led_netdev "lan1" "LAN1" "skyworth:green:lan1" "lan1" "link tx rx"
+	. /lib/functions/sk-d840n-leds.sh
+	skd840n_led() {
+		ucidef_set_led_default "$1" "$2" "$3" "$5"
+		case "$4" in
+		none) ;;
+		netdev) ucidef_set_led_netdev "$1" "$2" "$3" "$6" "$7" ;;
+		usbport) ucidef_set_led_usbport "$1" "$2" "$3" $8 ;;
+		*) _ucidef_set_led_trigger "$1" "$2" "$3" "$4" ;;
+		esac
+	}
+	skd840n_led_defaults || exit 1
 	;;
 esac
 

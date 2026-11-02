@@ -38,7 +38,7 @@ static struct zxpon zx_state;
 static DEFINE_MUTEX(zx_pon_lock);
 static struct net_device *zx_wan;
 static struct net_device *zx_omci;
-static struct led_classdev *zx_green;
+static struct led_trigger *zx_green;
 
 /*
  * The family is filled in further down, next to the ops table that has to
@@ -65,8 +65,7 @@ static void zxpon_apply_carrier(void)
 		else if (netif_carrier_ok(zx_wan))
 			netif_carrier_off(zx_wan);
 	}
-	if (zx_green)
-		led_set_brightness(zx_green, o5 ? zx_green->max_brightness : LED_OFF);
+	led_trigger_event(zx_green, o5 ? LED_FULL : LED_OFF);
 }
 
 static void zxpon_tick_work(struct work_struct *work)
@@ -319,11 +318,6 @@ static void zxpon_omci_setup(struct net_device *dev)
 	dev->needs_free_netdev = true;
 }
 
-void zx279133_pon_set_led(struct led_classdev *led)
-{
-	zx_green = led;
-}
-
 void zx279133_pon_note_rxsd(int light)
 {
 	if (!zx_alive)
@@ -336,6 +330,8 @@ void zx279133_pon_note_rxsd(int light)
 
 void zx279133_pon_carrier_kick(struct net_device *ndev)
 {
+	if (!zx_alive)
+		return;
 	if (ndev)
 		zx_wan = ndev;
 	zxpon_apply_carrier();
@@ -347,6 +343,9 @@ void zx279133_pon_attach(struct net_device *ndev)
 
 	if (zx_alive)
 		return;
+	led_trigger_register_simple("zx279133-pon", &zx_green);
+	if (!zx_green)
+		dev_warn(&ndev->dev, "PON LED trigger unavailable\n");
 	zxpon_init(&zx_state);
 	zx_wan = ndev;
 	if (device_create_file(&ndev->dev, &dev_attr_pon_state))
@@ -403,5 +402,7 @@ void zx279133_pon_stop(void)
 		genl_unregister_family(&zxpon_family);
 		zx_family_ok = 0;
 	}
+	led_trigger_unregister_simple(zx_green);
+	zx_green = NULL;
 	zx_wan = NULL;
 }

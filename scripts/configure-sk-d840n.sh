@@ -94,10 +94,12 @@ pin_y ZTE_ZX279133_RGMII
 # config already has both =y; pinning them keeps that true if upstream changes it.)
 pin_y LEDS_GPIO
 pin_y GPIO_ZX279133
-# LAN1 uses the standard netdev trigger, including in the recovery RAM image.
+# Panel LAN/WAN and USB use standard triggers, including in the recovery image.
 # Pin the actual kernel symbols, not a module package that might not be loaded.
 pin_y LEDS_TRIGGERS
 pin_y LEDS_TRIGGER_NETDEV
+pin_y LEDS_TRIGGER_DEFAULT_ON
+pin_y USB_LEDS_TRIGGER_USBPORT
 
 # pstore/ramoops is the closest thing this board can have to a console: the log goes into
 # DRAM, a warm reset keeps it, and the flashed system dumps the region back out. Without
@@ -483,7 +485,7 @@ skd840n_select_theme .
 make defconfig
 skd840n_pin_offload_build_config .config "$OFFLOAD_PROFILE"
 skd840n_check_theme_config .config
-for package in zxpond libzxpon-omci luci-app-sk-d840n-pon luci-theme-argon luci-i18n-base-zh-cn luci-i18n-argon-config-zh-cn firewall4 luci-app-firewall luci-i18n-firewall-zh-cn rpcd-mod-ucode ucode-mod-fs; do
+for package in zxpond libzxpon-omci luci-app-sk-d840n-pon luci-mod-system luci-theme-argon luci-i18n-base-zh-cn luci-i18n-argon-config-zh-cn firewall4 luci-app-firewall luci-i18n-firewall-zh-cn rpcd-mod-ucode ucode-mod-fs; do
 	grep -qx "CONFIG_PACKAGE_$package=y" .config || {
 		echo "Required ONU/firewall package lost after defconfig: $package" >&2; exit 1;
 	}

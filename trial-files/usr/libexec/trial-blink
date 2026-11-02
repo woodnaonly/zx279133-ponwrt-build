@@ -23,28 +23,37 @@
 #   gpio-35 led_phone1                                          (10d10080 = &gpio2)
 #   gpio-63 led_pon                                             (10d100c0 = &gpio3)
 #   gpio-65 led_wlan                                            (10d10100 = &gpio4)
-# and the same list shows what is *not* there: led_lan0..lan3 claim no GPIO at all, so
-# those four LEDs are driven by the 9132 switch's own LED outputs, which mainline has no
-# driver for. Expect the LAN LEDs to stay dark under mainline - that is a missing
-# feature of this SoC's mainline support, not a failed boot.
+# LAN1..4 can also be GPIO-controlled: the stock driver releases their descriptors
+# while using the PHY mux. The board DTS now claims GPIO4 offsets 2..5 for them.
 #
 # Polarity is settled and still not depended upon: writing to the vendor's own LED class
 # pulls each of these eight pins to "out lo" and lights the matching lamp, so they are
 # active-low exactly as the stock DTB's flag cell (0x01) says. Every phase below is
-# nevertheless a train of alternating halves, because a blink is the signal and a hold is
-# not - and led_lan0..lan3 are deliberately absent, since the vendor drives those four
-# through the SoC's LED engine (they light up without holding any GPIO) and mainline has
-# no driver for it. Expect the four LAN lamps to stay dark.
+# nevertheless a train of alternating halves, because a blink is the signal and a hold
+# is not. The raw fallback below uses only fitted non-alarm GPIO LEDs; the named walk
+# covers the LAN lamps. WPS and WLAN are vendor reservations, not fitted lamps here.
 #
 # mainline numbers: the five controllers are 16+16+16+16+6 wide in the same address
 # order, so their bases are 0/16/32/48/64 and these global numbers are the same as the
 # vendor's. They are still recomputed from /sys/class/gpio/gpiochip* rather than assumed.
 
-pins="10 9 13 21 24 35 63 65"
+# No raw access to the vendor's unfitted WPS/WLAN reservations.
+pins="10 21 24 35 63"
 alive_pin=10
 blinks=${1:-3}
 
 kmsg() { echo "trial-blink: $*" >/dev/kmsg 2>/dev/null; }
+
+# The normal LED service creates this file before applying system LED settings.
+# A diagnostic started before that point must also stop *between* pulses: zero
+# brightness detaches kernel triggers, and the new PON trigger must not be lost
+# to a background beacon after the user has configured permanent-off/automatic.
+beacon_pending() {
+	[ ! -e /var/run/led.state ] || return 1
+	# The LED service's global-off path does not create led.state.
+	[ "$(uci -q get 'system.@system[-1].leds_off' 2>/dev/null)" != 1 ]
+}
+beacon_pending || exit 0
 
 have_gpio=0
 [ -w /sys/class/gpio/export ] && have_gpio=1
@@ -56,8 +65,8 @@ for l in /sys/class/leds/*; do
 done
 
 led_max() { [ -r "$1/max_brightness" ] && cat "$1/max_brightness" || echo 255; }
-led_on() { [ -w "$1/brightness" ] && echo "$(led_max "$1")" >"$1/brightness" 2>/dev/null; }
-led_off() { [ -w "$1/brightness" ] && echo 0 >"$1/brightness" 2>/dev/null; }
+led_on() { beacon_pending || exit 0; [ -w "$1/brightness" ] && echo "$(led_max "$1")" >"$1/brightness" 2>/dev/null; }
+led_off() { beacon_pending || exit 0; [ -w "$1/brightness" ] && echo 0 >"$1/brightness" 2>/dev/null; }
 
 # pulse_led <dev>
 pulse_led() {
@@ -69,11 +78,13 @@ pulse_led() {
 
 # pulse_gpio <global pin> <on s> <off s>
 pulse_gpio() {
+	beacon_pending || exit 0
 	n=$1
 	echo "$n" >/sys/class/gpio/export 2>/dev/null || return 0
 	echo out >/sys/class/gpio/gpio"$n"/direction 2>/dev/null
 	echo 0 >/sys/class/gpio/gpio"$n"/value 2>/dev/null
 	sleep 0.6
+	beacon_pending || exit 0
 	echo 1 >/sys/class/gpio/gpio"$n"/value 2>/dev/null
 	sleep 0.6
 	echo "$n" >/sys/class/gpio/unexport 2>/dev/null
@@ -146,14 +157,17 @@ fi
 # really means "the DTS already owns it". Phase 4 covers that case, named.
 if [ "$have_gpio" = 1 ] && [ -z "$leds" ]; then
 	for n in $pins; do
+		beacon_pending || exit 0
 		kmsg "pin $n"
 		echo "$n" >/sys/class/gpio/export 2>/dev/null
 		echo out >/sys/class/gpio/gpio"$n"/direction 2>/dev/null
 		i=0
 		while [ $i -lt 3 ]; do
+			beacon_pending || exit 0
 			i=$((i + 1))
 			echo 0 >/sys/class/gpio/gpio"$n"/value 2>/dev/null
 			sleep 2
+			beacon_pending || exit 0
 			echo 1 >/sys/class/gpio/gpio"$n"/value 2>/dev/null
 			sleep 0.6
 		done
