@@ -34,6 +34,7 @@ on:
       - scripts/check-sk-d840n-management.sh
       - scripts/check-sk-d840n-ucode.sh
       - tests/*sk_pon*
+      - tests/*sk_lan1_led*
       - tests/sk_omci*
       - templates/**
       # The trial files go into the RAM image (the initramfs mode copies
@@ -134,6 +135,7 @@ jobs:
             node tests/test_sk_pon_ui.js &&
             python3 tests/test_sk_pon_contract.py &&
             python3 tests/test_sk_pon_firstboot.py &&
+            python3 tests/test_sk_lan1_led.py &&
             sh tests/test_sk_pon_host.sh &&
             sh scripts/check-sk-d840n-ucode.sh
           } 2>&1 | tee sk-pon-tests.log
@@ -567,6 +569,12 @@ jobs:
             fi
             [ "$rc" -eq 0 ] || exit 1
           fi
+
+      - name: "Gate: compiled LAN1 LED wiring and negative controls"
+        if: steps.pick.outputs.run == 'true'
+        run: |
+          python3 tools/check-sk-lan1-led.py --dtb /tmp/zx279133-sk-d840n.dts.dtb
+          python3 tests/test_sk_lan1_led.py --dtb /tmp/zx279133-sk-d840n.dts.dtb
 
       # This is its own step on purpose.  GitHub Actions refuses a workflow
       # whose single `run:` script is longer than 21000 characters, and the
@@ -1112,6 +1120,7 @@ jobs:
           KC=$( { ls -d openwrt/build_dir/target-*/linux-zte_zx279133/linux-$KVER/.config 2>/dev/null || true; } | head -1 )
           [ -n "$KC" ] || { echo "::error::no .config for linux-$KVER (KVER=$KVER) under build_dir; what is there:"; ls -d openwrt/build_dir/target-*/linux-* 2>&1 || true; exit 1; }
           echo "kernel config: $KC"
+          python3 tools/check-sk-lan1-led.py --kernel-config "$KC"
           # Editing target/linux/.../config-6.18 is the supported way to reach the kernel
           # build, but only the merged result proves it worked - a symbol name that does
           # not exist is dropped in silence, so every symbol is checked against the kernel's
@@ -1630,6 +1639,7 @@ jobs:
           test -n "$DTB" || { echo "::error::no sk-d840n dtb to check"; exit 1; }
           echo "kernel: $IMG"
           echo "dtb   : $DTB  ($(sha256sum "$DTB" | cut -c1-16)...)"
+          python3 tools/check-sk-lan1-led.py --dtb "$DTB"
 
           # A device tree node whose `compatible` names a driver that was not built is
           # SKIPPED SILENTLY by the kernel: the board boots, logs nothing wrong, and
@@ -1804,6 +1814,7 @@ jobs:
           test -n "$ITB" || { echo "no initramfs image produced" >&2; ls -l openwrt/bin/targets/zte/zx279133; exit 1; }
           echo "initramfs: $ITB"
           cp "$ITB" sk-d840n-initramfs.itb
+          python3 tools/check-sk-lan1-led.py --fit sk-d840n-initramfs.itb
           ls -l sk-d840n-initramfs.itb
 
       - name: Stage trial inputs

@@ -1,0 +1,30 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-only
+# config_generate skips LED defaults when an upgrade retains /etc/config/system.
+[ -n "${IPKG_INSTROOT:-}${PKG_ROOT:-}" ] && exit 1
+
+. /lib/functions.sh
+[ "$(board_name)" = "skyworth,sk-d840n" ] || exit 0
+
+lan1_configured=0
+check_lan1_led() {
+	local sysfs
+	config_get sysfs "$1" sysfs
+	[ "$sysfs" != "skyworth:green:lan1" ] || lan1_configured=1
+}
+config_load system || exit 1
+config_foreach check_lan1_led led
+# Any existing owner wins, including a user who deliberately disabled this LED.
+[ "$lan1_configured" = 0 ] || exit 0
+
+# An anonymous section avoids overwriting a user's section with the same name.
+section=$(uci add system led) || exit 1
+uci batch <<EOF
+set system.$section.name='LAN1'
+set system.$section.sysfs='skyworth:green:lan1'
+set system.$section.trigger='netdev'
+set system.$section.dev='lan1'
+set system.$section.mode='link tx rx'
+set system.$section.default='0'
+commit system
+EOF

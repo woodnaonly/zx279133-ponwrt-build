@@ -87,6 +87,10 @@ pin_y ZTE_ZX279133_RGMII
 # config already has both =y; pinning them keeps that true if upstream changes it.)
 pin_y LEDS_GPIO
 pin_y GPIO_ZX279133
+# LAN1 uses the standard netdev trigger, including in the recovery RAM image.
+# Pin the actual kernel symbols, not a module package that might not be loaded.
+pin_y LEDS_TRIGGERS
+pin_y LEDS_TRIGGER_NETDEV
 
 # pstore/ramoops is the closest thing this board can have to a console: the log goes into
 # DRAM, a warm reset keeps it, and the flashed system dumps the region back out. Without

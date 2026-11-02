@@ -181,17 +181,25 @@
 	 * wireless and no WLAN lamp** (owner, 2026-10-12) - the vendor reserves gpio-65 under
 	 * that name the way it reserves led_usb2 (led-id 0x35), which also has no lamp here.
 	 *
-	 * What is deliberately absent: led_lan0..lan3 appear in the vendor's
-	 * /sys/class/leds and do light up when written, but they claim **no GPIO** in that
-	 * list - the vendor reaches them through the SoC's LED engine instead, addressed by
-	 * the stock DTB's `led-id` cell (led_power = 0x33, led_usb1 = 0x34, led_los = 0x08,
-	 * ...), and on this panel those four are its only users. Mainline has no driver for
-	 * that engine (see the OPEN ITEMS above), so the four LAN LEDs cannot be described
-	 * here at all - they will stay dark under mainline even when a port links, and that
-	 * is a missing feature of this SoC's mainline support, not a boot failure.
+	 * LAN LEDs can also use GPIO control. The stock zx_led_probe() releases their
+	 * GPIO descriptors after selecting the PHY pinmux; zx_led_set() acquires them
+	 * again for manual brightness. Their absence from debugfs/gpio therefore does
+	 * not prove that a separate LED engine driver is required.
+	 * Stock led_lan0 (panel LAN1) names gpio4 pin 2, active-low. gpio4's gpio-ranges
+	 * maps offsets 0..5 to pinctrl pins 60..65, so offset 2 is pin 62 = p4-6, the
+	 * very pin named by stock lan_led0_pins. gpio-leds requests the GPIO mux through
+	 * the existing pinctrl driver. Only LAN1 is enabled here; LAN2..4 are unchanged.
 	 */
 	leds {
 		compatible = "gpio-leds";
+
+		led-lan1 {
+			color = <LED_COLOR_ID_GREEN>;
+			default-state = "off";
+			function = LED_FUNCTION_LAN;
+			gpios = <&gpio4 2 GPIO_ACTIVE_LOW>;
+			label = "skyworth:green:lan1";
+		};
 
 		led-power {
 			color = <LED_COLOR_ID_GREEN>;
