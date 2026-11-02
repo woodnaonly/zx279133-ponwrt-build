@@ -86,6 +86,11 @@ jobs:
           echo "### any PROVIDER lines"
           grep -rn 'Package/kexec' feeds/*/admin feeds/*/utils 2>/dev/null | head -10 || true
 
+      # Match the real build: feed install alone does not install our pinned
+      # Argon recipe, whose compatibility package the ONU UI depends on.
+      - name: Prepare pinned management UI
+        run: sh scripts/prepare-sk-d840n-ui.sh "$GITHUB_WORKSPACE/openwrt"
+
       - name: defconfig in flash mode
         run: |
           sh scripts/configure-sk-d840n.sh \
