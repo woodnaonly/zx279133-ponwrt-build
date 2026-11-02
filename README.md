@@ -45,6 +45,32 @@ That sibling layout is deliberate: `openwrt/scripts/configure-sr1010-initramfs.s
 defaults `KERNEL_TREE` to `../linux-mainline-zte-zxslc-sr1010/linux-6.18.38`, so the
 script needs no override.
 
+## NPU / flow offload prerequisites
+
+`configs/sk-d840n-offload.config` is the common built-in kernel profile for
+nft flowtables and manual TC flower. Configuration applies it to all kernel
+fragments and repairs existing build-root `CONFIG_KERNEL_*` overrides after
+defconfig. CI checks the actual merged kernel config and the executable
+`tc-tiny`, `nft` and `fw4` in the final image, not only package selections.
+
+Run `python tests/test_sk_offload.py` from a clean checkout. To also check
+the real pinned kernel's symbol names, supply `--kernel-git <kernel-checkout>`.
+`python tools/check-sk-offload.py --kernel-config <merged-.config>` checks
+the built kernel; `--kernel-config -` accepts `zcat /proc/config.gz` on stdin.
+
+These are availability gates, not hardware acceptance. Hardware offload
+remains opt-in through the native firewall page; existing firewall settings
+are preserved. After installing a successful build, test TCP/UDP forwarding
+between LAN and WAN endpoints: hardware flow packet/byte counters in
+`/sys/kernel/debug/zx279133-flows` must increase, conntrack must report
+`HW_OFFLOAD`, and both directions must remain correct. `hw-tc-offload: on`,
+a loaded PPU blob or an idle empty flow table alone proves none of this.
+Do not use traffic addressed to the router itself as a forwarding test.
+
+PPS/ME exception interrupts and per-core utilization remain unverified:
+there is no recovered interrupt acknowledge/clear contract or reliable
+CPU-side flow-to-ME table. This change does not guess either mechanism.
+
 ## Build
 
 Workflow `Build SR1010` (`workflow_dispatch`, also runs on the first push).

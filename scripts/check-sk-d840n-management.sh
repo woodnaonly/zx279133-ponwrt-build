@@ -10,10 +10,11 @@ ROOT=$(find "$TREE/build_dir" -maxdepth 3 -type d -name root-zte | head -1)
 [ -n "$ROOT" ] || { echo 'No staged root-zte image'; exit 1; }
 MANIFEST=$(find "$TREE/bin/targets" -name '*.manifest' | head -1)
 [ -n "$MANIFEST" ] || { echo 'No target image manifest'; exit 1; }
-for package in zxpond libzxpon-omci luci-app-sk-d840n-pon firewall4 nftables luci-app-firewall rpcd-mod-ucode ucode-mod-fs; do
+for package in zxpond libzxpon-omci luci-app-sk-d840n-pon firewall4 nftables tc-tiny luci-app-firewall rpcd-mod-ucode ucode-mod-fs; do
 	grep -q "^$package " "$MANIFEST" || { echo "Image manifest is missing $package"; exit 1; }
 done
 skd840n_check_theme_image "$ROOT" "$MANIFEST"
+python3 tools/check-sk-offload.py --root "$ROOT" --manifest "$MANIFEST"
 [ -L "$ROOT/etc/rc.d/S96zxpond" ] || { echo 'Protocol daemon is not enabled in the image'; exit 1; }
 for file in usr/sbin/zxpond etc/init.d/zxpond sbin/fw4 etc/init.d/firewall etc/config/firewall \
 	usr/sbin/nft usr/share/rpcd/ucode/luci.skd840n-pon usr/share/rpcd/ucode/luci.skd840n-system \

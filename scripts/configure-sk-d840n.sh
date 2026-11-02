@@ -8,6 +8,8 @@ set -eu
 
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 . "$SCRIPT_DIR/sk-d840n-theme.sh"
+. "$SCRIPT_DIR/sk-d840n-offload.sh"
+OFFLOAD_PROFILE="$SCRIPT_DIR/../configs/sk-d840n-offload.config"
 
 IW_DIR=${1:?openwrt dir}
 KERNEL_TREE=${2:?kernel tree}
@@ -426,16 +428,10 @@ printf 'CONFIG_PACKAGE_wrreg=y\n' >>.config
 # statement for a symbol, so a "# CONFIG_X is not set" left in an earlier
 # fragment decides the outcome unless it is taken out, and the DEVMEM round
 # already lost once to exactly that.
-NF_SYMS="NETFILTER NETFILTER_ADVANCED NETFILTER_INGRESS NETFILTER_EGRESS NETFILTER_NETLINK NF_CONNTRACK NF_CONNTRACK_MARK NF_CONNTRACK_ZONES NF_CONNTRACK_EVENTS NF_NAT NF_TABLES NF_TABLES_INET NF_TABLES_IPV4 NF_TABLES_IPV6 NF_TABLES_NETDEV NFT_CT NFT_NAT NFT_MASQ NFT_REDIR NFT_REJECT NFT_REJECT_INET NF_REJECT_IPV4 NF_REJECT_IPV6 NFT_REJECT_IPV4 NFT_REJECT_IPV6 NFT_FIB NFT_FIB_INET NFT_FIB_IPV4 NFT_FIB_IPV6 NF_LOG_SYSLOG NFT_LOG NFT_LIMIT NFT_QUOTA NFT_NUMGEN NFT_FWD_NETDEV NF_FLOW_TABLE NF_FLOW_TABLE_INET NFT_FLOW_OFFLOAD VETH"
-for f in target/linux/generic/config-6.18 \
-	 target/linux/zte/config-6.18 \
-	 target/linux/zte/zx279133/config-6.18; do
-	[ -f "$f" ] || continue
-	for s in $NF_SYMS; do
-		sed -i -e "/^CONFIG_$s=/d" -e "/^# CONFIG_$s is not set\$/d" "$f"
-		printf 'CONFIG_%s=y\n' "$s" >>"$f"
-	done
-done
+# Installing tc does not compile its kernel classifiers or actions. The
+# shared profile includes clsact/ingress, flower, redirect, pedit and csum
+# as well as nft flowtables; the final merged kernel is checked against it.
+skd840n_pin_offload_fragments . "$OFFLOAD_PROFILE"
 grep -hE "^(CONFIG_|# CONFIG_)(NETFILTER|NETFILTER_ADVANCED|NF_CONNTRACK|NF_NAT|NF_TABLES|NF_TABLES_IPV4|NFT_NAT|NFT_MASQ|VETH)=" \
 	target/linux/zte/zx279133/config-6.18
 
@@ -443,13 +439,11 @@ grep -hE "^(CONFIG_|# CONFIG_)(NETFILTER|NETFILTER_ADVANCED|NF_CONNTRACK|NF_NAT|
 # masquerade is a router that only works on the bench.
 printf 'CONFIG_PACKAGE_nftables=y\n' >>.config
 
-# The flower client, for the same reason nft is there.  The NPPT's flow
-# table offload is a TC flower interface - zx279133-offload.c answers
-# TC_SETUP_BLOCK, TC_SETUP_FT and TC_SETUP_CLSFLOWER - and without a
-# client there is no way to put a rule on it: the kernel side can be
-# perfect and the board still cannot ask for the offload.  The image
-# already carries ip-full; tc is the other half of iproute2, from the same
-# package, and it is what "tc filter add dev eth0 ingress flower ..." needs.
+# Keep a manual flower client alongside nft's automatic flowtable path.
+# zx279133-offload.c answers TC_SETUP_BLOCK, TC_SETUP_FT and
+# TC_SETUP_CLSFLOWER. tc can exercise the driver's eth0/lan-cpu0 ingress
+# interface independently of fw4; it does not enable hardware forwarding
+# by itself. DSA user ports use the conduit for nft's TC_SETUP_FT path.
 #
 # The symbol is tc-tiny, not tc, and the difference is not cosmetic: this
 # tree's iproute2 (cnjn/ImmortalWrt sr1010-zx279133) has no Package/tc at
@@ -472,8 +466,8 @@ printf 'CONFIG_PACKAGE_nftables=y\n' >>.config
 # no kernel module packages at all - there is no package/kernel/modules/
 # directory in it.  A package whose dependency names a package that does not
 # exist cannot be selected, so the overlay is the feed's recipe with that
-# one dependency dropped.  What the dependency was for is "tc qdisc add ...
-# netem"; a flower filter does not need it.
+# one dependency dropped. Built-in scheduling support from OFFLOAD_PROFILE
+# replaces it, including the ingress qdisc used by flower.
 printf 'CONFIG_PACKAGE_tc-tiny=y\n' >>.config
 
 # The overview row is not a package. luci-mod-status already owns
@@ -487,6 +481,7 @@ printf '%s\n' CONFIG_PACKAGE_luci-app-sk-d840n-pon=y CONFIG_PACKAGE_luci-theme-a
 
 skd840n_select_theme .
 make defconfig
+skd840n_pin_offload_build_config .config "$OFFLOAD_PROFILE"
 skd840n_check_theme_config .config
 for package in zxpond libzxpon-omci luci-app-sk-d840n-pon luci-theme-argon luci-i18n-base-zh-cn luci-i18n-argon-config-zh-cn firewall4 luci-app-firewall luci-i18n-firewall-zh-cn rpcd-mod-ucode ucode-mod-fs; do
 	grep -qx "CONFIG_PACKAGE_$package=y" .config || {
@@ -536,13 +531,8 @@ grep -qx 'CONFIG_PACKAGE_nftables=y' .config || {
 	grep -i 'nftables' .config || echo "(nothing at all)" >&2
 	exit 1; }
 
-# The same assertion for the flower client.  iproute2 is in the tree (the
-# image has carried ip-full all along), so this is about the subpackage
-# being selectable, not about a missing Makefile: a tc that defconfig
-# dropped means an image whose offload has no client, which is the same
-# failure as an offload driver with no rules to install.  The symbol
-# checked is tc-tiny - the real package - and not the virtual "tc" the
-# three variants provide, which defconfig drops without a word.
+# Keep the manual diagnostic client as well as fw4. The concrete package
+# is tc-tiny, not the virtual "tc" that defconfig drops without a word.
 grep -qx 'CONFIG_PACKAGE_tc-tiny=y' .config || {
 	echo "CONFIG_PACKAGE_tc-tiny did not survive defconfig - is package/network/utils/iproute2 in the tree, and is the overlay applied?" >&2
 	ls -d package/network/utils/iproute2 2>/dev/null || echo "package/network/utils/iproute2 is NOT in the tree" >&2

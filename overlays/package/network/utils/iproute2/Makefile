@@ -8,16 +8,13 @@
 # there, but the kmod-* packages are not - so "kmod-sched-core" is a package
 # that does not exist, and a package whose +kmod-sched-core dependency names
 # a package that does not exist cannot be selected at all.  The tc variants
-# would be unusable, and with them the flower client: the NPPT's flow-table
-# offload answers TC_SETUP_CLSFLOWER, so without a tc there is no way to put
-# a rule on it - the kernel side can be perfect and the board still cannot
-# ask for the offload.
+# would be unselectable. tc supplies manual TC flower diagnostics alongside
+# firewall4's independent automatic nft flowtable path.
 #
-# What the dependency was for: kmod-sched-core ships net/sched/sch_*.ko, and
-# its only user in tc is "tc qdisc add ... netem".  A flower filter does not
-# need it: "tc filter add ... ingress flower" is a netlink operation on the
-# cls_bpf/cls_flower path, not a queueing module.  Dropping the dependency
-# costs the netem qdisc and buys a tc that can be installed at all.
+# Removing a package dependency does not supply kernel functionality.
+# configs/sk-d840n-offload.config builds in clsact/ingress, cls_flower and
+# the redirect, packet-edit and checksum actions instead. The final kernel
+# and image gates check these together with the actual tc-tiny binary.
 #
 # The rest of the file is the feed's recipe verbatim (version 6.18.0, its
 # source hash, its configure arguments, its variant switch and its install

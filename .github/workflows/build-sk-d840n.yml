@@ -32,10 +32,12 @@ on:
       - scripts/configure-sk-d840n.sh
       - scripts/prepare-sk-d840n-ui.sh
       - scripts/sk-d840n-theme.sh
+      - scripts/sk-d840n-offload.sh
       - scripts/check-sk-d840n-management.sh
       - scripts/check-sk-d840n-ucode.sh
       - tests/*sk_pon*
       - tests/*sk_lan1_led*
+      - tests/*sk_offload*
       - tests/test_sysupgrade.py
       - tests/sk_omci*
       - templates/**
@@ -150,6 +152,7 @@ jobs:
             python3 tests/test_sk_pon_firstboot.py &&
             python3 tests/test_sk_pon_theme.py &&
             python3 tests/test_sk_lan1_led.py &&
+            python3 tests/test_sk_offload.py &&
             sh tests/test_sk_pon_host.sh &&
             sh scripts/check-sk-d840n-ucode.sh
           } 2>&1 | tee sk-pon-tests.log
@@ -247,6 +250,7 @@ jobs:
           KT=linux-mainline-zte-zxslc-sr1010/linux-$KVER
           cp -a kernel-overlays/. "$KT"/
           cp -a overlays/. openwrt/
+          python3 tools/check-sk-offload.py --kernel-tree "$KT"
           # board dts must be reachable and the SoC dtsi unmodified
           test -f "$KT/arch/arm64/boot/dts/zte/zx279133-sk-d840n.dts"
           grep -q 'zx279133-sk-d840n.dtb' "$KT/arch/arm64/boot/dts/zte/Makefile"
@@ -1135,6 +1139,7 @@ jobs:
           [ -n "$KC" ] || { echo "::error::no .config for linux-$KVER (KVER=$KVER) under build_dir; what is there:"; ls -d openwrt/build_dir/target-*/linux-* 2>&1 || true; exit 1; }
           echo "kernel config: $KC"
           python3 tools/check-sk-lan1-led.py --kernel-config "$KC"
+          python3 tools/check-sk-offload.py --kernel-config "$KC"
           # Editing target/linux/.../config-6.18 is the supported way to reach the kernel
           # build, but only the merged result proves it worked - a symbol name that does
           # not exist is dropped in silence, so every symbol is checked against the kernel's
