@@ -48,6 +48,29 @@ EOF
 KCFG=$(ls target/linux/zte/zx279133/config-* 2>/dev/null | head -1)
 [ -n "$KCFG" ] || { echo "no target/linux/zte/zx279133/config-* to extend" >&2; exit 1; }
 
+# The gzip uImage must fit the board's fixed 8 MiB kernel partition. Run 332
+# exceeded it by 48,824 bytes with -O2. Use the kernel's standard -Os choice
+# without removing drivers or diagnostics. Pin both config layers: OpenWrt
+# appends CONFIG_KERNEL_* from the build root after the target fragments.
+skd840n_pin_kernel_size() (
+	config=$1
+	prefix=${2:-}
+	[ -f "$config" ] || { echo "missing kernel config: $config" >&2; exit 1; }
+	case "$prefix" in
+		''|KERNEL_) ;;
+		*) echo "invalid kernel config prefix: $prefix" >&2; exit 1 ;;
+	esac
+	sed -i \
+		-e "/^CONFIG_${prefix}CC_OPTIMIZE_FOR_SIZE=/d" \
+		-e "/^# CONFIG_${prefix}CC_OPTIMIZE_FOR_SIZE is not set$/d" \
+		-e "/^CONFIG_${prefix}CC_OPTIMIZE_FOR_PERFORMANCE=/d" \
+		-e "/^# CONFIG_${prefix}CC_OPTIMIZE_FOR_PERFORMANCE is not set$/d" \
+		"$config"
+	printf 'CONFIG_%sCC_OPTIMIZE_FOR_SIZE=y\n# CONFIG_%sCC_OPTIMIZE_FOR_PERFORMANCE is not set\n' \
+		"$prefix" "$prefix" >>"$config"
+)
+skd840n_pin_kernel_size "$KCFG"
+
 # pin_y <symbol>: make it =y in the target config whatever form the line is in (=m, "is
 # not set", or absent). Writing only the =y form is not enough - appending a second line
 # for a symbol the file already carries leaves the merge order to decide. The name is
@@ -484,6 +507,7 @@ printf '%s\n' CONFIG_PACKAGE_luci-app-sk-d840n-pon=y CONFIG_PACKAGE_luci-theme-a
 skd840n_select_theme .
 make defconfig
 skd840n_pin_offload_build_config .config "$OFFLOAD_PROFILE"
+skd840n_pin_kernel_size .config KERNEL_
 skd840n_check_theme_config .config
 for package in zxpond libzxpon-omci luci-app-sk-d840n-pon luci-mod-system luci-theme-argon luci-i18n-base-zh-cn luci-i18n-argon-config-zh-cn firewall4 luci-app-firewall luci-i18n-firewall-zh-cn rpcd-mod-ucode ucode-mod-fs; do
 	grep -qx "CONFIG_PACKAGE_$package=y" .config || {

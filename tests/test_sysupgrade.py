@@ -242,6 +242,85 @@ class CompressionTests(TemporaryTest):
 
 
 @unittest.skipUnless(SHELL, "a POSIX shell is required")
+class KernelSizeTests(TemporaryTest):
+    @classmethod
+    def setUpClass(cls):
+        configure = (REPO / "scripts/configure-sk-d840n.sh").read_text(encoding="utf-8")
+        # Exercise the implementation configure uses, not a copy in the test.
+        signature = "skd840n_pin_kernel_size() ("
+        cls.helper = signature + configure.split(signature, 1)[1].split("\n)", 1)[0] + "\n)\n"
+
+    def pin(self, config, prefix=""):
+        return subprocess.run(
+            [SHELL, "-c", self.helper + 'skd840n_pin_kernel_size "$1" "$2"',
+             "pin-kernel-size", shell_path(config), prefix],
+            capture_output=True, text=True, timeout=10)
+
+    def test_both_layers_replace_conflicts_and_preserve_other_options(self):
+        for prefix in ("", "KERNEL_"):
+            with self.subTest(prefix=prefix):
+                config = self.directory / "kernel.config"
+                other_prefix = "" if prefix else "KERNEL_"
+                kept = ("# preserve drivers and diagnostics\n"
+                        f"CONFIG_{prefix}REALTEK_PHY=y\n"
+                        f"CONFIG_{prefix}DYNAMIC_DEBUG=y\n"
+                        f"CONFIG_{other_prefix}CC_OPTIMIZE_FOR_PERFORMANCE=y\n"
+                        f"CONFIG_{prefix}CC_OPTIMIZE_FOR_SIZE_HINT=y\n")
+                conflicts = ""
+                for symbol in ("SIZE", "PERFORMANCE"):
+                    name = f"CONFIG_{prefix}CC_OPTIMIZE_FOR_{symbol}"
+                    conflicts += "".join(f"{name}={value}\n" for value in ("y", "m", "n", "y"))
+                    conflicts += f"# {name} is not set\n"
+                config.write_text(kept + conflicts, encoding="utf-8", newline="\n")
+                result = self.pin(config, prefix)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                expected = (kept + f"CONFIG_{prefix}CC_OPTIMIZE_FOR_SIZE=y\n"
+                            f"# CONFIG_{prefix}CC_OPTIMIZE_FOR_PERFORMANCE is not set\n")
+                self.assertEqual(config.read_text(encoding="utf-8"), expected)
+                before = config.read_bytes()
+                result = self.pin(config, prefix)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(config.read_bytes(), before, "pin must be idempotent")
+
+    def test_build_root_override_keeps_size_optimization(self):
+        fragment, build = self.directory / "fragment", self.directory / ".config"
+        for config, prefix in ((fragment, ""), (build, "KERNEL_")):
+            config.write_text(f"CONFIG_{prefix}CC_OPTIMIZE_FOR_PERFORMANCE=y\n",
+                              encoding="utf-8")
+            result = self.pin(config, prefix)
+            self.assertEqual(result.returncode, 0, result.stderr)
+        # Match kernel-defaults.mk: build-root KERNEL_ lines follow the fragments.
+        merged = (fragment.read_text(encoding="utf-8") +
+                  build.read_text(encoding="utf-8").replace("CONFIG_KERNEL_", "CONFIG_"))
+        states = {}
+        for line in merged.splitlines():
+            if line.startswith("CONFIG_"):
+                symbol, value = line.split("=", 1)
+                states[symbol] = value
+            elif line.startswith("# CONFIG_") and line.endswith(" is not set"):
+                states[line.split()[1]] = "n"
+        self.assertEqual(states, {"CONFIG_CC_OPTIMIZE_FOR_SIZE": "y",
+                                  "CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE": "n"})
+
+    def test_missing_choices_are_added_and_missing_file_is_rejected(self):
+        config = self.directory / "kernel.config"
+        result = self.pin(config)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("missing kernel config", result.stderr)
+        self.assertFalse(config.exists())
+        config.write_text("CONFIG_REALTEK_PHY=y\n", encoding="utf-8")
+        result = self.pin(config)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(config.read_text(encoding="utf-8"),
+                         "CONFIG_REALTEK_PHY=y\nCONFIG_CC_OPTIMIZE_FOR_SIZE=y\n"
+                         "# CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE is not set\n")
+        before = config.read_bytes()
+        result = self.pin(config, "WRONG_")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(config.read_bytes(), before)
+
+
+@unittest.skipUnless(SHELL, "a POSIX shell is required")
 class PlatformTests(TemporaryTest):
     def test_partition_sizes_come_from_live_mtd_aliases(self):
         proc = self.directory / "proc-mtd"
@@ -402,6 +481,16 @@ class WorkflowTests(unittest.TestCase):
     def setUpClass(cls):
         cls.workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
         cls.steps = {s.get("name", ""): s for s in cls.workflow["jobs"]["build"]["steps"]}
+
+    def test_kernel_size_choice_is_pinned_at_both_layers_and_checked_after_merge(self):
+        configure = (REPO / "scripts/configure-sk-d840n.sh").read_text(encoding="utf-8")
+        defconfig = configure.index("\nmake defconfig\n")
+        self.assertLess(configure.index('skd840n_pin_kernel_size "$KCFG"'), defconfig)
+        self.assertGreater(configure.index("skd840n_pin_kernel_size .config KERNEL_"), defconfig)
+        gate = self.steps["Assert the kernel really has the PHY driver"]["run"]
+        required = next(line for line in gate.splitlines() if line.startswith('required="'))
+        self.assertIn("CC_OPTIMIZE_FOR_SIZE", shlex.split(required.split("=", 1)[1])[0].split())
+        self.assertIn("grep -qx '# CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE is not set' \"$KC\"", gate)
 
     def test_native_kernel_is_the_only_flash_pipeline(self):
         recipe = (REPO / "overlays/target/linux/zte/image/Makefile").read_text()

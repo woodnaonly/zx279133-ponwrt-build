@@ -1251,7 +1251,9 @@ jobs:
           # every run below so the next reader gets the answer without another round:
           # if the seed says =y and the merge says otherwise, the question is which of
           # the three config-* fragments is last, not whether the pin ran.
-          required="REALTEK_PHY LEDS_GPIO GPIO_ZX279133 GPIO_SYSFS PSTORE PSTORE_CONSOLE PSTORE_RAM MAGIC_SYSRQ MAGIC_SYSRQ_SERIAL DYNAMIC_DEBUG DYNAMIC_DEBUG_CORE NETFILTER NF_CONNTRACK NF_CONNTRACK_MARK NF_NAT NF_TABLES NF_TABLES_INET NF_TABLES_IPV4 NF_TABLES_IPV6 NFT_CT NFT_NAT NFT_MASQ NFT_REDIR NFT_REJECT NFT_REJECT_INET NFT_REJECT_IPV4 NFT_REJECT_IPV6 NFT_FIB NFT_FIB_INET NFT_FIB_IPV4 NFT_FIB_IPV6 NFT_LOG NFT_LIMIT NFT_QUOTA NFT_NUMGEN NF_FLOW_TABLE NF_FLOW_TABLE_INET NFT_FLOW_OFFLOAD"
+          # -Os keeps every selected feature while fitting the fixed kernel partition.
+          # Check the merged config, not just the two inputs configure pinned.
+          required="CC_OPTIMIZE_FOR_SIZE REALTEK_PHY LEDS_GPIO GPIO_ZX279133 GPIO_SYSFS PSTORE PSTORE_CONSOLE PSTORE_RAM MAGIC_SYSRQ MAGIC_SYSRQ_SERIAL DYNAMIC_DEBUG DYNAMIC_DEBUG_CORE NETFILTER NF_CONNTRACK NF_CONNTRACK_MARK NF_NAT NF_TABLES NF_TABLES_INET NF_TABLES_IPV4 NF_TABLES_IPV6 NFT_CT NFT_NAT NFT_MASQ NFT_REDIR NFT_REJECT NFT_REJECT_INET NFT_REJECT_IPV4 NFT_REJECT_IPV6 NFT_FIB NFT_FIB_INET NFT_FIB_IPV4 NFT_FIB_IPV6 NFT_LOG NFT_LIMIT NFT_QUOTA NFT_NUMGEN NF_FLOW_TABLE NF_FLOW_TABLE_INET NFT_FLOW_OFFLOAD"
           reported="DEVMEM STRICT_DEVMEM IO_STRICT_DEVMEM DETECT_HUNG_TASK SOFTLOCKUP_DETECTOR IKCONFIG IKCONFIG_PROC NETFILTER NETFILTER_ADVANCED NF_CONNTRACK NF_NAT NF_TABLES NF_TABLES_IPV4 NFT_NAT NFT_MASQ VETH"
           SEED=$( { ls openwrt/target/linux/zte/zx279133/config-* 2>/dev/null || true; } | head -1 )
           echo "kernel config seed: ${SEED:-none}"
@@ -1270,6 +1272,11 @@ jobs:
               exit 1
             }
           done
+          grep -qx '# CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE is not set' "$KC" || {
+            echo "::error::kernel optimization reverted to -O2" >&2
+            dump_config_state CC_OPTIMIZE_FOR_SIZE CC_OPTIMIZE_FOR_PERFORMANCE >&2
+            exit 1
+          }
           # One annotation per instrument, carrying the line exactly as the merged config
           # has it: an instrument that silently did not compile is worse than one that was
           # never asked for, and annotations are readable without signing in to anything.
