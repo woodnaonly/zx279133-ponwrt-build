@@ -433,9 +433,7 @@ jobs:
             fi
             echo "dtc native FAILED, its stderr:"
             sed 's/^/  /' "/tmp/$b.dtc-native.log"
-            # Like Kbuild, expand the GPIO/LED macros as well as includes.
-            # -fdirectives-only leaves #defines and macro names for dtc,
-            # which does not implement the C preprocessor.
+            # Use Kbuild-style preprocessing with both GCC and Clang.
             cpp -nostdinc -undef -x assembler-with-cpp -D__DTS__ \
                 -I "$DTS" -I "$PFX" -I "$KT/include" "$f" -o /tmp/pp.dts 2>/tmp/cpp.log
             rc=$?

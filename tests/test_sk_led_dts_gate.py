@@ -86,17 +86,19 @@ def compile_tests(steps, cpp, dtc):
         assert props['gpios'] == struct.pack('>II', 2, 1), props
         assert props['color'] == struct.pack('>I', 2), props
         assert props['function'] == b'lan\0', props
-        # Prove this fixture catches the original bug, not just a missing dtc.
-        broken = script.replace('-nostdinc ', '-nostdinc -fdirectives-only ')
-        result = run(broken, directory)
-        assert result.returncode != 0, 'directives-only incorrectly passed the DTS gate'
+        # Raw dtc cannot expand these includes/macros. Do not assume that GCC
+        # and Clang interpret -fdirectives-only identically in assembler mode.
+        result = subprocess.run(dtc + ['-q', '-I', 'dts', '-O', 'dtb', '-o',
+                                str(directory / 'raw.dtb'), str(board)],
+                                capture_output=True, text=True, timeout=30)
+        assert result.returncode != 0, 'raw DTS incorrectly passed without preprocessing'
         board.write_text('/dts-v1/;\n/ { broken = <; };\n', encoding='utf-8')
         result = run(script, directory)
         assert result.returncode != 0, 'invalid DTS incorrectly passed the gate'
         board.write_text('/dts-v1/;\n#include "missing.h"\n/ {};\n', encoding='utf-8')
         result = run(script, directory)
         assert result.returncode != 0, 'missing include incorrectly passed the gate'
-    print('PASS: workflow DTS harness expands real macros and rejects directives-only, syntax and include failures')
+    print('PASS: workflow DTS harness expands real macros and rejects raw DTS, syntax and include failures')
 
 
 def reporting_tests(steps):
