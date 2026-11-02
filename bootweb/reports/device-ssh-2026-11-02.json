@@ -1,0 +1,928 @@
+{
+  "schema": "sk-d840n-linux-ssh-readonly-v1",
+  "utc": "2026-11-02T07:01:00.469603+00:00",
+  "scope": "temporary Linux userspace test, NOT U-Boot/RAM recovery",
+  "device": "192.168.9.1",
+  "read_only_flash": true,
+  "flashable_release": false,
+  "native_uboot_verified": false,
+  "vendor_ecc_badblock_api_verified": false,
+  "reset_entry_verified": false,
+  "serial_rescue_verified": false,
+  "reboot_performed": false,
+  "partition_changes": false,
+  "harness_sha256": "0754ceca1790d487f0ee03856caab36f1c8c6b58e151d5198879e29e4937ec9b",
+  "harness_bytes": 1323064,
+  "temporary_directory": "/tmp/bootweb-ssh-075841c4e5ee40ca",
+  "cases": [
+    {
+      "name": "board_identity",
+      "passed": true
+    },
+    {
+      "name": "executable_transfer_sha256",
+      "passed": true
+    },
+    {
+      "name": "arm64_c_hashes_and_current_base",
+      "passed": true
+    },
+    {
+      "name": "ssh_loopback_http_idle_locked",
+      "passed": true
+    },
+    {
+      "name": "same_single_file_page",
+      "passed": true,
+      "bytes": 6921,
+      "sha256": "6b52d5f47b84294f6dc7ed37be497bfb7f1dd6493078daf77c1dee73b4d0e737"
+    },
+    {
+      "name": "host_rebinding_rejected",
+      "passed": true
+    },
+    {
+      "name": "cross_origin_rejected",
+      "passed": true
+    },
+    {
+      "name": "bad_token_rejected",
+      "passed": true
+    },
+    {
+      "name": "truncated_body_received_before_disconnect_1",
+      "passed": true,
+      "receipt": {
+        "event": "body_received",
+        "connection": 6,
+        "body_bytes": 1024,
+        "received_bytes": 1181
+      }
+    },
+    {
+      "name": "truncated_upload_not_ready_1",
+      "passed": true,
+      "http_status": 200,
+      "observed_state": "failed",
+      "observed_error": "truncated upload; nothing erased",
+      "partial_reply_bytes": 0,
+      "partial_reply_status": ""
+    },
+    {
+      "name": "explicit_cancel_1",
+      "passed": true
+    },
+    {
+      "name": "truncated_body_received_before_disconnect_2",
+      "passed": true,
+      "receipt": {
+        "event": "body_received",
+        "connection": 9,
+        "body_bytes": 1024,
+        "received_bytes": 1181
+      }
+    },
+    {
+      "name": "truncated_upload_not_ready_2",
+      "passed": true,
+      "http_status": 200,
+      "observed_state": "failed",
+      "observed_error": "truncated upload; nothing erased",
+      "partial_reply_bytes": 0,
+      "partial_reply_status": ""
+    },
+    {
+      "name": "explicit_cancel_2",
+      "passed": true
+    },
+    {
+      "name": "truncated_body_received_before_disconnect_3",
+      "passed": true,
+      "receipt": {
+        "event": "body_received",
+        "connection": 12,
+        "body_bytes": 1024,
+        "received_bytes": 1181
+      }
+    },
+    {
+      "name": "truncated_upload_not_ready_3",
+      "passed": true,
+      "http_status": 200,
+      "observed_state": "failed",
+      "observed_error": "truncated upload; nothing erased",
+      "partial_reply_bytes": 0,
+      "partial_reply_status": ""
+    },
+    {
+      "name": "explicit_cancel_3",
+      "passed": true
+    },
+    {
+      "name": "truncated_body_received_before_disconnect_4",
+      "passed": true,
+      "receipt": {
+        "event": "body_received",
+        "connection": 15,
+        "body_bytes": 1024,
+        "received_bytes": 1181
+      }
+    },
+    {
+      "name": "truncated_upload_not_ready_4",
+      "passed": true,
+      "http_status": 200,
+      "observed_state": "failed",
+      "observed_error": "truncated upload; nothing erased",
+      "partial_reply_bytes": 0,
+      "partial_reply_status": ""
+    },
+    {
+      "name": "explicit_cancel_4",
+      "passed": true
+    },
+    {
+      "name": "truncated_body_received_before_disconnect_5",
+      "passed": true,
+      "receipt": {
+        "event": "body_received",
+        "connection": 18,
+        "body_bytes": 1024,
+        "received_bytes": 1181
+      }
+    },
+    {
+      "name": "truncated_upload_not_ready_5",
+      "passed": true,
+      "http_status": 200,
+      "observed_state": "failed",
+      "observed_error": "truncated upload; nothing erased",
+      "partial_reply_bytes": 0,
+      "partial_reply_status": ""
+    },
+    {
+      "name": "explicit_cancel_5",
+      "passed": true
+    },
+    {
+      "name": "truncated_body_received_before_disconnect_6",
+      "passed": true,
+      "receipt": {
+        "event": "body_received",
+        "connection": 21,
+        "body_bytes": 1024,
+        "received_bytes": 1181
+      }
+    },
+    {
+      "name": "truncated_upload_not_ready_6",
+      "passed": true,
+      "http_status": 200,
+      "observed_state": "failed",
+      "observed_error": "truncated upload; nothing erased",
+      "partial_reply_bytes": 0,
+      "partial_reply_status": ""
+    },
+    {
+      "name": "explicit_cancel_6",
+      "passed": true
+    },
+    {
+      "name": "truncated_body_received_before_disconnect_7",
+      "passed": true,
+      "receipt": {
+        "event": "body_received",
+        "connection": 24,
+        "body_bytes": 1024,
+        "received_bytes": 1181
+      }
+    },
+    {
+      "name": "truncated_upload_not_ready_7",
+      "passed": true,
+      "http_status": 200,
+      "observed_state": "failed",
+      "observed_error": "truncated upload; nothing erased",
+      "partial_reply_bytes": 0,
+      "partial_reply_status": ""
+    },
+    {
+      "name": "explicit_cancel_7",
+      "passed": true
+    },
+    {
+      "name": "truncated_body_received_before_disconnect_8",
+      "passed": true,
+      "receipt": {
+        "event": "body_received",
+        "connection": 27,
+        "body_bytes": 1024,
+        "received_bytes": 1181
+      }
+    },
+    {
+      "name": "truncated_upload_not_ready_8",
+      "passed": true,
+      "http_status": 200,
+      "observed_state": "failed",
+      "observed_error": "truncated upload; nothing erased",
+      "partial_reply_bytes": 0,
+      "partial_reply_status": ""
+    },
+    {
+      "name": "explicit_cancel_8",
+      "passed": true
+    },
+    {
+      "name": "truncated_body_received_before_disconnect_9",
+      "passed": true,
+      "receipt": {
+        "event": "body_received",
+        "connection": 30,
+        "body_bytes": 1024,
+        "received_bytes": 1181
+      }
+    },
+    {
+      "name": "truncated_upload_not_ready_9",
+      "passed": true,
+      "http_status": 200,
+      "observed_state": "failed",
+      "observed_error": "truncated upload; nothing erased",
+      "partial_reply_bytes": 0,
+      "partial_reply_status": ""
+    },
+    {
+      "name": "explicit_cancel_9",
+      "passed": true
+    },
+    {
+      "name": "truncated_body_received_before_disconnect_10",
+      "passed": true,
+      "receipt": {
+        "event": "body_received",
+        "connection": 33,
+        "body_bytes": 1024,
+        "received_bytes": 1181
+      }
+    },
+    {
+      "name": "truncated_upload_not_ready_10",
+      "passed": true,
+      "http_status": 200,
+      "observed_state": "failed",
+      "observed_error": "truncated upload; nothing erased",
+      "partial_reply_bytes": 0,
+      "partial_reply_status": ""
+    },
+    {
+      "name": "explicit_cancel_10",
+      "passed": true
+    },
+    {
+      "name": "real_sysupgrade_validated_on_arm64",
+      "passed": true,
+      "package_bytes": 12431637,
+      "package_sha256": "73beaef1a972dc979bb0ad2b5a4b634af37e6861b1d2bfa047442a175fd5901d",
+      "seconds": 2.956
+    },
+    {
+      "name": "confirm_write_hard_locked",
+      "passed": true
+    },
+    {
+      "name": "repeat_confirm_still_locked",
+      "passed": true
+    },
+    {
+      "name": "reboot_unavailable",
+      "passed": true
+    },
+    {
+      "name": "cancel_ready",
+      "passed": true
+    },
+    {
+      "name": "wrong_board_rejected",
+      "passed": true,
+      "reason": "wrong system CONTROL board"
+    },
+    {
+      "name": "duplicate_tar_member_rejected",
+      "passed": true,
+      "reason": "duplicate archive member"
+    },
+    {
+      "name": "path_traversal_rejected",
+      "passed": true,
+      "reason": "unexpected archive member/path"
+    },
+    {
+      "name": "bad_fwtool_crc_rejected",
+      "passed": true,
+      "reason": "fwtool CRC mismatch"
+    },
+    {
+      "name": "wrong_uboot_base_rejected",
+      "passed": true,
+      "reason": "wrong/duplicate/unknown U-Boot CONTROL field or base"
+    },
+    {
+      "name": "full_boot_payload_rejected",
+      "passed": true,
+      "reason": "U-Boot payload must be exactly the fixed stage2 window (no full boot image)"
+    },
+    {
+      "name": "protected_hashes_unchanged_and_no_write_callback",
+      "passed": true
+    },
+    {
+      "name": "independent_full_boot_and_tags_unchanged",
+      "passed": true
+    }
+  ],
+  "pass": true,
+  "cleanup_complete": true,
+  "linux_board": {
+    "kernel": "6.18.38+",
+    "hostname": "ImmortalWrt",
+    "system": "ARMv8 Processor rev 4",
+    "model": "Skyworth SK-D840N",
+    "board_name": "skyworth,sk-d840n",
+    "rootfs_type": "jffs2",
+    "release": {
+      "distribution": "ImmortalWrt",
+      "version": "25.12.1",
+      "firmware_url": "https://downloads.immortalwrt.org/",
+      "revision": "r0-1b50aaf",
+      "target": "zte/zx279133",
+      "description": "ImmortalWrt 25.12.1 r0-1b50aaf",
+      "builddate": "1792990681"
+    }
+  },
+  "boot_and_tags_before": [
+    "868107e8298fdfeda84c61f9cea11f1fd146b23239c62c9d8e2141160b487954  /dev/mtd1",
+    "9f739d37021667828f88ff2438b82b2d4b5806a8f3d44afb628cbd72e2007c59  /dev/mtd4"
+  ],
+  "root_corrected_bits_before": 48,
+  "readonly_probe": [
+    {
+      "event": "before",
+      "linux_userspace_only": true,
+      "read_only": true,
+      "stage1": "d4d7a4bf90fc26cc61c76000bb272fac3113c14525ab7119c3d10fbd477231f4",
+      "stage2": "5b084490813b540c1a82ddf2e2d4de46080e6cfe47b15b2e6575bdf3fe198fe9",
+      "environment": "d6d9522e25c4b984d571d34ba7657674fa371dff06fe82e2a3d34a877168e044",
+      "boot_tail": "c97fce784428a2e10cd6d4ef97ccc756f2e4c1b146a9b9dc5415d4e3e245b70a",
+      "parameter_tags": "9f739d37021667828f88ff2438b82b2d4b5806a8f3d44afb628cbd72e2007c59"
+    },
+    {
+      "event": "after",
+      "linux_userspace_only": true,
+      "read_only": true,
+      "stage1": "d4d7a4bf90fc26cc61c76000bb272fac3113c14525ab7119c3d10fbd477231f4",
+      "stage2": "5b084490813b540c1a82ddf2e2d4de46080e6cfe47b15b2e6575bdf3fe198fe9",
+      "environment": "d6d9522e25c4b984d571d34ba7657674fa371dff06fe82e2a3d34a877168e044",
+      "boot_tail": "c97fce784428a2e10cd6d4ef97ccc756f2e4c1b146a9b9dc5415d4e3e245b70a",
+      "parameter_tags": "9f739d37021667828f88ff2438b82b2d4b5806a8f3d44afb628cbd72e2007c59"
+    },
+    {
+      "event": "finished",
+      "exit_code": 0,
+      "denied_write_calls": 0,
+      "flashable_release": false,
+      "native_uboot_verified": false
+    }
+  ],
+  "system_validation_result": {
+    "kind": "system",
+    "sha256": "73beaef1a972dc979bb0ad2b5a4b634af37e6861b1d2bfa047442a175fd5901d",
+    "writes": [
+      {
+        "name": "root",
+        "length": 4194308,
+        "capacity": 251658240,
+        "sha256": "ab95d1db886bd685a11625daa48c2c5ea73ddb9f4493ce0c845b15826850bc20"
+      },
+      {
+        "name": "dtb",
+        "length": 12297,
+        "capacity": 1048576,
+        "sha256": "cb4dd54414816eb070fa50251b63b8e970002d882f96f5cd2744174072715a88"
+      },
+      {
+        "name": "kernel",
+        "length": 8215292,
+        "capacity": 8388608,
+        "sha256": "0dd8bb0de447c7fcdf385f473173905798b70cdad2611e3375bd658420e2c656"
+      }
+    ]
+  },
+  "server_events": [
+    {
+      "event": "before",
+      "linux_userspace_only": true,
+      "read_only": true,
+      "stage1": "d4d7a4bf90fc26cc61c76000bb272fac3113c14525ab7119c3d10fbd477231f4",
+      "stage2": "5b084490813b540c1a82ddf2e2d4de46080e6cfe47b15b2e6575bdf3fe198fe9",
+      "environment": "d6d9522e25c4b984d571d34ba7657674fa371dff06fe82e2a3d34a877168e044",
+      "boot_tail": "c97fce784428a2e10cd6d4ef97ccc756f2e4c1b146a9b9dc5415d4e3e245b70a",
+      "parameter_tags": "9f739d37021667828f88ff2438b82b2d4b5806a8f3d44afb628cbd72e2007c59"
+    },
+    {
+      "event": "listening",
+      "address": "127.0.0.1:18088",
+      "capabilities": 0,
+      "lifetime_ms": 180000,
+      "native_uboot_verified": false
+    },
+    {
+      "event": "connection_closed",
+      "connection": 1,
+      "received_bytes": 73,
+      "sent_bytes": 761,
+      "receive_errno": 0
+    },
+    {
+      "event": "connection_closed",
+      "connection": 2,
+      "received_bytes": 64,
+      "sent_bytes": 7260,
+      "receive_errno": 0
+    },
+    {
+      "event": "connection_closed",
+      "connection": 3,
+      "received_bytes": 74,
+      "sent_bytes": 367,
+      "receive_errno": 0
+    },
+    {
+      "event": "connection_closed",
+      "connection": 4,
+      "received_bytes": 246,
+      "sent_bytes": 367,
+      "receive_errno": 0
+    },
+    {
+      "event": "connection_closed",
+      "connection": 5,
+      "received_bytes": 220,
+      "sent_bytes": 368,
+      "receive_errno": 0
+    },
+    {
+      "event": "body_received",
+      "connection": 6,
+      "body_bytes": 1024,
+      "received_bytes": 1181
+    },
+    {
+      "event": "connection_closed",
+      "connection": 6,
+      "received_bytes": 1181,
+      "sent_bytes": 0,
+      "receive_errno": 0
+    },
+    {
+      "event": "connection_closed",
+      "connection": 7,
+      "received_bytes": 73,
+      "sent_bytes": 795,
+      "receive_errno": 0
+    },
+    {
+      "event": "connection_closed",
+      "connection": 8,
+      "received_bytes": 217,
+      "sent_bytes": 761,
+      "receive_errno": 0
+    },
+    {
+      "event": "body_received",
+      "connection": 9,
+      "body_bytes": 1024,
+      "received_bytes": 1181
+    },
+    {
+      "event": "connection_closed",
+      "connection": 9,
+      "received_bytes": 1181,
+      "sent_bytes": 0,
+      "receive_errno": 0
+    },
+    {
+      "event": "connection_closed",
+      "connection": 10,
+      "received_bytes": 73,
+      "sent_bytes": 795,
+      "receive_errno": 0
+    },
+    {
+      "event": "connection_closed",
+      "connection": 11,
+      "received_bytes": 217,
+      "sent_bytes": 761,
+      "receive_errno": 0
+    },
+    {
+      "event": "body_received",
+      "connection": 12,
+      "body_bytes": 1024,
+      "received_bytes": 1181
+    },
+    {
+      "event": "connection_closed",
+      "connection": 12,
+      "received_bytes": 1181,
+      "sent_bytes": 0,
+      "receive_errno": 0
+    },
+    {
+      "event": "connection_closed",
+      "connection": 13,
+      "received_bytes": 73,
+      "sent_bytes": 795,
+      "receive_errno": 0
+    },
+    {
+      "event": "connection_closed",
+      "connection": 14,
+      "received_bytes": 217,
+      "sent_bytes": 761,
+      "receive_errno": 0
+    },
+    {
+      "event": "body_received",
+      "connection": 15,
+      "body_bytes": 1024,
+      "received_bytes": 1181
+    },
+    {
+      "event": "connection_closed",
+      "connection": 15,
+      "received_bytes": 1181,
+      "sent_bytes": 0,
+      "receive_errno": 0
+    },
+    {
+      "event": "connection_closed",
+      "connection": 16,
+      "received_bytes": 73,
+      "sent_bytes": 795,
+      "receive_errno": 0
+    },
+    {
+      "event": "connection_closed",
+      "connection": 17,
+      "received_bytes": 217,
+      "sent_bytes": 761,
+      "receive_errno": 0
+    },
+    {
+      "event": "body_received",
+      "connection": 18,
+      "body_bytes": 1024,
+      "received_bytes": 1181
+    },
+    {
+      "event": "connection_closed",
+      "connection": 18,
+      "received_bytes": 1181,
+      "sent_bytes": 0,
+      "receive_errno": 0
+    },
+    {
+      "event": "connection_closed",
+      "connection": 19,
+      "received_bytes": 73,
+      "sent_bytes": 795,
+      "receive_errno": 0
+    },
+    {
+      "event": "connection_closed",
+      "connection": 20,
+      "received_bytes": 217,
+      "sent_bytes": 761,
+      "receive_errno": 0
+    },
+    {
+      "event": "body_received",
+      "connection": 21,
+      "body_bytes": 1024,
+      "received_bytes": 1181
+    },
+    {
+      "event": "connection_closed",
+      "connection": 21,
+      "received_bytes": 1181,
+      "sent_bytes": 0,
+      "receive_errno": 0
+    },
+    {
+      "event": "connection_closed",
+      "connection": 22,
+      "received_bytes": 73,
+      "sent_bytes": 795,
+      "receive_errno": 0
+    },
+    {
+      "event": "connection_closed",
+      "connection": 23,
+      "received_bytes": 217,
+      "sent_bytes": 761,
+      "receive_errno": 0
+    },
+    {
+      "event": "body_received",
+      "connection": 24,
+      "body_bytes": 1024,
+      "received_bytes": 1181
+    },
+    {
+      "event": "connection_closed",
+      "connection": 24,
+      "received_bytes": 1181,
+      "sent_bytes": 0,
+      "receive_errno": 0
+    },
+    {
+      "event": "connection_closed",
+      "connection": 25,
+      "received_bytes": 73,
+      "sent_bytes": 795,
+      "receive_errno": 0
+    },
+    {
+      "event": "connection_closed",
+      "connection": 26,
+      "received_bytes": 217,
+      "sent_bytes": 761,
+      "receive_errno": 0
+    },
+    {
+      "event": "body_received",
+      "connection": 27,
+      "body_bytes": 1024,
+      "received_bytes": 1181
+    },
+    {
+      "event": "connection_closed",
+      "connection": 27,
+      "received_bytes": 1181,
+      "sent_bytes": 0,
+      "receive_errno": 0
+    },
+    {
+      "event": "connection_closed",
+      "connection": 28,
+      "received_bytes": 73,
+      "sent_bytes": 795,
+      "receive_errno": 0
+    },
+    {
+      "event": "connection_closed",
+      "connection": 29,
+      "received_bytes": 217,
+      "sent_bytes": 761,
+      "receive_errno": 0
+    },
+    {
+      "event": "body_received",
+      "connection": 30,
+      "body_bytes": 1024,
+      "received_bytes": 1181
+    },
+    {
+      "event": "connection_closed",
+      "connection": 30,
+      "received_bytes": 1181,
+      "sent_bytes": 0,
+      "receive_errno": 0
+    },
+    {
+      "event": "connection_closed",
+      "connection": 31,
+      "received_bytes": 73,
+      "sent_bytes": 795,
+      "receive_errno": 0
+    },
+    {
+      "event": "connection_closed",
+      "connection": 32,
+      "received_bytes": 217,
+      "sent_bytes": 761,
+      "receive_errno": 0
+    },
+    {
+      "event": "body_received",
+      "connection": 33,
+      "body_bytes": 1024,
+      "received_bytes": 1181
+    },
+    {
+      "event": "connection_closed",
+      "connection": 33,
+      "received_bytes": 1181,
+      "sent_bytes": 0,
+      "receive_errno": 0
+    },
+    {
+      "event": "connection_closed",
+      "connection": 34,
+      "received_bytes": 73,
+      "sent_bytes": 796,
+      "receive_errno": 0
+    },
+    {
+      "event": "connection_closed",
+      "connection": 35,
+      "received_bytes": 217,
+      "sent_bytes": 761,
+      "receive_errno": 0
+    },
+    {
+      "event": "body_received",
+      "connection": 36,
+      "body_bytes": 20480,
+      "received_bytes": 20704
+    },
+    {
+      "event": "connection_closed",
+      "connection": 36,
+      "received_bytes": 12431861,
+      "sent_bytes": 1262,
+      "receive_errno": 0
+    },
+    {
+      "event": "connection_closed",
+      "connection": 37,
+      "received_bytes": 219,
+      "sent_bytes": 397,
+      "receive_errno": 0
+    },
+    {
+      "event": "connection_closed",
+      "connection": 38,
+      "received_bytes": 219,
+      "sent_bytes": 397,
+      "receive_errno": 0
+    },
+    {
+      "event": "connection_closed",
+      "connection": 39,
+      "received_bytes": 217,
+      "sent_bytes": 374,
+      "receive_errno": 0
+    },
+    {
+      "event": "connection_closed",
+      "connection": 40,
+      "received_bytes": 217,
+      "sent_bytes": 761,
+      "receive_errno": 0
+    },
+    {
+      "event": "body_received",
+      "connection": 41,
+      "body_bytes": 20258,
+      "received_bytes": 20480
+    },
+    {
+      "event": "connection_closed",
+      "connection": 41,
+      "received_bytes": 143782,
+      "sent_bytes": 796,
+      "receive_errno": 0
+    },
+    {
+      "event": "connection_closed",
+      "connection": 42,
+      "received_bytes": 217,
+      "sent_bytes": 761,
+      "receive_errno": 0
+    },
+    {
+      "event": "body_received",
+      "connection": 43,
+      "body_bytes": 20480,
+      "received_bytes": 20702
+    },
+    {
+      "event": "connection_closed",
+      "connection": 43,
+      "received_bytes": 143782,
+      "sent_bytes": 794,
+      "receive_errno": 0
+    },
+    {
+      "event": "connection_closed",
+      "connection": 44,
+      "received_bytes": 217,
+      "sent_bytes": 761,
+      "receive_errno": 0
+    },
+    {
+      "event": "body_received",
+      "connection": 45,
+      "body_bytes": 20258,
+      "received_bytes": 20480
+    },
+    {
+      "event": "connection_closed",
+      "connection": 45,
+      "received_bytes": 143782,
+      "sent_bytes": 800,
+      "receive_errno": 0
+    },
+    {
+      "event": "connection_closed",
+      "connection": 46,
+      "received_bytes": 217,
+      "sent_bytes": 761,
+      "receive_errno": 0
+    },
+    {
+      "event": "body_received",
+      "connection": 47,
+      "body_bytes": 20480,
+      "received_bytes": 20704
+    },
+    {
+      "event": "connection_closed",
+      "connection": 47,
+      "received_bytes": 12431861,
+      "sent_bytes": 789,
+      "receive_errno": 0
+    },
+    {
+      "event": "connection_closed",
+      "connection": 48,
+      "received_bytes": 217,
+      "sent_bytes": 761,
+      "receive_errno": 0
+    },
+    {
+      "event": "body_received",
+      "connection": 49,
+      "body_bytes": 20480,
+      "received_bytes": 20703
+    },
+    {
+      "event": "connection_closed",
+      "connection": 49,
+      "received_bytes": 1454303,
+      "sent_bytes": 822,
+      "receive_errno": 0
+    },
+    {
+      "event": "connection_closed",
+      "connection": 50,
+      "received_bytes": 217,
+      "sent_bytes": 761,
+      "receive_errno": 0
+    },
+    {
+      "event": "body_received",
+      "connection": 51,
+      "body_bytes": 20480,
+      "received_bytes": 20703
+    },
+    {
+      "event": "connection_closed",
+      "connection": 51,
+      "received_bytes": 2109663,
+      "sent_bytes": 845,
+      "receive_errno": 0
+    },
+    {
+      "event": "connection_closed",
+      "connection": 52,
+      "received_bytes": 217,
+      "sent_bytes": 761,
+      "receive_errno": 0
+    },
+    {
+      "event": "after",
+      "linux_userspace_only": true,
+      "read_only": true,
+      "stage1": "d4d7a4bf90fc26cc61c76000bb272fac3113c14525ab7119c3d10fbd477231f4",
+      "stage2": "5b084490813b540c1a82ddf2e2d4de46080e6cfe47b15b2e6575bdf3fe198fe9",
+      "environment": "d6d9522e25c4b984d571d34ba7657674fa371dff06fe82e2a3d34a877168e044",
+      "boot_tail": "c97fce784428a2e10cd6d4ef97ccc756f2e4c1b146a9b9dc5415d4e3e245b70a",
+      "parameter_tags": "9f739d37021667828f88ff2438b82b2d4b5806a8f3d44afb628cbd72e2007c59"
+    },
+    {
+      "event": "finished",
+      "exit_code": 0,
+      "denied_write_calls": 0,
+      "flashable_release": false,
+      "native_uboot_verified": false
+    }
+  ],
+  "boot_and_tags_after": [
+    "868107e8298fdfeda84c61f9cea11f1fd146b23239c62c9d8e2141160b487954  /dev/mtd1",
+    "9f739d37021667828f88ff2438b82b2d4b5806a8f3d44afb628cbd72e2007c59  /dev/mtd4"
+  ],
+  "root_corrected_bits_after": 48
+}

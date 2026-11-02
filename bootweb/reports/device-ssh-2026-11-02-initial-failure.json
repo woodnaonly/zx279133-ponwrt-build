@@ -1,0 +1,159 @@
+{
+  "schema": "sk-d840n-linux-ssh-readonly-v1",
+  "utc": "2026-11-02T06:51:55.800543+00:00",
+  "scope": "temporary Linux userspace test, NOT U-Boot/RAM recovery",
+  "device": "192.168.9.1",
+  "read_only_flash": true,
+  "flashable_release": false,
+  "native_uboot_verified": false,
+  "vendor_ecc_badblock_api_verified": false,
+  "reset_entry_verified": false,
+  "serial_rescue_verified": false,
+  "reboot_performed": false,
+  "partition_changes": false,
+  "harness_sha256": "0510c0a52064078d5c018567267e29b62983f4f7f557a480c37bc100f90c8c29",
+  "harness_bytes": 1321992,
+  "cases": [
+    {
+      "name": "board_identity",
+      "passed": true
+    },
+    {
+      "name": "executable_transfer_sha256",
+      "passed": true
+    },
+    {
+      "name": "arm64_c_hashes_and_current_base",
+      "passed": true
+    },
+    {
+      "name": "ssh_loopback_http_idle_locked",
+      "passed": true
+    },
+    {
+      "name": "same_single_file_page",
+      "passed": true,
+      "bytes": 6921,
+      "sha256": "6b52d5f47b84294f6dc7ed37be497bfb7f1dd6493078daf77c1dee73b4d0e737"
+    },
+    {
+      "name": "host_rebinding_rejected",
+      "passed": true
+    },
+    {
+      "name": "cross_origin_rejected",
+      "passed": true
+    },
+    {
+      "name": "bad_token_rejected",
+      "passed": true
+    },
+    {
+      "name": "truncated_upload_not_ready",
+      "passed": false
+    },
+    {
+      "name": "protected_hashes_unchanged_and_no_write_callback",
+      "passed": true
+    },
+    {
+      "name": "independent_full_boot_and_tags_unchanged",
+      "passed": true
+    }
+  ],
+  "pass": false,
+  "cleanup_complete": true,
+  "linux_board": {
+    "kernel": "6.18.38+",
+    "hostname": "ImmortalWrt",
+    "system": "ARMv8 Processor rev 4",
+    "model": "Skyworth SK-D840N",
+    "board_name": "skyworth,sk-d840n",
+    "rootfs_type": "jffs2",
+    "release": {
+      "distribution": "ImmortalWrt",
+      "version": "25.12.1",
+      "firmware_url": "https://downloads.immortalwrt.org/",
+      "revision": "r0-1b50aaf",
+      "target": "zte/zx279133",
+      "description": "ImmortalWrt 25.12.1 r0-1b50aaf",
+      "builddate": "1792990681"
+    }
+  },
+  "boot_and_tags_before": [
+    "868107e8298fdfeda84c61f9cea11f1fd146b23239c62c9d8e2141160b487954  /dev/mtd1",
+    "9f739d37021667828f88ff2438b82b2d4b5806a8f3d44afb628cbd72e2007c59  /dev/mtd4"
+  ],
+  "root_corrected_bits_before": 48,
+  "readonly_probe": [
+    {
+      "event": "before",
+      "linux_userspace_only": true,
+      "read_only": true,
+      "stage1": "d4d7a4bf90fc26cc61c76000bb272fac3113c14525ab7119c3d10fbd477231f4",
+      "stage2": "5b084490813b540c1a82ddf2e2d4de46080e6cfe47b15b2e6575bdf3fe198fe9",
+      "environment": "d6d9522e25c4b984d571d34ba7657674fa371dff06fe82e2a3d34a877168e044",
+      "boot_tail": "c97fce784428a2e10cd6d4ef97ccc756f2e4c1b146a9b9dc5415d4e3e245b70a",
+      "parameter_tags": "9f739d37021667828f88ff2438b82b2d4b5806a8f3d44afb628cbd72e2007c59"
+    },
+    {
+      "event": "after",
+      "linux_userspace_only": true,
+      "read_only": true,
+      "stage1": "d4d7a4bf90fc26cc61c76000bb272fac3113c14525ab7119c3d10fbd477231f4",
+      "stage2": "5b084490813b540c1a82ddf2e2d4de46080e6cfe47b15b2e6575bdf3fe198fe9",
+      "environment": "d6d9522e25c4b984d571d34ba7657674fa371dff06fe82e2a3d34a877168e044",
+      "boot_tail": "c97fce784428a2e10cd6d4ef97ccc756f2e4c1b146a9b9dc5415d4e3e245b70a",
+      "parameter_tags": "9f739d37021667828f88ff2438b82b2d4b5806a8f3d44afb628cbd72e2007c59"
+    },
+    {
+      "event": "finished",
+      "exit_code": 0,
+      "denied_write_calls": 0,
+      "flashable_release": false,
+      "native_uboot_verified": false
+    }
+  ],
+  "error": "truncated_upload_not_ready",
+  "server_events": [
+    {
+      "event": "before",
+      "linux_userspace_only": true,
+      "read_only": true,
+      "stage1": "d4d7a4bf90fc26cc61c76000bb272fac3113c14525ab7119c3d10fbd477231f4",
+      "stage2": "5b084490813b540c1a82ddf2e2d4de46080e6cfe47b15b2e6575bdf3fe198fe9",
+      "environment": "d6d9522e25c4b984d571d34ba7657674fa371dff06fe82e2a3d34a877168e044",
+      "boot_tail": "c97fce784428a2e10cd6d4ef97ccc756f2e4c1b146a9b9dc5415d4e3e245b70a",
+      "parameter_tags": "9f739d37021667828f88ff2438b82b2d4b5806a8f3d44afb628cbd72e2007c59"
+    },
+    {
+      "event": "listening",
+      "address": "127.0.0.1:18088",
+      "capabilities": 0,
+      "lifetime_ms": 180000,
+      "native_uboot_verified": false
+    },
+    {
+      "event": "after",
+      "linux_userspace_only": true,
+      "read_only": true,
+      "stage1": "d4d7a4bf90fc26cc61c76000bb272fac3113c14525ab7119c3d10fbd477231f4",
+      "stage2": "5b084490813b540c1a82ddf2e2d4de46080e6cfe47b15b2e6575bdf3fe198fe9",
+      "environment": "d6d9522e25c4b984d571d34ba7657674fa371dff06fe82e2a3d34a877168e044",
+      "boot_tail": "c97fce784428a2e10cd6d4ef97ccc756f2e4c1b146a9b9dc5415d4e3e245b70a",
+      "parameter_tags": "9f739d37021667828f88ff2438b82b2d4b5806a8f3d44afb628cbd72e2007c59"
+    },
+    {
+      "event": "finished",
+      "exit_code": 0,
+      "denied_write_calls": 0,
+      "flashable_release": false,
+      "native_uboot_verified": false
+    }
+  ],
+  "boot_and_tags_after": [
+    "868107e8298fdfeda84c61f9cea11f1fd146b23239c62c9d8e2141160b487954  /dev/mtd1",
+    "9f739d37021667828f88ff2438b82b2d4b5806a8f3d44afb628cbd72e2007c59  /dev/mtd4"
+  ],
+  "root_corrected_bits_after": 48
+}

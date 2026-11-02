@@ -6,6 +6,8 @@
 
 设备为 SK-D840N / ZX279133，512 MiB RAM、256 MiB SPI NAND。通过当前 Linux 只读访问确认过社区 `svn308776` stage2 的哈希及当前 240 MiB root + 1 MiB scratch 布局。这不等于验证了 U-Boot 中的 NAND API。
 
+2026-11-02 已通过 SSH 在设备 Linux 用户态运行同一份 C 校验核心和 HTTP 服务，完成真实固件上传校验、10 次上传中断和写入/重启锁定检查。测试只读打开 boot、tags，退出后保护区哈希一致，临时进程和文件已清理。详见 `../reports/2026-11-02-ssh-readonly.md`；下面的 U-Boot RAM、ECC/BBT、Reset 和串口门槛仍未通过。
+
 现有 Linux 日志出现 JFFS2 数据 CRC 告警；即使 bad_blocks 和 ecc_failures 为 0，也不能声明存储完全正常。实机升级测试前需要保留这些告警及现有数据，不应先格式化根分区来消除现象。
 
 COM3 当前由既有 relay 管理。不得抢占端口、启动第二个 relay、终止未知发送者，或无意创建 `serreset` 文件（会切换 DTR/RTS）。检查状态应在正确目录运行，因原工具部分路径相对工作目录：
