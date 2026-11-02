@@ -31,10 +31,12 @@ on:
       - configs/sk-d840n*
       - scripts/configure-sk-d840n.sh
       - scripts/prepare-sk-d840n-ui.sh
+      - scripts/sk-d840n-theme.sh
       - scripts/check-sk-d840n-management.sh
       - scripts/check-sk-d840n-ucode.sh
       - tests/*sk_pon*
       - tests/*sk_lan1_led*
+      - tests/test_sysupgrade.py
       - tests/sk_omci*
       - templates/**
       # The trial files go into the RAM image (the initramfs mode copies
@@ -118,10 +120,21 @@ jobs:
             g++-multilib git gnutls-dev gperf haveged help2man intltool lib32gcc-s1 libc6-dev-i386 libelf-dev \
             libglib2.0-dev libgmp3-dev libjson-c-dev libltdl-dev libmpc-dev libmpfr-dev libncurses-dev libncursesw5-dev \
             libpython3-dev libreadline-dev libssl-dev libtool libyaml-dev libz-dev lld llvm lrzsz mkisofs msmtp \
-            nano ninja-build p7zip p7zip-full patch pkgconf python3 python3-pip python3-ply python3-docutils \
+            nano ninja-build p7zip p7zip-full patch pkgconf python3 python3-pip python3-venv python3-ply python3-docutils \
             python3-pyelftools bc dwarves qemu-utils qemu-user re2c rsync scons squashfs-tools subversion swig texinfo \
             uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev zstd
           sudo -E timedatectl set-timezone "Asia/Shanghai"
+
+      - name: Prepare firmware tools and upgrade regression tests
+        if: steps.pick.outputs.run == 'true'
+        run: |
+          set -euo pipefail
+          python3 -m venv "$RUNNER_TEMP/skd840n-firmware-venv"
+          PY="$RUNNER_TEMP/skd840n-firmware-venv/bin/python"
+          "$PY" -m pip install --quiet --disable-pip-version-check 'zopfli==0.4.3' 'PyYAML==6.0.3'
+          echo "SKD840N_HOST_PYTHON=$PY" >> "$GITHUB_ENV"
+          "$PY" tests/test_sysupgrade.py
+          sh -n overlays/target/linux/zte/zx279133/base-files/lib/upgrade/platform.sh
 
       - name: Rust 1.96.1 and offline ONU regression tests
         if: steps.pick.outputs.run == 'true'
@@ -135,6 +148,7 @@ jobs:
             node tests/test_sk_pon_ui.js &&
             python3 tests/test_sk_pon_contract.py &&
             python3 tests/test_sk_pon_firstboot.py &&
+            python3 tests/test_sk_pon_theme.py &&
             python3 tests/test_sk_lan1_led.py &&
             sh tests/test_sk_pon_host.sh &&
             sh scripts/check-sk-d840n-ucode.sh
@@ -1401,118 +1415,23 @@ jobs:
           fi
 
       - name: Package flash images
+        id: package_flash
         if: steps.pick.outputs.run == 'true' && matrix.mode == 'flash'
         run: |
-          set -e
-          # Pinned to $KVER, not a bare `linux-*` glob. The glob matched whatever the build
-          # happened to leave in that directory, so a stale or unexpected version directory
-          # would be packaged and gated while the release text still named $KVER - the same
-          # shape as the dtb one ("check something other than what you ship"), one level up.
-          # The `|| true` lives inside the substitution on purpose: under `set -euo pipefail`
-          # a failed `ls` would end the step before the check below could say anything.
+          set -euo pipefail
           KT=$( { ls -d openwrt/build_dir/target-*/linux-zte_zx279133/linux-$KVER 2>/dev/null || true; } | head -1 )
-          test -n "$KT" || { echo "::error::no build dir for linux-$KVER (KVER=$KVER); what is there:"; ls -d openwrt/build_dir/target-*/linux-zte_zx279133/* 2>&1 || true; exit 1; }
-          echo "KT: $KT"
-          # Same trap as the KT line above, one line down: `set -e` aborts on an assignment
-          # whose command substitution fails, so the probe for mkimage must not be the thing
-          # that ends the step. This one installs the tool instead, which is deliberate.
-          MKIMAGE=$(ls openwrt/staging_dir/host/bin/mkimage 2>/dev/null || command -v mkimage || true)
-          [ -n "$MKIMAGE" ] || { sudo apt-get -qq update && sudo apt-get -qq install u-boot-tools; MKIMAGE=mkimage; }
-          # THE KERNEL HAS TO FIT IN THE KERNEL PARTITION.
-          #
-          # The board's loader reads exactly the "kernel" partition - the
-          # env says "mtdparts=...8192k@0x200000(kernel)..." and the bootcmd
-          # is "mtd read kernel 0x88000000" - so the uImage has to be no
-          # larger than 8 MiB.  The kernel build's own Image.gz was 8,395,859
-          # bytes, 7,315 bytes too big, and `mtd write` truncates it without
-          # saying a word: only `mtd verify` notices, and it failed on the
-          # board on 2026-10-25 with "kernel" and "flash-uImage" hashing
-          # differently.
-          #
-          # The loader has no other decompression: lzma, lz4, zstd and
-          # bzip2 all answer "Unimplemented compression type N" (measured
-          # on the board, by booting a probe image for each type).  So the
-          # payload has to stay a gzip stream - and gzip -9 cannot be
-          # improved on by another gzip implementation.
-          #
-          # zopfli can: it is a gzip stream (the same format, the same
-          # decoder on the board) that is a few percent smaller than gzip
-          # -9, because it searches harder for the same format.  The
-          # kernel itself is bit-identical - it is the same Image, only
-          # packed differently - so what is flashed is what was tested.
+          test -n "$KT" || { echo "::error::no build dir for linux-$KVER"; exit 1; }
           RAW="$KT/arch/arm64/boot/Image"
-          test -f "$RAW" || { echo "::error::no $RAW"; exit 1; }
-          IMG="$KT/arch/arm64/boot/Image.zopfli.gz"
-          # zopfli comes from PyPI, not from the distribution's package.
-          #
-          # The `zopfli` command in Ubuntu's archive is version 1.0.3 and its
-          # interface is not what this build assumed: it has no `-q`, no `-o`
-          # and no `--splitting`.  The build called it with all three, the
-          # command wrote nothing at all, and run 167 failed with "zopfli
-          # produced nothing" after an hour of compiling - with the log saying
-          # nothing about why.
-          #
-          # The Python binding has the knobs this needs by name
-          # (numiterations, blocksplitting), installs from a manylinux wheel
-          # without a compiler, and is exactly what the accepted image on the
-          # board was made with - so the CI and the bench produce the same
-          # bytes from the same kernel.
-          #
-          # --user, because the runner's python is not the runner's to
-          # change, and a wheel, because zopfli's C extension would otherwise
-          # need a compiler and a header package for no reason.
-          python3 -m pip install --quiet --disable-pip-version-check --user \
-            "zopfli==0.4.3" || {
-            echo "::error::the zopfli module could not be installed - the kernel would not fit in the partition"
-            exit 1; }
-          python3 -c "import zopfli.gzip" || {
-            echo "::error::the zopfli module is not importable"
-            exit 1; }
-          # tools/mkgzip.py does the compression, checks that the stream
-          # decompresses back to the same kernel, and refuses to write a
-          # payload that does not fit in the partition.
-          python3 tools/mkgzip.py "$RAW" "$IMG" 10
-          test -f "$IMG" || { echo "::error::zopfli produced nothing"; exit 1; }
-          echo "kernel: $(stat -c %s "$RAW") bytes raw"
-          echo "kernel: $(stat -c %s "$KT/arch/arm64/boot/Image.gz" 2>/dev/null || echo '?') bytes with gzip -9"
-          echo "kernel: $(stat -c %s "$IMG") bytes with zopfli"
-          # The payload has to be a gzip stream that gives the same kernel
-          # back. zopfli writes one, but the loader only knows gzip, so the
-          # check is not optional: a stream the board's gunzip cannot take
-          # would fail as "Unimplemented compression type N" at boot, with
-          # nothing in the build log to say why.
-          gzip -dc "$IMG" | cmp - "$RAW" || { echo "::error::the zopfli stream does not decompress to the kernel"; exit 1; }
-          echo "kernel: the zopfli stream decompresses to the kernel"
-          # the dtb is where the kernel build left it. OpenWrt also stages a copy named
-          # image-<dts>.dtb under build_dir, and OpenWrt patches dtbs on the way to an
-          # image, so more than one file can match. The old line took whichever `find`
-          # happened to list first, which is an accident of argument order rather than a
-          # stated choice - and a staged copy that differs from the kernel's would then ship
-          # silently. Pick the kernel build explicitly and announce any divergence.
-          DTB=$(find "$KT/arch/arm64/boot/dts/zte" -name '*sk-d840n*.dtb' | head -1)
-          test -n "$DTB" || { echo "no sk-d840n dtb produced" >&2; ls -l "$KT/arch/arm64/boot/dts/zte"; exit 1; }
-          echo "DTB: $DTB"
-          echo "DTB: $(sha256sum "$DTB" | cut -d' ' -f1)"
-          for other in $(find openwrt/build_dir -name '*sk-d840n*.dtb' 2>/dev/null); do
-            if cmp -s "$DTB" "$other"; then
-              echo "     staged copy identical: $other"
-            else
-              echo "::warning::staged copy differs from the kernel build:"
-              echo "::warning::  $other  ($(sha256sum "$other" | cut -d' ' -f1))"
-              echo "::warning::  shipping the kernel build ($DTB); confirm that is the intent"
-            fi
-          done
-          # include/image.mk emits $(prefix)-$(fstype)-rootfs.jffs2; the SPI-NAND
-          # erase block on this board is 128 KiB, so take the 128k variant.
-          RS=$(find openwrt/bin/targets/zte/zx279133 -name '*jffs2-128k-rootfs.jffs2' | head -1)
-          [ -n "$RS" ] || RS=$(find openwrt/bin/targets/zte/zx279133 -name '*rootfs.jffs2' | head -1)
-          test -n "$RS" || { echo "no rootfs.jffs2 produced" >&2; ls -l openwrt/bin/targets/zte/zx279133; exit 1; }
-          echo "rootfs: $RS"
-          # bootargs from the board's env load a legacy uImage at the FIT load address
-          "$MKIMAGE" -A arm64 -O linux -T kernel -C gzip -a 0x80200000 -e 0x80200000 \
-            -n "OpenWrt mainline $KVER sk-d840n" -d "$IMG" flash-uImage
-          cp "$DTB" flash-dtb.bin
-          cp "$RS" flash-rootfs.jffs2
+          test -f "$RAW"
+          # OpenWrt has already made the Zopfli uImage, sysupgrade tar and
+          # native metadata/signature. Validate that exact image and export its
+          # members verbatim: there is no second compressor or mkimage here.
+          python3 tools/check_sysupgrade.py \
+            --source-dir openwrt/bin/targets/zte/zx279133 \
+            --raw-kernel "$RAW" \
+            --fwtool openwrt/staging_dir/host/bin/fwtool \
+            --export-dir .
+          RS=flash-rootfs.jffs2
           # THE NAT RULE HAS TO BE IN THE IMAGE, not only in the tree.  A
           # rootfs without it is a board that boots, serves LuCI and cannot
           # route, and the only way to know which one was built is to look
@@ -1552,57 +1471,23 @@ jobs:
           fi
           echo "rootfs: it carries the NAT rule"
           grep -x -e 'sk-nat' -e 'S96sk-nat' -e '99-sk-nat' rootfs-names.txt || true
-          # The same three parts as one sysupgrade tar, for upgrading from inside a
-          # running system (LuCI or `sysupgrade -n`). base-files platform.sh writes
-          # them by label, so no partition offset is hard-coded on the device.
-          SU=$(find openwrt/bin/targets/zte/zx279133 -name '*jffs2-128k-sysupgrade.bin' | head -1)
-          [ -n "$SU" ] || SU=$(find openwrt/bin/targets/zte/zx279133 -name '*sysupgrade.bin' | head -1)
-          test -n "$SU" || { echo "no sysupgrade.bin produced" >&2; ls -l openwrt/bin/targets/zte/zx279133; exit 1; }
-          echo "sysupgrade: $SU"
-          cp "$SU" flash-sysupgrade.bin
           cp templates/flash-sk-d840n.sh flash-sk-d840n.sh
-          ls -l flash-uImage flash-dtb.bin flash-rootfs.jffs2 flash-sysupgrade.bin
-          # THE GATE: the kernel partition is 8 MiB, and `mtd write` truncates
-          # what does not fit without saying a word - only `mtd verify` on the
-          # board notices, and it says so after the flash has already
-          # happened. A release that ships an oversized uImage is worse than
-          # no release at all: the board reports a successful flash and then
-          # comes up with "wrong image header" and nothing else to go on.
-          #
-          # This is not hypothetical. The 2026-10-25 build produced an
-          # 8,395,923-byte uImage for an 8,388,608-byte partition - 7,315
-          # bytes over - and the board's `mtd verify` is the only thing that
-          # caught it (the kernel hash and the image hash differed).
-          KPART=8388608
-          KSIZE=$(stat -c %s flash-uImage)
-          echo "kernel uImage: $KSIZE bytes, the kernel partition holds $KPART"
-          if [ "$KSIZE" -gt "$KPART" ]; then
-            echo "::error::flash-uImage is $KSIZE bytes and the kernel partition holds only $KPART - mtd write would truncate it silently"
-            exit 1
-          fi
-          echo "kernel uImage: it fits, with $((KPART - KSIZE)) bytes to spare"
-          # Manifest travels INSIDE the tarball, not just as a release attachment: the
-          # flasher runs on the board, and it can only check integrity against a manifest
-          # that came across with the images. `mtd verify` cannot do this - it confirms
-          # whatever was just written, so a truncated image is programmed and reported as
-          # success.
-          ( cd . && sha256sum flash-uImage flash-dtb.bin flash-rootfs.jffs2 \
-                            flash-sysupgrade.bin flash-sk-d840n.sh > sha256sums-release )
-          cat sha256sums-release
-          # prove the manifest describes these exact files before shipping it
+          # The maintenance manifest retains its existing filenames; the direct
+          # download has its own checksum, without duplicating the bin in the tgz.
+          sha256sum immortalwrt-sk-d840n-sysupgrade.bin > immortalwrt-sk-d840n-sysupgrade.bin.sha256
+          sha256sum flash-uImage flash-dtb.bin flash-rootfs.jffs2 \
+            flash-sysupgrade.bin flash-sk-d840n.sh > sha256sums-release
+          sha256sum -c immortalwrt-sk-d840n-sysupgrade.bin.sha256
           sha256sum -c sha256sums-release
-          # one tarball so the RAM trial only has to tftp a single file
           mkdir -p flash-set
           cp flash-uImage flash-dtb.bin flash-rootfs.jffs2 flash-sysupgrade.bin \
-             flash-sk-d840n.sh sha256sums-release flash-set/
+            flash-sk-d840n.sh sha256sums-release flash-set/
           tar czf flash-set.tgz -C flash-set .
-          # and prove the tarball carries both the images and the manifest that covers them
-          tar tzf flash-set.tgz | sort
-          rm -rf flash-set-verify && mkdir flash-set-verify
-          tar xzf flash-set.tgz -C flash-set-verify
-          ( cd flash-set-verify && sha256sum -c sha256sums-release )
-          rm -rf flash-set-verify
-          ls -l flash-set.tgz
+          VERIFY_DIR=$(mktemp -d)
+          trap 'rm -rf "$VERIFY_DIR"' EXIT
+          tar xzf flash-set.tgz -C "$VERIFY_DIR"
+          ( cd "$VERIFY_DIR" && sha256sum -c sha256sums-release )
+          echo "validated=true" >> "$GITHUB_OUTPUT"
 
       - name: "Gate: every dtb compatible has a driver in this kernel"
         if: steps.pick.outputs.run == 'true' && matrix.mode == 'flash'
@@ -1807,6 +1692,7 @@ jobs:
           exit "$rc"
 
       - name: Package initramfs image
+        id: package_initramfs
         if: steps.pick.outputs.run == 'true' && matrix.mode == 'initramfs'
         run: |
           set -e
@@ -1816,6 +1702,7 @@ jobs:
           cp "$ITB" sk-d840n-initramfs.itb
           python3 tools/check-sk-lan1-led.py --fit sk-d840n-initramfs.itb
           ls -l sk-d840n-initramfs.itb
+          echo "validated=true" >> "$GITHUB_OUTPUT"
 
       - name: Stage trial inputs
         if: steps.pick.outputs.run == 'true'
@@ -1852,7 +1739,13 @@ jobs:
         run: |
           # In initramfs mode the flash-* files do not exist; sha256sum then exits
           # non-zero and pipefail would fail a job whose images are fine.
-          sha256sum flash-uImage flash-dtb.bin flash-rootfs.jffs2 flash-sysupgrade.bin sk-d840n-initramfs.itb 2>/dev/null | tee sha256sums || true
+          if [ "${{ matrix.mode }}" = flash ]; then
+            sha256sum immortalwrt-sk-d840n-sysupgrade.bin flash-uImage flash-dtb.bin \
+              flash-rootfs.jffs2 flash-sysupgrade.bin > sha256sums
+          else
+            sha256sum sk-d840n-initramfs.itb > sha256sums
+          fi
+          sha256sum -c sha256sums
           {
             echo "## ${{ matrix.mode }} output"
             echo '```'
@@ -1881,11 +1774,11 @@ jobs:
           if-no-files-found: ignore
 
       - name: Upload outputs
-        # Not `success()`: a 70-minute build that trips over a cosmetic late step
-        # still produced images worth having. Artifacts need a session to
-        # download; the anonymous release below stays gated on success so a broken
-        # build can never be published as if it were good.
-        if: steps.pick.outputs.run == 'true' && !cancelled()
+        # Failed or unvalidated firmware must not be offered for flashing.
+        if: >-
+          success() && steps.pick.outputs.run == 'true' &&
+          ((matrix.mode == 'flash' && steps.package_flash.outputs.validated == 'true') ||
+           (matrix.mode == 'initramfs' && steps.package_initramfs.outputs.validated == 'true'))
         uses: actions/upload-artifact@v4
         with:
           name: sk-d840n-${{ matrix.mode }}
@@ -1901,8 +1794,22 @@ jobs:
             trial-set.tgz
             trial
 
+      - name: Upload direct sysupgrade image
+        if: success() && steps.pick.outputs.run == 'true' && matrix.mode == 'flash' && steps.package_flash.outputs.validated == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: sk-d840n-sysupgrade
+          compression-level: 0
+          if-no-files-found: error
+          path: |
+            immortalwrt-sk-d840n-sysupgrade.bin
+            immortalwrt-sk-d840n-sysupgrade.bin.sha256
+
       - name: Publish release
-        if: success()
+        if: >-
+          success() && steps.pick.outputs.run == 'true' &&
+          ((matrix.mode == 'flash' && steps.package_flash.outputs.validated == 'true') ||
+           (matrix.mode == 'initramfs' && steps.package_initramfs.outputs.validated == 'true'))
         uses: softprops/action-gh-release@v2
         with:
           tag_name: skd840n_${{ matrix.mode }}_${{ github.run_number }}_${{ github.run_id }}
@@ -1919,13 +1826,17 @@ jobs:
           # the note do not belong in the document a person reads to decide what to do.
           body: |
             ## SK-D840N（ZX279133，mainline 6.18.38）— ${{ matrix.mode }}
+
             - ImmortalWrt `cnjn/ImmortalWrt@sr1010-zx279133` + `cnjn/linux-mainline-zte-zxslc-sr1010@build`
             - 板级文件：`zx279133-sk-d840n.dts`；分区顺序保证 `root` = mtdblock5，与板上现有 U-Boot 的 bootargs 一致
             - **未在本机验证**。免串口流程：先 `trial-kexec.sh` 用 kexec 起 RAM 镜像（不写 flash，断电即回原系统），
               确认 SSH 通了且 `/proc/mtd` 里 root 仍是第 5 个，再用 `flash-set.tgz` 里的 `flash-sk-d840n.sh --write`
               按 root → dtb → kernel 的顺序写入
-            - `flash-sysupgrade.bin`：同一套 kernel/dtb/root 打成的 sysupgrade tar，可在运行中的系统里用
-              LuCI 或 `sysupgrade -n` 刷入（设备侧 `platform.sh` 按分区标签写入，仍然 kernel 最后）。
+            - **flash 模式直刷文件：`immortalwrt-sk-d840n-sysupgrade.bin`**。从本页 Assets 单独下载，
+              **上传至 LuCI 固件升级页面，无需解压**；也可用 `sysupgrade` 命令。内部是标准 sysupgrade tar，
+              已验证 kernel ≤ 8 MiB；`flash-sysupgrade.bin` 是字节完全相同的兼容文件名。
+              Actions artifact 下载仍会套 ZIP，关闭压缩也不改变这一机制；需要直接下载 `.bin` 请使用本页 Assets。
+              `flash-set.tgz` 是维护/救援包，不可直接上传至 LuCI；`.itb` 是 initramfs 模式的 RAM 救援镜像。
               注意：换了 kernel 的 sysupgrade 若内核起不来，没有串口就只能上编程器 —— 先用 kexec 试驾
             - LAN 口走 SR1010 的 NPPT 路径，PHY 是 **RTL8226B**（Realtek），在 MDIO controller #1 的地址 5 上。
               **板级 dts 里现在没有这颗 PHY 的节点**（2026-10-29 删掉），这是实测的结果，不是偏好：
@@ -1967,6 +1878,8 @@ jobs:
               微码里的 packet-type / port-flow 表是否自带 GEM 分流，从头部读不出来；这需要一次起内核看日志。
               运行时网口会不会出现，同样只能在板子上看 `/sys/class/net`。
           files: |
+            immortalwrt-sk-d840n-sysupgrade.bin
+            immortalwrt-sk-d840n-sysupgrade.bin.sha256
             flash-uImage
             flash-dtb.bin
             flash-rootfs.jffs2
@@ -1979,3 +1892,14 @@ jobs:
             trial-set.tgz
             trial/*
           ignore_missing_files: true
+
+      - name: Direct firmware download summary
+        if: success() && steps.pick.outputs.run == 'true' && matrix.mode == 'flash' && steps.package_flash.outputs.validated == 'true'
+        run: |
+          {
+            echo '## ImmortalWrt 直刷固件'
+            echo '[下载 immortalwrt-sk-d840n-sysupgrade.bin](https://github.com/${{ github.repository }}/releases/download/skd840n_flash_${{ github.run_number }}_${{ github.run_id }}/immortalwrt-sk-d840n-sysupgrade.bin)'
+            echo
+            echo '上传至 LuCI 固件升级页面，无需解压。Actions artifact 外层仍是 ZIP；上面的 Release 链接直接下载 .bin。'
+            echo 'flash-set.tgz 用于维护/救援，不能直接上传至 LuCI；initramfs .itb 只用于 RAM 启动。'
+          } >> "$GITHUB_STEP_SUMMARY"

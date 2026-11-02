@@ -61,12 +61,21 @@ Workflow `ZX279133 SK-D840N Build`, matrix mode `initramfs` and `flash`
 
 | artifact | what it is |
 | --- | --- |
+| `immortalwrt-sk-d840n-sysupgrade.bin` | primary flash-mode download: upload directly to LuCI's firmware upgrade page; do not unpack |
+| `immortalwrt-sk-d840n-sysupgrade.bin.sha256` | SHA256 checksum for the primary download |
 | `sk-d840n-initramfs.itb` | RAM-only FIT, same shape as SR1010's |
 | `trial-set.tgz` | `trial-Image.gz` + `trial-dtb.bin` + both scripts, one download |
 | `trial-Image.gz`, `trial-dtb.bin` | the kernel with the initramfs embedded, unpacked for `kexec`, and its dtb |
 | `flash-uImage` / `flash-dtb.bin` / `flash-rootfs.jffs2` | the triple the installed U-Boot bootcmd reads (`mtd read kernel`/`mtd read dtb`, `bootm`, `root=/dev/mtdblock5`) |
-| `flash-sysupgrade.bin` | the same triple as a sysupgrade tar, for flashing from inside a running system |
-| `flash-set.tgz` | those four plus `flash-sk-d840n.sh` |
+| `flash-sysupgrade.bin` | byte-identical compatibility filename for the primary sysupgrade image |
+| `flash-set.tgz` | maintenance bundle: the three partition files, `flash-sysupgrade.bin`, the flasher and its checksum manifest; not a LuCI upload |
+
+Download the standalone `.bin` from a successful **flash** Release's Assets, or
+use the direct link in the Actions run summary. GitHub Actions artifacts are
+downloaded inside a ZIP even with compression disabled; the separate
+`sk-d840n-sysupgrade` artifact contains the `.bin` and its checksum. Release
+assets do not have that ZIP wrapper. The `.itb` is a RAM-only recovery image,
+not an installed-system upgrade.
 
 ### Browser recovery (`sk-d840n-initramfs.itb`, initramfs mode only)
 
@@ -93,15 +102,32 @@ which takes Alpine's musl `kexec-tools` plus the `libz`/`liblzma` its binary nee
 writes `staging/trial/trial-kx.tgz`. Copy it next to the trial artifacts (it is not
 in the release, so `trial-kexec.sh` takes it as a local file or fetches it).
 
-## Upgrading from inside the system (`flash-sysupgrade.bin`)
+## Upgrading from inside the system
 
-`sysupgrade.bin` is an **uncompressed sysupgrade tar** whose members are
+`immortalwrt-sk-d840n-sysupgrade.bin` is an **uncompressed sysupgrade tar** whose members are
 `sysupgrade-skyworth_sk-d840n/{CONTROL,kernel,dtb,root}` - the exact triple above.
+The `.bin` is already the uploadable firmware: its internal tar format is part
+of the platform's upgrade protocol, not a download wrapper to remove.
+The native OpenWrt image pipeline uses Zopfli to fit the legacy gzip uImage in
+the 8,388,608-byte kernel partition, including its 64-byte header. CI checks
+its CRCs and raw-kernel identity, preserves native metadata/signatures, and
+exports all three maintenance images from this same sysupgrade.
 `overlays/target/linux/zte/zx279133/base-files/lib/upgrade/platform.sh` writes them
 back by partition label, so no offset is hard-coded on the device, and it keeps the
 `kernel` partition for last for the same reason the flasher does.
 
-    sysupgrade -n flash-sysupgrade.bin        # or the LuCI firmware page
+    sha256sum -c immortalwrt-sk-d840n-sysupgrade.bin.sha256
+    sysupgrade -n immortalwrt-sk-d840n-sysupgrade.bin  # or upload the .bin in LuCI
+
+Preflight checks require nonempty regular kernel/dtb/root members and compare
+each size with the running kernel's MTD capacity. The upgrade repeats all
+checks before the first write. Failed builds publish logs, not flashable
+artifacts. `flash-sysupgrade.bin` remains available for existing scripts.
+
+For local builds, install `zopfli==0.4.3` in the host Python and run the configure
+script to stage the compressor. With a virtual environment, pass its interpreter
+as `SKD840N_HOST_PYTHON=/absolute/path/to/venv/bin/python` to Make. CI supplies
+this variable from a pinned virtual environment before compiling.
 
 This is safe with respect to the mounted root because `/sbin/sysupgrade` hands the
 work to `/lib/upgrade/do_stage2`, which runs from `/tmp/root` (`RAM_ROOT`) after the

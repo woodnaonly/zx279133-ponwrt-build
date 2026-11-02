@@ -55,7 +55,8 @@ def main():
     src, dst = sys.argv[1], sys.argv[2]
     iters = int(sys.argv[3]) if len(sys.argv) > 3 else 10
 
-    raw = open(src, "rb").read()
+    with open(src, "rb") as source:
+        raw = source.read()
     print("kernel: %d bytes raw" % len(raw))
 
     # Block splitting is worth another 1.5% on this kernel (8,199,103 bytes
@@ -81,10 +82,7 @@ def main():
                          "same kernel back\n")
         return 1
 
-    with open(dst, "wb") as fh:
-        fh.write(payload)
     total = len(payload) + HEADER
-    print("wrote %s: %d bytes" % (dst, len(payload)))
     print("the 8 MiB partition holds %d bytes with the uImage header: %s "
           "(spare %d)"
           % (PARTITION, "it fits" if total <= PARTITION else "IT DOES NOT FIT",
@@ -94,6 +92,9 @@ def main():
                          "%d byte partition - mtd write would truncate it "
                          "silently\n" % (total - PARTITION, PARTITION))
         return 1
+    with open(dst, "wb") as fh:
+        fh.write(payload)
+    print("wrote %s: %d bytes" % (dst, len(payload)))
     if os.path.getsize(dst) != len(payload):
         sys.stderr.write("::error::the file on disk is not what was "
                          "compressed\n")

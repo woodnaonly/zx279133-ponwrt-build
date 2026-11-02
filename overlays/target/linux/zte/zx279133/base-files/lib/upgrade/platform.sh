@@ -2,6 +2,9 @@
 
 . /lib/functions.sh
 
+# stage2 copies awk/wc/tar itself, but not the mktemp used by both preflights.
+RAMFS_COPY_BIN="${RAMFS_COPY_BIN:-} mktemp"
+
 # Skyworth SK-D840N under the community U-Boot that is already flashed:
 #   bootcmd = mtd read kernel ...; mtd read dtb ...; bootm  -  with
 #   bootargs ... root=/dev/mtdblock5 rootfstype=jffs2
@@ -15,8 +18,15 @@
 # replaced the board still boots the kernel it booted before, and on a unit with
 # no serial console that window is the only recovery there is.
 
-skd840n_has_part() { # label
-	grep -q "\"$1\"" /proc/mtd
+skd840n_part_size() { # label -> size in bytes, from the running kernel
+	local index size
+	index=$(awk -F'"' -v name="$1" '$2 == name {
+		sub(/^mtd/, "", $1); sub(/:.*/, "", $1); print $1
+	}' /proc/mtd)
+	case "$index" in ''|*[!0-9]*) return 1 ;; esac
+	size=$(cat "/sys/class/mtd/mtd$index/size" 2>/dev/null) || return 1
+	case "$size" in ''|*[!0-9]*|0) return 1 ;; esac
+	printf '%s\n' "$size"
 }
 
 # Where the saved configuration archive is, echoed for `mtd -j`; nothing if there is none.
@@ -68,36 +78,82 @@ skd840n_tar_z() { # file; echoes "z" for gzip, nothing for a plain tar
 	esac
 }
 
-platform_check_image() {
-	[ "$#" -gt 1 ] && return 1
-	local file="$1"
-	local z
+# Check ALL members before root (or any other partition) can be erased.
+# Called both from the preflight and again inside the upgrade RAM root.
+skd840n_validate_parts() { # directory containing kernel, dtb and root
+	local part size capacity
+	for part in kernel dtb root; do
+		capacity=$(skd840n_part_size "$part") || {
+			v "Invalid image: $part partition capacity is unavailable"
+			return 1
+		}
+		size=0
+		if [ ! -f "$1/$part" ] || [ -L "$1/$part" ]; then
+			v "Invalid image: $part size=$size capacity=$capacity: not a regular file"
+			return 1
+		fi
+		size=$(wc -c < "$1/$part") || return 1
+		if [ "$size" -eq 0 ] || [ "$size" -gt "$capacity" ]; then
+			v "Invalid image: $part size=$size capacity=$capacity: empty or oversized"
+			return 1
+		fi
+	done
+}
 
+# Stream only expected regular members to fixed temporary filenames. Never
+# extract arbitrary archive paths or links into the upgrade RAM filesystem.
+skd840n_unpack_image() { # image, temporary directory
+	local file="$1" dir="$2" z listing member part
+	local prefix=sysupgrade-skyworth_sk-d840n
 	z=$(skd840n_tar_z "$file")
-	tar t${z}f "$file" 2>/dev/null | grep -q 'sysupgrade-[^/]*/kernel' || {
-		v "Invalid image: not a sysupgrade tar with a kernel member"
+	listing=$(tar t${z}f "$file" 2>/dev/null) || {
+		v "Invalid image: cannot list sysupgrade tar"
 		return 1
 	}
-	skd840n_has_part kernel && skd840n_has_part root || {
-		v "This kernel exposes no kernel/root mtd partitions - wrong board?"
+	for member in $listing; do
+		case "$member" in
+		"$prefix"|"$prefix/"|"$prefix/CONTROL"|"$prefix/kernel"|"$prefix/dtb"|"$prefix/root") ;;
+		*) v "Invalid image: unexpected archive member $member"; return 1 ;;
+		esac
+	done
+	# Both BusyBox and GNU tar put the file type first in verbose listings.
+	if tar t${z}vf "$file" 2>/dev/null | grep -q '^[^d-]'; then
+		v "Invalid image: archive contains a link or special file"
+		return 1
+	fi
+	for part in CONTROL kernel dtb root; do
+		if [ "$(printf '%s\n' "$listing" | grep -Fxc "$prefix/$part")" != 1 ]; then
+			v "Invalid image: missing or duplicate $part member"
+			return 1
+		fi
+		tar x${z}Of "$file" "$prefix/$part" > "$dir/$part" || {
+			v "Invalid image: cannot read $part member"
+			return 1
+		}
+	done
+	[ "$(cat "$dir/CONTROL")" = 'BOARD=skyworth_sk-d840n' ] || {
+		v "Invalid image: wrong CONTROL board"
 		return 1
 	}
-	return 0
+	skd840n_validate_parts "$dir"
+}
+
+platform_check_image() {
+	[ "$#" -eq 1 ] || return 1
+	local dir rc=0
+	dir=$(mktemp -d) || return 1
+	skd840n_unpack_image "$1" "$dir" || rc=1
+	rm -rf "$dir"
+	return "$rc"
 }
 
 platform_do_upgrade() {
 	local file="$1" dir sub conf_tar
-	local z
-
-	z=$(skd840n_tar_z "$file")
 	dir=$(mktemp -d) || return 1
-	tar x${z}f "$file" -C "$dir" || { rm -rf "$dir"; return 1; }
-	sub=$(find "$dir" -maxdepth 1 -type d -name 'sysupgrade-*' | head -1)
-	if [ -z "$sub" ]; then
-		v "No sysupgrade-<board> directory in image"
-		rm -rf "$dir"
-		return 1
-	fi
+	# Revalidate before any write, even when preflight was bypassed or the
+	# image was replaced after platform_check_image returned successfully.
+	skd840n_unpack_image "$file" "$dir" || { rm -rf "$dir"; return 1; }
+	sub=$dir
 
 	if [ -f "$sub/root" ]; then
 		# -j gives the mtd tool the saved config archive so it is appended to the

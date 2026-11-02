@@ -6,6 +6,17 @@ include $(INCLUDE_DIR)/image.mk
 KERNEL_LOADADDR := 0x80200000
 KERNEL_ENTRY := 0x80200000
 
+# The flash kernel must be compressed before sysupgrade-tar consumes it.
+# CI fixes this interpreter to the venv containing zopfli==0.4.3; local builds
+# may use python3 with the same module installed.
+SKD840N_HOST_PYTHON ?= python3
+export SKD840N_HOST_PYTHON
+
+define Build/skd840n-gzip
+	$(SKD840N_HOST_PYTHON) -u $(TOPDIR)/scripts/skd840n-mkgzip.py $@ $@.new 10
+	mv $@.new $@
+endef
+
 define Device/Default
   PROFILES := Default
   KERNEL_NAME := Image
@@ -43,8 +54,10 @@ define Device/skyworth_sk-d840n
   # refused for a board-name mismatch.
   SUPPORTED_DEVICES := skyworth,sk-d840n zte,133
   KERNEL_NAME := Image
-  KERNEL = kernel-bin | gzip | uImage gzip
+  KERNEL = kernel-bin | skd840n-gzip | uImage gzip
   KERNEL_SUFFIX := .uImage
+  KERNEL_SIZE := 8192k
+  KERNEL_DEPENDS += $$(TOPDIR)/scripts/skd840n-mkgzip.py
   BLOCKSIZE := 128k
   PAGESIZE := 2048
   # include/image.mk names the artifact $(DEVICE_IMG_PREFIX)-$(fstype)-$(imagename),

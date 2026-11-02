@@ -1,12 +1,28 @@
 #!/bin/sh
 # SPDX-License-Identifier: GPL-2.0-or-later
+set -eu
 [ -n "${IPKG_INSTROOT:-}${PKG_ROOT:-}" ] && exit 1
-[ "$(uci -q get luci.main.skd840n_argon_migrated)" = 1 ] && exit 0
+[ "$(uci -q get luci.main.skd840n_argon_migrated)" = 2 ] && exit 0
 [ -f /www/luci-static/argon/css/cascade.css ] || exit 1
-uci batch <<'EOF'
-set luci.themes.Argon='/luci-static/argon'
-set luci.main.mediaurlbase='/luci-static/argon'
-set luci.main.lang='zh_cn'
-set luci.main.skd840n_argon_migrated='1'
-commit luci
-EOF
+
+# Version 2 also migrates retained v1 configs from automatic/dark to light.
+# Check each UCI operation: a batch does not reliably propagate command errors.
+uci -q get luci.main >/dev/null
+uci -q get 'argon.@global[0]' >/dev/null || uci add argon global >/dev/null
+uci set 'argon.@global[0].mode=light'
+uci commit argon
+if uci -q get luci.themes >/dev/null; then
+	uci delete luci.themes
+fi
+uci set luci.themes=internal
+uci set luci.themes.Argon=/luci-static/argon
+uci set luci.main.mediaurlbase=/luci-static/argon
+uci set luci.main.lang=zh_cn
+uci commit luci
+
+# Do not let a failed commit leave a cached completion marker that skips retries.
+uci set luci.main.skd840n_argon_migrated=2
+if ! uci commit luci; then
+	uci -q revert luci.main.skd840n_argon_migrated
+	exit 1
+fi

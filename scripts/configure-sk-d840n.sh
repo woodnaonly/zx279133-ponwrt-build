@@ -6,6 +6,9 @@
 #             (what the board's existing U-Boot bootcmd boots with no serial cable)
 set -eu
 
+SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
+. "$SCRIPT_DIR/sk-d840n-theme.sh"
+
 IW_DIR=${1:?openwrt dir}
 KERNEL_TREE=${2:?kernel tree}
 MODE=${3:?initramfs or flash}
@@ -17,6 +20,8 @@ grep -q 'zx279133-sk-d840n.dtb' "$KERNEL_TREE/arch/arm64/boot/dts/zte/Makefile" 
 	echo "board dts is not in arch/arm64/boot/dts/zte/Makefile" >&2; exit 1; }
 
 cd "$IW_DIR"
+# Native sysupgrade and standalone images must use the same compressor.
+cp "$SCRIPT_DIR/../tools/mkgzip.py" scripts/skd840n-mkgzip.py
 [ -f configs/zte_zx279133_sr1010_initramfs.config ] || { echo "no sr1010 base config" >&2; exit 1; }
 cp configs/zte_zx279133_sr1010_initramfs.config .config
 printf 'CONFIG_EXTERNAL_KERNEL_TREE="%s"\n' "$(cd "$KERNEL_TREE" && pwd)" >>.config
@@ -480,7 +485,9 @@ printf '%s\n' CONFIG_PACKAGE_luci-app-sk-d840n-pon=y CONFIG_PACKAGE_luci-theme-a
 	CONFIG_PACKAGE_luci-i18n-argon-config-zh-cn=y CONFIG_LUCI_LANG_zh_Hans=y \
 	CONFIG_PACKAGE_firewall4=y CONFIG_PACKAGE_luci-app-firewall=y CONFIG_PACKAGE_luci-i18n-firewall-zh-cn=y >>.config
 
+skd840n_select_theme .
 make defconfig
+skd840n_check_theme_config .config
 for package in zxpond libzxpon-omci luci-app-sk-d840n-pon luci-theme-argon luci-i18n-base-zh-cn luci-i18n-argon-config-zh-cn firewall4 luci-app-firewall luci-i18n-firewall-zh-cn rpcd-mod-ucode ucode-mod-fs; do
 	grep -qx "CONFIG_PACKAGE_$package=y" .config || {
 		echo "Required ONU/firewall package lost after defconfig: $package" >&2; exit 1;
