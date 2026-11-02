@@ -72,7 +72,8 @@ def compile_tests(steps, cpp, dtc):
         board = directory / 'panel.dts'
         board.write_text('/dts-v1/;\n#include "panel.h"\n'
                          '/ { gpios = <PANEL_PIN ACTIVE_LOW>; '
-                         'color = <GREEN>; function = LAN; };\n', encoding='utf-8')
+                         'color = <GREEN>; function = LAN; '
+                         'linux,default-trigger = "default-on"; };\n', encoding='utf-8')
         # Keep all artifacts private to this test instead of writing CI's /tmp
         # filenames. Commands and their preprocessor flags remain verbatim.
         harness = harness.replace('/tmp/', directory.as_posix() + '/')
@@ -86,6 +87,21 @@ def compile_tests(steps, cpp, dtc):
         assert props['gpios'] == struct.pack('>II', 2, 1), props
         assert props['color'] == struct.pack('>I', 2), props
         assert props['function'] == b'lan\0', props
+        assert props['linux,default-trigger'] == b'default-on\0', props
+        predefines = subprocess.run(cpp + ['-dM', '-x', 'assembler-with-cpp', '-'],
+                                    input='', capture_output=True, text=True, timeout=30)
+        assert predefines.returncode == 0, predefines.stderr
+        if any(line.startswith('#define linux ') for line in predefines.stdout.splitlines()):
+            # The original Linux failure: cpp's predefined linux=1 silently
+            # renames a valid DT property; dtc accepts the resulting wrong name.
+            result = run(script.replace('-undef ', ''), directory)
+            assert result.returncode == 0, result.stdout + result.stderr
+            broken, = [n['props'] for n in FDT((directory / 'panel.dts.dtb').read_bytes()).nodes]
+            assert 'linux,default-trigger' not in broken, broken
+            assert broken['1,default-trigger'] == b'default-on\0', broken
+            print('PASS: removing -undef reproduces linux,default-trigger becoming 1,default-trigger')
+        else:
+            print('NOTE: preprocessor has no Linux builtin; use a Linux target for the macro-collision control')
         # Raw dtc cannot expand these includes/macros. Do not assume that GCC
         # and Clang interpret -fdirectives-only identically in assembler mode.
         result = subprocess.run(dtc + ['-q', '-I', 'dts', '-O', 'dtb', '-o',
