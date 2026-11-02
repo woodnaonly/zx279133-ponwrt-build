@@ -137,6 +137,7 @@ jobs:
           "$PY" -m pip install --quiet --disable-pip-version-check 'zopfli==0.4.3' 'PyYAML==6.0.3'
           echo "SKD840N_HOST_PYTHON=$PY" >> "$GITHUB_ENV"
           "$PY" tests/test_sysupgrade.py
+          "$PY" tests/test_sk_led_dts_gate.py
           sh -n overlays/target/linux/zte/zx279133/base-files/lib/upgrade/platform.sh
 
       - name: Rust 1.96.1 and offline ONU regression tests
@@ -414,7 +415,10 @@ jobs:
             fi
             echo "dtc native FAILED, its stderr:"
             sed 's/^/  /' "/tmp/$b.dtc-native.log"
-            cpp -nostdinc -x assembler-with-cpp -D__DTS__ -fdirectives-only \
+            # Like Kbuild, expand the GPIO/LED macros as well as includes.
+            # -fdirectives-only leaves #defines and macro names for dtc,
+            # which does not implement the C preprocessor.
+            cpp -nostdinc -undef -x assembler-with-cpp -D__DTS__ \
                 -I "$DTS" -I "$PFX" -I "$KT/include" "$f" -o /tmp/pp.dts 2>/tmp/cpp.log
             rc=$?
             if [ $rc -eq 0 ] && dtc -q -I dts -O dtb -o "/tmp/$b.dtb" \
@@ -594,8 +598,18 @@ jobs:
       - name: "Gate: complete panel LED wiring and negative controls"
         if: steps.pick.outputs.run == 'true'
         run: |
-          python3 tools/check-sk-lan1-led.py --dtb /tmp/zx279133-sk-d840n.dts.dtb
-          python3 tests/test_sk_lan1_led.py --dtb /tmp/zx279133-sk-d840n.dts.dtb
+          set -uo pipefail
+          set +e
+          {
+            python3 tools/check-sk-lan1-led.py --dtb /tmp/zx279133-sk-d840n.dts.dtb &&
+            python3 tests/test_sk_lan1_led.py --dtb /tmp/zx279133-sk-d840n.dts.dtb
+          } 2>&1 | tee sk-panel-led-gate.log
+          rc=${PIPESTATUS[0]}
+          if [ "$rc" != 0 ]; then
+            message=$(tail -n 65 sk-panel-led-gate.log | python3 -c 'import sys; s=sys.stdin.read()[-6000:]; print(s.replace("%","%25").replace("\r","").replace("\n","%0A"))')
+            echo "::error::Panel LED gate failed: $message"
+          fi
+          exit "$rc"
 
       # This is its own step on purpose.  GitHub Actions refuses a workflow
       # whose single `run:` script is longer than 21000 characters, and the
@@ -1775,6 +1789,11 @@ jobs:
             openwrt/.config
             sk-pon-tests.log
             sk-management-gate.log
+            sk-panel-led-gate.log
+            /tmp/zx279133-sk-d840n.dts.dtb
+            /tmp/zx279133-sk-d840n.dts.dtc-native.log
+            /tmp/zx279133-sk-d840n.dts.dtc-cpp.log
+            /tmp/cpp.log
             sk-configure.log
             compile-parallel.log
             compile-v1.log
