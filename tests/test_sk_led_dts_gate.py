@@ -9,6 +9,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+import traceback
 
 import yaml
 
@@ -25,6 +26,35 @@ def run(script, directory):
     # the failing gate's status across tee before exiting with that same status.
     return subprocess.run([SHELL, '-e', '-c', script], cwd=directory,
                           capture_output=True, text=True, timeout=30)
+
+
+def clone_tests(steps):
+    source = next(s['run'] for s in steps if s.get('name') == 'Clone sources')
+    tree = 'linux-mainline-zte-zxslc-sr1010/linux-6.18.38'
+    with tempfile.TemporaryDirectory(prefix='sk-led-pin-') as tmp:
+        dtsi = Path(tmp) / tree / 'arch/arm64/boot/dts/zte/zx279133.dtsi'
+        dtsi.parent.mkdir(parents=True)
+        dtsi.touch()
+        prefix = f'''IW_BRANCH=fixture
+IW_URL=https://example.invalid/openwrt
+KERNEL_BRANCH=build
+KERNEL_URL=https://example.invalid/kernel
+KERNEL_SHA={'a' * 40}
+KVER=6.18.38
+git() {{
+  if [ "$1" = -C ]; then
+    [ "$2" = {shlex.quote(tree)} ] || return 41
+    [ "$3" != rev-parse ] || printf '%s\\n' "$KERNEL_SHA"
+  fi
+}}
+'''
+        result = run(prefix + source, tmp)
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert 'Pinned Linux tree: ' + 'a' * 40 in result.stdout, result.stdout
+        broken = source.replace('-C "$KT"', '-C linux-mainline-zte-zxslc-sr1010')
+        result = run(prefix + broken, tmp)
+        assert result.returncode != 0, 'pinning the wrapper instead of Linux was accepted'
+    print('PASS: workflow pins and verifies the Linux submodule, not the wrapper repository')
 
 
 def compile_tests(steps, cpp, dtc):
@@ -97,11 +127,23 @@ def reporting_tests(steps):
     print('PASS: LED gate logs/annotations preserve both failures, escape messages and stop after a failed DTB check')
 
 
-if __name__ == '__main__':
+def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--cpp', default='cpp', help='preprocessor command, e.g. "zig cc -E"')
     parser.add_argument('--dtc', nargs='+', default=['dtc'])
     args = parser.parse_args()
     steps = yaml.safe_load(WORKFLOW.read_text(encoding='utf-8'))['jobs']['build']['steps']
+    clone_tests(steps)
     compile_tests(steps, shlex.split(args.cpp), args.dtc)
     reporting_tests(steps)
+
+
+if __name__ == '__main__':
+    try:
+        main()
+    except Exception:
+        # Public Actions annotations remain readable when raw logs require login.
+        message = traceback.format_exc()[-6000:]
+        message = message.replace('%', '%25').replace('\r', '').replace('\n', '%0A')
+        print('::error::LED CI regression failed: ' + message, flush=True)
+        raise
