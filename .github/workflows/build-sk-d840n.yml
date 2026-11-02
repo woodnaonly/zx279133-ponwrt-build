@@ -2,7 +2,7 @@ name: ZX279133 SK-D840N Build
 
 # Phase 2: Skyworth SK-D840N (same ZX279133 SoC as SR1010) built from
 #   base   = cnjn/ImmortalWrt target zte/zx279133  (+ our image profile)
-#   kernel = cnjn/linux-mainline-zte-zxslc-sr1010 6.18.38 (+ our board DTS)
+#   kernel = pinned ZX279133 6.18.38 + official stable updates to 6.18.60
 #   format = the flash layout proven by huxiangjs/SK-D840N-OpenWRT, so the
 #            U-Boot that is already in this board boots it with no serial cable.
 #
@@ -27,8 +27,10 @@ on:
     paths:
       - .github/workflows/build-sk-d840n.yml
       - kernel-overlays/**
+      - kernel-patches/**
       - overlays/**
       - configs/sk-d840n*
+      - tests/test_sk_kernel.py
       - scripts/configure-sk-d840n.sh
       - scripts/prepare-sk-d840n-ui.sh
       - scripts/sk-d840n-theme.sh
@@ -59,8 +61,10 @@ on:
 env:
   IW_URL: https://github.com/cnjn/ImmortalWrt
   IW_BRANCH: sr1010-zx279133
+  IW_SHA: 1b50aaf4ed9cf042df6207564555b244d6ced517
   KERNEL_URL: https://github.com/cnjn/linux-mainline-zte-zxslc-sr1010
   KERNEL_BRANCH: build
+  KERNEL_SOURCE_DIR: linux-mainline-zte-zxslc-sr1010/linux-6.18.38
   # Pinned because cloning the branch tip makes every build a race with somebody else's push, and that
   # race is what killed runs 72/73/74 identically: 21 errors, all in `zx279133-offload.c`, a file we do
   # not overlay, because our overlay set had fallen behind his driver revision and shadowed five files
@@ -73,11 +77,9 @@ env:
   # Raising this sha therefore means re-taking the six overlaid driver files from the new revision and
   # re-applying only those three changes; the copies in this repository are otherwise his, byte for byte.
   KERNEL_SHA: 96e5a2413524742e177e383fe523ef21de5ed238
-  # Single source of truth for the kernel version. It used to be spelled out in eight
-  # places across three workflow files plus the release text, so a version bump meant
-  # editing ten strings and missing one produced a build that used one tree and announced
-  # another. Everything that names a version now reads this.
-  KVER: '6.18.38'
+  # Resulting version, NOT the wrapper's historical submodule directory name.
+  # configs/sk-d840n-stable.json pins every official patch; tests check agreement.
+  KVER: '6.18.60'
 
 permissions: write-all
 
@@ -93,7 +95,10 @@ jobs:
           sudo apt-get -qq update
           sudo apt-get -qq install --no-install-recommends device-tree-compiler python3-yaml
       - name: Exercise the workflow's DTS and LED gates
-        run: python3 tests/test_sk_led_dts_gate.py
+        run: |
+          python3 tests/test_sk_kernel.py
+          python3 tests/test_kernel_version_single_source.py
+          python3 tests/test_sk_led_dts_gate.py
 
   build:
     name: ${{ matrix.mode }}
@@ -186,17 +191,27 @@ jobs:
         if: steps.pick.outputs.run == 'true'
         run: |
           git clone --depth 1 -b "$IW_BRANCH" "$IW_URL" openwrt
+          git -C openwrt fetch --depth 1 origin "$IW_SHA"
+          git -C openwrt checkout --detach "$IW_SHA"
+          test "$(git -C openwrt rev-parse HEAD)" = "$IW_SHA"
           git clone --branch "$KERNEL_BRANCH" --recurse-submodules "$KERNEL_URL" linux-mainline-zte-zxslc-sr1010
           # --shallow-submodules would fetch only the commit the branch pointer names, which is the
           # thing being moved off; a full submodule fetch is what lets the checkout below reach it.
           # build is a wrapper branch. KERNEL_SHA names a Linux commit, not a
           # wrapper commit: pin the submodule that every build step actually uses.
-          KT=linux-mainline-zte-zxslc-sr1010/linux-$KVER
+          KT="$KERNEL_SOURCE_DIR"
           git -C "$KT" checkout --detach "$KERNEL_SHA"
           git -C "$KT" submodule update --init --recursive
           test "$(git -C "$KT" rev-parse HEAD)" = "$KERNEL_SHA"
           test -f "$KT/arch/arm64/boot/dts/zte/zx279133.dtsi"
           echo "Pinned Linux tree: $(git -C "$KT" rev-parse HEAD)"
+
+      - name: Apply checksum-pinned official stable updates
+        if: steps.pick.outputs.run == 'true'
+        run: |
+          python3 tools/prepare-sk-kernel.py --tree "$KERNEL_SOURCE_DIR" --version "$KVER" --openwrt openwrt
+          test "$(make -s -C "$KERNEL_SOURCE_DIR" kernelversion)" = "$KVER"
+          cat kernel-provenance.json
 
       # CONFIG_DEVMEM, and why the earlier attempts at it went nowhere.
       #
@@ -269,7 +284,7 @@ jobs:
       - name: Apply SK-D840N overlays
         if: steps.pick.outputs.run == 'true'
         run: |
-          KT=linux-mainline-zte-zxslc-sr1010/linux-$KVER
+          KT="$KERNEL_SOURCE_DIR"
           cp -a kernel-overlays/. "$KT"/
           cp -a overlays/. openwrt/
           python3 tools/check-sk-offload.py --kernel-tree "$KT"
@@ -637,7 +652,7 @@ jobs:
         if: steps.pick.outputs.run == 'true'
         run: |
           set -e
-          KT=linux-mainline-zte-zxslc-sr1010/linux-$KVER
+          KT="$KERNEL_SOURCE_DIR"
           DRV=$KT/drivers/net/ethernet/zte/zx279133-switch.c
           test -f "$DRV" || { echo "::error::the 9132 driver did not reach the tree"; exit 1; }
           # This tree is not upstream: there is no include/linux/netdev.h and
@@ -699,7 +714,7 @@ jobs:
         if: steps.pick.outputs.run == 'true'
         run: |
           set -e
-          KT=linux-mainline-zte-zxslc-sr1010/linux-$KVER
+          KT="$KERNEL_SOURCE_DIR"
           # The problem list goes into the annotation, not only into the job
           # log: the Actions log endpoints answer 404 to an anonymous
           # client, so a failure that can only be read there is a failure
@@ -754,7 +769,7 @@ jobs:
             sh scripts/prepare-sk-d840n-ui.sh "$GITHUB_WORKSPACE/openwrt"
             sh scripts/configure-sk-d840n.sh \
               "$GITHUB_WORKSPACE/openwrt" \
-              "$GITHUB_WORKSPACE/linux-mainline-zte-zxslc-sr1010/linux-$KVER" \
+              "$GITHUB_WORKSPACE/$KERNEL_SOURCE_DIR" \
               "${{ matrix.mode }}"
           ) 2>&1 | tee sk-configure.log
           rc=${PIPESTATUS[0]}
@@ -1328,6 +1343,15 @@ jobs:
             ls -l "$SPI" 2>/dev/null || echo "no $SPI" >&2
             exit 1; }
 
+      - name: "Gate: actual kernel and modules have the requested version"
+        if: steps.pick.outputs.run == 'true'
+        run: |
+          set -euo pipefail
+          KT=$( { ls -d openwrt/build_dir/target-*/linux-zte_zx279133/linux-$KVER 2>/dev/null || true; } | head -1 )
+          ROOTFS=$( { ls -d openwrt/build_dir/target-*/root-zte 2>/dev/null || true; } | head -1 )
+          test -n "$KT" && test -n "$ROOTFS"
+          python3 tools/prepare-sk-kernel.py --check-built "$KT" --rootfs "$ROOTFS" --version "$KVER"
+
       - name: "Gate: ONU UI, protocol service and firewall4 reached the image"
         if: steps.pick.outputs.run == 'true'
         run: |
@@ -1782,6 +1806,8 @@ jobs:
       - name: Checksums and summary
         if: steps.pick.outputs.run == 'true' && success()
         run: |
+          test -s kernel-provenance.json
+          python3 -c 'import json, os; p=json.load(open("kernel-provenance.json")); assert p["version"] == os.environ["KVER"]; assert p["kernel_sha"] == os.environ["KERNEL_SHA"]'
           # In initramfs mode the flash-* files do not exist; sha256sum then exits
           # non-zero and pipefail would fail a job whose images are fine.
           if [ "${{ matrix.mode }}" = flash ]; then
@@ -1790,6 +1816,7 @@ jobs:
           else
             sha256sum sk-d840n-initramfs.itb > sha256sums
           fi
+          sha256sum kernel-provenance.json >> sha256sums
           sha256sum -c sha256sums
           {
             echo "## ${{ matrix.mode }} output"
@@ -1818,6 +1845,7 @@ jobs:
             /tmp/zx279133-sk-d840n.dts.dtc-cpp.log
             /tmp/cpp.log
             sk-configure.log
+            kernel-provenance.json
             compile-parallel.log
             compile-v1.log
             compile-watchdog.log
@@ -1843,6 +1871,7 @@ jobs:
             sha256sums-release
             trial-set.tgz
             trial
+            kernel-provenance.json
 
       - name: Upload direct sysupgrade image
         if: success() && steps.pick.outputs.run == 'true' && matrix.mode == 'flash' && steps.package_flash.outputs.validated == 'true'
@@ -1875,9 +1904,10 @@ jobs:
           # release, and `${{ ... }}` inside it is still evaluated. Implementation notes about
           # the note do not belong in the document a person reads to decide what to do.
           body: |
-            ## SK-D840N（ZX279133，mainline 6.18.38）— ${{ matrix.mode }}
+            ## SK-D840N（ZX279133，Linux 6.18.60）— ${{ matrix.mode }}
 
-            - ImmortalWrt `cnjn/ImmortalWrt@sr1010-zx279133` + `cnjn/linux-mainline-zte-zxslc-sr1010@build`
+            - ImmortalWrt 固定 `1b50aaf4`；ZX279133 驱动固定 `96e5a241`，叠加校验和锁定的官方 6.18.38 → 6.18.60 稳定补丁。
+              完整提交与逐补丁 SHA256 见 `kernel-provenance.json`；本次不跟随驱动分支新增功能。
             - 板级文件：`zx279133-sk-d840n.dts`；分区顺序保证 `root` = mtdblock5，与板上现有 U-Boot 的 bootargs 一致
             - **未在本机验证**。免串口流程：先 `trial-kexec.sh` 用 kexec 起 RAM 镜像（不写 flash，断电即回原系统），
               确认 SSH 通了且 `/proc/mtd` 里 root 仍是第 5 个，再用 `flash-set.tgz` 里的 `flash-sk-d840n.sh --write`
@@ -1941,6 +1971,7 @@ jobs:
             flash-set.tgz
             trial-set.tgz
             trial/*
+            kernel-provenance.json
           ignore_missing_files: true
 
       - name: Direct firmware download summary

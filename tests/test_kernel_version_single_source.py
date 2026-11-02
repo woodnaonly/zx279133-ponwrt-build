@@ -25,12 +25,13 @@ build left in that directory got packaged and gated, while the release text stil
 pinned version.
 """
 import os
+from pathlib import Path
 import re
 import subprocess
 import sys
 import tempfile
 
-WF = '/mnt/c/ugit/SK-D840N4/ci-build-repo/.github/workflows'
+WF = str(Path(__file__).resolve().parents[1] / '.github/workflows')
 FILES = ['build-sk-d840n.yml', 'build-sr1010.yml', 'diagnose-config.yml']
 MAIN = 'build-sk-d840n.yml'
 
@@ -143,11 +144,12 @@ def main():
         else:
             ok('%s defines KVER: %s' % (f, m.group(1)))
         kvers[f] = m.group(1)
-    if len(set(kvers.values())) > 1:
-        bad('the three workflows disagree on the version: %s' % kvers)
+    sk_versions = {f: v for f, v in kvers.items() if f != 'build-sr1010.yml'}
+    if len(set(sk_versions.values())) > 1:
+        bad('the SK-D840N workflows disagree on the version: %s' % sk_versions)
     elif kvers:
-        ok('all three agree: %s' % sorted(set(kvers.values()))[0])
-    KVER = sorted(set(kvers.values()))[0] if kvers else ''
+        ok('SK-D840N build and diagnosis agree; independent SR1010 is unchanged')
+    KVER = kvers.get(MAIN, '')
 
     print('\n=== 2. ${{ env.KVER }} must not appear: that context is absent there ===')
     # Comment lines are excluded for the same reason as in section 4: the explanatory notes
@@ -178,7 +180,9 @@ def main():
                         bad('%s:%d is executable and hardcodes %s: %s'
                             % (f, i, m.group(0), raw.strip()[:70]))
                         bad_exec += 1
-                elif v != KVER:
+                elif 'KERNEL_SOURCE_DIR:' in raw:
+                    ok('%s source directory is independent of its resulting version' % f)
+                elif v != kvers.get(f):
                     bad('%s:%d is a non-executable literal %s but KVER is %s'
                         % (f, i, m.group(0), KVER))
                     bad_exec += 1

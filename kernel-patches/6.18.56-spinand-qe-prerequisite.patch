@@ -1,0 +1,25 @@
+The official 6.18.56 fix restricts QE writes to HAS_QE_BIT on ALL devices.
+It supersedes the custom strict-read-only-only guard. Normalize that one block
+before applying the unchanged official SPI-NAND fix; retain the other custom
+read-only validation, protection and manufacturer support.
+
+diff --git a/drivers/mtd/nand/spi/core.c b/drivers/mtd/nand/spi/core.c
+--- a/drivers/mtd/nand/spi/core.c
++++ b/drivers/mtd/nand/spi/core.c
+@@ -1540,13 +1540,9 @@ static int spinand_configure_chip(struct spinand_device *spinand)
+ 			quad_enable = true;
+ 	}
+ 
+-	/* Bit 0 is not a QE bit on chips that do not advertise one. */
+-	if (!spinand->strict_read_only ||
+-	    (spinand->flags & SPINAND_HAS_QE_BIT)) {
+-		ret = spinand_init_quad_enable(spinand, quad_enable);
+-		if (ret)
+-			return ret;
+-	}
++	ret = spinand_init_quad_enable(spinand, quad_enable);
++	if (ret)
++		return ret;
+ 
+ 	if (spinand->configure_chip) {
+ 		ret = spinand->configure_chip(spinand, SSDR);

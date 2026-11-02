@@ -1,0 +1,61 @@
+{
+  "base_version": "6.18.38",
+  "version": "6.18.60",
+  "kernel_sha": "96e5a2413524742e177e383fe523ef21de5ed238",
+  "stable_base_sha": "e46dc0adfe39724bcf52cea47b8f9c9aed86a394",
+  "stable_sha": "f45ed76d6791cf72ff1265ee93511175bbbc2f18",
+  "source_tar_sha256": "3c2f44ef6acc021a7ad444d9a2e6ec1ef488ff09368793d0004a6080f69d621e",
+  "url": "https://cdn.kernel.org/pub/linux/kernel/v6.x/incr/",
+  "rebases": [
+    {
+      "patch": "patch-6.18.54-55.xz",
+      "path": "net/netfilter/nf_flow_table_offload.c",
+      "replacement": "kernel-patches/6.18.55-nf-flow-table-offload.patch",
+      "sha256": "bfa429990137c755179a0966b072314e9ab6a7b77f96733beeba134fc91e1235"
+    },
+    {
+      "patch": "patch-6.18.55-56.xz",
+      "path": "net/netfilter/nf_flow_table_offload.c",
+      "replacement": "kernel-patches/6.18.56-nf-flow-table-offload.patch",
+      "sha256": "ed5f2016d3e07eb66f7940d83ef46b2e5426d28d0d6970dcfc674faee5386686"
+    },
+    {
+      "patch": "patch-6.18.55-56.xz",
+      "path": "drivers/mtd/nand/spi/core.c",
+      "replacement": "kernel-patches/6.18.56-spinand.patch",
+      "sha256": "ff1358f4796f463a818ec7532f0ef83124b54a7cdf1d52b40e9d9189c4f0ac1d"
+    }
+  ],
+  "preparations": [
+    {
+      "before_patch": "patch-6.18.55-56.xz",
+      "path": "drivers/mtd/nand/spi/core.c",
+      "patch": "kernel-patches/6.18.56-spinand-qe-prerequisite.patch",
+      "sha256": "b6f690529a8f977fc94fb6d7788bd4775eababee0f4d16f6e8c45d654fc43408"
+    }
+  ],
+  "patches": [
+    ["patch-6.18.38-39.xz", "29db6e0fcc51e07e731f064fca17c2c580b32cb492007dff37ee9929860350c1"],
+    ["patch-6.18.39-40.xz", "381edf7d1504645393e0632398b8b3e08cbcf03449e289d271184274579030c6"],
+    ["patch-6.18.40-41.xz", "bf3a15971026367d82b93ceb7452c877af180d6661e4ca49d84cd01d43c591db"],
+    ["patch-6.18.41-42.xz", "3daebae9995f913201f77fc802a2ef03ae87322f6d9a271e30f6d69a081e03a6"],
+    ["patch-6.18.42-43.xz", "054265a974df46cc8fc95afc84f00ffaa5ac4bf0c33fd7f6a6c778238d04920e"],
+    ["patch-6.18.43-44.xz", "eaf32420b762b84c6146066e30d32d52b8b4dde25824bb79307599bd506478f1"],
+    ["patch-6.18.44-45.xz", "128175ba3507dc74a44eb7acfb119297091b5007e53b2b35ba59db78b20797e7"],
+    ["patch-6.18.45-46.xz", "60b2a70d026fd29868f3a3bd7b24afc280cb4cf70880c040845baab61e07edcf"],
+    ["patch-6.18.46-47.xz", "73736df9f7d656f3ed4c1abdc276a134e8d7e08f99ca7ca8710881008ced37c5"],
+    ["patch-6.18.47-48.xz", "2fb86dbea0f3938bc718da1dcde28d81fcd6fe6da5393c73fdaf2fc25e0cd355"],
+    ["patch-6.18.48-49.xz", "981b42547c86d4e50dec0a3d0660b2258b62e4c039661ea36cb690e94f89b291"],
+    ["patch-6.18.49-50.xz", "95c853016b6815a1b71d075365f3122edae47d4b4b3c6b497ffa88f0aa5ae01e"],
+    ["patch-6.18.50-51.xz", "1677b2aca6658d3385606db52f8458af2654e2e51c3eab3b989ab315412a127e"],
+    ["patch-6.18.51-52.xz", "ebf473b14bbca4b67d70e61545959fe34c721bf4db5172c83c06f4de7e96b1d3"],
+    ["patch-6.18.52-53.xz", "da5db97738dbae8f9ce11c695408d53cc14f81702c914062be013cb786250c9e"],
+    ["patch-6.18.53-54.xz", "ca34f886e816d70675a8b3cd5f7246c1351bbeda4047d01ff3e4079254939042"],
+    ["patch-6.18.54-55.xz", "72ae23c9e79f38366440ec9ec3e28db5dd03b6159c0308c0251a0307659d04ce"],
+    ["patch-6.18.55-56.xz", "c3f4c3a4c90dcfd69912e0cd19d60f22fc92d33097e4b66aa7b487d4e17b6479"],
+    ["patch-6.18.56-57.xz", "3fb8d8add319dc45b5908005486fd7dca0ce41544dbb3d5af087cd6791e8a291"],
+    ["patch-6.18.57-58.xz", "f4412fbf6780b52bbcb8de1a14b6674eebbb90a749bf38d109a2d5cfe7ef2e8b"],
+    ["patch-6.18.58-59.xz", "5ebaaf2ef32920ab297ab5dcf3463a04a3d05b7d79d63a51103305f609423987"],
+    ["patch-6.18.59-60.xz", "5ef140a1c6f527e74d01e3c0dcf8c3ed2da92ff1b0f8965feb5dadd343b3a6a7"]
+  ]
+}

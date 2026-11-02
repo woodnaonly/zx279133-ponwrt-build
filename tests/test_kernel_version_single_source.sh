@@ -6,8 +6,8 @@
 # prove that all THREE workflows still parse - two of them were edited when the kernel
 # version was collapsed into a single source, and nothing else was checking their YAML.
 set -u
-cd /mnt/c/ugit/SK-D840N4 || exit 1
-W=ci-build-repo/.github/workflows
+REPO=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd) || exit 1
+W=$REPO/.github/workflows
 
 echo "=== all three workflows must still parse ==="
 for f in build-sk-d840n.yml build-sr1010.yml diagnose-config.yml; do
@@ -24,4 +24,4 @@ print('  ok   $f  (%d job(s))' % len(d['jobs']))
 done
 
 echo
-exec python3 staging/diag-20261014/test_kernel_version_single_source.py
+exec python3 "$REPO/tests/test_kernel_version_single_source.py"

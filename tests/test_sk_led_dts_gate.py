@@ -40,9 +40,15 @@ IW_URL=https://example.invalid/openwrt
 KERNEL_BRANCH=build
 KERNEL_URL=https://example.invalid/kernel
 KERNEL_SHA={'a' * 40}
-KVER=6.18.38
+IW_SHA={'b' * 40}
+KERNEL_SOURCE_DIR={shlex.quote(tree)}
+KVER=6.18.60
 git() {{
   if [ "$1" = -C ]; then
+    if [ "$2" = openwrt ]; then
+      [ "$3" != rev-parse ] || printf '%s\\n' "$IW_SHA"
+      return 0
+    fi
     [ "$2" = {shlex.quote(tree)} ] || return 41
     [ "$3" != rev-parse ] || printf '%s\\n' "$KERNEL_SHA"
   fi

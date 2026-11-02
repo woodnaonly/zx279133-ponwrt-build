@@ -17,10 +17,12 @@ on:
 env:
   IW_URL: https://github.com/cnjn/ImmortalWrt
   IW_BRANCH: sr1010-zx279133
+  IW_SHA: 1b50aaf4ed9cf042df6207564555b244d6ced517
   KERNEL_URL: https://github.com/cnjn/linux-mainline-zte-zxslc-sr1010
   KERNEL_BRANCH: build
-  # Same submodule version as build-sk-d840n.yml; see the note there.
-  KVER: '6.18.38'
+  KERNEL_SHA: 96e5a2413524742e177e383fe523ef21de5ed238
+  KERNEL_SOURCE_DIR: linux-mainline-zte-zxslc-sr1010/linux-6.18.38
+  KVER: '6.18.60'
 
 jobs:
   probe:
@@ -41,11 +43,21 @@ jobs:
       - name: Clone sources
         run: |
           git clone --depth 1 -b "$IW_BRANCH" "$IW_URL" openwrt
-          git clone --branch "$KERNEL_BRANCH" --recurse-submodules --shallow-submodules "$KERNEL_URL" linux-mainline-zte-zxslc-sr1010
+          git -C openwrt fetch --depth 1 origin "$IW_SHA"
+          git -C openwrt checkout --detach "$IW_SHA"
+          test "$(git -C openwrt rev-parse HEAD)" = "$IW_SHA"
+          git clone --branch "$KERNEL_BRANCH" --recurse-submodules "$KERNEL_URL" linux-mainline-zte-zxslc-sr1010
+          git -C "$KERNEL_SOURCE_DIR" checkout --detach "$KERNEL_SHA"
+          test "$(git -C "$KERNEL_SOURCE_DIR" rev-parse HEAD)" = "$KERNEL_SHA"
+
+      - name: Apply checksum-pinned official stable updates
+        run: |
+          python3 tools/prepare-sk-kernel.py --tree "$KERNEL_SOURCE_DIR" --version "$KVER" --openwrt openwrt
+          test "$(make -s -C "$KERNEL_SOURCE_DIR" kernelversion)" = "$KVER"
 
       - name: Apply overlays
         run: |
-          cp -a kernel-overlays/. linux-mainline-zte-zxslc-sr1010/linux-$KVER/
+          cp -a kernel-overlays/. "$KERNEL_SOURCE_DIR"/
           cp -a overlays/. openwrt/
 
       - name: What pins the rootfs symbols
@@ -78,7 +90,7 @@ jobs:
         run: |
           sh scripts/configure-sk-d840n.sh \
             "$GITHUB_WORKSPACE/openwrt" \
-            "$GITHUB_WORKSPACE/linux-mainline-zte-zxslc-sr1010/linux-$KVER" flash
+            "$GITHUB_WORKSPACE/$KERNEL_SOURCE_DIR" flash
           cd openwrt
           echo "### resolved rootfs symbols (flash)"
           grep -nE 'CONFIG_TARGET_ROOTFS|CONFIG_TARGET_IMAGES|JFFS2' .config || echo "NO rootfs symbols at all"
@@ -87,7 +99,7 @@ jobs:
         run: |
           sh scripts/configure-sk-d840n.sh \
             "$GITHUB_WORKSPACE/openwrt" \
-            "$GITHUB_WORKSPACE/linux-mainline-zte-zxslc-sr1010/linux-$KVER" initramfs
+            "$GITHUB_WORKSPACE/$KERNEL_SOURCE_DIR" initramfs
           cd openwrt
           echo "### resolved rootfs symbols (initramfs)"
           grep -nE 'CONFIG_TARGET_ROOTFS|CONFIG_TARGET_IMAGES|JFFS2' .config || echo "NO rootfs symbols at all"
