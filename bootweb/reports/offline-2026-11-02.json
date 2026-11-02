@@ -1,0 +1,416 @@
+{
+  "schema": "sk-d840n-bootweb-offline-v1",
+  "utc": "2026-11-02T05:07:18.516910+00:00",
+  "scope": "OFFLINE DEVELOPMENT ONLY",
+  "offline_pass": true,
+  "flashable_release": false,
+  "native_write_enabled": false,
+  "hardware_acceptance": {
+    "ram_command_entry": false,
+    "relocation_and_x18": false,
+    "ram_placement_and_cache": false,
+    "ethernet_2p5g": false,
+    "nand_ecc_badblocks": false,
+    "watchdog": false,
+    "reset_hold_3s": false,
+    "btl_rescue_known_good": false,
+    "ram_full_backup_and_config": false,
+    "system_write_reboot": false,
+    "uboot_write_reboot": false,
+    "damaged_system_reentry": false,
+    "cold_boot": false
+  },
+  "toolchain": {
+    "zig": "0.14.1",
+    "zig_executable_sha256": "1ddf230367e07738c4a769eae66c1db7469e37bd520e81c86356453d0db2b9fd",
+    "python": "3.13.5",
+    "host": "Windows-11-10.0.26300-SP0",
+    "host_undefined_behavior_traps": true,
+    "native_fixed_x18": true,
+    "warnings_as_errors": true
+  },
+  "tests": {
+    "run": 35,
+    "failed": 0,
+    "errors": 0,
+    "skipped": 0,
+    "cases": [
+      {
+        "id": "test_bootweb.EngineTests.test_all_rejection_paths_erase_nothing",
+        "status": "passed",
+        "seconds": 0.132642
+      },
+      {
+        "id": "test_bootweb.EngineTests.test_badblock_skip_stays_inside_partition",
+        "status": "passed",
+        "seconds": 0.059223
+      },
+      {
+        "id": "test_bootweb.EngineTests.test_failed_boot_update_still_audits_protected_regions",
+        "status": "passed",
+        "seconds": 0.070185
+      },
+      {
+        "id": "test_bootweb.EngineTests.test_io_and_readback_failures_never_success",
+        "status": "passed",
+        "seconds": 0.33037
+      },
+      {
+        "id": "test_bootweb.EngineTests.test_system_write_order_readback_and_protected_bytes",
+        "status": "passed",
+        "seconds": 0.123507
+      },
+      {
+        "id": "test_bootweb.EngineTests.test_test_and_production_profiles_cannot_mix",
+        "status": "passed",
+        "seconds": 0.016063
+      },
+      {
+        "id": "test_bootweb.EngineTests.test_uboot_exact_window_preserves_protected_hashes",
+        "status": "passed",
+        "seconds": 0.231016
+      },
+      {
+        "id": "test_bootweb.EntryTests.test_reset_hold_requires_measured_gpio_and_continuous_three_seconds",
+        "status": "passed",
+        "seconds": 0.003363
+      },
+      {
+        "id": "test_bootweb.HttpTests.test_bounded_http_contract",
+        "status": "passed",
+        "seconds": 0.000242
+      },
+      {
+        "id": "test_bootweb.HttpTests.test_disconnect_after_confirmation_continues_once_and_status_stays_available",
+        "status": "passed",
+        "seconds": 0.257036
+      },
+      {
+        "id": "test_bootweb.HttpTests.test_real_loopback_server_upload_fail_and_locked_confirm",
+        "status": "passed",
+        "seconds": 0.078848
+      },
+      {
+        "id": "test_bootweb.SourceTests.test_page_and_native_hard_stop",
+        "status": "passed",
+        "seconds": 0.000631
+      },
+      {
+        "id": "test_bootweb.TaskTests.test_confirm_freezes_exact_bytes",
+        "status": "passed",
+        "seconds": 0.007078
+      },
+      {
+        "id": "test_bootweb.TaskTests.test_disconnect_partial_upload_has_no_ready_state",
+        "status": "passed",
+        "seconds": 0.000613
+      },
+      {
+        "id": "test_bootweb.TaskTests.test_full_upload_then_confirm_and_idempotence",
+        "status": "passed",
+        "seconds": 0.108571
+      },
+      {
+        "id": "test_bootweb.ValidatorTests.test_bad_crc_and_truncated_kernel",
+        "status": "passed",
+        "seconds": 0.011123
+      },
+      {
+        "id": "test_bootweb.ValidatorTests.test_each_capacity_and_oversized_tar_size",
+        "status": "passed",
+        "seconds": 0.096974
+      },
+      {
+        "id": "test_bootweb.ValidatorTests.test_fdt_bootargs_and_disabled_ancestors_cannot_override_layout",
+        "status": "passed",
+        "seconds": 0.017325
+      },
+      {
+        "id": "test_bootweb.ValidatorTests.test_fdt_geometry_alias_and_protection",
+        "status": "passed",
+        "seconds": 0.021138
+      },
+      {
+        "id": "test_bootweb.ValidatorTests.test_fwtool_crc_chain_and_archive_end",
+        "status": "passed",
+        "seconds": 0.006531
+      },
+      {
+        "id": "test_bootweb.ValidatorTests.test_hash_and_crc_vectors",
+        "status": "passed",
+        "seconds": 0.019265
+      },
+      {
+        "id": "test_bootweb.ValidatorTests.test_layouts_sizes_order_and_fixed_targets",
+        "status": "passed",
+        "seconds": 0.015878
+      },
+      {
+        "id": "test_bootweb.ValidatorTests.test_missing_duplicate_special_and_paths",
+        "status": "passed",
+        "seconds": 0.023092
+      },
+      {
+        "id": "test_bootweb.ValidatorTests.test_random_inputs_and_mutations_are_bounded",
+        "status": "passed",
+        "seconds": 0.081566
+      },
+      {
+        "id": "test_bootweb.ValidatorTests.test_uboot_payload_control_and_hash",
+        "status": "passed",
+        "seconds": 0.16014
+      },
+      {
+        "id": "test_bootweb.ValidatorTests.test_wrong_board_base_and_metadata",
+        "status": "passed",
+        "seconds": 0.009824
+      },
+      {
+        "id": "test_native_service.NativeServiceTests.test_confirm_disconnect_writes_once_and_rejects_busy_mutation",
+        "status": "passed",
+        "seconds": 0.122402
+      },
+      {
+        "id": "test_native_service.NativeServiceTests.test_missing_scratch_or_unknown_installed_base_never_listens",
+        "status": "passed",
+        "seconds": 0.014367
+      },
+      {
+        "id": "test_native_service.NativeServiceTests.test_page_locked_upload_origin_and_truncated_body",
+        "status": "passed",
+        "seconds": 0.025248
+      },
+      {
+        "id": "test_net_bridge.NetTests.test_virtual_arp_tcp_stream_duplicates_checksum_and_disconnect",
+        "status": "passed",
+        "seconds": 0.004661
+      },
+      {
+        "id": "test_tools.ToolTests.test_elf_manifest_checks_machine_and_entry_but_never_certifies_ram",
+        "status": "passed",
+        "seconds": 0.006932
+      },
+      {
+        "id": "test_tools.ToolTests.test_package_cli_rejects_existing_output_and_fake_base",
+        "status": "passed",
+        "seconds": 0.126992
+      },
+      {
+        "id": "test_tools.ToolTests.test_package_generator_protected_regions_and_determinism",
+        "status": "passed",
+        "seconds": 0.134559
+      },
+      {
+        "id": "test_tools.ToolTests.test_profile_or_static_report_never_unlocks_hardware",
+        "status": "passed",
+        "seconds": 0.070291
+      },
+      {
+        "id": "test_tools.ToolTests.test_recovery_size_hard_limit_does_not_authorize_partition",
+        "status": "passed",
+        "seconds": 0.02436
+      }
+    ]
+  },
+  "source_inputs": {
+    "sha256": "540bf9b35fbf39e7bc21b3049c0695309c72a08e02b1d31031af1848f0341852",
+    "files": {
+      "adapter/entry.c": "654c1f0e48b940ff3f61f75a982c70550a972c042f3b451d864723f69c59fb38",
+      "adapter/lwip/arch/cc.h": "2ba8a8f3be281624eaa7b308051560c59fd1ee4c28ad0fbb18af50ab2dd162fa",
+      "adapter/lwip/bridge.c": "76d1ee63f4ef48ef0c503d3b364a69e3533412feda9520e24aa3daf2ba26ff5b",
+      "adapter/lwip/lwipopts.h": "9a4b10f42acb5a3e155e4089d3b009a1be51e7514739a9ede19678f3b14b5375",
+      "adapter/lwip/stdlib.h": "22329f4083dd3d5548c4bff9d4771f1c4a7ee7e92f7f8d56e35ea454511e1786",
+      "adapter/lwip/string.h": "bbabdbdc25cf4b694bd87068d5bea9aafa0a50fcc699880b76127122061cf527",
+      "adapter/standalone.ld": "148cd9c0e5e0e6e6a565239aa70336065ed32ebe777d18cf04b9728808f30934",
+      "adapter/vendor_unverified.c": "ed2e45a5155b1e8246571824b35726d551f9293d24834849d081d1e51a6c5ccc",
+      "host/__init__.py": "6bdd458ee2b6fd950e4f0b0864d84b9835340964de5f3ccbe8e7c834f666cd92",
+      "host/core.py": "fa20e5b865e37debd1854c6b9fb37f0965014bc89f61228ba24a7d971c6d028d",
+      "host/image.py": "8fb1ff2c628a644b64f97a9d51db92958b61b8f6e9e4197901f129f18f115f07",
+      "host/platform.py": "3c1b7f09850cf454a336359e3af1353e16801a96bb331bf7eeaf70899be97781",
+      "host/simulator.py": "4ff220872de603717b654da1990417925db760b877163673a4f2dc99bf961a6b",
+      "include/bootweb.h": "c8fc53bee1e136c29277ddf4b4fa4dc5daf4a548a3486d1bd6d7c0e4dbcc727d",
+      "include/net_bridge.h": "2f339d72a13543f99367a3f6ccd2d17d09e6945d9908ccdf0156b5788f35e12c",
+      "include/platform.h": "209609aa9bf8c02e96e5ea3ed9704988a2052a43f6177696c417ed2d1acdde32",
+      "LICENSES/lwip.txt": "353b9851da160c784535c5d20db7f2a435cbfeecdee73d16540ed9b324407c14",
+      "profiles/btl-shared-static.json": "8a7beeae04be42ac403bcf08416b86ba1aeb8f60a53312d51fdc4f284966612d",
+      "profiles/svn308776.json": "6768baaad8c347eeacac236f63aeff94f56857838c45ab3ad818a1ece287b804",
+      "profiles/svn358069.json": "10c71f9d59317a49018ee72ff5d2dec87290337b9a2ff02778c76110aad242ef",
+      "src/entry_gate.c": "64e5ca18fb61cfd5cadb7cea415a8af57676a030da6c6b1478f6aa3e78869737",
+      "src/fdt.c": "4a903fd3b6c58f4e7cbf2227117348a64eedadef05faf9d96f67b9d1a8864cd9",
+      "src/flash.c": "3e5d86b0afdc8e0443fbab819f99ba9ce708ca10d9995f22cd102a0e4bf9948d",
+      "src/hash.c": "1fbaf2a838849bc8e5d390d81275f7b7ea8b63dbbef07ef00908d09b6df66bda",
+      "src/http.c": "4f221b7aff487e166f48945c8a163648103f18b5942ca0d32082a01dac591875",
+      "src/internal.h": "ef95e51435d8e2ccc68e28fd2a031b9d93c7d1ecec2d0facdec06f430616d64e",
+      "src/json.c": "d6add58c06054fe94e529b3a83eb7a3378cb40722475d368ad1ec692fef2ad0c",
+      "src/package.c": "bde4a0b8004ba829c4ca26e5a88f605815b3d96aafe5c51280e39cf542425ff7",
+      "src/service.c": "d773a77c62e65b861bf5fcd71f5f2de08105ded9fead412928cbe5aa72bae05b",
+      "src/task.c": "953b6c54fc52fc5d1a15fd2a48ccaaa7bbb8ff7fd7d4e1632311c3ae3f5f86e1",
+      "tests/fixtures.py": "d7dac9d69b19ec2f02b1dfc74e43baaacccecdd294ac20e8c2633b707b9fe8fb",
+      "tests/test_bootweb.py": "7f7310869c1b9c0b100245d4bfc3b7c1e95102452e91452756c87ba43dc66881",
+      "tests/test_native_service.py": "01de69b095e23d09d537e424fde6e1d8d939abfbe469ee4395c7b6683c030fdf",
+      "tests/test_net_bridge.py": "9a2187ed833fb187d7fc2cbc037899802b2f907a909f55327e7902a74c733e34",
+      "tests/test_tools.py": "f8fc381ce2c259dab477dddcf04af72d334146e7857f8559663b4d086d379c75",
+      "tools/audit_boot.py": "b5a995562cbcbd562c7eebb5024cdbeebc7e079bcadb0d4cf30f5ba011ccc4c8",
+      "tools/build.py": "a7c1056747324f73b3bc709acce5a178260f698742ef09e1e686846ba6c0690d",
+      "tools/check_recovery_size.py": "c4c8b0a5a0d31e67b0e5376b3a8a1f055ebc0a4389c639eee4bc9b447fe61427",
+      "tools/dependencies.lock.json": "3f5dc30c3d3d467669fc838fa815febb3b7cd11b521e5f6e6629f2ff5aa1f0d8",
+      "tools/ida_audit.py": "c68fe4714738a4f40c862e21564306fdddbc0082a47939cff54d2f43d3b03409",
+      "tools/package.py": "666c9ef6d137872a5ab9f62af7f97b5a87b63471f78fe94e2a776015a67f3aa7",
+      "tools/serve_demo.py": "2b476e742873d01b4143934b77f31b8622657550141adff585cd71e469c7c483",
+      "tools/verify.py": "15c140535735e06bd7d1b8d0644d4ede08cebb1ddbdaf24499580c29a16330a8",
+      "web/index.html": "6b52d5f47b84294f6dc7ed37be497bfb7f1dd6493078daf77c1dee73b4d0e737"
+    }
+  },
+  "network_dependency": {
+    "name": "lwIP",
+    "version": "2.2.0",
+    "license": "BSD-3-Clause",
+    "vendor_hardware_drivers_linked": false,
+    "license_sha256": "ef4aac92e05e87cd1cdc140870ed52206ba03d4a7fe46c1e11d7ffa6c87d252b",
+    "source_and_headers_sha256": "a0745184761ef4eedcc8d52d411fdadcbab772c1c5a7e507ccfb43a224b63284",
+    "hashed_file_count": 181,
+    "linked_sources": [
+      "core/init.c",
+      "core/def.c",
+      "core/inet_chksum.c",
+      "core/ip.c",
+      "core/mem.c",
+      "core/memp.c",
+      "core/netif.c",
+      "core/pbuf.c",
+      "core/stats.c",
+      "core/sys.c",
+      "core/tcp.c",
+      "core/tcp_in.c",
+      "core/tcp_out.c",
+      "core/timeouts.c",
+      "core/ipv4/etharp.c",
+      "core/ipv4/icmp.c",
+      "core/ipv4/ip4.c",
+      "core/ipv4/ip4_addr.c",
+      "netif/ethernet.c"
+    ]
+  },
+  "artifacts": {
+    "bootweb-unadapted.elf": {
+      "bytes": 528128,
+      "sha256": "0bf9eec156836b98b39aee5467515dc308c6da9092aeee9d1c1a0fec9e3a96af",
+      "flashable": false
+    },
+    "bootweb-unadapted.bin": {
+      "bytes": 98128,
+      "sha256": "fb1ea7a5841a7a37a001645d5a4623a368f496cb95d178fceff5efe58f869df2",
+      "flashable": false
+    }
+  },
+  "native_elf": {
+    "machine": "AArch64",
+    "entry": "0x89000000",
+    "load_segments": [
+      {
+        "address": "0x89000000",
+        "file_bytes": 84536,
+        "memory_bytes": 84536,
+        "flags": 5,
+        "alignment": 65536
+      },
+      {
+        "address": "0x89014a40",
+        "file_bytes": 13576,
+        "memory_bytes": 13576,
+        "flags": 4,
+        "alignment": 65536
+      },
+      {
+        "address": "0x89017f48",
+        "file_bytes": 8,
+        "memory_bytes": 418184,
+        "flags": 6,
+        "alignment": 65536
+      }
+    ],
+    "ram_placement_verified": false,
+    "vendor_container": false
+  },
+  "page": {
+    "bytes": 6921,
+    "limit_bytes": 32768,
+    "sha256": "6b52d5f47b84294f6dc7ed37be497bfb7f1dd6493078daf77c1dee73b4d0e737",
+    "visual_browser_qa": false
+  },
+  "existing_system_format_check": {
+    "kind": "system",
+    "layout": "current240",
+    "bytes": 12431637,
+    "sha256": "73beaef1a972dc979bb0ad2b5a4b634af37e6861b1d2bfa047442a175fd5901d",
+    "writes": [
+      {
+        "name": "root",
+        "offset": "0x00f00000",
+        "capacity": 251658240,
+        "length": 4194308,
+        "sha256": "ab95d1db886bd685a11625daa48c2c5ea73ddb9f4493ce0c845b15826850bc20"
+      },
+      {
+        "name": "dtb",
+        "offset": "0x00a00000",
+        "capacity": 1048576,
+        "length": 12297,
+        "sha256": "cb4dd54414816eb070fa50251b63b8e970002d882f96f5cd2744174072715a88"
+      },
+      {
+        "name": "kernel",
+        "offset": "0x00200000",
+        "capacity": 8388608,
+        "length": 8215292,
+        "sha256": "0dd8bb0de447c7fcdf385f473173905798b70cdad2611e3375bd658420e2c656"
+      }
+    ],
+    "authenticity_verified": false,
+    "hardware_verified": false,
+    "flashable_release": false,
+    "sample_name": "flash-sysupgrade.bin"
+  },
+  "community_profile": {
+    "image_sha256": "0f8efd0c8cb1083e813bcf6a3c6a138670fad5f3d6ec79330b410c15afe1f941",
+    "region_sha256": {
+      "stage1": "d4d7a4bf90fc26cc61c76000bb272fac3113c14525ab7119c3d10fbd477231f4",
+      "stage2": "5b084490813b540c1a82ddf2e2d4de46080e6cfe47b15b2e6575bdf3fe198fe9",
+      "environment": "cae7076446987a1780a5f5d9141be36001ec03285e892277d6add1272974c7da",
+      "tail": "c97fce784428a2e10cd6d4ef97ccc756f2e4c1b146a9b9dc5415d4e3e245b70a"
+    },
+    "banners": [
+      "U-Boot 2021.01-svn308776 (Apr 17 2025 - 16:09:35 +0800)"
+    ],
+    "recognized_code": true,
+    "command_count": 62,
+    "btl_static_regions_checked": 5
+  },
+  "factory_comparison": {
+    "image_sha256": "009929cd17142567a1537e773758809bb75aa79a51af6597f2140c82e318f808",
+    "region_sha256": {
+      "stage1": "d4d7a4bf90fc26cc61c76000bb272fac3113c14525ab7119c3d10fbd477231f4",
+      "stage2": "250f8537cfd436a67196a263f4a39aeac36d894c27e5cf8d611c2ff856defd98",
+      "environment": "0cd6fd75bf3f781c5cc82fed2547c7f8dbe66669d77921261b120f1450feb645",
+      "tail": "c97fce784428a2e10cd6d4ef97ccc756f2e4c1b146a9b9dc5415d4e3e245b70a"
+    },
+    "banners": [
+      "U-Boot 2021.01-svn358069 (Dec 01 2025 - 20:05:38 +0800)"
+    ],
+    "recognized_code": true,
+    "command_count": 62,
+    "btl_static_regions_checked": 5
+  },
+  "fallback_size_only": {
+    "image_bytes": 13273560,
+    "partition_bytes": 4194304,
+    "maximum_image_bytes": 3932160,
+    "reserved_erase_blocks": 2,
+    "size_pass": false,
+    "hardware_boot_verified": false,
+    "partition_creation_allowed": false,
+    "flashable_release": false,
+    "note": "Size only; FIT hashes/configurations, RAM boot and rescue entry still require validation.",
+    "sample_name": "sk-325-initramfs.itb"
+  }
+}

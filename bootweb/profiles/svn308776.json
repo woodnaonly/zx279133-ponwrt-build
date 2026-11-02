@@ -1,0 +1,26 @@
+{
+  "board": "skyworth_sk-d840n",
+  "revision": "svn308776",
+  "role": "adaptation-baseline",
+  "banner": "U-Boot 2021.01-svn308776 (Apr 17 2025 - 16:09:35 +0800)",
+  "image_sha256": "0f8efd0c8cb1083e813bcf6a3c6a138670fad5f3d6ec79330b410c15afe1f941",
+  "stage2_sha256": "5b084490813b540c1a82ddf2e2d4de46080e6cfe47b15b2e6575bdf3fe198fe9",
+  "stage1_sha256": "d4d7a4bf90fc26cc61c76000bb272fac3113c14525ab7119c3d10fbd477231f4",
+  "tail_sha256": "c97fce784428a2e10cd6d4ef97ccc756f2e4c1b146a9b9dc5415d4e3e245b70a",
+  "link_address": "0x88000000",
+  "stage2_file_start": "0x20000",
+  "command_record_bytes": 56,
+  "command_table_file_range": ["0xb62e8", "0xb7078"],
+  "command_dispatch_file_offset": "0x32c98",
+  "command_implementation_field": "0x18",
+  "command_repeat_field": "0x10",
+  "runtime_verified": false,
+  "reset_gpio_verified": false,
+  "btl_rescue_verified": false,
+  "native_write_enabled": false,
+  "notes": [
+    "Link addresses are not runtime call targets.",
+    "No go/bootelf command was found in the measured command table.",
+    "A JSON profile cannot unlock the unverified adapter."
+  ]
+}

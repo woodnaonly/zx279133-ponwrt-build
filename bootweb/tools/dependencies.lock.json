@@ -1,0 +1,15 @@
+{
+  "zig": {
+    "version": "0.14.1",
+    "windows_archive": "zig-x86_64-windows-0.14.1.zip",
+    "archive_sha256": "554f5378228923ffd558eac35e21af020c73789d87afeabf4bfd16f2e6feed2c"
+  },
+  "lwip": {
+    "version": "2.2.0",
+    "source_and_headers_sha256": "a0745184761ef4eedcc8d52d411fdadcbab772c1c5a7e507ccfb43a224b63284",
+    "license_sha256": "ef4aac92e05e87cd1cdc140870ed52206ba03d4a7fe46c1e11d7ffa6c87d252b",
+    "hash_algorithm": "SHA256 of sorted compact JSON mapping selected source + all include headers to file SHA256",
+    "hashed_file_count": 181,
+    "hardware_drivers": "none"
+  }
+}

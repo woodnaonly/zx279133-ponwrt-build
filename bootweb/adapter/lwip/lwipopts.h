@@ -1,0 +1,50 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
+#ifndef BW_LWIPOPTS_H
+#define BW_LWIPOPTS_H
+#define NO_SYS 1
+#define SYS_LIGHTWEIGHT_PROT 0
+#define LWIP_IPV4 1
+#define LWIP_IPV6 0
+#define LWIP_ARP 1
+#define LWIP_ETHERNET 1
+#define LWIP_ICMP 1
+#define LWIP_RAW 0
+#define LWIP_UDP 0
+#define LWIP_TCP 1
+#define LWIP_DNS 0
+#define LWIP_DHCP 0
+#define LWIP_AUTOIP 0
+#define LWIP_IGMP 0
+#define LWIP_NETCONN 0
+#define LWIP_SOCKET 0
+#define LWIP_NETIF_API 0
+#define LWIP_NETIF_HOSTNAME 0
+#define LWIP_NETIF_STATUS_CALLBACK 0
+#define LWIP_NETIF_LINK_CALLBACK 0
+#define LWIP_STATS 0
+#define LWIP_DEBUG 0
+#define LWIP_CALLBACK_API 1
+#define LWIP_TCP_TIMESTAMPS 0
+#define LWIP_TCP_KEEPALIVE 0
+#define IP_REASSEMBLY 0
+#define IP_FRAG 0
+#define IP_FORWARD 0
+#define MEM_ALIGNMENT 8
+#define MEM_SIZE (256 * 1024)
+#define MEMP_NUM_PBUF 64
+#define PBUF_POOL_SIZE 64
+#define PBUF_POOL_BUFSIZE 1536
+#define MEMP_NUM_TCP_PCB 3
+#define MEMP_NUM_TCP_PCB_LISTEN 1
+#define MEMP_NUM_TCP_SEG 64
+#define TCP_MSS 1460
+#define TCP_WND (16 * 1024)
+#define TCP_SND_BUF (16 * 1024)
+#define TCP_SND_QUEUELEN 32
+#define TCP_LISTEN_BACKLOG 1
+#define CHECKSUM_CHECK_IP 1
+#define CHECKSUM_CHECK_TCP 1
+#define CHECKSUM_GEN_IP 1
+#define CHECKSUM_GEN_TCP 1
+#define LWIP_RAND() bw_lwip_random()
+#endif

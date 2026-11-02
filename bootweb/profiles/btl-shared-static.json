@@ -1,0 +1,22 @@
+{
+  "board": "skyworth_sk-d840n",
+  "stage1_sha256": "d4d7a4bf90fc26cc61c76000bb272fac3113c14525ab7119c3d10fbd477231f4",
+  "evidence": "IDA 9.2 static ARM64 analysis only; no target execution or MMIO read",
+  "runtime_verified": false,
+  "serial_rescue_verified": false,
+  "native_write_enabled": false,
+  "regions": {
+    "boot_media_dispatch": {"start": "0x1858", "end": "0x18bc", "sha256": "2d1c0c83b13cfdd3ce7d81811b645ff3350ac3874fbd1aad4502eb33521e6d7f"},
+    "nand_boot_candidate": {"start": "0x242c", "end": "0x24a8", "sha256": "75b7c92eb55b803f24f3b958bd1e82799c75189121d57e63d8fcf0ed2a89009a"},
+    "secure_selector_candidate": {"start": "0x4bb0", "end": "0x4bd4", "sha256": "b233114b137744376037d4767322a1cd5e1e2a5546737fd75f8188dcca92bb47"},
+    "container_verify_candidate": {"start": "0x47ac", "end": "0x4b9c", "sha256": "c5e4b902149c0aa8996eff75031c496dee57974d76a5cf84e1df7a7ec8205e9d"},
+    "uart_console_candidate": {"start": "0x2ea0", "end": "0x2ff4", "sha256": "bb78907df9b1de3ba22563f23ee9a0d9c7d0db0542540d7b44187e3c5491f7f2"}
+  },
+  "nand_load_candidate": {"flash_offset": "0x20000", "length": "0x180000", "nonsecure_destination": "0x88000000", "secure_destination": "0x88800000"},
+  "notes": [
+    "The raw/direct path and signed-container path are selected by hardware state; neither may be assumed for a rescue attempt.",
+    "The candidate NAND loader reads through file offset 0x1a0000, including env; the update write window remains strictly 0x20000..0x180000.",
+    "UART XMODEM/go behavior exists statically in BTL, not in the measured U-Boot command table.",
+    "This is documentation, not an executable address table or a flash-unlock profile."
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "board": "skyworth_sk-d840n",
+  "revision": "svn358069",
+  "role": "comparison-only-not-a-write-base",
+  "image_sha256": "009929cd17142567a1537e773758809bb75aa79a51af6597f2140c82e318f808",
+  "stage2_sha256": "250f8537cfd436a67196a263f4a39aeac36d894c27e5cf8d611c2ff856defd98",
+  "stage1_sha256": "d4d7a4bf90fc26cc61c76000bb272fac3113c14525ab7119c3d10fbd477231f4",
+  "tail_sha256": "c97fce784428a2e10cd6d4ef97ccc756f2e4c1b146a9b9dc5415d4e3e245b70a",
+  "runtime_verified": false,
+  "native_write_enabled": false,
+  "notes": ["Do not apply community offsets or an svn308776 package to this version."]
+}
