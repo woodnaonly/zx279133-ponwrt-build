@@ -43,6 +43,7 @@ on:
       - tests/*sk_offload*
       - tests/test_sysupgrade.py
       - tests/test_sk_layout.py
+      - tests/test_sk_uboot.py
       - tests/sk_layout_fixture.py
       - tests/sk_omci*
       - templates/**
@@ -102,6 +103,7 @@ jobs:
           python3 tests/test_kernel_version_single_source.py
           python3 tests/test_sk_led_dts_gate.py
           python3 tests/test_sk_layout.py
+          python3 tests/test_sk_uboot.py
 
   build:
     name: ${{ matrix.mode }}
