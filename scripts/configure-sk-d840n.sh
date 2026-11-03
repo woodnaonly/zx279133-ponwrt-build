@@ -500,6 +500,7 @@ printf 'CONFIG_PACKAGE_tc-tiny=y\n' >>.config
 # the image is assembled. base-files carries the view, and 99-sk-ports
 # copies it into place on the first boot.
 printf 'CONFIG_PACKAGE_zxpond=y\n' >>.config
+printf 'CONFIG_PACKAGE_sk-layout-check=y\n' >>.config
 printf '%s\n' CONFIG_PACKAGE_luci-app-sk-d840n-pon=y CONFIG_PACKAGE_luci-theme-argon=y \
 	CONFIG_PACKAGE_luci-i18n-argon-config-zh-cn=y CONFIG_LUCI_LANG_zh_Hans=y \
 	CONFIG_PACKAGE_firewall4=y CONFIG_PACKAGE_luci-app-firewall=y CONFIG_PACKAGE_luci-i18n-firewall-zh-cn=y >>.config
@@ -509,7 +510,7 @@ make defconfig
 skd840n_pin_offload_build_config .config "$OFFLOAD_PROFILE"
 skd840n_pin_kernel_size .config KERNEL_
 skd840n_check_theme_config .config
-for package in zxpond libzxpon-omci luci-app-sk-d840n-pon luci-mod-system luci-theme-argon luci-i18n-base-zh-cn luci-i18n-argon-config-zh-cn firewall4 luci-app-firewall luci-i18n-firewall-zh-cn rpcd-mod-ucode ucode-mod-fs; do
+for package in sk-layout-check libfdt zxpond libzxpon-omci luci-app-sk-d840n-pon luci-mod-system luci-theme-argon luci-i18n-base-zh-cn luci-i18n-argon-config-zh-cn firewall4 luci-app-firewall luci-i18n-firewall-zh-cn rpcd-mod-ucode ucode-mod-fs; do
 	grep -qx "CONFIG_PACKAGE_$package=y" .config || {
 		echo "Required ONU/firewall package lost after defconfig: $package" >&2; exit 1;
 	}

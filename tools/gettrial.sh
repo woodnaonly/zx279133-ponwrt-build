@@ -154,4 +154,4 @@ fi
 mv -f v/* . 2>/dev/null || true
 rmdir v
 ls -l trial-Image.gz trial-dtb.bin flash-uImage flash-dtb.bin 2>/dev/null || true
-echo "next: $( [ "$MODE" = flash ] && echo 'python tools/dtbparts.py staging/trial/flash-dtb.bin root=0xf00000,0xf000000 && sh tools/mkgate.sh' || echo 'sh tools/pushtrial.sh' )"
+echo "next: $( [ "$MODE" = flash ] && echo 'python tools/dtbparts.py staging/trial/flash-dtb.bin layout=native241 root=0xf00000,0xf100000 && sh tools/mkgate.sh' || echo 'sh tools/pushtrial.sh' )"

@@ -21,6 +21,8 @@ import gzip
 import struct
 import sys
 
+from sk_layout import inspect_layout
+
 FDT_BEGIN_NODE, FDT_END_NODE, FDT_PROP, FDT_NOP = 1, 2, 3, 4
 FDT_END = 9  # not 5 - libfdt reserves 5..8 and ends the struct block with 0x00000009
 
@@ -197,6 +199,18 @@ def check_uimage(path):
 def main():
     dtb = open(sys.argv[1], "rb").read()
     nodes = walk(dtb)
+    expected_layout = next((s.split("=", 1)[1] for s in sys.argv[2:] if s.startswith("layout=")), None)
+    # Historical vendor blobs remain inspectable, but all current board blobs
+    # and explicit release gates must pass the strict layout parser.
+    if expected_layout or nodes[0]["props"].get("compatible", b"").split(b"\0")[0] == b"skyworth,sk-d840n":
+        try:
+            layout = inspect_layout(dtb)
+            if expected_layout and layout["layout"] != expected_layout:
+                raise ValueError("unexpected layout: " + layout["layout"])
+        except (ValueError, UnicodeError, struct.error) as error:
+            print("TABLE WRONG - " + str(error))
+            return 1
+        print("validated layout: " + layout["layout"])
     pins = alias_pins(nodes)
     parts = [i for i, n in enumerate(nodes) if n["name"].startswith("partition@")]
     if not parts:
@@ -245,6 +259,8 @@ def main():
 
     for spec in sys.argv[2:]:
         want, val = spec.split("=", 1)
+        if want == "layout":
+            continue
         if want == "uimage":
             # The kernel's own placement comes from the image header, not from the dtb, so it
             # is checked here rather than assumed: arm64 bootm honours ih_load, and a load

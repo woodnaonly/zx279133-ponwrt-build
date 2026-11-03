@@ -109,7 +109,7 @@ echo "=== 3. NEGATIVE CONTROL: partitions in the wrong order must be caught ==="
 # for.
 awk '
   /^[[:space:]]*label = "boot";/      { boot=$0; next }
-  /^[[:space:]]*label = "scratch";/  { scratch=$0; print scratch; print boot; next }
+  /^[[:space:]]*label = "kernel";/  { kernel=$0; print kernel; print boot; next }
   { print }
 ' "$W/ours.dts" >"$W/swapped.dts"
 if cmp -s "$W/ours.dts" "$W/swapped.dts"; then
@@ -117,7 +117,7 @@ if cmp -s "$W/ours.dts" "$W/swapped.dts"; then
 fi
 out=$(run_gate "$W/swapped.dts"); rc=$?
 printf '%s\n' "$out" | grep -E '^::error::' | sed 's/^/      /'
-[ "$rc" -ne 0 ] && ok "exit $rc - a boot/scratch swap is rejected" \
+[ "$rc" -ne 0 ] && ok "exit $rc - a boot/kernel swap is rejected" \
 	|| bad "swapping two partition labels was not noticed"
 printf '%s\n' "$out" | grep -q 'partition order is wrong' \
 	&& ok "and the message names the partition order" || bad "wrong error message"

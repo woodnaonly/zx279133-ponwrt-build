@@ -3,7 +3,7 @@
 . /lib/functions.sh
 
 # stage2 copies awk/wc/tar itself, but not the mktemp used by both preflights.
-RAMFS_COPY_BIN="${RAMFS_COPY_BIN:-} mktemp"
+RAMFS_COPY_BIN="${RAMFS_COPY_BIN:-} mktemp /usr/sbin/sk-layout-check"
 
 # Skyworth SK-D840N under the community U-Boot that is already flashed:
 #   bootcmd = mtd read kernel ...; mtd read dtb ...; bootm  -  with
@@ -27,6 +27,61 @@ skd840n_part_size() { # label -> size in bytes, from the running kernel
 	size=$(cat "/sys/class/mtd/mtd$index/size" 2>/dev/null) || return 1
 	case "$size" in ''|*[!0-9]*|0) return 1 ;; esac
 	printf '%s\n' "$size"
+}
+
+# Read the actual aliases/geometry, not just a label or the root capacity alone.
+# Unknown layouts fail closed. Layout migration is a separate DTB-only procedure.
+skd840n_live_layout() {
+	local root_size count index label offset size actual value field expected layout
+	root_size=$(cat /sys/class/mtd/mtd5/size 2>/dev/null) || return 1
+	case "$root_size" in
+	251658240) layout=current240; count=6 ;;
+	252706816) layout=native241; count=5 ;;
+	*) return 1 ;;
+	esac
+	[ "$(awk 'NR>1 && $1 != "mtd0:" {n++} END {print n+0}' /proc/mtd)" = "$count" ] || return 1
+	for index in 1 2 3 4 5 6; do
+		[ "$index" -le "$count" ] || break
+		case "$index" in
+		1) label=boot; offset=0; size=2097152 ;;
+		2) label=kernel; offset=2097152; size=8388608 ;;
+		3) label=dtb; offset=10485760; size=1048576 ;;
+		4) label='parameter tags'; offset=11534336; size=4194304 ;;
+		5) label=root; offset=15728640; size=$root_size ;;
+		6) label=scratch; offset=267386880; size=1048576 ;;
+		esac
+		actual=$(awk -F'"' -v name="$label" '$2 == name {
+			sub(/^mtd/, "", $1); sub(/:.*/, "", $1); id=$1; n++
+		} END {if (n != 1) exit 1; print id}' /proc/mtd) || return 1
+		[ "$actual" = "$index" ] || return 1
+		[ "$(cat "/sys/class/mtd/mtd$index/name" 2>/dev/null)" = "$label" ] || return 1
+		for field in offset size erasesize; do
+			case "$field" in offset) expected=$offset ;; size) expected=$size ;; erasesize) expected=131072 ;; esac
+			value=$(cat "/sys/class/mtd/mtd$index/$field" 2>/dev/null) || return 1
+			[ "$value" = "$expected" ] || return 1
+		done
+	done
+	printf '%s\n' "$layout"
+}
+
+skd840n_validate_layout() { # extracted dtb; required again in upgrade ramfs
+	local image_layout live_layout
+	[ -x /usr/sbin/sk-layout-check ] || {
+		v "Invalid image: required sk-layout-check is missing; no writes permitted"
+		return 1
+	}
+	image_layout=$(/usr/sbin/sk-layout-check "$1") || {
+		v "Invalid image: unsupported or corrupt DTB layout"
+		return 1
+	}
+	live_layout=$(skd840n_live_layout) || {
+		v "Invalid image: live MTD layout is unknown"
+		return 1
+	}
+	case "$image_layout:$live_layout" in
+	current240:current240|native241:native241) return 0 ;;
+	*) v "Invalid image: layout change $live_layout -> $image_layout requires a separate migration"; return 1 ;;
+	esac
 }
 
 # Where the saved configuration archive is, echoed for `mtd -j`; nothing if there is none.
@@ -98,6 +153,7 @@ skd840n_validate_parts() { # directory containing kernel, dtb and root
 			return 1
 		fi
 	done
+	skd840n_validate_layout "$1/dtb"
 }
 
 # Stream only expected regular members to fixed temporary filenames. Never

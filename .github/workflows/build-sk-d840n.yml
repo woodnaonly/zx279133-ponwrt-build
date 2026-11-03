@@ -42,6 +42,8 @@ on:
       - tests/*sk_led*
       - tests/*sk_offload*
       - tests/test_sysupgrade.py
+      - tests/test_sk_layout.py
+      - tests/sk_layout_fixture.py
       - tests/sk_omci*
       - templates/**
       # The trial files go into the RAM image (the initramfs mode copies
@@ -93,12 +95,13 @@ jobs:
       - name: Install DTS regression tools
         run: |
           sudo apt-get -qq update
-          sudo apt-get -qq install --no-install-recommends device-tree-compiler python3-yaml
+          sudo apt-get -qq install --no-install-recommends device-tree-compiler libfdt-dev python3-yaml
       - name: Exercise the workflow's DTS and LED gates
         run: |
           python3 tests/test_sk_kernel.py
           python3 tests/test_kernel_version_single_source.py
           python3 tests/test_sk_led_dts_gate.py
+          python3 tests/test_sk_layout.py
 
   build:
     name: ${{ matrix.mode }}
@@ -140,7 +143,7 @@ jobs:
           sudo -E apt-get -qq install ack antlr3 asciidoc autoconf automake autopoint binutils bison \
             build-essential bzip2 ccache clang cmake cpio curl device-tree-compiler ecj fastjar flex gawk gettext gcc-multilib \
             g++-multilib git gnutls-dev gperf haveged help2man intltool lib32gcc-s1 libc6-dev-i386 libelf-dev \
-            libglib2.0-dev libgmp3-dev libjson-c-dev libltdl-dev libmpc-dev libmpfr-dev libncurses-dev libncursesw5-dev \
+            libfdt-dev libglib2.0-dev libgmp3-dev libjson-c-dev libltdl-dev libmpc-dev libmpfr-dev libncurses-dev libncursesw5-dev \
             libpython3-dev libreadline-dev libssl-dev libtool libyaml-dev libz-dev lld llvm lrzsz mkisofs msmtp \
             nano ninja-build p7zip p7zip-full patch pkgconf python3 python3-pip python3-venv python3-ply python3-docutils \
             python3-pyelftools bc dwarves qemu-utils qemu-user re2c rsync scons squashfs-tools subversion swig texinfo \
@@ -512,9 +515,8 @@ jobs:
           #     this DT's partition list is the only thing that decides what mtdblock5
           #     *is*. Add or drop a partition above root and the board mounts the
           #     wrong region with no error anyone would notice.
-          #   - `scratch`: our last MiB, split out of root. Its presence is also the
-          #     marker that this blob is the mainline layout and not the vendor one,
-          #     which is how the kexec rounds proved which dtb was live.
+          #   - native241: root owns the final 241 MiB, without scratch/mtd6.
+          #     Capacity, aliases and every offset are checked on the actual blob.
           # The content gate below reads the blob this dtc harness compiled, and it opens
           # with `if [ -f /tmp/zx279133-sk-d840n.dts.dtb ]; then`. An absent blob therefore
           # skips the entire block and the step still reports success - a gate that did not
@@ -613,7 +615,7 @@ jobs:
                              inp && /label = / {gsub(/^.*label = /, ""); gsub(/;.*$/, ""); print; inp=0}
                              inp && /^[[:space:]]*\};/ {inp=0}' /tmp/sk-d840n-gate.norm.dts)
             echo "     partitions in order: $(echo "$LABELS" | tr '\n' ' ')"
-            WANT='"boot" "kernel" "dtb" "parameter tags" "root" "scratch"'
+            WANT='"boot" "kernel" "dtb" "parameter tags" "root"'
             GOT=$(echo "$LABELS" | tr '\n' ' ')
             if [ "$(echo "$GOT" | sed 's/[[:space:]]*$//')" = "$WANT" ]; then
               echo "ok   partition order matches, so mtdblock5 == root"
@@ -625,6 +627,7 @@ jobs:
             fi
             [ "$rc" -eq 0 ] || exit 1
           fi
+          python3 tools/dtbparts.py /tmp/zx279133-sk-d840n.dts.dtb layout=native241 root=0xf00000,0xf100000
 
       - name: "Gate: complete panel LED wiring and negative controls"
         if: steps.pick.outputs.run == 'true'
@@ -1351,6 +1354,10 @@ jobs:
           ROOTFS=$( { ls -d openwrt/build_dir/target-*/root-zte 2>/dev/null || true; } | head -1 )
           test -n "$KT" && test -n "$ROOTFS"
           python3 tools/prepare-sk-kernel.py --check-built "$KT" --rootfs "$ROOTFS" --version "$KVER"
+          test -x "$ROOTFS/usr/sbin/sk-layout-check"
+          layout=$(qemu-aarch64 -L "$ROOTFS" "$ROOTFS/usr/sbin/sk-layout-check" /tmp/zx279133-sk-d840n.dts.dtb)
+          test "$layout" = native241
+          echo "Target AArch64 layout validator: $layout (including its shipped libfdt)"
 
       - name: "Gate: ONU UI, protocol service and firewall4 reached the image"
         if: steps.pick.outputs.run == 'true'
@@ -1530,6 +1537,8 @@ jobs:
           #                  build did not - one of the two has to be there,
           #                  or the script never runs.
           python3 tools/jffs2names.py --list "$RS" > rootfs-names.txt
+          grep -qx 'sk-layout-check' rootfs-names.txt || {
+            echo "::error::released rootfs lacks the mandatory layout validator"; exit 1; }
           echo "rootfs: $(wc -l < rootfs-names.txt) names in the image"
           grep -qx 'sk-nat' rootfs-names.txt || {
             echo "::error::the built rootfs does not contain sk-nat - the flashed image would not masquerade"; exit 1; }

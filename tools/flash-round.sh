@@ -42,7 +42,7 @@ esac
 # that `mtd write <img> root` on the running 4.19 lands where the new kernel mounts) *and*
 # be the sixth child (so that U-Boot's root=/dev/mtdblock5 names it). Both are checked by
 # tools/dtbparts.py and either one failing means this image panics with no serial to read.
-python tools/dtbparts.py staging/trial/flash-dtb.bin root=0xf00000,0xf000000 \
+python tools/dtbparts.py staging/trial/flash-dtb.bin layout=native241 root=0xf00000,0xf100000 \
 	|| { echo "refusing to build a flasher for this dtb - see TABLE WRONG above" >&2; exit 1; }
 
 # Same proof as tools/flash-direct.sh: a `--write` initrd is a fire-ready irreversible command,

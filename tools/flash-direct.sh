@@ -38,10 +38,9 @@ MODE=${1:-dry}
 # Which directory the two images come from. `staging/rollback` holds the pair this board boots
 # with today, so the same verified path that writes mainline also undoes it.
 SRC=${SRC:-staging/trial}
-# What the dtb's root partition must say. The mainline table puts root at 240 MiB, the vendor
-# one at 241 MiB, and both are legitimate for their own kernel - so the expectation travels
-# with the source rather than being hard-coded.
-EXPECT=${EXPECT:-root=0xf00000,0xf000000}
+# New releases use native241. Capacity changes require the separate DTB-only migration;
+# the target-side guard still refuses a mismatch even if EXPECT is overridden here.
+EXPECT=${EXPECT:-root=0xf00000,0xf100000}
 # Snapshot what is about to be overwritten before overwriting it. BACKUP=0 only makes sense
 # when tools/preflashbackup.sh already ran in this same window.
 BACKUP=${BACKUP:-1}

@@ -23,6 +23,11 @@ LOG=$D/write.log
 say() { echo "$(cut -d. -f1 /proc/uptime) $*" >>"$LOG"; }
 
 say "start kernel=$(uname -r) uptime=$(cat /proc/uptime)"
+[ -r /lib/upgrade/platform.sh ] || { say "ABORT: layout guard is missing"; exit 1; }
+. /lib/upgrade/platform.sh
+command -v skd840n_validate_layout >/dev/null 2>&1 || { say "ABORT: platform lacks the layout guard"; exit 1; }
+v() { say "$*"; }
+skd840n_validate_layout "$D/flash-dtb.bin" || { say "ABORT: invalid layout or migration required"; exit 1; }
 # Labels are resolved from sysfs rather than by grepping /proc/mtd, so that nothing here has
 # to carry a nested quote, and so a label that is missing yields an abort instead of an empty
 # device name that dd would happily open as /dev/.

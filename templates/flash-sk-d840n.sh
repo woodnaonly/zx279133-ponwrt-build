@@ -31,6 +31,13 @@ for f in "$KERNEL_IMG" "$DTB_IMG" "$ROOT_IMG"; do
 	[ -f "$f" ] || die "missing $f (run from the directory holding the images)"
 done
 
+# The same guard as sysupgrade, before ANY erase, including manual maintenance.
+[ -r /lib/upgrade/platform.sh ] || die "required platform layout guard is missing"
+. /lib/upgrade/platform.sh
+command -v skd840n_validate_layout >/dev/null 2>&1 || die "platform lacks the layout guard"
+v() { say "$*"; }
+skd840n_validate_layout "$DTB_IMG" || die "unsupported layout or layout migration required"
+
 # Integrity, checked before a single eraseblock is touched.
 #
 # sha256sums-release ships inside flash-set.tgz next to these images for exactly this.
@@ -129,7 +136,9 @@ say "done. Reboot into it (or power-cycle)."
 say ""
 say "REVERSIBILITY - read this before you assume anything."
 say "  This run just wrote THREE partitions: root, dtb, kernel."
-say "  Rolling back kernel+dtb alone:"
+say "  Never restore a 240 MiB DTB over a root already used at 241 MiB."
+say "  Layout changes require separate offline recovery, not this flasher."
+say "  Historical kernel+dtb rollback reference (not an authorization):"
 say "    SRC=staging/rollback EXPECT='root=0xf00000,0xf100000' sh tools/flash-direct.sh write"
 say "  puts the vendor 4.19 uImage and the vendor dtb back (both byte-exact prefixes"
 say "  of what was in mtd2/mtd3 before this project touched them). But root now"

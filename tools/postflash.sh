@@ -205,7 +205,7 @@ fi
 		echo "  mainline has no PON MAC driver, so this is expected on 6.18.38+ and is not a"
 		echo "  flashing mistake. To get the optical side back, write the vendor pair back:"
 		echo "    SRC=staging/rollback EXPECT='root=0xf00000,0xf100000' sh tools/flash-direct.sh write"
-		echo "  (that value matches the VENDOR dtb; the mainline one is 0xf000000, 1 MiB shorter)"
+		echo "  Native241 also uses 0xf100000. Never shrink a used 241 MiB root to 240 MiB."
 		;;
 	alive)
 		echo "  the optical side is up - PON was NOT lost, and the earlier offline reading of the"

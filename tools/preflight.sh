@@ -95,7 +95,7 @@ else
 fi
 
 echo "=== 3. the partition table the images will be booted with ==="
-python tools/dtbparts.py staging/trial/flash-dtb.bin root=0xf00000,0xf000000
+python tools/dtbparts.py staging/trial/flash-dtb.bin layout=native241 root=0xf00000,0xf100000
 
 echo "=== 4. gate payload = exactly those bytes ==="
 sh tools/mkgate.sh

@@ -6,12 +6,11 @@
 //   - SPI-NAND hangs off the SFC at 0x10d0f000 (live: /sys/.../10d0f000.spifc/spi_master/spi1/spi1.0)
 //   - partition map is derived from the community/vendor U-Boot one (env at boot+0x180000):
 //       boot 2048k@0x0 kernel 8192k@0x200000 dtb 1024k@0xa00000
-//       "parameter tags" 4096k@0xb00000 root+scratch 246784k@0xf00000
-//     This DTS splits that last 246784k (= 241 MiB) into root 240 MiB at 0xf00000 and
-//     scratch 1 MiB at 0xff00000 (the vendor 4.19 table keeps it as one 241 MiB root).
-//     The /dev/mtdN numbering is pinned by the mtd1..mtd6 aliases below, not counted off
+//       "parameter tags" 4096k@0xb00000 root 246784k@0xf00000
+//     root occupies the complete final 241 MiB; there is no separate scratch partition.
+//     The /dev/mtdN numbering is pinned by the mtd1..mtd5 aliases below, not counted off
 //     node order, so it survives a kernel-config change: boot=1 kernel=2 dtb=3
-//     "parameter tags"=4 root=5 scratch=6, and mtd0 is the SPI-NAND master if
+//     "parameter tags"=4 root=5, and mtd0 is the SPI-NAND master if
 //     CONFIG_MTD_PARTITIONED_MASTER is enabled and absent if it is not.
 //     (`root` must stay index 5 - the installed U-Boot bootargs hard-code
 //      root=/dev/mtdblock5 - *and* must start at 0xf00000, because that is where the
@@ -74,7 +73,6 @@
 		mtd3 = &dtbpart;
 		mtd4 = &tagspart;
 		mtd5 = &rootpart;
-		mtd6 = &scratchpart;
 	};
 
 	chosen {
@@ -915,9 +913,7 @@
  * The pin also frees the table from the hack that used to satisfy (1): U-Boot's single
  * 4096k `parameter tags` region is no longer split in two to fill a slot, so it is one
  * read-only node again and still covers the bytes U-Boot keeps its MAC/calibration in.
- * `scratch` (1 MiB at 0xff00000) is not a usable log area either - erasing a sub-range
- * needs the MEMERASE ioctl, which no tool on this image provides - its only job is to
- * keep the chip fully described.
+ * The final MiB belongs to root. Never use that range as a raw NAND test area.
  *
  * Offsets/labels otherwise mirror the community U-Boot env
  * (boot 2048k@0x0, kernel 8192k@0x200000, dtb 1024k@0xa00000,
@@ -961,12 +957,7 @@
 
 			rootpart: partition@f00000 {
 				label = "root";
-				reg = <0xf00000 0xf000000>;
-			};
-
-			scratchpart: partition@ff00000 {
-				label = "scratch";
-				reg = <0xff00000 0x100000>;
+				reg = <0xf00000 0xf100000>;
 			};
 		};
 	};

@@ -17,10 +17,12 @@ import subprocess
 import tarfile
 import zlib
 
+from sk_layout import inspect_layout
+
 BOARD = "skyworth_sk-d840n"
 PREFIX = "sysupgrade-" + BOARD
 LIMITS = {"kernel": 8 * 1024 * 1024, "dtb": 1024 * 1024,
-          "root": 240 * 1024 * 1024}
+          "root": 241 * 1024 * 1024}
 MAIN_IMAGE = "immortalwrt-sk-d840n-sysupgrade.bin"
 EXPORTS = {"kernel": "flash-uImage", "dtb": "flash-dtb.bin",
            "root": "flash-rootfs.jffs2"}
@@ -114,15 +116,13 @@ def inspect_image(image, raw_kernel=None):
             "wrong CONTROL board")
     kernel = inspect_kernel(blobs["kernel"], raw_kernel)
     dtb = blobs["dtb"]
-    require(len(dtb) >= 40 and dtb[:4] == bytes.fromhex("d00dfeed"),
-            "invalid device tree magic/header")
-    require(40 <= struct.unpack(">I", dtb[4:8])[0] <= len(dtb),
-            "invalid device tree declared size")
+    layout = inspect_layout(dtb)
+    require(len(blobs["root"]) <= layout["root_bytes"], "root image exceeds DTB capacity")
     require(blobs["root"][:2] == bytes.fromhex("8519"),
             "root is not a little-endian JFFS2 image")
     report = {"image": str(image), "sizes": {k: len(blobs[k]) for k in LIMITS},
               "kernel": kernel, "metadata": metadata,
-              "native_signature_present": signed}
+              "native_signature_present": signed, "layout": layout}
     return blobs, report
 
 

@@ -24,6 +24,8 @@ import zlib
 
 import yaml
 
+from sk_layout_fixture import build_checker, dtb
+
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "tools"))
 import check_sysupgrade as firmware
@@ -65,9 +67,9 @@ def uimage(raw=b"self-contained ARM64 kernel" * 32):
     return header[:4] + struct.pack(">I", zlib.crc32(header)) + header[8:] + payload
 
 
-def members():
+def members(layout="native241"):
     return {"CONTROL": b"BOARD=skyworth_sk-d840n\n", "kernel": uimage(),
-            "dtb": bytes.fromhex("d00dfeed") + struct.pack(">I", 40) + bytes(32),
+            "dtb": dtb(layout),
             "root": bytes.fromhex("8519") + bytes(126)}
 
 
@@ -322,6 +324,12 @@ class KernelSizeTests(TemporaryTest):
 
 @unittest.skipUnless(SHELL, "a POSIX shell is required")
 class PlatformTests(TemporaryTest):
+    @classmethod
+    def setUpClass(cls):
+        cls.compiler_temp = tempfile.TemporaryDirectory(prefix="sk-platform-checker-")
+        cls.addClassCleanup(cls.compiler_temp.cleanup)
+        cls.checker = build_checker(cls.compiler_temp.name)
+
     def test_partition_sizes_come_from_live_mtd_aliases(self):
         proc = self.directory / "proc-mtd"
         sysfs = self.directory / "sysfs"
@@ -333,7 +341,7 @@ class PlatformTests(TemporaryTest):
             (target / "size").write_text(str(size))
         proc.write_text("\n".join(records) + "\n")
         text = PLATFORM.read_text(encoding="utf-8").replace(". /lib/functions.sh", ":")
-        self.assertIn('RAMFS_COPY_BIN="${RAMFS_COPY_BIN:-} mktemp"', text)
+        self.assertIn('RAMFS_COPY_BIN="${RAMFS_COPY_BIN:-} mktemp /usr/sbin/sk-layout-check"', text)
         text = text.replace("/proc/mtd", shlex.quote(shell_path(proc)))
         text = text.replace("/sys/class/mtd", shell_path(sysfs))
         script = self.directory / "lookup.sh"
@@ -344,11 +352,14 @@ class PlatformTests(TemporaryTest):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual([int(s) for s in result.stdout.split()], list(firmware.LIMITS.values()))
 
-    def run_platform(self, action, *, capacities=None, backup=None, default_backup=False):
-        capacities = capacities or {"kernel": 1024, "dtb": 512, "root": 2048}
+    def run_platform(self, action, *, capacities=None, backup=None, default_backup=False,
+                     live="native241", checker_missing=False):
+        capacities = capacities or {"kernel": 1024, "dtb": 4096, "root": 2048}
         script = self.directory / "platform.sh"
         config = self.directory / "sysupgrade.tgz"
         text = PLATFORM.read_text(encoding="utf-8").replace(". /lib/functions.sh", ":")
+        checker = str(self.directory / "missing-checker") if checker_missing else self.checker
+        text = text.replace("/usr/sbin/sk-layout-check", shell_path(checker))
         script.write_text(text.replace("/tmp/sysupgrade.tgz", shell_path(config)),
                           encoding="utf-8", newline="\n")
         if default_backup:
@@ -367,6 +378,7 @@ command -v hexdump >/dev/null 2>&1 || hexdump() {{ od -An -tx1 -N2 | tr -d ' \\n
 skd840n_part_size() {{ case "$1" in
 {cases}
 *) return 1 ;; esac; }}
+skd840n_live_layout() {{ printf '%s\\n' {shlex.quote(live)}; }}
 mtd() {{
     printf '%s\\n' "$*" >> {quote(log)}
     prev=; src=; label=
@@ -411,7 +423,7 @@ UPGRADE_BACKUP={quote(backup) if backup else "''"}
             for spare in (1, 0, -1):
                 with self.subTest(part=part, spare=spare):
                     parts = members()
-                    capacities = {"kernel": 1024, "dtb": 512, "root": 2048}
+                    capacities = {"kernel": 1024, "dtb": 4096, "root": 2048}
                     capacities[part] = len(parts[part]) + spare
                     make_image(self.image, parts)
                     for action in ("platform_check_image", "platform_do_upgrade"):
@@ -474,6 +486,25 @@ UPGRADE_BACKUP={quote(backup) if backup else "''"}
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertTrue(writes[0].startswith("-j "), writes)
             self.assertEqual([w.split()[-1] for w in writes], ["root", "dtb", "kernel"])
+
+    def test_layout_changes_unknown_live_and_missing_checker_never_write(self):
+        for image_layout, live, missing in (("current240", "native241", False),
+                                             ("native241", "current240", False),
+                                             ("native241", "unknown", False),
+                                             ("native241", "native241", True)):
+            for action in ("platform_check_image", "platform_do_upgrade"):
+                with self.subTest(image=image_layout, live=live, missing=missing, action=action):
+                    make_image(self.image, members(image_layout))
+                    result, writes = self.run_platform(action, live=live, checker_missing=missing)
+                    self.assertNotEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(writes, [])
+
+    def test_legacy_same_layout_is_supported_but_bad_dtb_never_writes(self):
+        make_image(self.image, members("current240"))
+        result, _ = self.run_platform("platform_check_image", live="current240")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        parts = members(); parts["dtb"] = bytes.fromhex("d00dfeed") + bytes(36)
+        self.assert_rejected_before_write(parts)
 
 
 class WorkflowTests(unittest.TestCase):
