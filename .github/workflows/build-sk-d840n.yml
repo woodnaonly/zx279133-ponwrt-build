@@ -42,6 +42,7 @@ on:
       - tests/*sk_led*
       - tests/*sk_offload*
       - tests/test_sysupgrade.py
+      - tests/test_mtd_rw.py
       - tests/test_sk_layout.py
       - tests/test_sk_uboot.py
       - tests/sk_layout_fixture.py
@@ -161,6 +162,7 @@ jobs:
           "$PY" -m pip install --quiet --disable-pip-version-check 'zopfli==0.4.3' 'PyYAML==6.0.3'
           echo "SKD840N_HOST_PYTHON=$PY" >> "$GITHUB_ENV"
           "$PY" tests/test_sysupgrade.py
+          "$PY" tests/test_mtd_rw.py
           sh -n overlays/target/linux/zte/zx279133/base-files/lib/upgrade/platform.sh
 
       - name: Rust 1.96.1 and offline ONU regression tests

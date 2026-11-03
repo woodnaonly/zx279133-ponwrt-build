@@ -14,6 +14,7 @@ for package in zxpond libzxpon-omci luci-app-sk-d840n-pon luci-mod-system firewa
 	grep -q "^$package " "$MANIFEST" || { echo "Image manifest is missing $package"; exit 1; }
 done
 skd840n_check_theme_image "$ROOT" "$MANIFEST"
+python3 tools/check-sk-mtd-rw.py --tree "$TREE" --root "$ROOT" --manifest "$MANIFEST"
 python3 tools/check-sk-offload.py --root "$ROOT" --manifest "$MANIFEST"
 [ -L "$ROOT/etc/rc.d/S96zxpond" ] || { echo 'Protocol daemon is not enabled in the image'; exit 1; }
 for file in usr/sbin/zxpond etc/init.d/zxpond sbin/fw4 etc/init.d/firewall etc/config/firewall \

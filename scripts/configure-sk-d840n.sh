@@ -91,6 +91,11 @@ pin_y() {
 }
 pin_y REALTEK_PHY
 
+# Keep the optional mtd-rw module loadable and unloadable in both image modes.
+# Installing its package does not remove any device-tree read-only flags.
+pin_y MODULES
+pin_y MODULE_UNLOAD
+
 # The on-board LAN switch driver.  On the SK-D840N that is the 9132, whose CPU
 # port sits on the XMAC0 LAN lane - the same place the RTL8372N's CPU port sits
 # on the SR1010 - so it is the same kind of child driver and it is built the
@@ -394,6 +399,9 @@ fi
 # Unlike zrec it cannot touch flash, so the released root can carry it.
 printf 'CONFIG_PACKAGE_rdreg=y\n' >>.config
 
+# Build against this image's exact kernel; never auto-load with the unlock flag.
+printf 'CONFIG_PACKAGE_kmod-mtd-rw=y\n' >>.config
+
 # mdread is the other half of the same observability gap. eth0 runs fixed-link, so phylib never
 # attaches the RTL8226B at mdio1 address 5 and SIOCGMIIREG has no phydev to ask; and the only way
 # back into U-Boot is a power cut, which resets the PHY, so the bootloader can show the chip's
@@ -510,7 +518,7 @@ make defconfig
 skd840n_pin_offload_build_config .config "$OFFLOAD_PROFILE"
 skd840n_pin_kernel_size .config KERNEL_
 skd840n_check_theme_config .config
-for package in sk-layout-check libfdt zxpond libzxpon-omci luci-app-sk-d840n-pon luci-mod-system luci-theme-argon luci-i18n-base-zh-cn luci-i18n-argon-config-zh-cn firewall4 luci-app-firewall luci-i18n-firewall-zh-cn rpcd-mod-ucode ucode-mod-fs; do
+for package in kmod-mtd-rw sk-layout-check libfdt zxpond libzxpon-omci luci-app-sk-d840n-pon luci-mod-system luci-theme-argon luci-i18n-base-zh-cn luci-i18n-argon-config-zh-cn firewall4 luci-app-firewall luci-i18n-firewall-zh-cn rpcd-mod-ucode ucode-mod-fs; do
 	grep -qx "CONFIG_PACKAGE_$package=y" .config || {
 		echo "Required ONU/firewall package lost after defconfig: $package" >&2; exit 1;
 	}

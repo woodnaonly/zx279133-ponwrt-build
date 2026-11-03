@@ -73,6 +73,31 @@ CPU-side flow-to-ME table. This change does not guess either mechanism.
 
 ## Build
 
+Both SK-D840N image modes include `kmod-mtd-rw`, built against the same
+external kernel as the image. It is installed but **not auto-loaded**;
+the device-tree read-only flags remain in place on normal boot. The package
+patch supports sparse MTD indices (this board starts at `mtd1`) and restores
+the correct flags for indices 32–63 on unload.
+
+After booting the matching firmware, an operator can explicitly load it:
+
+```sh
+insmod mtd-rw i_want_a_brick=1
+# Unload after the maintenance operation; restores flags, not flash data.
+rmmod mtd_rw
+```
+
+This unlocks all read-only MTD partitions, including boot and factory tags;
+it does not select a safe write range or supply a working U-Boot. Do not load
+a module copied from a different kernel/firmware, or use forced module loading.
+Pause the smart outlet's 20-minute-on/30-second-off cycle before any erase or
+write. Its remaining on-time is not a power-stability guarantee.
+
+CI checks the final manifest, AArch64 `.ko`, actual kernel release/vermagic,
+explicit opt-in parameter and absence of auto-load entries. The offline test
+`python tests/test_mtd_rw.py` executes the patched upstream code against fake
+MTDs only; it neither loads a real module nor validates hardware flashing.
+
 Workflow `Build SR1010` (`workflow_dispatch`, also runs on the first push).
 Output: `bin/targets/zte/zx279133/immortalwrt-zte-zx279133-zte_zxslc-sr1010-initramfs.itb`.
 

@@ -1,0 +1,31 @@
+From: SK-D840N maintainers
+Subject: [PATCH] Handle sparse MTD aliases and use a 64-bit unlock bitmap
+
+SK-D840N exposes mtd1 through mtd6 with no mtd0. An absent device is not
+the end of the MTD namespace. Keep the existing 64-device bound, and use
+64-bit shifts so unloading restores the right flags for indices 32-63.
+
+--- a/mtd-rw.c
++++ b/mtd-rw.c
+@@ -92,9 +92,10 @@
+ 	for (i = 0; i < MTD_MAX; ++i) {
+ 		err = set_writeable(i, true);
+ 		if (!err) {
+-			unlocked |= (1 << i);
++			unlocked |= (1ULL << i);
+ 		} else if (err == -ENODEV) {
+-			break;
++			/* Fixed partition aliases can leave holes, including mtd0. */
++			continue;
+ 		}
+ 	}
+ 
+@@ -117,7 +118,7 @@
+ 	unsigned i;
+ 
+ 	for (i = 0; i < mtd_last; ++i) {
+-		if (unlocked & (1 << i)) {
++		if (unlocked & (1ULL << i)) {
+ 			set_writeable(i, false);
+ 		}
+ 	}
