@@ -549,13 +549,17 @@ class WorkflowTests(unittest.TestCase):
                             selected = wanted in (mode, "both")
                             expression = condition.replace("success()", repr(success))
                             values = {"steps.pick.outputs.run": "true" if selected else "false",
+                                      "github.event_name": "push",
+                                      "github.ref": "refs/heads/main",
+                                      "inputs.publish_release": True,
                                       "matrix.mode": mode,
                                       "steps.package_flash.outputs.validated": "true" if validated and mode == "flash" else "",
                                       "steps.package_initramfs.outputs.validated": "true" if validated and mode == "initramfs" else ""}
                             for key, value in values.items():
                                 expression = expression.replace(key, repr(value))
                             expression = expression.replace("&&", " and ").replace("||", " or ")
-                            actual = eval(expression, {"__builtins__": {}})
+                            expression = expression.replace("!= false", "!= False").replace("!startsWith(", "not startsWith(")
+                            actual = eval(expression, {"__builtins__": {}, "startsWith": str.startswith})
                             expected = success and selected and validated
                             if name in ("Upload direct sysupgrade image", "Direct firmware download summary"):
                                 expected = expected and mode == "flash"

@@ -23,7 +23,13 @@ on:
         required: false
         default: 'false'
         type: boolean
+      publish_release:
+        description: 'Publish Release (disable for RAM comparisons)'
+        required: false
+        default: true
+        type: boolean
   push:
+    branches: ['perf/tcp-optimized-20261105-221803']
     paths:
       - .github/workflows/build-sk-d840n.yml
       - kernel-overlays/**
@@ -31,6 +37,8 @@ on:
       - overlays/**
       - configs/sk-d840n*
       - tests/test_sk_kernel.py
+      - tests/test_sk_tcp_optimization.py
+      - tests/sk_tcp_harness.h
       - scripts/configure-sk-d840n.sh
       - scripts/prepare-sk-d840n-ui.sh
       - scripts/sk-d840n-theme.sh
@@ -102,6 +110,7 @@ jobs:
       - name: Exercise the workflow's DTS and LED gates
         run: |
           python3 tests/test_sk_kernel.py
+          python3 tests/test_sk_tcp_optimization.py --require-compiler
           python3 tests/test_kernel_version_single_source.py
           python3 tests/test_sk_lan1_phy_led.py
           python3 tests/test_sk_led_dts_gate.py
@@ -114,7 +123,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        mode: [initramfs, flash]
+        mode: [initramfs]
     runs-on: ubuntu-22.04
     timeout-minutes: 400
     steps:
@@ -1895,6 +1904,8 @@ jobs:
 
       - name: Publish release
         if: >-
+          !startsWith(github.ref, 'refs/heads/perf/tcp-') &&
+          (github.event_name != 'workflow_dispatch' || inputs.publish_release != false) &&
           success() && steps.pick.outputs.run == 'true' &&
           ((matrix.mode == 'flash' && steps.package_flash.outputs.validated == 'true') ||
            (matrix.mode == 'initramfs' && steps.package_initramfs.outputs.validated == 'true'))
@@ -1984,7 +1995,7 @@ jobs:
           ignore_missing_files: true
 
       - name: Direct firmware download summary
-        if: success() && steps.pick.outputs.run == 'true' && matrix.mode == 'flash' && steps.package_flash.outputs.validated == 'true'
+        if: success() && steps.pick.outputs.run == 'true' && matrix.mode == 'flash' && steps.package_flash.outputs.validated == 'true' && (github.event_name != 'workflow_dispatch' || inputs.publish_release != false)
         run: |
           {
             echo '## ImmortalWrt 直刷固件'

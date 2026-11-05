@@ -1219,6 +1219,27 @@ struct zx279133_wanid_slot {
 	unsigned int snat_users;
 };
 
+/* A software fallback keeps its original safety checks; expose why it ran. */
+enum zx279133_tx_csum_fallback {
+	ZX279133_TX_CSUM_OK,
+	ZX279133_TX_CSUM_DISABLED,
+	ZX279133_TX_CSUM_SHORT,
+	ZX279133_TX_CSUM_PROTOCOL,
+	ZX279133_TX_CSUM_ENCAP,
+	ZX279133_TX_CSUM_RANGE,
+	ZX279133_TX_CSUM_START,
+	ZX279133_TX_CSUM_OFFSET,
+	ZX279133_TX_CSUM_SCTP,
+	ZX279133_TX_CSUM_PULL,
+	ZX279133_TX_CSUM_VERSION,
+	ZX279133_TX_CSUM_IHL,
+	ZX279133_TX_CSUM_LENGTH,
+	ZX279133_TX_CSUM_TRANSPORT,
+	ZX279133_TX_CSUM_NOT_TCP,
+	ZX279133_TX_CSUM_FRAGMENT,
+	ZX279133_TX_CSUM_COUNT,
+};
+
 struct zx279133_eth {
 	struct device *dev;
 	struct net_device *ndev;
@@ -1380,6 +1401,11 @@ struct zx279133_eth {
 	u64 tx_timeout_stalls;
 	u64 tx_hw_csum_packets;
 	u64 tx_sw_csum_packets;
+	/* Submitted software-fallback packets, protected by tx_lock. */
+	u64 tx_csum_fallback[ZX279133_TX_CSUM_COUNT];
+	atomic64_t tx_csum_help_errors;
+	atomic64_t tx_vlan_pop_errors;
+	atomic64_t tx_vlan_popped;
 	atomic64_t rx_irq_count;
 	atomic64_t idm_local_irq_count;
 	/*
