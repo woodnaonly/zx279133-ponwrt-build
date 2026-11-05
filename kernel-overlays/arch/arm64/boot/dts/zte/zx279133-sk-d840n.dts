@@ -158,35 +158,34 @@
 		};
 	};
 
-	/* Not copied from SR1010 and not read off the stock DTB's *node names* either -
-	 * the running vendor kernel publishes the claim list directly, and it is the
-	 * authority: /sys/kernel/debug/gpio names the GPIO each LED holds.
+	/* The vendor kernel's boot log selects /soc/leds_5. Its active-low GPIO
+	 * descriptions, corroborated by the stock driver, are:
 	 *
-	 *   10d10000 = &gpio0:  9 led_los, 10 led_power, 13 led_wps
+	 *   10d10000 = &gpio0:  9 led_los, 10 led_power
 	 *   10d10040 = &gpio1:  5 led_usb1, 8 led_wan
 	 *   10d10080 = &gpio2:  3 led_phone1
 	 *   10d100c0 = &gpio3: 15 led_pon
-	 *   10d10100 = &gpio4:  1 led_wlan
 	 *
-	 * Active-low, measured rather than inherited: driving the vendor's own LED class
-	 * (echo 255 > /sys/class/leds/led_power/brightness) pulls that pin to "out lo" and
-	 * the lamp lights, and all eight GPIO LEDs did exactly that. The front row then
-	 * names itself, left to right:
-	 *   电源=led_power=gpio-10   注册=led_pon=gpio-63   光信号(red)=led_los=gpio-9
-	 *   上网=led_wan=gpio-24      lan1..lan4=led_lan0..3  usb1=led_usb1=gpio-21
-	 * led_phone1 is the FXS lamp. There is no WPS lamp on this SKU; the vendor's
-	 * led_wps entry is not a fitted LED. **led_wlan is not described at all: this board has no
-	 * wireless and no WLAN lamp** (owner, 2026-10-12) - the vendor reserves gpio-65 under
-	 * that name the way it reserves led_usb2 (led-id 0x35), which also has no lamp here.
+	 * These declarations do not prove continuity to each panel lamp. On
+	 * 2026-11-03 the owner reported LAN1 and USB dark with all ten LED class
+	 * devices set to default-on/1; debugfs reported their GPIOs as out low.
+	 * Later single-lamp tests confirmed USB on GPIO1_5 and panel LAN1 on
+	 * the external PHY's factory force word, not on this GPIO4_2 backend.
+	 * Do not treat a brightness readback or GPIO claim as physical acceptance.
+	 * led_phone1 retains its existing sysfs name for FXS. This SKU has no WPS
+	 * or WLAN lamp; vendor-only names are not evidence of fitted hardware.
 	 *
-	 * LAN LEDs can also use GPIO control. The stock zx_led_probe() releases their
-	 * GPIO descriptors after selecting the PHY pinmux; zx_led_set() acquires them
-	 * again for manual brightness. Their absence from debugfs/gpio therefore does
-	 * not prove that a separate LED engine driver is required.
-	 * Stock led_lan0 (panel LAN1) names gpio4 pin 2, active-low. gpio4's gpio-ranges
-	 * maps offsets 0..5 to pinctrl pins 60..65, so offset 2 is pin 62 = p4-6, the
-	 * very pin named by stock lan_led0_pins. gpio-leds requests the GPIO mux through
-	 * the existing pinctrl driver. LAN2..4 use GPIO4 offsets 3..5 (p4-7..9).
+	 * Stock zx_led_probe() selects the LAN pinmux then releases its GPIO
+	 * descriptors; zx_led_set() can acquire them again for manual brightness.
+	 * Absence from debugfs/gpio alone does not establish an LED-engine-only path.
+	 * Stock led_lan0 names gpio4 offset 2, pin 62 = p4-6. This remains the
+	 * candidate for the LAN1 class device, not a verified panel-LAN1 connection.
+	 * LAN2..4 use GPIO4 offsets 3..5 (p4-7..9). Stock and mainline GPIO mux values
+	 * agree for these pins and USB's GPIO1 offset 5 (pin 21 = p1-6).
+	 * The owner confirms there are no LEDs in the RJ45 sockets. Inverting
+	 * PHY d044 bit 0 lit panel LAN1 at 1000Mbps; stable off/auto remain unverified.
+	 * keep LAN1 properties/sysfs unchanged until its on/off fields are verified.
+	 * Evidence and diagnostic limits: docs/96-panel-led-stock-reverse-and-probe-20261103.md.
 	 */
 	leds {
 		compatible = "gpio-leds";

@@ -179,6 +179,7 @@ jobs:
             python3 tests/test_sk_pon_firstboot.py &&
             python3 tests/test_sk_pon_theme.py &&
             python3 tests/test_sk_lan1_led.py &&
+            python3 tests/test_sk_led_probe.py &&
             python3 tests/test_sk_led_triggers.py &&
             node tests/test_sk_led_ui.js &&
             python3 tests/test_sk_offload.py &&
@@ -633,7 +634,7 @@ jobs:
           fi
           python3 tools/dtbparts.py /tmp/zx279133-sk-d840n.dts.dtb layout=native241 root=0xf00000,0xf100000
 
-      - name: "Gate: complete panel LED wiring and negative controls"
+      - name: "Gate: declared LED topology and software negative controls"
         if: steps.pick.outputs.run == 'true'
         run: |
           set -uo pipefail

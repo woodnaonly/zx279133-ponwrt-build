@@ -322,7 +322,7 @@ def dtb_tests(dtb=None):
                 broken = copy.deepcopy(nodes)
                 broken[index]['props'][key] = value
                 rejected(broken)
-    print('PASS: every LED rejects wrong wiring/polarity/color/function/state/trigger, WPS, duplicates and GPIO conflicts')
+    print('PASS: LED declaration negative controls reject changed GPIO/polarity/color/function/state/trigger, WPS, duplicates and conflicts; not physical verification')
 
 
 def kernel_config_tests():
