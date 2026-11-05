@@ -10,6 +10,49 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 DRIVER = ROOT / 'kernel-overlays/drivers/net/ethernet/zte'
 
+# These are Linux ABI values, not the host libc's errno implementation. On
+# glibc, <errno.h> includes <linux/errno.h>; forwarding our shim back to libc
+# recurses through that include and leaves EIO/EINVAL/etc. undefined (#338).
+LINUX_ERRNO_STUB = '''#ifndef SK_LAN1_TEST_LINUX_ERRNO_H
+#define SK_LAN1_TEST_LINUX_ERRNO_H
+#define EIO 5
+#define EEXIST 17
+#define ENODEV 19
+#define EINVAL 22
+#define ETIMEDOUT 110
+#endif
+'''
+
+
+def check_errno_fixture(compiler, root):
+    """Reproduce glibc's errno include cycle, also on non-Linux hosts."""
+    recursive = root / 'host-errno-cycle'
+    (recursive / 'linux').mkdir(parents=True)
+    (recursive / 'errno.h').write_text(
+        '#ifndef SK_LAN1_TEST_HOST_ERRNO_H\n#define SK_LAN1_TEST_HOST_ERRNO_H\n'
+        '#include <linux/errno.h>\n#endif\n', encoding='utf-8')
+    (recursive / 'linux/errno.h').write_text(
+        '#include <errno.h>\n#ifndef ETIMEDOUT\n#define ETIMEDOUT 110\n#endif\n',
+        encoding='utf-8')
+    source = recursive / 'check.c'
+    source.write_text(
+        '#include <linux/errno.h>\n' + ''.join(
+            f'_Static_assert({name} == {value}, "{name} Linux ABI");\n'
+            for name, value in (('EIO', 5), ('EEXIST', 17), ('ENODEV', 19),
+                                ('EINVAL', 22), ('ETIMEDOUT', 110))),
+        encoding='utf-8')
+    flags = ['-std=c11', '-Wall', '-Wextra', '-Werror', '-c',
+             '-o', str(recursive / 'check.o')]
+    broken = subprocess.run(compiler + flags + ['-I' + str(recursive), str(source)],
+                            capture_output=True, text=True, timeout=90)
+    assert broken.returncode != 0 and 'EIO' in broken.stderr, (
+        'Regression fixture did not reproduce #338: ' + broken.stdout + broken.stderr)
+    fixed = subprocess.run(compiler + flags + ['-I' + str(root),
+                           '-I' + str(recursive), str(source)],
+                           capture_output=True, text=True, timeout=90)
+    assert fixed.returncode == 0, fixed.stdout + fixed.stderr
+    print('PASS Linux errno include-cycle regression: old shim rejected, self-contained shim accepted')
+
 
 def function(source, signature):
     start = source.index(signature)
@@ -214,10 +257,11 @@ def main():
         root = Path(directory)
         (root / 'linux').mkdir()
         (root / 'linux/types.h').write_text('#include <stdint.h>\n#include <stdbool.h>\ntypedef uint16_t u16;\n', encoding='utf-8')
-        (root / 'linux/errno.h').write_text('#include <errno.h>\n#ifndef ETIMEDOUT\n#define ETIMEDOUT 110\n#endif\n', encoding='utf-8')
+        (root / 'linux/errno.h').write_text(LINUX_ERRNO_STUB, encoding='utf-8')
         cfile, executable = root / 'test.c', root / 'test.exe'
         cfile.write_text(compiled, encoding='utf-8')
         command = [args.cc] + (['cc'] if Path(args.cc).stem.lower() == 'zig' else [])
+        check_errno_fixture(command, root)
         command += ['-std=c11', '-O0', '-Wall', '-Wextra', '-Werror', '-I' + str(root),
                     '-I' + str(DRIVER), str(cfile), '-o', str(executable)]
         result = subprocess.run(command, capture_output=True, text=True, timeout=90)

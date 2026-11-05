@@ -103,6 +103,7 @@ jobs:
         run: |
           python3 tests/test_sk_kernel.py
           python3 tests/test_kernel_version_single_source.py
+          python3 tests/test_sk_lan1_phy_led.py
           python3 tests/test_sk_led_dts_gate.py
           python3 tests/test_sk_layout.py
           python3 tests/test_sk_uboot.py
