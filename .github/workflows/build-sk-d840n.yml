@@ -23,7 +23,13 @@ on:
         required: false
         default: 'false'
         type: boolean
+      publish_release:
+        description: 'Publish Release (disable for RAM comparisons)'
+        required: false
+        default: true
+        type: boolean
   push:
+    branches: ['perf/tcp-control-20261105-221803']
     paths:
       - .github/workflows/build-sk-d840n.yml
       - kernel-overlays/**
@@ -114,7 +120,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        mode: [initramfs, flash]
+        mode: [initramfs]
     runs-on: ubuntu-22.04
     timeout-minutes: 400
     steps:
@@ -1895,6 +1901,8 @@ jobs:
 
       - name: Publish release
         if: >-
+          !startsWith(github.ref, 'refs/heads/perf/tcp-') &&
+          (github.event_name != 'workflow_dispatch' || inputs.publish_release != false) &&
           success() && steps.pick.outputs.run == 'true' &&
           ((matrix.mode == 'flash' && steps.package_flash.outputs.validated == 'true') ||
            (matrix.mode == 'initramfs' && steps.package_initramfs.outputs.validated == 'true'))
@@ -1984,7 +1992,7 @@ jobs:
           ignore_missing_files: true
 
       - name: Direct firmware download summary
-        if: success() && steps.pick.outputs.run == 'true' && matrix.mode == 'flash' && steps.package_flash.outputs.validated == 'true'
+        if: success() && steps.pick.outputs.run == 'true' && matrix.mode == 'flash' && steps.package_flash.outputs.validated == 'true' && (github.event_name != 'workflow_dispatch' || inputs.publish_release != false)
         run: |
           {
             echo '## ImmortalWrt 直刷固件'

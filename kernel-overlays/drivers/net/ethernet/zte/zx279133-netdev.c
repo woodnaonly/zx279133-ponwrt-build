@@ -312,28 +312,46 @@ static int zx279133_stop(struct net_device *ndev)
 	return 0;
 }
 
-static bool zx279133_tx_csum_supported(struct sk_buff *skb)
+static enum zx279133_tx_csum_fallback
+zx279133_tx_csum_reason(struct sk_buff *skb)
 {
 	const struct iphdr *iph;
 	unsigned int network = skb_network_offset(skb);
 	unsigned int transport = skb_transport_offset(skb);
 
-	if (skb->protocol != htons(ETH_P_IP) || skb->encapsulation ||
-	    network > 63 || transport > 63 ||
-	    skb_checksum_start_offset(skb) != transport ||
-	    skb->csum_offset != offsetof(struct tcphdr, check) ||
-	    skb_csum_is_sctp(skb))
-		return false;
+	if (!zx279133_tx_hw_csum)
+		return ZX279133_TX_CSUM_DISABLED;
+	if (skb->len < ETH_ZLEN)
+		return ZX279133_TX_CSUM_SHORT;
+	if (skb->protocol != htons(ETH_P_IP))
+		return ZX279133_TX_CSUM_PROTOCOL;
+	if (skb->encapsulation)
+		return ZX279133_TX_CSUM_ENCAP;
+	if (network > 63 || transport > 63)
+		return ZX279133_TX_CSUM_RANGE;
+	if (skb_checksum_start_offset(skb) != transport)
+		return ZX279133_TX_CSUM_START;
+	if (skb->csum_offset != offsetof(struct tcphdr, check))
+		return ZX279133_TX_CSUM_OFFSET;
+	if (skb_csum_is_sctp(skb))
+		return ZX279133_TX_CSUM_SCTP;
 	if (!pskb_may_pull(skb, transport + sizeof(struct tcphdr)))
-		return false;
+		return ZX279133_TX_CSUM_PULL;
 	iph = ip_hdr(skb);
 	/* DSA may have padded a short frame before it reaches the conduit.
 	 * IDM must not include that Ethernet padding in its TCP checksum.
 	 */
-	return iph->version == 4 && iph->ihl >= 5 &&
-		skb->len - network == ntohs(iph->tot_len) &&
-		transport == network + iph->ihl * 4 &&
-		iph->protocol == IPPROTO_TCP;
+	if (iph->version != 4)
+		return ZX279133_TX_CSUM_VERSION;
+	if (iph->ihl < 5)
+		return ZX279133_TX_CSUM_IHL;
+	if (skb->len - network != ntohs(iph->tot_len))
+		return ZX279133_TX_CSUM_LENGTH;
+	if (transport != network + iph->ihl * 4)
+		return ZX279133_TX_CSUM_TRANSPORT;
+	if (iph->protocol != IPPROTO_TCP)
+		return ZX279133_TX_CSUM_NOT_TCP;
+	return ZX279133_TX_CSUM_OK;
 }
 
 static netdev_tx_t zx279133_start_xmit_common(struct sk_buff *skb,
@@ -353,6 +371,7 @@ static netdev_tx_t zx279133_start_xmit_common(struct sk_buff *skb,
 	bool arm_reclaim;
 	bool hw_csum = false;
 	bool sw_csum = false;
+	enum zx279133_tx_csum_fallback csum_reason = ZX279133_TX_CSUM_OK;
 
 	spin_lock_bh(&eth->tx_lock);
 	if (unlikely(tx->pending >= ZX279133_IDM_TX_DEPTH - 1))
@@ -369,12 +388,13 @@ static netdev_tx_t zx279133_start_xmit_common(struct sk_buff *skb,
 	if (skb_linearize(skb))
 		goto drop;
 	if (skb->ip_summed == CHECKSUM_PARTIAL) {
-		hw_csum = zx279133_tx_hw_csum &&
-			skb->len >= ETH_ZLEN &&
-			zx279133_tx_csum_supported(skb);
+		csum_reason = zx279133_tx_csum_reason(skb);
+		hw_csum = csum_reason == ZX279133_TX_CSUM_OK;
 		if (!hw_csum) {
-			if (skb_checksum_help(skb))
+			if (skb_checksum_help(skb)) {
+				atomic64_inc(&eth->tx_csum_help_errors);
 				goto drop;
+			}
 			sw_csum = true;
 		}
 	}
@@ -442,8 +462,10 @@ static netdev_tx_t zx279133_start_xmit_common(struct sk_buff *skb,
 	slot->dma_mapped = true;
 	if (hw_csum)
 		eth->tx_hw_csum_packets++;
-	else if (sw_csum)
+	else if (sw_csum) {
 		eth->tx_sw_csum_packets++;
+		eth->tx_csum_fallback[csum_reason]++;
+	}
 	arm_reclaim = !tx->pending;
 	tx->producer = (tx->producer + 1) &
 				   (ZX279133_IDM_TX_DEPTH - 1);
@@ -1206,10 +1228,33 @@ static u32 zx279133_hw_stat(struct zx279133_eth *eth, unsigned int offset)
 	return readl(eth->base + offset);
 }
 
+/* Appended after every existing statistic, including the dynamic RX groups. */
+static const char zx279133_tx_csum_names[][ETH_GSTRING_LEN] = {
+	"tx_csum_fb_disabled",
+	"tx_csum_fb_short",
+	"tx_csum_fb_protocol",
+	"tx_csum_fb_encap",
+	"tx_csum_fb_range",
+	"tx_csum_fb_start",
+	"tx_csum_fb_offset",
+	"tx_csum_fb_sctp",
+	"tx_csum_fb_pull",
+	"tx_csum_fb_version",
+	"tx_csum_fb_ihl",
+	"tx_csum_fb_length",
+	"tx_csum_fb_transport",
+	"tx_csum_fb_not_tcp",
+	"tx_csum_fb_fragment",
+	"tx_csum_help_errors",
+	"tx_vlan_pop_errors",
+	"tx_vlan_popped",
+};
+
 static int zx279133_get_sset_count(struct net_device *ndev, int sset)
 {
 	if (sset == ETH_SS_STATS)
-		return ZX279133_STAT_COUNT + ZX279133_IDM_CPU_RX_QUEUES + 16;
+		return ZX279133_STAT_COUNT + ZX279133_IDM_CPU_RX_QUEUES + 16 +
+			ARRAY_SIZE(zx279133_tx_csum_names);
 	return -EOPNOTSUPP;
 }
 
@@ -1234,6 +1279,7 @@ static void zx279133_get_strings(struct net_device *ndev, u32 sset, u8 *data)
 	}
 	ethtool_puts(&data, "rx_hash_active");
 	ethtool_puts(&data, "rx_hash_loads");
+	memcpy(data, zx279133_tx_csum_names, sizeof(zx279133_tx_csum_names));
 }
 
 static void zx279133_get_ethtool_stats(struct net_device *ndev,
@@ -1396,6 +1442,14 @@ static void zx279133_get_ethtool_stats(struct net_device *ndev,
 		READ_ONCE(eth->rx_refill_deficit_high_water);
 	data[ZX279133_STAT_RX_REFILL_RETRY_WORK_RUNS] =
 		atomic64_read(&eth->rx_refill_retry_work_runs);
+	data += ZX279133_STAT_COUNT + ZX279133_IDM_CPU_RX_QUEUES + 16;
+	spin_lock_bh(&eth->tx_lock);
+	for (i = 1; i < ZX279133_TX_CSUM_COUNT; i++)
+		*data++ = eth->tx_csum_fallback[i];
+	spin_unlock_bh(&eth->tx_lock);
+	*data++ = atomic64_read(&eth->tx_csum_help_errors);
+	*data++ = atomic64_read(&eth->tx_vlan_pop_errors);
+	*data = atomic64_read(&eth->tx_vlan_popped);
 }
 
 static void
