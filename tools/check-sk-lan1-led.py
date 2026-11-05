@@ -13,6 +13,9 @@ FILES = ('etc/board.d/01_leds', 'etc/uci-defaults/99-sk-lan1-led',
 PLUGINS = ('zx279133-los', 'zx279133-pon', 'usbport')
 KERNEL_SYMBOLS = ('LEDS_CLASS', 'LEDS_GPIO', 'GPIO_ZX279133', 'LEDS_TRIGGERS',
                   'LEDS_TRIGGER_NETDEV', 'LEDS_TRIGGER_DEFAULT_ON', 'USB_LEDS_TRIGGER_USBPORT')
+# Vendor-declared GPIO topology, not a verified panel-to-pad wiring map.
+# Later tests lit LAN1 via a PHY factory word and USB via GPIO1_5; see docs/96.
+# Independent LAN1 fields and USB automatic behaviour are not physically verified.
 # name: GPIO bank, offset, function, color, initial state, default trigger
 PANEL = {
     **{f'skyworth:green:lan{i}': (4, i + 1, 'lan', 2, 'off', None) for i in range(2, 5)},
@@ -130,7 +133,7 @@ def validate_fit(blob):
               and node['props'].get('type') == b'flat_dt\0']
     assert len(images) == 1, 'expected one inline board DTB in the released FIT'
     validate_dtb(images[0]['props']['data'])
-    print('PASS: complete panel wiring is embedded in the released initramfs FIT')
+    print('PASS: declared LED topology is embedded in the released initramfs FIT; not physical lamp verification')
 
 
 def validate_config(path):

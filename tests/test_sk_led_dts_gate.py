@@ -150,7 +150,7 @@ def compile_tests(steps, cpp, dtc):
 
 def reporting_tests(steps):
     source = next(s['run'] for s in steps if s.get('name') ==
-                  'Gate: complete panel LED wiring and negative controls')
+                  'Gate: declared LED topology and software negative controls')
     commands = ('python3 tools/check-sk-lan1-led.py --dtb /tmp/zx279133-sk-d840n.dts.dtb',
                 'python3 tests/test_sk_lan1_led.py --dtb /tmp/zx279133-sk-d840n.dts.dtb')
     python = shlex.quote(Path(sys.executable).as_posix())
