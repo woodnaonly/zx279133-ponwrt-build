@@ -299,6 +299,7 @@ jobs:
           cp -a kernel-overlays/. "$KT"/
           cp -a overlays/. openwrt/
           python3 tools/check-sk-offload.py --kernel-tree "$KT"
+          sh tools/check-sk-kconfig.sh "$KT"
           # board dts must be reachable and the SoC dtsi unmodified
           test -f "$KT/arch/arm64/boot/dts/zte/zx279133-sk-d840n.dts"
           grep -q 'zx279133-sk-d840n.dtb' "$KT/arch/arm64/boot/dts/zte/Makefile"

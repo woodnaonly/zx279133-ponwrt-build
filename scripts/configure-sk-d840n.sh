@@ -120,6 +120,11 @@ pin_y ZTE_ZX279133_RGMII
 # LEDS_GPIO there is no /sys/class/leds entry per DTS node, and without the GPIO driver
 # there is no /sys/class/gpio either, leaving the trial with no signal at all. (cnjn's
 # config already has both =y; pinning them keeps that true if upstream changes it.)
+# The switch's PHY LED consumes the LED class; do not reverse-select it from
+# the networking dependency graph. Keep both the class and its parent menu
+# built in so this dependency cannot demote the built-in switch to a module.
+pin_y NEW_LEDS
+pin_y LEDS_CLASS
 pin_y LEDS_GPIO
 pin_y GPIO_ZX279133
 # Panel LAN/WAN and USB use standard triggers, including in the recovery image.
