@@ -893,15 +893,9 @@ jobs:
           # the number is stated before the build starts rather than
           # inferred from a hang.
           echo "::notice::the build starts with $(df -BG . | tail -1 | awk '{print $4}') free"
-          # Where the progress is published while the build runs.
-          #
-          # The branch is named after the run, so two runs never fight over
-          # the same ref.  The file lives under progress/, which the
-          # workflow's own push filter does not match - so publishing
-          # progress cannot start another build, which is the one way a
-          # diagnostic could make the thing it diagnoses worse.
-          PROGRESS_BRANCH="ci-progress/${{ github.run_number }}-${{ matrix.mode }}"
-          PROGRESS_FILE="progress/${{ github.run_number }}-${{ matrix.mode }}.txt"
+          # The watchdog below reports through the job log and
+          # compile-watchdog.log only.  It used to push a ci-progress/<run>-<mode>
+          # branch per run; that was removed because the branches piled up.
           # What the build is doing, and when it stops doing it.
           #
           # Runs 168 and 169 both sat in this step until a ceiling took them and
@@ -972,9 +966,6 @@ jobs:
           WD=
           trap 'if [ -n "$WD" ]; then kill "$WD" 2>/dev/null || true; fi' EXIT
           (
-            PROGRESS_WORKSPACE="$GITHUB_WORKSPACE" \
-            PROGRESS_BRANCH="$PROGRESS_BRANCH" \
-            PROGRESS_FILE="$PROGRESS_FILE" \
             bash ../tools/compile-watchdog.sh . ../compile-parallel.log \
                  ../compile-make.pid ../compile-watchdog.log
           ) &

@@ -4,6 +4,12 @@
 **Subject:** the CI compile step hangs, and every channel that could say where
 has been measured; so the build now writes down where it is, while it is there.
 
+> **2026-11-05 update:** the build no longer publishes a `ci-progress/<run>-<mode>` branch.
+> The branches piled up (hundreds by run 336) and nothing read them.  `publish-progress.sh`,
+> `publish-rehearse.sh` and the watchdog's `publish()` were removed; the watchdog still
+> reports through `::notice::` lines and `compile-watchdog.log`.  The text below is the
+> original 2026-10-25 record and is kept as written.
+
 ---
 
 ## 1. What was measured, and what it says

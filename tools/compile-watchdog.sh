@@ -56,11 +56,6 @@
 # step then waits for a pipe that will never close: the build is dead and the
 # job is not, and the runner is wasted until the step's own ceiling.
 #
-# It also publishes what it sees to a branch, so that a machine with no token
-# can read a build that is still running: the job log is 403 without one, the
-# artifact needs a session, and the annotations of a job are published only
-# when the job ENDS - which is the one thing a build that is stuck cannot do.
-#
 # The timings are compressed by the rehearsal through the environment:
 # BEAT_SECONDS, QUIET_SECONDS, WRITE_SECONDS, PROC_SECONDS,
 # HARD_WRITE_SECONDS.
@@ -121,7 +116,7 @@ wrote_in() {
 youngest_build_process() {
 	ps -eo etimes,args 2>/dev/null |
 		grep -Ei 'make|cc1|gcc|clang|(^|/)ld |(^|/)ar |(^|/)cp |(^|/)mv |(^|/)tar |(^|/)strip |objcopy|fakeroot|cmake|ninja|curl|wget|rsync|python|perl|bison|flex|protoc|zopfli|gzip|pigz|xz|bzip2|apk' |
-		grep -Ev 'ps -eo|compile-watchdog|grep -E|publish-progress' |
+		grep -Ev 'ps -eo|compile-watchdog|grep -E' |
 		awk '{ v = $1 + 0; if (m == "" || v < m) m = v } END { print (m == "" ? 999999 : m) }'
 }
 
@@ -159,41 +154,6 @@ stop_the_build() {
 	if [ -n "${pgid:-}" ]; then
 		kill -KILL -"$pgid" 2>/dev/null || true
 	fi
-}
-
-publish() {
-	[ -n "${PROGRESS_BRANCH:-}" ] && [ -n "${PROGRESS_FILE:-}" ] || return 0
-	[ -n "${PROGRESS_WORKSPACE:-}" ] || return 0
-	[ -f "$LOG" ] || return 0
-	{
-		echo "=== $(date -u +%H:%M:%S) beat $n log=$sz frozen=$frozen wrote=$wrote ==="
-		echo "--- signals: quiet=${quiet_age}s writes=${WRITE_SECONDS}s newproc=${PROC_SECONDS}s hard=${HARD_WRITE_SECONDS}s cmp=$CMP proc=${proc_age}s ---"
-		echo "--- the last 30 lines of the build's own log ---"
-		tail -n 30 "$LOG" 2>/dev/null || true
-		echo "--- the build's own processes ---"
-		ps -eo etimes,stat,args --sort=-etimes 2>/dev/null |
-			grep -Ei 'make|cc1|gcc|clang|(^|/)ld |(^|/)ar |python|perl|cmake|ninja|tee|curl|wget|git|rsync|tar ' |
-			grep -Ev 'ps -eo|compile-watchdog|grep -E' | head -14 || true
-		echo "--- the oldest processes that are not kernel threads ---"
-		ps -eo etimes,stat,args --sort=-etimes 2>/dev/null |
-			awk 'NR > 1 && $3 !~ /^\[/' | head -8 || true
-		echo "--- what is running under the build ---"
-		ps -eo etimes,stat,args --sort=-etimes 2>/dev/null |
-			grep -E 'root-|init\.d|uci-defaults|post-install|scripts\.tar|/apk/' |
-			grep -Ev 'ps -eo|grep -E' | head -12 || true
-		echo "--- the directories the build touched lately ---"
-		ls -t build_dir 2>/dev/null | head -8 || true
-		echo "--- how big the root filesystem is getting ---"
-		for r in build_dir/target-*/root-*; do
-			[ -d "$r" ] || continue
-			echo "  $r: $(find "$r" -type f 2>/dev/null | wc -l) files, $(du -sh "$r" 2>/dev/null | cut -f1)"
-		done
-		echo "--- memory and load ---"
-		free -m | sed -n '2p' || true
-		uptime || true
-	} > ../progress.snapshot 2>/dev/null || true
-	sh ../tools/publish-progress.sh "$PROGRESS_WORKSPACE" \
-		"$PROGRESS_BRANCH" "$PROGRESS_FILE" ../progress.snapshot >/dev/null 2>&1 || true
 }
 
 n=0
@@ -271,7 +231,6 @@ while :; do
 		dirs=$(ls -t build_dir 2>/dev/null | head -4 | tr '\n' ' ' || true)
 		mem=$(free -m | awk '/^Mem:/ {print $7"MB available"}' || true)
 		echo "::notice::beat $n $(date -u +%H:%M:%S) log=$sz quiet=${quiet_age}s wrote=$wrote proc=${proc_age}s mem=$mem dirs=[$dirs] longest=[$longest]"
-		publish
 	fi
 	sleep "$BEAT_SECONDS"
 done
