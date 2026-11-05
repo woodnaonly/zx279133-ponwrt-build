@@ -64,6 +64,7 @@ config ZTE_ZX279133_SWITCH
 	depends on PCS_XPCS
 	depends on NET_DSA
 	select NET_DSA_TAG_ZX279133_RTL8372N
+	depends on LEDS_CLASS
 	help
 	  Build the driver for the LAN switch this board carries, the 9132.
 	  Its CPU port sits on the XMAC0 LAN lane exactly where the RTL8372N's

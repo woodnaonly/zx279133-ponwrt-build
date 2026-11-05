@@ -274,6 +274,13 @@ def dtb_fixture():
               {'path': '/switch', 'props': {}}, {'path': '/switch/ports', 'props': {}}]
     for i, port in ((1, 8), (2, 5), (3, 6), (4, 7)):
         nodes.append({'path': f'/switch/ports/port@{port}', 'props': {'reg': cell(port), 'label': f'lan{i}\0'.encode()}})
+        if i == 1:
+            nodes += [
+                {'path': '/switch/ports/port@8/leds', 'props': {'#address-cells': cell(1), '#size-cells': cell(0)}},
+                {'path': '/switch/ports/port@8/leds/led@0', 'props': {
+                    'reg': cell(0), 'label': b'skyworth:green:lan1\0', 'color': cell(2),
+                    'default-state': b'off\0', 'function': b'lan\0'}},
+            ]
     return nodes
 
 
@@ -306,6 +313,17 @@ def dtb_tests(dtb=None):
         rejected(duplicate)
         rejected(nodes + [{'path': '/other-consumer', 'props': {'gpios': cell(handle, pin, 1)}}])
     for index, node in enumerate(nodes):
+        if node['props'].get('label') == b'skyworth:green:lan1\0':
+            for key, value in [('reg', cell(1)), ('gpios', cell(6, 2, 1)),
+                               ('color', cell(7)), ('default-state', b'keep\0'),
+                               ('function', b'wrong\0'), ('linux,default-trigger', b'default-on\0')]:
+                broken = copy.deepcopy(nodes)
+                broken[index]['props'][key] = value
+                rejected(broken)
+            rejected(nodes[:index] + nodes[index + 1:])
+            duplicate = copy.deepcopy(nodes)
+            duplicate.append({'path': '/duplicate-lan1', 'props': dict(node['props'])})
+            rejected(duplicate)
         if node['props'].get('reg') == cell(0, 0x10d10100, 0, 0x40):
             for key, value in [('gpio-ranges', cell(1, 0, 61, 6)),
                                ('compatible', b'wrong,gpio\0'), ('status', b'disabled\0')]:

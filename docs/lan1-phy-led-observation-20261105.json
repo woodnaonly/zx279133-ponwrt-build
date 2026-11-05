@@ -1,0 +1,43 @@
+{
+  "schema": "sk-d840n-lan1-pre-backend-observation-v1",
+  "date": "2026-11-05",
+  "board": "skyworth,sk-d840n",
+  "installed_firmware": "337",
+  "kernel": "6.18.60+",
+  "base_commit": "e07111ec09e88b500f9a5f1015ea9a2d1f9d3c02",
+  "phy": 5,
+  "mmd": "0x1f",
+  "authorized_masks": {
+    "d032": "0x0027",
+    "d040": "0x0001",
+    "d044": "0x0001"
+  },
+  "fresh_original_words": {
+    "d032": "0x0003",
+    "d040": "0x391f",
+    "d044": "0x40fa"
+  },
+  "on": {
+    "candidate_words": ["0x0000", "0x391e", "0x40fb"],
+    "physical_observation_source": "user",
+    "user_message": "亮了",
+    "all_three_original_words_restored_after_60_second_guard": true,
+    "network_config_and_sentinels_unchanged": true
+  },
+  "off": {
+    "candidate_words": ["0x0000", "0x391e", "0x40fa"],
+    "physical_observation_source": "user",
+    "user_message": "LAN1 灭了，其他灯没有变化",
+    "all_three_original_words_restored_after_60_second_guard": true,
+    "network_config_and_sentinels_unchanged": true
+  },
+  "other_lamps_unchanged_user_confirmed": true,
+  "link_during_observation_mbps": 1000,
+  "nand_written_during_observation": false,
+  "does_not_prove": [
+    "new firmware build or installation",
+    "cold-boot automatic link/activity/unplug behavior",
+    "2500 Mbps throughput"
+  ],
+  "private_evidence": "Raw serial/SSH captures, host pins, configuration and NAND backups remain local and are not published."
+}

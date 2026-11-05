@@ -114,6 +114,31 @@ def compile_tests(steps, cpp, dtc):
                                 str(directory / 'raw.dtb'), str(board)],
                                 capture_output=True, text=True, timeout=30)
         assert result.returncode != 0, 'raw DTS incorrectly passed without preprocessing'
+        # Compile the actual changed port, not only a hand-written LED fixture.
+        # #339 added leds before phy-mode and the synthetic DTB tests missed
+        # DTS's requirement that properties precede all child nodes.
+        actual = (ROOT / 'kernel-overlays/arch/arm64/boot/dts/zte/zx279133-sk-d840n.dts').read_text(encoding='utf-8')
+        start = actual.index('\t\t\tport@8 {')
+        end = actual.index('\n\t\t\t};', start) + len('\n\t\t\t};')
+        port = actual[start:end]
+        prefix = ('/dts-v1/;\n#define LED_COLOR_ID_GREEN 2\n'
+                  '#define LED_FUNCTION_LAN "lan"\n/ {\n')
+        board.write_text(prefix + port + '\n};\n', encoding='utf-8')
+        result = run(script, directory)
+        assert result.returncode == 0, 'actual LAN1 port DTS rejected:\n' + result.stdout + result.stderr
+        compiled = {node['path']: node['props'] for node in FDT((directory / 'panel.dts.dtb').read_bytes()).nodes}
+        assert compiled['/port@8']['phy-mode'] == b'2500base-x\0'
+        assert compiled['/port@8/fixed-link']['speed'] == struct.pack('>I', 2500)
+        assert compiled['/port@8/leds/led@0']['label'] == b'skyworth:green:lan1\0'
+        property_line = '\n\t\t\t\tphy-mode = "2500base-x";'
+        assert port.count(property_line) == 1
+        broken_port = port.replace(property_line, '', 1).replace(
+            '\n\t\t\t\t};', '\n\t\t\t\t};' + property_line, 1)
+        board.write_text(prefix + broken_port + '\n};\n', encoding='utf-8')
+        result = run(script, directory)
+        assert result.returncode != 0, 'property after LAN1 subnode incorrectly accepted'
+        assert 'Properties must precede subnodes' in result.stdout + result.stderr
+        print('PASS: actual LAN1 port compiles and a property-after-subnode mutation reproduces #339')
         board.write_text('/dts-v1/;\n/ { broken = <; };\n', encoding='utf-8')
         result = run(script, directory)
         assert result.returncode != 0, 'invalid DTS incorrectly passed the gate'

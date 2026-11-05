@@ -183,21 +183,13 @@
 	 * GPIO descriptors after selecting the PHY pinmux; zx_led_set() acquires them
 	 * again for manual brightness. Their absence from debugfs/gpio therefore does
 	 * not prove that a separate LED engine driver is required.
-	 * Stock led_lan0 (panel LAN1) names gpio4 pin 2, active-low. gpio4's gpio-ranges
-	 * maps offsets 0..5 to pinctrl pins 60..65, so offset 2 is pin 62 = p4-6, the
-	 * very pin named by stock lan_led0_pins. gpio-leds requests the GPIO mux through
-	 * the existing pinctrl driver. LAN2..4 use GPIO4 offsets 3..5 (p4-7..9).
+	 * Panel LAN1 was physically verified on external PHY 5/MMD 1f channel 0:
+	 * masked d032/d040 event disable plus d044 bit 0 gives stable off/on.
+	 * Its LED now belongs under switch port 8; do not reserve GPIO4_2 for it.
+	 * LAN2..4 retain GPIO4 offsets 3..5 (p4-7..9), USB retains GPIO1_5.
 	 */
 	leds {
 		compatible = "gpio-leds";
-
-		led-lan1 {
-			color = <LED_COLOR_ID_GREEN>;
-			default-state = "off";
-			function = LED_FUNCTION_LAN;
-			gpios = <&gpio4 2 GPIO_ACTIVE_LOW>;
-			label = "skyworth:green:lan1";
-		};
 
 		led-lan2 {
 			color = <LED_COLOR_ID_GREEN>;
@@ -760,6 +752,22 @@
 				 * must not stay advertised as 2.5G.
 				 */
 				phy-mode = "2500base-x";
+
+				/* Panel LAN1 is PHY 5/MMD 1f channel 0, not GPIO4_2.
+				 * The switch owns only the verified LED event/polarity
+				 * fields; no phy_device is created or reinitialized.
+				 */
+				leds {
+					#address-cells = <1>;
+					#size-cells = <0>;
+					led@0 {
+						reg = <0>;
+						color = <LED_COLOR_ID_GREEN>;
+						default-state = "off";
+						function = LED_FUNCTION_LAN;
+						label = "skyworth:green:lan1";
+					};
+				};
 
 				fixed-link {
 					speed = <2500>;

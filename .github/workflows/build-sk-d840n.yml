@@ -39,6 +39,7 @@ on:
       - scripts/check-sk-d840n-ucode.sh
       - tests/*sk_pon*
       - tests/*sk_lan1_led*
+      - tests/*sk_lan1_phy_led*
       - tests/*sk_led*
       - tests/*sk_offload*
       - tests/test_sysupgrade.py
@@ -102,6 +103,7 @@ jobs:
         run: |
           python3 tests/test_sk_kernel.py
           python3 tests/test_kernel_version_single_source.py
+          python3 tests/test_sk_lan1_phy_led.py
           python3 tests/test_sk_led_dts_gate.py
           python3 tests/test_sk_layout.py
           python3 tests/test_sk_uboot.py
@@ -179,6 +181,8 @@ jobs:
             python3 tests/test_sk_pon_firstboot.py &&
             python3 tests/test_sk_pon_theme.py &&
             python3 tests/test_sk_lan1_led.py &&
+            python3 tests/test_sk_lan1_phy_led.py &&
+            python3 tests/test_sk_led_probe.py &&
             python3 tests/test_sk_led_triggers.py &&
             node tests/test_sk_led_ui.js &&
             python3 tests/test_sk_offload.py &&
@@ -295,6 +299,7 @@ jobs:
           cp -a kernel-overlays/. "$KT"/
           cp -a overlays/. openwrt/
           python3 tools/check-sk-offload.py --kernel-tree "$KT"
+          sh tools/check-sk-kconfig.sh "$KT"
           # board dts must be reachable and the SoC dtsi unmodified
           test -f "$KT/arch/arm64/boot/dts/zte/zx279133-sk-d840n.dts"
           grep -q 'zx279133-sk-d840n.dtb' "$KT/arch/arm64/boot/dts/zte/Makefile"

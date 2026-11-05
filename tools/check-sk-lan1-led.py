@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0-only
-"""Check all SK-D840N panel LEDs (legacy LAN1 gate entrypoint)."""
+"""Check nine GPIO panel LEDs and the verified LAN1 PHY backend, not real lamps."""
 import argparse
 from pathlib import Path
 import struct
@@ -11,11 +11,11 @@ BASE = Path(__file__).resolve().parents[1] / 'overlays/target/linux/zte/zx279133
 FILES = ('etc/board.d/01_leds', 'etc/uci-defaults/99-sk-lan1-led',
          'lib/functions/sk-d840n-leds.sh')
 PLUGINS = ('zx279133-los', 'zx279133-pon', 'usbport')
-KERNEL_SYMBOLS = ('LEDS_GPIO', 'GPIO_ZX279133', 'LEDS_TRIGGERS',
+KERNEL_SYMBOLS = ('LEDS_CLASS', 'LEDS_GPIO', 'GPIO_ZX279133', 'LEDS_TRIGGERS',
                   'LEDS_TRIGGER_NETDEV', 'LEDS_TRIGGER_DEFAULT_ON', 'USB_LEDS_TRIGGER_USBPORT')
 # name: GPIO bank, offset, function, color, initial state, default trigger
 PANEL = {
-    **{f'skyworth:green:lan{i}': (4, i + 1, 'lan', 2, 'off', None) for i in range(1, 5)},
+    **{f'skyworth:green:lan{i}': (4, i + 1, 'lan', 2, 'off', None) for i in range(2, 5)},
     'skyworth:green:power': (0, 10, 'power', 2, 'on', None),
     'skyworth:green:pon': (3, 15, 'wan', 2, 'off', 'zx279133-pon'),
     'skyworth:red:los': (0, 9, 'wan', 1, 'on', 'zx279133-los'),
@@ -23,6 +23,7 @@ PANEL = {
     'skyworth:green:usb1': (1, 5, 'usb', 2, 'off', None),
     'skyworth:green:phone1': (2, 3, 'phone', 2, 'off', None),
 }
+LAN1_NAME = 'skyworth:green:lan1'
 
 
 def cells(raw):
@@ -42,6 +43,17 @@ def validate_dtb(blob):
     led_nodes = [n for n in nodes if n['path'].startswith('/leds/')]
     assert len(led_nodes) == len(PANEL), 'wrong panel LED count (no WPS/WLAN on this SKU)'
     assert {n['props'].get('label', b'').rstrip(b'\0').decode() for n in led_nodes} == set(PANEL), 'missing/extra panel LEDs'
+    all_panel = [n for n in nodes if n['props'].get('label', b'').startswith(b'skyworth:')]
+    assert len(all_panel) == 10, 'nine GPIO plus exactly one PHY LED required'
+    assert {n['props']['label'].rstrip(b'\0').decode() for n in all_panel} == {*PANEL, LAN1_NAME}, 'duplicate/unknown panel label'
+    phy_leds = [n for n in all_panel if n['props']['label'] == (LAN1_NAME + '\0').encode()]
+    assert len(phy_leds) == 1 and phy_leds[0]['path'].endswith('/port@8/leds/led@0'), 'LAN1 must be port-8 PHY channel zero'
+    phy = phy_leds[0]['props']
+    assert cells(phy['reg']) == (0,) and 'gpios' not in phy, 'LAN1 must not use GPIO4_2'
+    assert phy.get('default-state') == b'off\0' and phy.get('function') == b'lan\0', 'wrong LAN1 initial state/function'
+    assert phy.get('color') == struct.pack('>I', 2) and 'linux,default-trigger' not in phy, 'wrong LAN1 color/trigger'
+    phy_parent = bypath[phy_leds[0]['path'].rsplit('/', 1)[0]]
+    assert cells(phy_parent['#address-cells']) == (1,) and cells(phy_parent['#size-cells']) == (0,), 'invalid PHY LED bus cells'
     owners = {}
     for candidate in nodes:
         for key, raw in candidate['props'].items():
@@ -56,6 +68,9 @@ def validate_dtb(blob):
                 assert i + count < len(values), 'truncated GPIO specifier'
                 owners.setdefault((values[i], values[i + 1]), []).append((candidate['path'], key))
                 i += count + 1
+    gpio4 = [handle for handle, node in handles.items()
+             if node['props'].get('reg') == struct.pack('>4I', 0, 0x10d10100, 0, 0x40)]
+    assert len(gpio4) == 1 and (gpio4[0], 2) not in owners, 'stale GPIO4_2 LAN1 consumer'
     for node in led_nodes:
         props = node['props']
         name = props['label'].rstrip(b'\0').decode()
@@ -91,7 +106,7 @@ def validate_dtb(blob):
     handle, pin, flags = cells(nppt['opsd-gpios'])
     assert cells(handles[handle]['props']['reg'])[1] == 0x10d10080 and (pin, flags) == (1, 0), 'optical RX_SD wiring changed'
     assert 'leds' not in nppt and 'led-names' not in nppt, 'stale direct LED ownership'
-    print('PASS: all 10 panel LEDs, GPIO ownership/polarity, optical sensor, automatic triggers and DSA mapping')
+    print('PASS: nine GPIO LEDs plus unique port-8 PHY LAN1, ownership, triggers and DSA mapping; real lamps require observation')
 
 
 def validate_root(root):
