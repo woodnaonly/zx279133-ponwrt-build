@@ -62,3 +62,15 @@ work/
 
 # Native tests of the imported protocol engine.
 overlays/package/libs/libzxpon-omci/omci/target/
+
+# Local bootweb builds, firmware payloads, serial captures and device secrets.
+# Keep source, tests and redacted reports trackable; do not ignore *.bin globally.
+/bootweb/.build/
+/device-dumps/
+/scratch/
+/.build/
+/.pytest_cache/
+*.part
+Thumbs.db
+Desktop.ini
+.DS_Store

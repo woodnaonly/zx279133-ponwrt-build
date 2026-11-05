@@ -59,6 +59,7 @@
 #include <linux/etherdevice.h>
 #include <linux/ethtool.h>
 #include <linux/iopoll.h>
+#include <linux/leds.h>
 #include <linux/mdio.h>
 #include <linux/mii.h>
 #include <linux/mod_devicetable.h>
@@ -83,6 +84,7 @@
 
 #include "zx279133.h"
 #include "zx279133-lan.h"
+#include "zx279133-lan1-led.h"
 
 /* XMAC0, the LAN window.  Same offsets the RTL8372N driver uses. */
 #define ZX279133_XMAC0_BASE		0x140000
@@ -504,6 +506,20 @@ static const u16 zx279133_switch_outerphy_serdes_1g[][2] = {
 	{ ZX279133_SWITCH_OUTERPHY_SERDES_OPT_3, 0x0403 },
 };
 
+struct zx279133_switch;
+
+struct zx279133_lan1_led {
+	struct zx279133_switch *priv;
+	struct device_node *node;
+	struct led_classdev cdev;
+	struct zx_lan1_led_fields fields;
+	struct mutex lock;
+	struct delayed_work work;
+	unsigned int attempts;
+	bool registered;
+	bool stopping;
+};
+
 struct zx279133_switch {
 	/* The device this driver was probed on.  Two of the helpers below
 	 * (the lane report and the SOPC publish) print through it and have
@@ -523,6 +539,7 @@ struct zx279133_switch {
 	 * to be read there.
 	 */
 	struct mii_bus *outer_mdio;
+	struct zx279133_lan1_led lan1_led;
 	/*
 	 * The last raw value of the outerphy's auto-negotiation status, so the
 	 * driver can say when the lane's state changed and what it changed from.
@@ -2053,6 +2070,170 @@ static struct mii_bus *zx279133_switch_outer_mdio(struct zx279133_switch *priv)
 
 	priv->outer_mdio = bus;
 	return bus;
+}
+
+static int zx279133_lan1_led_read(void *context, u16 reg)
+{
+	return mdiobus_c45_read(context, ZX279133_SWITCH_OUTERPHY_ADDR, 0x1f, reg);
+}
+
+static int zx279133_lan1_led_write(void *context, u16 reg, u16 value)
+{
+	return mdiobus_c45_write(context, ZX279133_SWITCH_OUTERPHY_ADDR, 0x1f,
+				reg, value);
+}
+
+static int zx279133_lan1_led_brightness(struct led_classdev *cdev,
+				      enum led_brightness brightness)
+{
+	struct zx279133_lan1_led *led = container_of(cdev,
+					struct zx279133_lan1_led, cdev);
+	int ret;
+
+	mutex_lock(&led->lock);
+	/* Unregister flushes the LED core before the saved fields are restored. */
+	ret = led->stopping ? 0 : zx_lan1_led_set(&led->fields, brightness);
+	mutex_unlock(&led->lock);
+	if (ret)
+		dev_err_ratelimited(led->priv->dev,
+			"LAN1_PHY_LED_FAULT rc=%d restore_rc=%d; no further LED writes\n",
+			ret, led->fields.restore_error);
+	return ret;
+}
+
+static ssize_t backend_show(struct device *dev, struct device_attribute *attr,
+			    char *buf)
+{
+	return sysfs_emit(buf, "phy-mdio1-5-channel0\n");
+}
+static DEVICE_ATTR_RO(backend);
+
+static struct attribute *zx279133_lan1_led_attrs[] = {
+	&dev_attr_backend.attr,
+	NULL,
+};
+ATTRIBUTE_GROUPS(zx279133_lan1_led);
+
+static void zx279133_lan1_led_work(struct work_struct *work)
+{
+	struct zx279133_lan1_led *led = container_of(to_delayed_work(work),
+						struct zx279133_lan1_led, work);
+	struct zx279133_switch *priv = led->priv;
+	struct led_init_data init = { .fwnode = of_fwnode_handle(led->node) };
+	struct mii_bus *bus;
+	int ret, restore;
+
+	if (READ_ONCE(led->stopping))
+		return;
+	led->attempts++;
+	/* Reuse the switch's bus reference; never create or bind a phy_device. */
+	mutex_lock(&priv->lane_lock);
+	bus = zx279133_switch_outer_mdio(priv);
+	mutex_unlock(&priv->lane_lock);
+	if (!bus) {
+		if (led->attempts < 30)
+			schedule_delayed_work(&led->work, msecs_to_jiffies(1000));
+		else
+			dev_err(priv->dev, "LAN1_PHY_LED_UNAVAILABLE bus absent after 30 attempts; LAN unchanged\n");
+		return;
+	}
+	led->fields.io.context = bus;
+	led->fields.io.read = zx279133_lan1_led_read;
+	led->fields.io.write = zx279133_lan1_led_write;
+	mutex_lock(&led->lock);
+	if (led->stopping) {
+		mutex_unlock(&led->lock);
+		return;
+	}
+	ret = zx_lan1_led_claim(&led->fields);
+	mutex_unlock(&led->lock);
+	if (ret) {
+		dev_err(priv->dev, "LAN1_PHY_LED_UNAVAILABLE claim rc=%d restore_rc=%d; LAN unchanged\n",
+			ret, led->fields.restore_error);
+		return;
+	}
+	led->cdev.name = "skyworth:green:lan1";
+	led->cdev.max_brightness = 1;
+	led->cdev.flags = LED_REJECT_NAME_CONFLICT;
+	led->cdev.brightness_set_blocking = zx279133_lan1_led_brightness;
+	led->cdev.groups = zx279133_lan1_led_groups;
+	ret = led_classdev_register_ext(priv->dev, &led->cdev, &init);
+	if (ret) {
+		mutex_lock(&led->lock);
+		restore = zx_lan1_led_restore(&led->fields);
+		mutex_unlock(&led->lock);
+		dev_err(priv->dev, "LAN1_PHY_LED_UNAVAILABLE register rc=%d restore_rc=%d; LAN unchanged\n",
+			ret, restore);
+		return;
+	}
+	led->registered = true;
+	dev_info(priv->dev,
+		 "LAN1_PHY_LED_READY name=%s backend=phy-mdio1-5-channel0 software-netdev=1 attempts=%u\n",
+		 led->cdev.name, led->attempts);
+}
+
+static void zx279133_lan1_led_cleanup(void *data)
+{
+	struct zx279133_lan1_led *led = data;
+	int ret;
+
+	mutex_lock(&led->lock);
+	WRITE_ONCE(led->stopping, true);
+	mutex_unlock(&led->lock);
+	cancel_delayed_work_sync(&led->work);
+	if (led->registered) {
+		led_classdev_unregister(&led->cdev);
+		led->registered = false;
+	}
+	mutex_lock(&led->lock);
+	ret = zx_lan1_led_restore(&led->fields);
+	mutex_unlock(&led->lock);
+	if (ret)
+		dev_err(led->priv->dev, "LAN1_PHY_LED_RESTORE_FAILED rc=%d\n", ret);
+	of_node_put(led->node);
+	led->node = NULL;
+}
+
+static void zx279133_lan1_led_start(struct zx279133_switch *priv)
+{
+	struct zx279133_lan1_led *led = &priv->lan1_led;
+	struct device_node *ports, *port, *leds, *node = NULL;
+	const char *label;
+	u32 number;
+
+	if (!of_machine_is_compatible("skyworth,sk-d840n"))
+		return;
+	ports = of_get_child_by_name(priv->dev->of_node, "ports");
+	if (!ports)
+		return;
+	for_each_available_child_of_node(ports, port) {
+		if (of_property_read_u32(port, "reg", &number) ||
+		    number != ZX279133_SWITCH_DSA_OUTER_PORT)
+			continue;
+		leds = of_get_child_by_name(port, "leds");
+		if (leds && of_get_available_child_count(leds) == 1)
+			node = of_get_next_available_child(leds, NULL);
+		of_node_put(leds);
+		of_node_put(port);
+		break;
+	}
+	of_node_put(ports);
+	if (!node || of_property_read_u32(node, "reg", &number) || number != 0 ||
+	    of_property_read_string(node, "label", &label) ||
+	    strcmp(label, "skyworth:green:lan1") || of_find_property(node, "gpios", NULL)) {
+		of_node_put(node);
+		dev_err(priv->dev, "LAN1_PHY_LED_UNAVAILABLE invalid/missing port-8 channel-0 LED; LAN unchanged\n");
+		return;
+	}
+	led->priv = priv;
+	led->node = node;
+	mutex_init(&led->lock);
+	INIT_DELAYED_WORK(&led->work, zx279133_lan1_led_work);
+	if (devm_add_action_or_reset(priv->dev, zx279133_lan1_led_cleanup, led)) {
+		dev_err(priv->dev, "LAN1_PHY_LED_UNAVAILABLE cleanup allocation failed; LAN unchanged\n");
+		return;
+	}
+	schedule_delayed_work(&led->work, 0);
 }
 
 /*
@@ -3989,6 +4170,7 @@ static int zx279133_switch_probe(struct platform_device *pdev)
 
 	/* The conduit is live; the NPPT may hand its frames to it now. */
 	zx279133_lan_service_set_dsa_active(priv->service, true);
+	zx279133_lan1_led_start(priv);
 
 	return 0;
 
