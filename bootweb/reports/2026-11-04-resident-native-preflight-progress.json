@@ -1,0 +1,116 @@
+{
+  "schema": "sk-d840n-resident-installation-progress-v2",
+  "recorded_local": "2026-11-04T12:32:00+08:00",
+  "requested_outcome": "Actual persistent NAND installation and natural cold-power verification",
+  "status": "NOT_INSTALLED_PHYSICAL_RESET_AND_NETWORK_REENTRY_UNVERIFIED",
+  "permanent_installation_complete": false,
+  "nand_written": false,
+  "real_erase_or_program_executed": false,
+  "saveenv_executed": false,
+  "reboot_requested": false,
+  "serial_rescue_required": false,
+  "serial_rescue_verified": false,
+  "rescue_waiver": "2026-11-04-explicit-rescue-waiver.json",
+  "permitted_physical_write_window": ["0x20000", "0x180000"],
+  "power_cycle_seconds": {"on": 1200, "off": 30},
+  "current_backup": {
+    "full_physical_ecc_bytes": 268435456,
+    "sha256": "8bc44d2e8a27404e35aabe25e67e7782af641f986f92abdf5f42fe2cbd7d9248",
+    "file": "../.build/resident-full-backup-rle-20261104-1015/nand-backup/nand-physical-ecc.bin",
+    "configuration_archive": "../.build/resident-current-config-20261104-1205/current-config.tar.gz",
+    "configuration_sha256": "b81a695e0294acea8f2b70eba70a76b1ccd3f21ff259884dfe0b84f31be9c089"
+  },
+  "offline": {
+    "report": "../.build/offline-20261104-resident-identity-submission-a.json",
+    "passed": true,
+    "tests": 172,
+    "hardware_acceptance": false
+  },
+  "implemented_this_stage": [
+    "Distinct native NAND adapter preflight target with no real mutation opcode transmitted",
+    "Every physical erase block and page in the permitted window checked through the actual vendor wrapper ABI",
+    "Real SPI mutation evidence counts only commands whose controller START was submitted",
+    "Resident image descriptor and exact original-vendor ABI reconstruction, separate from installed-image SHA256",
+    "Native installed identity verifies the fixed ECC-read stage2, not a candidate claim or HTTP input",
+    "Resident status is set only by the native installed-image verification callback",
+    "Additional non-overlapping RAM identity scratch [0x89200000,0x89360000)",
+    "Synthetic Reset, configuration export, full-window NAND gate and image-format regression tests"
+  ],
+  "physical_reset": {
+    "report": "../.build/resident-reset-sample-20261104-1219/report.json",
+    "register": "0x10d10014",
+    "bit": 0,
+    "active_low_from_actual_control_dtb": true,
+    "seconds": 90,
+    "samples": 1498,
+    "observed_raw_bit": 0,
+    "release_hold_release_observed": false,
+    "physical_reset_pass": false,
+    "gpio_writes": 0,
+    "human_press_was_performed": "unknown"
+  },
+  "native_preflight_trials": [
+    {
+      "report": "../.build/resident-native-preflight-web-20261104-1223/report.json",
+      "build": "../.build/resident-bootstrap-native-preflight-20261104-1217/manifest.json",
+      "vendor_erase_abi_emulated_blocks": 11,
+      "vendor_page_abi_emulated_pages": 704,
+      "hardware_mutations": 0,
+      "nand_abi_dryrun_pass": true,
+      "bounded_spi_pass": true,
+      "web_page_and_ten_interruptions_pass": true,
+      "complete_http_acceptance_pass": false,
+      "failure": "Full valid upload exceeded the host HTTP deadline after verbose UART preflight logging",
+      "complete_alias_cache_spi_rx_driver_phy_restore_pass": true,
+      "boot_and_tags_before_repeat_after_equal": true,
+      "overall_pass": false
+    },
+    {
+      "report": "../.build/resident-identity-preflight-web-20261104-1227/report.json",
+      "build": "../.build/resident-bootstrap-identity-preflight-20261104-1226/manifest.json",
+      "vendor_erase_abi_emulated_blocks": 11,
+      "vendor_page_abi_emulated_pages": 704,
+      "hardware_mutations": 0,
+      "nand_abi_dryrun_pass": true,
+      "bounded_spi_pass": true,
+      "installed_identity_pass": true,
+      "installed_resident": false,
+      "vendor_abi_and_installed_sha256": "5b084490813b540c1a82ddf2e2d4de46080e6cfe47b15b2e6575bdf3fe198fe9",
+      "complete_http_acceptance_pass": false,
+      "failure": "Second native network entry in the same natural supply cycle timed out on initial HTTP state",
+      "complete_alias_cache_spi_rx_driver_phy_restore_pass": true,
+      "boot_and_tags_before_repeat_after_equal": true,
+      "overall_pass": false
+    }
+  ],
+  "unchanged_ecc_hashes": {
+    "boot_2m": "868107e8298fdfeda84c61f9cea11f1fd146b23239c62c9d8e2141160b487954",
+    "tags_4m": "9f739d37021667828f88ff2438b82b2d4b5806a8f3d44afb628cbd72e2007c59",
+    "corrected_read_returns": 0,
+    "uncorrectable_or_short_read_errors": 0
+  },
+  "resident_format_offline_check": {
+    "manifest": "../.build/resident-bootstrap-format-checked-20261104-1231/manifest.json",
+    "tail_bytes": 133120,
+    "tail_sha256": "a1697b36f54cbe1ec3b417e38566dfa5629d29fd9210484abcd208667ecf92cc",
+    "production_c_format_checker_pass": true,
+    "flashable_release": false,
+    "contains_preflight_code_not_a_final_installation_candidate": true
+  },
+  "remaining_required_work": [
+    "Observe real physical Reset release, continuous press and release; do not treat constant low input as verified",
+    "Fix and repeat native network reentry acceptance, including complete valid upload",
+    "Connect and verify the cold Reset Web entry on the final non-preflight resident image",
+    "Complete the distinct installer and write-capable resident Web adapter with exact image-bound authorization",
+    "Prove the complete bounded NAND operation and audit budget before first real erase",
+    "Run exact final-candidate RAM normal boot, Reset Web, serial bootweb and complete upload tests",
+    "Actual window-only write, full ECC readback and protected-region comparison",
+    "Natural cold-power OpenWrt boot and independently verified persistent Web entry"
+  ],
+  "terminal_state_after_trials": {
+    "console": "original U-Boot prompt in the observed natural cycle",
+    "serial_owner_running": false,
+    "old_commands_queued": false,
+    "no_cleanup_replay_after_a_later_power_cycle": true
+  }
+}

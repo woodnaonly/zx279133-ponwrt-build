@@ -58,8 +58,10 @@ def main():
     if stage1 and hashlib.sha256(data[:0x20000]).hexdigest() != "d4d7a4bf90fc26cc61c76000bb272fac3113c14525ab7119c3d10fbd477231f4":
         raise ValueError("refusing unknown BTL code")
     seeds = ({0x800: "candidate_btl_start", 0x1858: "candidate_btl_main",
-              0x1f54: "candidate_btl_nor_boot", 0x242c: "candidate_btl_nand_boot",
+              0x1f54: "candidate_btl_spi_boot", 0x242c: "candidate_btl_nand_boot",
               0x21a8: "candidate_btl_nand_read", 0x2ea0: "candidate_btl_uart_receive",
+              0x2aec: "candidate_btl_boot_parameter_read",
+              0x9530: "candidate_btl_wps_path",
               0x4bb0: "candidate_btl_secure_selector",
               0x47ac: "candidate_btl_image_verify", 0x4bd4: "candidate_btl_cache_prepare",
               0x4c90: "candidate_btl_uart_boot", 0x40f4: "candidate_btl_printf"}
@@ -79,6 +81,28 @@ def main():
                       0x88067e84: "candidate_eth_halt", 0x88068140: "candidate_eth_set_current",
                       0x88067e00: "candidate_eth_init", 0x88067ee4: "candidate_eth_rx",
                       0x88065630: "candidate_get_timer"})
+        seeds.update({0x8801aea0: "candidate_nand_device_by_index",
+                      0x88018d34: "candidate_mtd_read_ecc",
+                      0x88036f88: "candidate_board_eth_init",
+                      0x88036dac: "candidate_board_eth_send",
+                      0x88037364: "candidate_board_eth_recv",
+                      0x88036fdc: "candidate_board_eth_halt"})
+        seeds.update({0x88001958: "candidate_c_runtime_entry",
+                      0x880019d8: "candidate_relocate_image",
+                      0x88009fd0: "candidate_board_init_f",
+                      0x8800a270: "candidate_board_init_r",
+                      0x88018cc0: "candidate_mtd_erase",
+                      0x88018dfc: "candidate_mtd_write_ecc",
+                      0x88025824: "candidate_spi_erase_callback",
+                      0x88025fa0: "candidate_spi_write_oob_callback",
+                      0x880256c4: "candidate_spi_wait_ready",
+                      0x8802564c: "candidate_spi_get_feature",
+                      0x88025c58: "candidate_spi_program_page",
+                      0x88025e80: "candidate_spi_ecc_config",
+                      0x88025f1c: "candidate_spi_select_target",
+                      0x8801a900: "candidate_nand_erase_block",
+                      0x8801a9d4: "candidate_nand_erase_core",
+                      0x88056cb8: "candidate_spi_memory_operation"})
     for ea, name in seeds.items():
         ida_name.set_name(ea, name, ida_name.SN_FORCE)
         ida_ua.create_insn(ea)

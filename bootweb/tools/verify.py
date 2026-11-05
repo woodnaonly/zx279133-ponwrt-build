@@ -89,7 +89,7 @@ class Results(unittest.TextTestResult):
 
 
 def inputs():
-    paths = [p for folder in ("adapter", "host", "include", "profiles", "src", "tests", "tools", "web", "LICENSES")
+    paths = [p for folder in ("adapter", "host", "include", "profiles", "src", "tests", "tools", "web", "vendor", "LICENSES")
              for p in (ROOT / folder).rglob("*") if p.is_file() and "__pycache__" not in p.parts]
     values = {p.relative_to(ROOT).as_posix(): sha256(p.read_bytes()) for p in sorted(paths)}
     canonical = json.dumps(values, sort_keys=True, separators=(",", ":")).encode()
@@ -152,7 +152,7 @@ def main():
                                "host_undefined_behavior_traps": not args.no_ubsan,
                                "native_fixed_x18": True, "warnings_as_errors": True}
         command = [sys.executable, str(ROOT / "tools/build.py"), "--zig", str(zig), "--lwip-dir", str(lwip),
-                   "--test-core", "--test-net", "--test-service"]
+                   "--test-core", "--test-net", "--test-service", "--test-readonly", "--test-backup"]
         if not args.no_ubsan:
             command.append("--ubsan")
         subprocess.run(command, check=True)

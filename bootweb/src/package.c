@@ -2,7 +2,9 @@
 #include "internal.h"
 #define PREFIX "sysupgrade-" BW_BOARD
 struct member {size_t off,len;};
-static int all_zero(const uint8_t *p,size_t n) {while(n--)if(*p++)return 0;return 1;}
+static int all_zero(const uint8_t *p,size_t n) {
+    while(n--) {if(*p++)return 0;if(!(n&0x3fffu)){bw_poll();if(bw_cancelled())return 0;}}return 1;
+}
 static size_t length(const char *p) {size_t n=0;while(p[n])n++;return n;}
 static int text(const uint8_t *p,size_t n,const char *s) {return n==length(s)&&bw_equal(p,s,n);}
 static int octal(const uint8_t *p,size_t n,size_t *out) {
@@ -111,16 +113,18 @@ static void span(struct bw_span *s,const uint8_t *p,struct member m,const char *
     bw_zero(s,sizeof(*s));s->data_offset=m.off;s->length=m.len;s->offset=off;s->capacity=cap;
     bw_copy(s->name,name,length(name)+1);bw_sha256(p+m.off,m.len,s->sha256);
 }
-int bw_validate(const void *v,size_t n,const char *base,uint32_t layout,struct bw_result *out,char error[BW_ERROR_SIZE]) {
+int bw_validate_identity(const void *v,size_t n,const struct bw_identity *identity,uint32_t layout,struct bw_result *out,char error[BW_ERROR_SIZE]) {
     const uint8_t *p=v;struct member m[4];struct bw_result r;size_t end=n;int system;
     if(error)error[0]=0;
     if(!p||!out||!error)return -1;
     bw_zero(out,sizeof(*out));bw_zero(m,sizeof(m));bw_zero(&r,sizeof(r));
-    if(!base||!bw_hex64(base)||!bw_string(base,BW_BASE))return bw_fail(error,"unknown/unadapted installed U-Boot code base");
+    if(bw_cancelled())return bw_fail(error,"service deadline reached; validation cancelled");
+    if(!bw_identity_valid(identity))return bw_fail(error,"unknown/unadapted vendor ABI or installed identity");
     if(layout>BW_LAYOUT_RECOVERY237)return bw_fail(error,"unknown partition layout");
     if(n<1536||n>BW_MAX_UPLOAD)return bw_fail(error,"upload length outside fixed limits");
     system=bw_equal(p,PREFIX,sizeof(PREFIX)-1);
     if(system&&fwtool(p,n,&end,error))return -1;
+    if(bw_cancelled())return bw_fail(error,"service deadline reached; validation cancelled");
     if(tar(p,end,system,m,error))return -1;
     r.kind=system?BW_SYSTEM:BW_UBOOT;r.layout=layout;r.package_bytes=n;
     if(system) {
@@ -138,8 +142,18 @@ int bw_validate(const void *v,size_t n,const char *base,uint32_t layout,struct b
         char payload[65],control[65];
         if(m[1].len!=BW_STAGE2_SIZE)return bw_fail(error,"U-Boot payload must be exactly the fixed stage2 window (no full boot image)");
         bw_sha256(p+m[1].off,m[1].len,payload);bw_sha256(p+m[0].off,m[0].len,control);
-        if(boot_control(p+m[0].off,m[0].len,base,payload,error)||sums(p+m[2].off,m[2].len,control,payload,error))return -1;
+        if(boot_control(p+m[0].off,m[0].len,identity->installed_sha256,payload,error)||sums(p+m[2].off,m[2].len,control,payload,error))return -1;
         span(&r.writes[0],p,m[1],"uboot",BW_STAGE2_START,BW_STAGE2_SIZE);r.count=1;
     }
-    bw_sha256(p,n,r.package_sha256);bw_copy(out,&r,sizeof(r));return 0;
+    bw_sha256(p,n,r.package_sha256);
+    if(bw_cancelled())return bw_fail(error,"service deadline reached; validation cancelled");
+    bw_copy(out,&r,sizeof(r));return 0;
+}
+int bw_validate(const void *v,size_t n,const char *base,uint32_t layout,struct bw_result *out,char error[BW_ERROR_SIZE]) {
+    struct bw_identity identity;
+    if(bw_legacy_identity(base,&identity)) {
+        if(out)bw_zero(out,sizeof(*out));
+        return error?bw_fail(error,"unknown/unadapted installed U-Boot code base"):-1;
+    }
+    return bw_validate_identity(v,n,&identity,layout,out,error);
 }

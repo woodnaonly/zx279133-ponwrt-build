@@ -1,0 +1,30 @@
+{
+  "schema": "sk-d840n-hardware-evidence-amendment-v1",
+  "recorded_local": "2026-11-04T14:04:00+08:00",
+  "supersedes_interpretation_not_raw_logs": true,
+  "affected_report": "../.build/resident-reset-pinctrl-physical-20261104-1402/report.json",
+  "physical_reset_pass": false,
+  "nand_written": false,
+  "volatile_pinctrl_write_attempted": true,
+  "register": "0x10e20000",
+  "configured_word": "0x20000003",
+  "restoration_word": "0x00000003",
+  "prior_full_word_value": "UNKNOWN: original acquisition used md.b",
+  "full_word_restoration_verified": false,
+  "invalidated_claims": [
+    "Byte-lane reads reconstruct complete pinctrl MMIO register words",
+    "Original pin14 mux selection was definitely zero",
+    "Writing the byte-reconstructed saved value proves complete volatile state restoration"
+  ],
+  "read_only_cross_check": {
+    "method": "md.l 10e20000 20 and md.l 10d10000 8",
+    "pinctrl_first_four_words": ["0x00000003", "0x01259549", "0x00fdcfe0", "0x55000000"],
+    "gpio_direction_word": "0x00002600",
+    "gpio_input_word": "0x00000000",
+    "icache_on": true,
+    "dcache_on": true,
+    "console_uboot_identity": "svn308776"
+  },
+  "action": "Do not guess missing original high bits. Discard this cycle for final acceptance; preserve the configured smart-switch schedule and obtain fresh native-width register values after the next observed natural power-on.",
+  "persistent_writes_or_active_reboot": false
+}

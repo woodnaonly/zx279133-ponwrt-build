@@ -1,0 +1,21 @@
+{
+  "schema": "sk-d840n-native241-install-request-v1",
+  "operation": "update-resident-native241-then-web-install-337",
+  "human_request": "实施 bootweb 支持单 root 241 MiB，并实际安装 #337；持续供电已由用户确认。此次 TTL 更新修正已发现的等待与任务准备生命周期问题，仍仅修改限定 U-Boot 窗口，网页 U-Boot 自刷不解锁。",
+  "source_installed_sha256": "c2c28d8825b4014d8bd554fbe8ebf5802dfdc02091e04a04af83bf594a751276",
+  "candidate_sha256": "4332c7558ecd4cde491bf6a796b1ea531aa6770ef2ec720a91ef9a6dcec4d5be",
+  "resident_manifest_sha256": "3a9a733685eecf0447a0a7ccd7b55a4c94d75c722f9032af9c9c265e690bf667",
+  "permitted_physical_write": ["0x20000", "0x180000"],
+  "continuous_power_required": true,
+  "web_uboot_enabled": false,
+  "system_package_sha256": "f92c1ff53d8cf7c64eabc97122eeda316228d787b0aa448638670df88603cca2",
+  "fresh_backup_sha256": "381d0eaade09aa06c7a28a3fd2f9eababc75209da9936dde650c61c48435b925",
+  "current_configuration_sha256": "b81a695e0294acea8f2b70eba70a76b1ccd3f21ff259884dfe0b84f31be9c089",
+  "backup_audit": "../.build/native241-idlefix-current-full-backup-06/snapshot-audit.json",
+  "configuration_report": "../.build/native241-idlefix-current-config-06/report.json",
+  "offline_report": "../.build/native241-idlefix-offline-final-06/report.json",
+  "prior_one_use_authorization_reused": false,
+  "rescue_verified": false,
+  "hardware_acceptance_complete": false,
+  "nand_written": false
+}

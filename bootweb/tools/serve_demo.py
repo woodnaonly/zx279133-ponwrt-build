@@ -72,6 +72,9 @@ class Demo(socketserver.ThreadingTCPServer):
         with self.lock:
             state = STATES[self.task.state]
             return {"board": "skyworth_sk-d840n", "base": self.core.base, "layout": self.layout,
+                    "version": "bootweb-development-v2", "resident": False,
+                    "vendor_abi_sha256": self.core.base, "installed_sha256": self.core.base,
+                    "lock_reason": "" if self.nand else "No hardware write adapter is attached",
                     "mode": "电脑内存模拟" if self.nand else "电脑校验预览（写入锁定）",
                     "notice": "仅本机演示：不会连接设备，不会读写真实 Flash；未完成实机验收。",
                     "token": self.token, "state": state, "id": str(self.task.id),
@@ -88,6 +91,29 @@ class Demo(socketserver.ThreadingTCPServer):
 
 
 class Handler(socketserver.StreamRequestHandler):
+    remaining_body = 0
+
+    def finish(self):
+        # An early 409 with unread POST bytes can become a TCP reset on Windows,
+        # hiding the rejection response. Half-close first, then discard only a
+        # bounded tail; never parse or validate a rejected body.
+        try:
+            if self.remaining_body:
+                self.wfile.flush()
+                self.request.shutdown(socket.SHUT_WR)
+                deadline = time.monotonic() + .2
+                discard = min(self.remaining_body, 256 * 1024)
+                while discard and time.monotonic() < deadline:
+                    self.request.settimeout(max(.001, deadline-time.monotonic()))
+                    chunk = self.rfile.read(min(discard, 65536))
+                    if not chunk:
+                        break
+                    discard -= len(chunk)
+        except OSError:
+            pass
+        finally:
+            super().finish()
+
     def reply(self, code, data, content_type="application/json; charset=utf-8"):
         if not isinstance(data, bytes):
             data = json.dumps(data, ensure_ascii=False).encode()
@@ -109,6 +135,7 @@ class Handler(socketserver.StreamRequestHandler):
             chunk = self.rfile.read(min(65536, n - done))
             if not chunk:
                 raise ValidationError("truncated request body")
+            self.remaining_body = n - done - len(chunk)
             yield chunk
             done += len(chunk)
 
@@ -126,6 +153,7 @@ class Handler(socketserver.StreamRequestHandler):
                     return
                 header += char
             request = server.core.parse_http(bytes(header))
+            self.remaining_body = request.length
             host = f"127.0.0.1:{server.server_address[1]}"
             if request.host.decode() != host or request.origin and request.origin.decode() != "http://" + host:
                 raise ValidationError("Host/Origin rejected")
@@ -158,7 +186,7 @@ class Handler(socketserver.StreamRequestHandler):
                     server.core.lib.bw_task_finish(C.byref(server.task))
                     code = 200 if server.task.state == 3 else 409
                 return self.reply(code, server.state())
-            if request.length > 96:
+            if request.length > 192:
                 raise ValidationError("control body exceeds fixed limit")
             body = b"".join(self.body(request.length))
             with server.lock:
@@ -168,13 +196,13 @@ class Handler(socketserver.StreamRequestHandler):
                     if server.nand is None:
                         raise ValidationError("real writes are locked; start explicit in-memory simulation if needed")
                     lines = body.split(b"\n")
-                    if len(lines) != 3 or lines[2] or not lines[0].isdigit() or len(lines[0]) > 20 or len(lines[1]) != 64:
+                    if len(lines) != 4 or lines[3] or not lines[0].isdigit() or len(lines[0]) > 20 or len(lines[1]) != 64 or len(lines[2]) != 64:
                         raise ValidationError("invalid confirmation body")
                     task_id = int(lines[0])
                     if task_id > 2**64 - 1:
                         raise ValidationError("task id overflow")
                     prior = server.task.state
-                    if server.core.lib.bw_task_confirm(C.byref(server.task), task_id, lines[1], request.token):
+                    if server.core.lib.bw_task_confirm_identity(C.byref(server.task), task_id, lines[1], lines[2], request.token):
                         raise ValidationError(server.task.error.decode())
                     if prior == 3:
                         server.worker = threading.Thread(target=server.execute, daemon=True)

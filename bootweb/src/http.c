@@ -21,7 +21,11 @@ int bw_http_parse(const void *v,size_t n,struct bw_request *r,char error[BW_ERRO
     bw_copy(r->method,p,a);bw_copy(r->path,p+a+1,b-a-1);
     if(!bw_string(r->method,"GET")&&!bw_string(r->method,"POST"))return bw_fail(error,"method not allowed");
     if(!(bw_string(r->path,"/")||bw_string(r->path,"/api/state")||bw_string(r->path,"/api/upload")||
-         bw_string(r->path,"/api/confirm")||bw_string(r->path,"/api/cancel")||bw_string(r->path,"/api/reboot")))
+         bw_string(r->path,"/api/confirm")||bw_string(r->path,"/api/cancel")||bw_string(r->path,"/api/reboot")
+#ifdef BW_RAM_BACKUP
+         ||bw_string(r->path,"/api/backup")||bw_string(r->path,"/api/backup-finish")
+#endif
+         ))
         return bw_fail(error,"route not allowed");
     at=e+2;
     while(at+2<n) {

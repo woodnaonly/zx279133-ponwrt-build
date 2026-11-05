@@ -1,0 +1,25 @@
+{
+  "schema": "sk-d840n-user-directed-install-v1",
+  "human_instruction": "你先打包固件 刷入啊 不要测试了",
+  "recorded_local": "2026-11-04T14:35:00+08:00",
+  "skip_preinstallation_acceptance": true,
+  "serial_rescue_waived_for_this_operation": true,
+  "resident_manifest_sha256": "dfd9cb834e31c5fc27a05f4e0d76c80bddb419507ff11db27caf1c366b290e15",
+  "candidate_sha256": "3982b9f25d7a3fb71d021d704c6c5e842b3360e25eb9040b3695755a5e2d85c7",
+  "permitted_physical_write": ["0x20000", "0x180000"],
+  "existing_native_binding": {
+    "path": "C:/UGit/openwrt/SK-D840N/ci-build-repo/bootweb/.build/resident-native-word-chain-web-20261104-1426/report.json",
+    "sha256": "66b273070bb01e576927ff2d90f68182ad85ab11054b7c8e7e9303dcb4cc4313"
+  },
+  "disclosures": {
+    "new_tests_not_requested": true,
+    "final_reset_cold_entry_not_hardware_accepted": true,
+    "whole_installation_timing_certificate_missing": true,
+    "native_runtime_operation_deadlines_retained": true,
+    "first_erase_and_full_operation_budget_admission_retained": true,
+    "web_nand_update_functions_remain_locked": true,
+    "current_backup_and_protected_regions_required": true,
+    "real_nand_written": false,
+    "cold_boot_acceptance_complete": false
+  }
+}

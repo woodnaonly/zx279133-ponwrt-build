@@ -7,15 +7,16 @@
 </style>
 <h1>SK-D840N 轻量恢复</h1>
 <section id="notice" class="warning" role="alert">连接设备后才会显示可用功能。校验不代表已完成实机验证。</section>
-<section><h2>设备信息</h2><pre id="device">正在连接…</pre><small>恢复地址 192.168.9.1 · 电脑静态地址 192.168.9.2 · 网口适配尚待实测，首版计划仅支持已验证的 2.5G 口</small></section>
-<section><h2>1. 上传并校验</h2><p>选择系统 sysupgrade.bin 或 uboot-update.tar。完整上传并通过全部检查之前，不擦除 Flash。</p>
+<section><h2>设备信息</h2><pre id="device">正在连接…</pre><small>恢复地址 192.168.9.1 · 本轮电脑地址 192.168.9.25/24 · 当前 1 Gbps 链路不算 2.5G 性能验收</small></section>
+<section><h2>1. 上传并校验</h2><p>选择系统 sysupgrade.bin 或 uboot-update.tar。RAM 只读模式只上传和校验，不写入 Flash，也不能重启。</p>
 <input id="file" type="file" accept=".bin,.tar" aria-label="更新包"><br>
 <button id="upload" disabled>上传并校验</button><button id="cancel" disabled>清除未执行任务</button>
 <label for="up">上传进度</label><progress id="up" max="100" value="0"></progress><div id="uploadText"></div></section>
 <section><h2>2. 校验结果与确认</h2><pre id="summary">尚未上传</pre>
 <div id="confirmation" class="hidden"><p class="warning">U-Boot 更新中断电可能无法开机，需要前级串口救援。本工具不承诺自动回滚。请保持供电和网线连接。</p>
 <label>输入 SK-D840N 确认板型 <input id="board" type="text" autocomplete="off" spellcheck="false"></label>
-<label><input id="agree" type="checkbox">我已阅读校验结果，确认本次更新，并已准备串口救援。</label>
+<label><input id="agree" type="checkbox">我已备份当前系统与配置，阅读校验结果并确认本次更新。</label>
+<label id="powerLabel" class="hidden"><input id="powerAck" type="checkbox">我已暂停智能开关定时断电，本次升级及重启验证期间保持持续供电。</label>
 <button id="confirm" class="danger" disabled>确认写入</button></div></section>
 <section><h2>3. 进度与日志</h2><p id="status">等待设备</p><progress id="progress" max="100" value="0"></progress><pre id="logs" aria-live="polite"></pre>
 <small>浏览器断连不会自动重试刷写。重新打开本页只查询现有任务；写入后仍需重启验证。</small><br>
@@ -26,15 +27,18 @@ const $=id=>document.getElementById(id);let state=null,token='',sending=false,po
 const states={idle:'等待上传',receiving:'接收中',validating:'校验中',ready:'校验通过，等待明确确认',queued:'已确认，等待执行',writing:'正在擦写及读回校验',success:'写入及读回完成；尚待重启验证',failed:'任务失败，未报告成功',cancelled:'任务已取消'};
 function log(s){$('logs').textContent+=(new Date().toLocaleTimeString()+' '+s+'\n');$('logs').scrollTop=$('logs').scrollHeight;}
 async function post(path,body=''){const r=await fetch(path,{method:'POST',headers:{'X-Bootweb-Token':token,'Content-Type':'application/octet-stream'},body});const v=await r.json();if(!r.ok)throw Error(v.error||('HTTP '+r.status));return v;}
-function buttons(){const ready=state&&state.state==='ready';$('upload').disabled=sending||!state||state.state!=='idle';$('cancel').disabled=sending||!state||!['ready','failed','receiving'].includes(state.state);$('confirmation').classList.toggle('hidden',!ready);$('confirm').disabled=!ready||!state.can_confirm||$('board').value!=='SK-D840N'||!$('agree').checked;$('reboot').disabled=sending||!state||!state.can_reboot;}
-function render(v){const changed=!state||state.state!==v.state;state=v;token=v.token;$('notice').textContent=v.notice;$('device').textContent='型号：'+v.board+'\n基底：'+v.base+'\n分区布局：'+v.layout+'\n运行方式：'+v.mode;$('status').textContent=(states[v.state]||v.state)+(v.error?'：'+v.error:'');$('progress').value=v.total?Math.round(100*v.done/v.total):0;
-if(v.result){$('summary').textContent='类型：'+v.result.kind+'\n包 SHA256：'+v.result.sha256+'\n'+v.result.writes.map(s=>s.name+'：'+s.length+' 字节 / 容量 '+s.capacity+' 字节\nSHA256 '+s.sha256).join('\n');}else $('summary').textContent='尚未取得通过校验的包';
+function isReadonly(v){return v&&['native-ram-readonly','native-resident-readonly'].includes(v.mode);}
+function buttons(){const ready=state&&state.state==='ready',readonly=isReadonly(state),continuous=state&&state.power_mode==='continuous_required';$('upload').disabled=sending||!state||state.state!=='idle';$('cancel').disabled=sending||!state||!['ready','failed','receiving'].includes(state.state);$('confirmation').classList.toggle('hidden',!ready||readonly||!state.can_confirm);$('powerLabel').classList.toggle('hidden',!continuous);$('confirm').disabled=!ready||readonly||!state.can_confirm||$('board').value!=='SK-D840N'||!$('agree').checked||(continuous&&!$('powerAck').checked);$('reboot').disabled=sending||!state||readonly||!state.can_reboot;}
+function consentBinding(v){return JSON.stringify([v.token,v.installed_sha256||v.base,v.id,v.result&&v.result.sha256,v.power_mode]);}
+function render(v){const changed=!state||state.state!==v.state,readonly=isReadonly(v);if(!state||consentBinding(state)!==consentBinding(v)){$('board').value='';$('agree').checked=false;$('powerAck').checked=false;}state=v;token=v.token;$('notice').textContent=readonly?'只读模式：仅上传和校验。NAND 写入和重启均禁用。':v.notice;$('device').textContent='型号：'+v.board+'\n基底：'+v.base+'\n分区布局：'+v.layout+'\n供电策略：'+(v.power_mode==='continuous_required'?'升级期间必须持续供电':'保持原策略')+'\n运行方式：'+(readonly?'只读（原生 U-Boot）':v.mode);$('status').textContent=(readonly&&v.state==='ready'?'校验通过；只读模式，不执行写入':states[v.state]||v.state)+(v.error?'：'+v.error:'');$('progress').value=v.total?Math.round(100*v.done/v.total):0;
+$('device').textContent+='\n'+JSON.stringify({version:v.version,vendor_abi_sha256:v.vendor_abi_sha256,installed_sha256:v.installed_sha256},null,2);if(v.lock_reason)$('notice').textContent+='\n'+v.lock_reason;
+if(v.result){$('summary').textContent='类型：'+v.result.kind+'\n包 SHA256：'+v.result.sha256+'\n'+v.result.writes.map(s=>s.name+'：'+s.length+' 字节 / 容量 '+s.capacity+' 字节\nSHA256 '+s.sha256).join('\n')+(v.update_bound_ms?'\n保守耗时预算：'+Math.ceil(v.update_bound_ms/60000)+' 分钟（不是实测耗时）':'');}else $('summary').textContent='尚未取得通过校验的包';
 if(changed)log($('status').textContent);if(v.phase)$('status').textContent+=' · '+v.phase;buttons();}
 async function refresh(){if(polling)return;polling=true;try{const r=await fetch('/api/state',{cache:'no-store'});if(!r.ok)throw Error('HTTP '+r.status);render(await r.json());}catch(e){$('status').textContent='连接中断：'+e.message+'。不会自动重试写入。';$('upload').disabled=$('confirm').disabled=$('reboot').disabled=true;}finally{polling=false;}}
-$('board').oninput=buttons;$('agree').onchange=buttons;
+$('board').oninput=buttons;$('agree').onchange=buttons;$('powerAck').onchange=buttons;
 $('upload').onclick=()=>{const file=$('file').files[0];if(!file)return log('请先选择更新包');if(file.size<1536||file.size>262209536)return log('文件长度超出固定范围');sending=true;buttons();const x=new XMLHttpRequest();x.open('POST','/api/upload');x.setRequestHeader('X-Bootweb-Token',token);x.setRequestHeader('Content-Type','application/octet-stream');x.upload.onprogress=e=>{if(e.lengthComputable){$('up').value=100*e.loaded/e.total;$('uploadText').textContent=e.loaded+' / '+e.total+' 字节';}};x.onload=()=>{sending=false;try{const v=JSON.parse(x.responseText);if(x.status>=400)throw Error(v.error||'校验失败');render(v);log('完整上传与校验结束');}catch(e){log(e.message);refresh();}buttons();};x.onerror=()=>{sending=false;log('上传连接中断，不会执行或重试写入');refresh();};x.send(file);};
-$('confirm').onclick=async()=>{if(!state||state.state!=='ready')return;const id=state.id,digest=state.result.sha256;const ok=confirm('确认写入 '+state.result.kind+'？\nSHA256 '+digest+'\n请勿断电。');if(!ok)return;$('confirm').disabled=true;try{render(await post('/api/confirm',id+'\n'+digest+'\n'));}catch(e){log(e.message);refresh();}};
-$('cancel').onclick=async()=>{try{$('board').value='';$('agree').checked=false;render(await post('/api/cancel'));}catch(e){log(e.message);}};
+$('confirm').onclick=async()=>{if(!state||state.state!=='ready'||$('confirm').disabled)return;const id=state.id,digest=state.result.sha256,installed=state.installed_sha256||state.base,continuous=state.power_mode==='continuous_required';const ok=confirm('确认写入 '+state.result.kind+'？\nSHA256 '+digest+(continuous?'\n请确认定时断电已暂停；本次为清洁安装。':'')+'\n请勿断电。');if(!ok)return;$('confirm').disabled=true;try{render(await post('/api/confirm',id+'\n'+digest+'\n'+installed+'\n'+(continuous?'continuous-power\n':'')));}catch(e){log(e.message);refresh();}};
+$('cancel').onclick=async()=>{try{$('board').value='';$('agree').checked=false;$('powerAck').checked=false;render(await post('/api/cancel'));}catch(e){log(e.message);}};
 $('reboot').onclick=async()=>{if(!confirm('确认重启？重启后须检查系统与 U-Boot，才算完成升级验证。'))return;try{await post('/api/reboot');log('已请求重启');}catch(e){log(e.message);}};
 refresh();setInterval(refresh,1500);
 </script>

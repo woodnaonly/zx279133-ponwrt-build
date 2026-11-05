@@ -1,0 +1,33 @@
+{
+  "schema": "sk-d840n-native241-reset-web-observation-v1",
+  "date_local": "2026-11-05",
+  "physical_cold_reset_entry_pass": true,
+  "resident_web_opened_in_real_browser": true,
+  "ram_payload_loaded": false,
+  "flash_commands_sent": false,
+  "system_337_uploaded": false,
+  "system_337_installed": false,
+  "source_directory": "../.build/native241-cold-reset-20261105-0828",
+  "source_observer_exit_pass": false,
+  "host_observer_failure": "Expected display name SK-D840N rather than the production BW_BOARD value skyworth_sk-d840n; stopped after GET /api/state without sending commands.",
+  "host_correction": "resident_live.py now requires the exact production board ID skyworth_sk-d840n; two related offline tests pass, including rejection of the old display name.",
+  "manual_uart_and_http_comparison": {
+    "board": "skyworth_sk-d840n",
+    "mode": "native-resident",
+    "version": "bootweb-resident-native241-v1",
+    "resident": true,
+    "layout": "native241",
+    "power_mode": "continuous_required",
+    "vendor_abi_sha256": "5b084490813b540c1a82ddf2e2d4de46080e6cfe47b15b2e6575bdf3fe198fe9",
+    "installed_sha256": "c2c28d8825b4014d8bd554fbe8ebf5802dfdc02091e04a04af83bf594a751276",
+    "uart_and_http_token_sha256": "d3ccd8f68d490916a62a4bcb1d9f9d6bce1ad0b5c2da6e888126e324b109e13c",
+    "state": "idle",
+    "can_confirm": false,
+    "can_reboot": false,
+    "comparison_pass": true
+  },
+  "screenshot": "../.build/native241-cold-reset-20261105-0828/resident-web.jpg",
+  "resident_return_not_fully_captured": true,
+  "web_wait_expired_before_upload": true,
+  "next": "Fresh physical Reset power-on with corrected observer; no replay of the previous session or automatic write retry."
+}

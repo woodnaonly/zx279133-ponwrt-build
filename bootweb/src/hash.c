@@ -3,8 +3,12 @@
 #include "internal.h"
 static void (*poll_fn)(void *);
 static void *poll_context;
+static int (*cancel_fn)(void *);
+static void *cancel_context;
 void bw_set_poll(void (*fn)(void *),void *ctx) {poll_fn=fn;poll_context=ctx;}
 void bw_poll(void) {if(poll_fn)poll_fn(poll_context);}
+void bw_set_cancel(int (*fn)(void *),void *ctx) {cancel_fn=fn;cancel_context=ctx;}
+int bw_cancelled(void) {return cancel_fn&&cancel_fn(cancel_context);}
 const char *bw_base_hash(void) {return BW_BASE;}
 int bw_test_build(void) {
 #ifdef BW_TEST_BASE
@@ -41,7 +45,9 @@ int bw_decimal(const uint8_t *p,size_t n,uint64_t *out) {
 }
 static uint32_t crc_run(const void *v,size_t n,uint32_t c) {
     const uint8_t *p=v; unsigned j;
-    while(n--) { c^=*p++; for(j=0;j<8;j++) c=(c>>1)^((0u-(c&1u))&0xedb88320u);if(!(n&0x3fffu))bw_poll(); }
+    if(bw_cancelled())return c;
+    while(n--) { c^=*p++; for(j=0;j<8;j++) c=(c>>1)^((0u-(c&1u))&0xedb88320u);
+        if(!(n&0x3fffu)){bw_poll();if(bw_cancelled())return c;} }
     return c;
 }
 uint32_t bw_crc32(const void *v,size_t n) {return crc_run(v,n,0xffffffffu)^0xffffffffu;}
@@ -78,10 +84,12 @@ void bw_hash_init(struct bw_hash *s) {
 }
 void bw_hash_add(struct bw_hash *s,const void *v,size_t n) {
     const uint8_t *p=v; s->bytes+=n;
+    if(bw_cancelled())return;
     while(n) {
         size_t z=64-s->used; if(z>n) z=n; bw_copy(s->block+s->used,p,z);
         s->used+=z;p+=z;n-=z;
-        if(s->used==64) { transform(s,s->block);s->used=0;if(!((s->bytes-n)&0x3fffu))bw_poll(); }
+        if(s->used==64) { transform(s,s->block);s->used=0;
+            if(!((s->bytes-n)&0x3fffu)){bw_poll();if(bw_cancelled())return;} }
     }
 }
 void bw_hash_end(struct bw_hash *s,char out[65]) {

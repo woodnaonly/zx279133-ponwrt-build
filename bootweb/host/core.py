@@ -5,6 +5,7 @@ fingerprint and mandatory build-mode check; it cannot be mistaken for production
 """
 import ctypes as C
 from pathlib import Path
+import re
 import sys
 import threading
 
@@ -17,6 +18,16 @@ MAX_UPLOAD = 0x0FA10000
 
 class ValidationError(ValueError):
     pass
+
+
+class Identity(C.Structure):
+    _fields_ = [("vendor_abi_sha256", C.c_char * 65), ("installed_sha256", C.c_char * 65)]
+
+
+class UbootBudget(C.Structure):
+    _fields_ = [(name, C.c_uint64) for name in (
+        "power_started_ms", "power_uncertainty_ms", "erase_max_ms", "page_max_ms",
+        "read_max_ms", "hash_max_ms", "bad_query_max_ms", "service_max_ms", "fixed_max_ms", "power_policy")]
 
 
 class Span(C.Structure):
@@ -43,7 +54,9 @@ class Task(C.Structure):
     _fields_ = [("state", C.c_uint32), ("layout", C.c_uint32), ("id", C.c_uint64),
                 ("expected", C.c_size_t), ("received", C.c_size_t), ("capacity", C.c_size_t),
                 ("buffer", C.c_void_p), ("token", C.c_char * 65), ("base", C.c_char * 65),
-                ("error", C.c_char * 192), ("result", Result)]
+                ("error", C.c_char * 192), ("result", Result),
+                ("vendor_abi_sha256", C.c_char * 65), ("image_bound_confirmation", C.c_uint32),
+                ("continuous_power_confirmed", C.c_uint32)]
 
 
 class Request(C.Structure):
@@ -59,13 +72,19 @@ WRITE = C.CFUNCTYPE(C.c_int, C.c_void_p, C.c_uint32, C.c_void_p)
 VERIFY_BOOT = C.CFUNCTYPE(C.c_int, C.c_void_p, C.c_void_p, C.c_size_t)
 WATCH = C.CFUNCTYPE(None, C.c_void_p)
 PROGRESS = C.CFUNCTYPE(None, C.c_void_p, C.c_char_p, C.c_uint32, C.c_uint32)
+VERIFY_IDENTITY = C.CFUNCTYPE(C.c_int, C.c_void_p, C.POINTER(Identity))
+PREPARE_UBOOT = C.CFUNCTYPE(C.c_int, C.c_void_p, C.POINTER(Identity), C.c_void_p, C.c_size_t, C.POINTER(UbootBudget))
+NAND_NOW = C.CFUNCTYPE(C.c_uint64, C.c_void_p)
+AUTHORIZE_NO_RESCUE = C.CFUNCTYPE(C.c_int, C.c_void_p, C.POINTER(Identity), C.c_char_p)
 
 
 class Port(C.Structure):
     _fields_ = [("context", C.c_void_p), ("capabilities", C.c_uint32),
                 ("is_bad", BAD), ("read", READ), ("erase", ERASE),
                 ("write_page", WRITE), ("verify_boot", VERIFY_BOOT),
-                ("watchdog", WATCH), ("progress", PROGRESS)]
+                ("watchdog", WATCH), ("progress", PROGRESS), ("verify_identity", VERIFY_IDENTITY),
+                ("prepare_uboot_write", PREPARE_UBOOT), ("milliseconds", NAND_NOW),
+                ("authorize_no_rescue", AUTHORIZE_NO_RESCUE)]
 
 
 class Core:
@@ -84,12 +103,20 @@ class Core:
             "bw_sha256": ([C.c_void_p, C.c_size_t, C.c_void_p], None),
             "bw_crc32": ([C.c_void_p, C.c_size_t], C.c_uint32),
             "bw_validate": ([C.c_void_p, C.c_size_t, C.c_char_p, C.c_uint32, C.POINTER(Result), C.c_void_p], C.c_int),
+            "bw_validate_identity": ([C.c_void_p, C.c_size_t, C.POINTER(Identity), C.c_uint32, C.POINTER(Result), C.c_void_p], C.c_int),
+            "bw_resident_image_check": ([C.c_void_p, C.c_size_t, C.c_void_p], C.c_int),
+            "bw_resident_image_version": ([C.c_void_p, C.c_size_t], C.c_char_p),
             "bw_execute": ([C.c_void_p, C.c_size_t, C.c_char_p, C.c_uint32, C.POINTER(Port), C.c_void_p, C.c_size_t, C.c_void_p], C.c_int),
+            "bw_execute_identity": ([C.c_void_p, C.c_size_t, C.POINTER(Identity), C.c_uint32, C.POINTER(Port), C.c_void_p, C.c_size_t, C.c_void_p], C.c_int),
+            "bw_uboot_budget_check": ([C.POINTER(UbootBudget), C.c_uint64, C.POINTER(C.c_uint64), C.c_void_p], C.c_int),
+            "bw_system_budget_bound": ([C.POINTER(Result), C.POINTER(UbootBudget), C.POINTER(C.c_uint64), C.c_void_p], C.c_int),
             "bw_task_init": ([C.POINTER(Task), C.c_void_p, C.c_size_t, C.c_char_p, C.c_uint32, C.c_char_p], C.c_int),
+            "bw_task_init_identity": ([C.POINTER(Task), C.c_void_p, C.c_size_t, C.POINTER(Identity), C.c_uint32, C.c_char_p], C.c_int),
             "bw_task_begin": ([C.POINTER(Task), C.c_size_t, C.c_uint64], C.c_int),
             "bw_task_feed": ([C.POINTER(Task), C.c_void_p, C.c_size_t], C.c_int),
             "bw_task_finish": ([C.POINTER(Task)], C.c_int),
             "bw_task_confirm": ([C.POINTER(Task), C.c_uint64, C.c_char_p, C.c_char_p], C.c_int),
+            "bw_task_confirm_identity": ([C.POINTER(Task), C.c_uint64, C.c_char_p, C.c_char_p, C.c_char_p], C.c_int),
             "bw_task_cancel": ([C.POINTER(Task), C.c_char_p], C.c_int),
             "bw_task_run": ([C.POINTER(Task), C.POINTER(Port), C.c_void_p, C.c_size_t], C.c_int),
             "bw_http_parse": ([C.c_void_p, C.c_size_t, C.POINTER(Request), C.c_void_p], C.c_int),
@@ -105,6 +132,32 @@ class Core:
         with self.lock:
             rc = self.lib.bw_validate(data, len(data), (base or self.base).encode(),
                                       LAYOUTS[layout], C.byref(result), error)
+        if rc:
+            raise ValidationError(error.value.decode())
+        return result
+
+    def resident_identity(self, stage2):
+        """Recognize the original ABI or the constrained resident format only.
+
+        A hash supplied by an operator is not an ABI proof. The production C
+        checker normalizes ONLY the audited cold hook and resident tail.
+        """
+        digest=C.create_string_buffer(65)
+        with self.lock:
+            kind=self.lib.bw_resident_image_check(stage2,len(stage2),digest)
+        if kind<0:
+            raise ValidationError("unknown vendor ABI or resident image format")
+        return Identity(self.base.encode(),digest.value)
+
+    def validate_identity(self, data, identity, *, layout="current240"):
+        if not isinstance(identity,Identity) or any(not re.fullmatch(rb"[0-9a-f]{64}",value) for value in
+                (identity.vendor_abi_sha256,identity.installed_sha256)):
+            raise ValidationError("invalid explicit installed/vendor identity")
+        if not 1536<=len(data)<=MAX_UPLOAD:
+            raise ValidationError("upload length outside fixed limits")
+        result,error=Result(),C.create_string_buffer(192)
+        with self.lock:
+            rc=self.lib.bw_validate_identity(data,len(data),C.byref(identity),LAYOUTS[layout],C.byref(result),error)
         if rc:
             raise ValidationError(error.value.decode())
         return result

@@ -17,4 +17,7 @@ struct bw_ethernet {
     void (*watchdog)(void *);
 };
 BW_API int bw_lwip_bind(struct bw_platform *, const struct bw_ethernet *);
+/* Close listener/streams and remove the netif BEFORE restoring a vendor RX
+ * hook. Clears all references to the caller's RAM-trial stack/context. */
+BW_API void bw_lwip_shutdown(void);
 #endif

@@ -1,0 +1,56 @@
+{
+  "schema": "sk-d840n-installation-policy-amendment-v1",
+  "date_local": "2026-11-04",
+  "human_instruction": "Do not require rescue; install first and verify",
+  "rescue_required_for_this_requested_installation": false,
+  "rescue_verified": false,
+  "status": "NOT_FLASHED_NO_BOOTABLE_RESIDENT_IMAGE_OR_NATIVE_WRITE_ADAPTER",
+  "permanent_installation_complete": false,
+  "nand_written": false,
+  "device_commands_sent_this_turn": false,
+  "single_operation_rescue_waiver": {
+    "core_callback_implemented": true,
+    "name": "bw_port.authorize_no_rescue",
+    "binds": ["installed vendor ABI and image identity", "exact package SHA256"],
+    "native_installer_must_consume_once": true,
+    "http_package_or_capability_cannot_supply_it": true,
+    "default_without_callback_still_requires_rescue": true,
+    "configured_in_a_real_hardware_adapter": false,
+    "scope": "Only the serial-rescue prerequisite can be waived. All other write checks are retained."
+  },
+  "remaining_blockers": {
+    "bootable_resident_image_created": false,
+    "cold_entry_copy_and_relocation_verified": false,
+    "reset_entry_and_device_random_token_verified": false,
+    "real_native_erase_program_ecc_interfaces_verified": false,
+    "bounded_native_write_operation_time_proven": false,
+    "current_configuration_export_complete": false
+  },
+  "evidence": {
+    "existing_ram_binary_is_not_a_flashable_resident_image": true,
+    "ordinary_vendor_adapter_still_returns_failure": true,
+    "ram_payload_requires_explicit_cold_copy": true,
+    "original_spi_busy_wait_has_no_internal_timeout": true,
+    "previous_complete_ecc_backup_sha256": "8bc44d2e8a27404e35aabe25e67e7782af641f986f92abdf5f42fe2cbd7d9248",
+    "historical_hardware_report": "C:/UGit/openwrt/SK-D840N/ci-build-repo/bootweb/reports/2026-11-04-resident-installation.json",
+    "historical_hardware_report_is_not_acceptance_of_the_modified_port_abi": true
+  },
+  "tests": {
+    "scope": "Offline synthetic NAND only; no hardware was contacted",
+    "report": "C:/UGit/openwrt/SK-D840N/ci-build-repo/bootweb/.build/offline-20261104-explicit-rescue-waiver-b.json",
+    "passed": true,
+    "run": 128,
+    "failed": 0,
+    "errors": 0,
+    "skipped": 0,
+    "new_cases": [
+      "one-operation waiver binds exact identity and package without setting rescue capability",
+      "missing, denied or consumed waiver erases nothing",
+      "waiver cannot replace container, native preflight, identity or timing checks",
+      "slow or mutating authorizer is followed by final time and candidate checks",
+      "U-Boot rescue waiver is not consulted for a system update"
+    ]
+  },
+  "further_rescue_instructions_requested": false,
+  "note": "Cancelling rescue preparation does not turn the existing RAM-only payload into a cold-bootable U-Boot image or implement the missing native NAND adapter. No unadapted or RAM-only binary was flashed."
+}

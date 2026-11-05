@@ -3,7 +3,9 @@
 struct tree {const uint8_t *p,*str;size_t total,begin,end,strings;};
 typedef int (*visit)(void *,const char *,const char *,const uint8_t *,size_t);
 static size_t slen(const char *p) {size_t n=0;while(p[n])n++;return n;}
-static int zeros(const uint8_t *p,size_t n) {while(n--)if(*p++)return 0;return 1;}
+static int zeros(const uint8_t *p,size_t n) {
+    while(n--) {if(*p++)return 0;if(!(n&0x3fffu)){bw_poll();if(bw_cancelled())return 0;}}return 1;
+}
 static int in_range(size_t off,size_t n,size_t total) {return off<=total && n<=total-off;}
 static int overlap(size_t a,size_t n,size_t b,size_t m) {return a<b+m && b<a+n;}
 static int open_tree(struct tree *t,const uint8_t *p,size_t len) {
@@ -29,6 +31,7 @@ static int walk(struct tree *t,visit fn,void *ctx) {
     unsigned nodes=0,roots=0,children_started[32];
     path[0]=0;
     while(pos+4<=t->end) {
+        if(bw_cancelled())return -1;
         uint32_t tag=bw_be32(t->p+pos);pos+=4;
         if(tag==1) {
             size_t start=pos,n;
@@ -130,6 +133,22 @@ static int bootargs(const uint8_t *p,size_t n) {
     }
     return roots==1&&types==1;
 }
+static void error_text(char **out,const char *value) {while(*value)*(*out)++=*value++;}
+static void error_hex(char **out,uint32_t value) {
+    static const char digits[]="0123456789abcdef";unsigned i;
+    error_text(out,"0x");for(i=0;i<8;i++)*(*out)++=digits[(value>>(28-4*i))&15];
+}
+static int layout_error(char *error,const char *name,uint32_t off,uint32_t size,const struct query *q) {
+    char msg[BW_ERROR_SIZE],*out=msg;
+    /* Fixed strings and a known partition label bound this to < 160 bytes. */
+    error_text(&out,"FDT layout mismatch: ");error_text(&out,name);
+    error_text(&out," expected offset=");error_hex(&out,off);error_text(&out," size=");error_hex(&out,size);
+    if(q->found&&q->size==8) {
+        error_text(&out," actual offset=");error_hex(&out,bw_be32(q->value));
+        error_text(&out," size=");error_hex(&out,bw_be32(q->value+4));
+    } else error_text(&out," actual reg missing/invalid");
+    *out=0;return bw_fail(error,msg);
+}
 int bw_fdt_layout(const uint8_t *data,size_t length,uint32_t layout,char *error) {
     static const char *names[7]={"boot","kernel","dtb","parameter tags","root","scratch","recovery"};
     static const uint32_t offsets[7]={0,0x200000,0xa00000,0xb00000,0xf00000,0xff00000,0xfc00000};
@@ -161,8 +180,9 @@ int bw_fdt_layout(const uint8_t *data,size_t length,uint32_t layout,char *error)
         if(j==7 || !(want&(1u<<j)) || (seen&(1u<<j)))return bw_fail(error,"unknown/duplicate FDT partition");
         seen|=1u<<j;size=sizes[j];if(j==4)size=layout==1?0xf100000:layout==2?0xed00000:0xf000000;
         if(!enabled(&t,d.children[i],&q))return bw_fail(error,"disabled FDT partition");
-        if(get(&t,d.children[i],"reg",&q)||!q.found||q.size!=8||bw_be32(q.value)!=offsets[j]||bw_be32(q.value+4)!=size)
-            return bw_fail(error,"FDT layout mismatch (including recovery boundary)");
+        if(get(&t,d.children[i],"reg",&q))return bw_fail(error,"invalid/duplicate FDT reg");
+        if(!q.found||q.size!=8||bw_be32(q.value)!=offsets[j]||bw_be32(q.value+4)!=size)
+            return layout_error(error,names[j],offsets[j],size,&q);
         if(j==0||j==3) {
             if(get(&t,d.children[i],"read-only",&q)||!q.found||q.size)return bw_fail(error,"FDT omits protected read-only partition");
         }

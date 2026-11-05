@@ -9,7 +9,7 @@
 | banner | U-Boot 2021.01-svn308776，2025-04-17 16:09:35 +0800 | U-Boot 2021.01-svn358069 |
 | 完整 2 MiB boot SHA256 | `0f8efd0c8cb1083e813bcf6a3c6a138670fad5f3d6ec79330b410c15afe1f941` | `009929cd17142567a1537e773758809bb75aa79a51af6597f2140c82e318f808` |
 | `[0x20000,0x180000)` SHA256 | `5b084490813b540c1a82ddf2e2d4de46080e6cfe47b15b2e6575bdf3fe198fe9` | `250f8537cfd436a67196a263f4a39aeac36d894c27e5cf8d611c2ff856defd98` |
-| 原生运行 / 写入 | 未验证 / 锁定 | 不支持 / 锁定 |
+| 原生运行 / 写入 | RAM 只读入口及 HTTP 已实测，完整验收见试验报告 / 锁定 | 不支持 / 锁定 |
 
 两版前 128 KiB 相同，SHA256 为 `d4d7a4bf90fc26cc61c76000bb272fac3113c14525ab7119c3d10fbd477231f4`。boot 尾部 `[0x1A0000,0x200000)` 同为 `c97fce784428a2e10cd6d4ef97ccc756f2e4c1b146a9b9dc5415d4e3e245b70a`。env 不是跨设备可复制的固件代码，不能用另一份 dump 的 env 覆盖当前配置。
 
@@ -27,9 +27,9 @@ name[8], maxargs[4], padding[4], cmd_rep[8], cmd[8], usage[8], help[8], complete
 
 文件 `0x32C98` 的分发路径从记录 `+0x10` 调用 repeat wrapper；wrapper 从 `+0x18` 取实际实现。它不是旧版整数 `repeatable` 结构。恢复程序入口 `bootweb_command(cmd, flags, argc, argv)` 已采用四参数命令 ABI。
 
-当前命令表没有 `go` 或 `bootelf`。RAM 验证仍需先确认安全的临时命令接入或其他执行路径；不能给出一条实际不存在的 `go 0x89000000` 命令。`0x89000000` 只是开发链接地址，没有证明它不与 U-Boot、malloc、栈、DTB、上传缓冲区或 DMA 区冲突。
+当前命令表没有 `go` 或 `bootelf`。本机 RAM 只读入口通过临时替换 `?` 记录的 `+0x18` 字段实测，`help` 保留，返回后读回核对恢复。不能给出一条实际不存在的 `go 0x89000000` 命令。`0x89000000` 仅适用于本轮经 `bdinfo`、LMB、运行时代码和页表核对的固定布局，不是通用安全地址。
 
-反编译的 `bdinfo` 路径显示 `gd` 在 `x18`，候选字段为 relocaddr `gd+112`、reloc_off `gd+152`、fdt_blob `gd+200`。这些仍需通过当前运行实例核实。原生编译保留 `x18`，但这本身不能证明调用、栈和缓存 ABI 已经安全。
+反编译的 `bdinfo` 路径显示 `gd` 在 `x18`，字段为 relocaddr `gd+112`、reloc_off `gd+152`、fdt_blob `gd+200`。本轮实测 gd/x18 为 `0x9f6fbde0`，重定位地址 `0x9ff3c000`、偏移 `0x17f3c000`。最小四参数探针已返回 U-Boot 并恢复入口与缓存；完整服务另用 64 KiB 私有栈，机器码审计禁止改写 x18 及 FP/SIMD 指令。
 
 ## 社区版函数候选
 
@@ -56,6 +56,14 @@ name[8], maxargs[4], padding[4], cmd_rep[8], cmd[8], usage[8], help[8], complete
 
 看门狗、设备熵源、重启和 Reset GPIO 尚未完成适配；不从 Linux GPIO 编号推断前级寄存器。
 
+## 本机 RAM 只读适配
+
+`vendor_ram_readonly.c` 仅由独立只读目标链接，普通 `vendor_unverified.c` 仍硬停。每次 TTL 装载前后核对当前实例指纹；实际使用 `reloc+0x18d34` 的固定物理偏移 ECC 读取和 `reloc+0x192c0` 坏块查询，不使用 skip-bad、raw/OOB 或 NAND shell handler。只读范围限定为验收所需分区，擦除、写页、保存环境和重启函数均不绑定。
+
+原始网帧使用已核对的 legacy eth_device 发送回调和驱动 RX 回调槽，协议栈为 lwIP，不借用 Linux 网络。退出时 halt、恢复 RX 回调、设备状态、已保存的 NP 驱动上下文及两个 PHY 模式缓存，并读回检查。PHY 缓存恢复后同周期网络重入仍失败；只能把每次新的自然上电作为独立验证起点，不能承诺可重复初始化。
+
+看门狗只读检查厂商已关闭状态，会话令牌来自电脑安全随机数。具体 RAM 区间、构建哈希、HTTP、ECC 和两周期状态见 `../reports/2026-11-03-ttl-ram-readonly.md`；这些证据不开放任何写入能力。
+
 ## 前级 BTL 的两种路径
 
 共享前级的静态区域指纹另存于 `profiles/btl-shared-static.json`。文件偏移/静态地址 `0x1858` 通过硬件启动选择进入 NAND、NOR 或串口路径；NAND 启动候选 `0x242C` 向装载路径传入 Flash `0x20000` 和长度 `0x180000`。
@@ -78,4 +86,4 @@ name[8], maxargs[4], padding[4], cmd_rep[8], cmd[8], usage[8], help[8], complete
 
 分析前级时在脚本参数最后加 `stage1`，并另选数据库与输出名。报告包含伪代码、静态调用点、函数范围及区域哈希，仍全部标记为未运行验证。
 
-下一阶段必须先完成 RAM 只读探测与收发验证，再实现真实 `bw_vendor_attach`。不得通过删除硬停、猜地址或设置 capability 位来跳过硬件验收。
+RAM 只读目标的实测不解除普通适配器的硬停。完整备份、前级救援、可写适配、Reset 入口及升级读回/重启仍需单独验收；不得通过猜地址或设置 capability 位跳过。

@@ -1,7 +1,7 @@
 """Sparse, ECC-interface-shaped NAND model. It has NO device/file write backend."""
 import ctypes as C
 import threading
-from .core import BAD, READ, ERASE, WRITE, VERIFY_BOOT, WATCH, PROGRESS, Port
+from .core import BAD, READ, ERASE, WRITE, VERIFY_BOOT, WATCH, PROGRESS, Port, PREPARE_UBOOT, NAND_NOW
 
 ERASE_SIZE, PAGE_SIZE, FLASH_SIZE = 0x20000, 0x800, 0x10000000
 
@@ -18,11 +18,32 @@ class SparseNand:
         self.events, self.errors = [], []
         self.lock = threading.RLock()
         self.progress = progress or (lambda phase, done, total: None)
+        self.clock = 1000
+        self.prepare_error = False
+        self.budget = None
         # Keep callback objects alive for the complete C call.
         self.callbacks = (BAD(self._bad), READ(self._read), ERASE(self._erase),
                           WRITE(self._write), VERIFY_BOOT(lambda ctx, data, size: 0),
                           WATCH(lambda ctx: None), PROGRESS(self._progress))
         self.port = Port(None, capabilities, *self.callbacks)
+        # Synthetic time bounds for an in-memory model ONLY. No hardware
+        # adapter imports this module or these numbers.
+        self.prepare_callback = PREPARE_UBOOT(self._prepare_uboot)
+        self.now_callback = NAND_NOW(lambda ctx: self.clock)
+        self.port.prepare_uboot_write = self.prepare_callback
+        self.port.milliseconds = self.now_callback
+
+    def _prepare_uboot(self, ctx, identity, data, size, budget):
+        if self.prepare_error or size != 0x160000:
+            return -1
+        values = dict(power_started_ms=0, power_uncertainty_ms=10, erase_max_ms=10,
+                      page_max_ms=1, read_max_ms=2, hash_max_ms=2,
+                      bad_query_max_ms=1, service_max_ms=1, fixed_max_ms=100)
+        if self.budget is not None:
+            values.update(self.budget)
+        for name, value in values.items():
+            setattr(budget.contents, name, value)
+        return 0
 
     def read(self, offset, size):
         if offset < 0 or size < 0 or offset + size > FLASH_SIZE:

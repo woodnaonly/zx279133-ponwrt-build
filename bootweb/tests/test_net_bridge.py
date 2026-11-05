@@ -39,12 +39,15 @@ class NetTests(unittest.TestCase):
         lib.bw_lwip_bind.argtypes = [C.POINTER(Platform), C.POINTER(Ethernet)]
         lib.bw_lwip_bind.restype = C.c_int
         incoming, outgoing, callback_errors = [], [], []
+        on_frame = [None]
         clock = [1000]
         pc, dev = bytes.fromhex("020000000002"), bytes.fromhex("020000000001")
         pcip, devip = bytes([192, 168, 9, 2]), bytes([192, 168, 9, 1])
 
         def transmit(ctx, p, n):
-            outgoing.append(C.string_at(p, n))
+            frame = C.string_at(p, n)
+            outgoing.append(frame)
+            if on_frame[0]:on_frame[0](frame)
             return 0
 
         def poll(ctx, receive, arg):
@@ -134,6 +137,64 @@ class NetTests(unittest.TestCase):
         platform.poll(None)
         self.assertEqual(platform.recv(None, fd, buf, len(buf), 20), 0)
         platform.close(None, fd)
+        # Reject without consuming a POST body. The already buffered bytes
+        # and a late tail after our FIN must not turn the HTTP 409 into RST.
+        outgoing.clear()
+        incoming.append(packet(3000, 0, 2, port=42000))
+        platform.poll(None)
+        syn = next(decoded(frame) for frame in outgoing if decoded(frame) and decoded(frame)[2] & 0x12 == 0x12)
+        server_seq = syn[0] + 1
+        incoming.append(packet(3001, server_seq, 0x10, port=42000))
+        platform.poll(None)
+        fd = platform.accept(None)
+        self.assertGreater(fd, 0)
+        header = b"POST /api/confirm HTTP/1.1\r\nHost: 192.168.9.1\r\nContent-Length: 8\r\n\r\n"
+        incoming.append(packet(3001, server_seq, 0x18, header+b"body", port=42000))
+        platform.poll(None)
+        self.assertEqual(platform.recv(None, fd, buf, len(header), 20), len(header))
+        response = b"HTTP/1.1 409 Conflict\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}"
+        outgoing.clear()
+        self.assertEqual(platform.send(None, fd, response, len(response)), len(response))
+        def finish_after_fin(frame):
+            decoded_frame = decoded(frame)
+            if decoded_frame and decoded_frame[2] & 1:
+                on_frame[0] = None
+                client_seq = 3001+len(header)+4
+                incoming.append(packet(client_seq, server_seq+len(response)+1, 0x18, b"tail", port=42000))
+                incoming.append(packet(client_seq+4, server_seq+len(response)+1, 0x11, port=42000))
+        on_frame[0] = finish_after_fin
+        before_close = clock[0]
+        platform.close(None, fd)
+        self.assertIsNone(on_frame[0])
+        self.assertLessEqual(clock[0]-before_close, 200)
+        segments = [decoded(frame) for frame in outgoing if decoded(frame)]
+        self.assertIn(response, [segment[3] for segment in segments])
+        self.assertTrue(any(segment[2] & 1 for segment in segments))
+        self.assertFalse(any(segment[2] & 4 for segment in segments))
+        # A peer that never finishes cannot prolong close beyond its short
+        # drain budget or the platform's absolute power-window deadline.
+        for index in range(2):
+            port = 43000+index
+            outgoing.clear()
+            incoming.append(packet(4000, 0, 2, port=port))
+            platform.poll(None)
+            syn = next(decoded(frame) for frame in outgoing if decoded(frame) and decoded(frame)[2] & 0x12 == 0x12)
+            incoming.append(packet(4001, syn[0]+1, 0x10, port=port))
+            platform.poll(None)
+            fd = platform.accept(None)
+            self.assertGreater(fd, 0)
+            self.assertEqual(platform.send(None, fd, response, len(response)), len(response))
+            before_close = clock[0]
+            stop_at = before_close+3
+            stop_callback = INIT(lambda ctx: int(index==1 and clock[0]>=stop_at))
+            platform.stop_requested = stop_callback
+            platform.close(None, fd)
+            elapsed = clock[0]-before_close
+            if index:
+                self.assertLessEqual(elapsed, 3)
+            else:
+                self.assertEqual(elapsed, 200)
+            platform.stop_requested = INIT()
         # Dropped connections before accept must not exhaust all stream slots.
         for index in range(4):
             port = 41000 + index
@@ -146,6 +207,7 @@ class NetTests(unittest.TestCase):
             platform.poll(None)
         self.assertEqual(callback_errors, [])
         self.assertEqual(platform.nand.capabilities, 0)
+        lib.bw_lwip_shutdown()
 
 
 if __name__ == "__main__":

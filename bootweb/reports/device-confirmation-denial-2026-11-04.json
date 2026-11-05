@@ -1,0 +1,15 @@
+{
+  "schema": "sk-d840n-supplemental-native-denial-v1",
+  "utc": "2026-11-04T02:30:29.743185+00:00",
+  "capture_directory": "C:/UGit/openwrt/SK-D840N/ci-build-repo/bootweb/.build/resident-full-backup-rle-20261104-1015",
+  "current_uart_token_bound": true,
+  "token_not_published": true,
+  "confirmation_fields": 3,
+  "task_id": "12",
+  "package_sha256": "73beaef1a972dc979bb0ad2b5a4b634af37e6861b1d2bfa047442a175fd5901d",
+  "installed_sha256": "5b084490813b540c1a82ddf2e2d4de46080e6cfe47b15b2e6575bdf3fe198fe9",
+  "http_status": 409,
+  "proper_confirmation_denied": true,
+  "nand_write_capability": false,
+  "note": "Supplemental live check after the main upload sequence. The current token was matched to this capture's UART command, not accepted from an unrelated HTTP peer. No second UART handle was opened."
+}

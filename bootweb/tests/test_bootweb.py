@@ -50,6 +50,14 @@ class ValidatorTests(unittest.TestCase):
             self.assertFalse(result.report()["flashable_release"])
         self.assertEqual(self.core.validate(system(format=tarfile.GNU_FORMAT)).count, 3)
 
+    def test_native241_is_strict_and_partition_errors_report_both_ranges(self):
+        self.assertEqual(self.core.validate(system(layout="native241"),layout="native241").writes[0].capacity,0xf100000)
+        self.reject(system(layout="current240"),"FDT",layout="native241")
+        parts=sys_parts("native241")
+        parts["dtb"]=fdt("native241",changes={"root":(0xf00000,0xf000000)})
+        self.reject(system(parts),r"root expected offset=0x00f00000 size=0x0f100000 actual offset=0x00f00000 size=0x0f000000",layout="native241")
+        self.reject(system(layout="recovery237"),"FDT",layout="native241")
+
     def test_wrong_board_base_and_metadata(self):
         p = sys_parts()
         p["CONTROL"] = b"BOARD=other\n"
@@ -465,7 +473,7 @@ class HttpTests(unittest.TestCase):
                 self.assertEqual(request("POST", "/api/cancel", b"")[0], 200)
                 code, state = request("POST", "/api/upload", data)
                 self.assertEqual((code, state["state"]), (200, "ready"))
-                confirm = (state["id"] + "\n" + state["result"]["sha256"] + "\n").encode()
+                confirm = (state["id"] + "\n" + state["result"]["sha256"] + "\n" + state["installed_sha256"] + "\n").encode()
                 detached("/api/confirm", confirm)
                 self.assertTrue(stopped.wait(2), "writer did not continue after browser disconnect")
                 self.assertEqual(request("GET", "/api/state")[1]["state"], "writing")
@@ -489,6 +497,18 @@ class HttpTests(unittest.TestCase):
 
 
 class EntryTests(unittest.TestCase):
+    def test_reset_entry_stopped_or_reversing_clock_is_bounded(self):
+        core=Core();PRESS=C.CFUNCTYPE(C.c_int,C.c_void_p);NOW=C.CFUNCTYPE(C.c_uint64,C.c_void_p);POLL=C.CFUNCTYPE(None,C.c_void_p)
+        class Entry(C.Structure):
+            _fields_=[("context",C.c_void_p),("verified",C.c_int),("pressed",PRESS),("now",NOW),("poll",POLL)]
+        core.lib.bw_reset_entry.argtypes=[C.POINTER(Entry)];core.lib.bw_reset_entry.restype=C.c_int
+        for backwards in (False,True):
+            calls=[0]
+            def now(ctx):calls[0]+=1;return 1000-calls[0] if backwards else 1000
+            callbacks=PRESS(lambda ctx:1),NOW(now),POLL(lambda ctx:None)
+            io=Entry(None,1,*callbacks)
+            self.assertEqual(core.lib.bw_reset_entry(C.byref(io)),-1);self.assertLessEqual(calls[0],1000002)
+
     def test_reset_hold_requires_measured_gpio_and_continuous_three_seconds(self):
         core = Core()
         PRESS = C.CFUNCTYPE(C.c_int, C.c_void_p)
