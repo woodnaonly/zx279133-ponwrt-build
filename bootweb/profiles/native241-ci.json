@@ -1,0 +1,20 @@
+{
+  "schema": "sk-d840n-native241-ci-profile-v1",
+  "board": "skyworth_sk-d840n",
+  "layout": "native241",
+  "power_mode": "continuous_required",
+  "vendor_abi_sha256": "5b084490813b540c1a82ddf2e2d4de46080e6cfe47b15b2e6575bdf3fe198fe9",
+  "control_dtb_sha256": "330630bb6cfe276d6cc66784a6ff970183ec8dca9af90b0b9ba1bccda968d007",
+  "reset_pinctrl_configuration": {
+    "register": "0x10e20000",
+    "global_pin": 14,
+    "shift": 29,
+    "width": 2,
+    "mask": "0x60000000",
+    "function": 1,
+    "value": "0x20000000"
+  },
+  "hardware_acceptance_complete": false,
+  "installation_authorized": false,
+  "web_uboot_enabled": false
+}

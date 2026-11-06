@@ -27,6 +27,18 @@
 
 ## 在当前 Windows 工作区构建
 
+### GitHub Actions 出包
+
+主工作流 `ZX279133 SK-D840N Build` 的 `all` 模式并行构建 initramfs、flash 和 native241 Bootweb，手动选择 `bootweb` 可只跑恢复程序。原有 `both` 仍仅构建两种系统固件。
+
+Bootweb job 使用 Windows runner、Python 3.13、Zig 0.14.1、Capstone 5.0.7 和 Node.js 22。依赖由 `tools/dependencies.lock.json` 固定，公开 `svn308776` 基底及 lwIP 源码均核对哈希，不依赖本机备份或私人验收报告。
+
+成功后单独发布 Bootweb 预发布 Release，提供 `sk-d840n-bootweb-native241-candidate.tar`、`sk-d840n-bootweb-native241-tools.tgz` 和 `sha256sums-bootweb`；失败只上传诊断报告。候选包仅适配公开原始 stage2，已装其他常驻版本的设备不能直接套用。离线构建入口 `--ci-offline-profile` 不提供安装授权，也不冒充 RAM 探针或实体 Reset 证据。下载文件和安装边界见 [`docs/CI-RELEASE.md`](docs/CI-RELEASE.md)。
+
+干净 checkout 可依次运行 `python -X utf8 bootweb/tools/ci.py prepare`、`python -X utf8 bootweb/tools/ci.py build`；前者下载并校验公开依赖，后者离线构建。需预先安装上述 Python、Node.js 和 Capstone。输出放在 `bootweb/.build/ci-native241/dist/`；重复构建应使用新的 `--work-dir`。
+
+### 本地开发构建
+
 依赖：Python 3.13、Zig 0.14.1、lwIP 2.2.0、Capstone 5.0.7。构建脚本不下载安装软件，不连接设备。AArch64 构建会检查完整指令流，拒绝 SIMD/FP 与改写 x18 的指令；IDA 仍是可选的静态逆向工具。
 
 当前已验证的路径：

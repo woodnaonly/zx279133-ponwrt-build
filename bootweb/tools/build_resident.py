@@ -21,6 +21,7 @@ from ram_probe import relocated_record
 from host.resident import patch_resident_development,add_resident_descriptor
 from host.core import BASE,Core
 from host.reset import physical_reset_evidence,unverified_reset_mapping,PINCTRL_CODE_PINS,CONTROL_DTB_SHA256
+from ci_profile import load_ci_profile
 
 
 def byte_array(name, data):
@@ -37,14 +38,15 @@ def main():
     parser.add_argument("--native241-service",action="store_true",help="use the strict native241 continuous-power system Web payload; no hardware acceptance is implied")
     parser.add_argument("--reset-evidence",type=Path,help="physical press/release trace for the exact live control DTB; enables the cold Reset path only after recomputation")
     parser.add_argument("--user-directed-unverified-reset",type=Path,help="explicit skipped-acceptance build: use measured 32-bit mux mapping, never claim a passed physical test")
+    parser.add_argument("--ci-offline-profile",type=Path,help="fixed static Reset target for public-baseline CI; no hardware acceptance or installation authority")
     parser.add_argument("--boot-dump",type=Path,default=ROOT.parents[1]/"sk-d840n-openwrt/binary/boot.bin")
     parser.add_argument("--vendor-reference",type=Path,default=ROOT.parents[1]/"sk-d840n-openwrt/binary/boot.bin",help="immutable original ABI template; CURRENT protection bytes still come from --boot-dump")
     parser.add_argument("--zig",type=Path,default=ROOT/".build/toolchain/zig-x86_64-windows-0.14.1/zig.exe")
     args=parser.parse_args()
     if args.native_service_trial and args.native241_service:
         parser.error("choose either the locked callback trial or native241 service")
-    if args.reset_evidence and args.user_directed_unverified_reset:
-        parser.error("verified and explicitly unverified Reset policies are mutually exclusive")
+    if sum(bool(v) for v in (args.reset_evidence,args.user_directed_unverified_reset,args.ci_offline_profile))>1:
+        parser.error("verified, explicitly unverified and CI-only Reset policies are mutually exclusive")
     reset_evidence=None
     if args.reset_evidence:
         if not args.device_entropy_trial:parser.error("Reset Web entry requires the independent device entropy build")
@@ -54,10 +56,21 @@ def main():
         if not args.device_entropy_trial:parser.error("Reset entry still requires the device entropy build")
         try:reset_evidence=unverified_reset_mapping(json.loads(args.user_directed_unverified_reset.read_text(encoding="utf-8")))
         except (OSError,ValueError) as error:parser.error(str(error))
-    output=args.build_dir.resolve();output.mkdir(parents=True,exist_ok=False)
+    if args.ci_offline_profile and args.boot_dump.stat().st_size!=0x200000:
+        parser.error("CI mode accepts only the 2 MiB public reference, not a device NAND backup")
     dump=args.boot_dump.read_bytes()
+    ci_policy={}
+    if args.ci_offline_profile:
+        if not (args.native241_service and args.resident_format and args.device_entropy_trial):
+            parser.error("CI target requires --native241-service --resident-format --device-entropy-trial")
+        try:
+            ci_policy=load_ci_profile(args.ci_offline_profile,dump)
+            load_ci_profile(args.ci_offline_profile,args.vendor_reference.read_bytes())
+        except (OSError,ValueError) as error:parser.error(str(error))
+        reset_evidence=ci_policy["reset_static_configuration"]
     if len(dump)==0x10000000:dump=dump[:0x200000]
     if len(dump)!=0x200000:parser.error("requires a complete ECC boot or physical NAND dump")
+    output=args.build_dir.resolve();output.mkdir(parents=True,exist_ok=False)
     stage2=dump[0x20000:0x180000]
     current_id=Core().resident_identity(stage2)
     native_service=args.native_service_trial or args.native241_service
@@ -65,6 +78,9 @@ def main():
     payload=(args.payload_dir/(name+".bin")).read_bytes()
     elf=(args.payload_dir/(name+".elf")).read_bytes()
     policy=json.loads((args.payload_dir/("resident-native-policy.json" if native_service else "ram-build-policy.json")).read_text(encoding="utf-8"))
+    if (bool(policy.get("ci_offline_build"))!=bool(args.ci_offline_profile) or
+            (ci_policy and policy.get("ci_profile_sha256")!=ci_policy["ci_profile_sha256"])):
+        parser.error("CI payload and resident target profile must match; no hardware evidence substitution")
     if policy.get("payload_sha256")!=hashlib.sha256(payload).hexdigest() or policy.get("elf_sha256")!=hashlib.sha256(elf).hexdigest():
         parser.error("payload/ELF differs from the separate build policy")
     if args.native241_service:
@@ -140,8 +156,9 @@ def main():
     stage0_elf=output/"resident-stage0.elf"
     subprocess.run([*common,str(ROOT/"adapter/resident-stage0.c"),"-Wl,-T,"+str(script),"-Wl,-e,bw_resident_stage0","-o",str(stage0_elf)],check=True)
     tail_path=output/"resident-tail-ram-trial.bin"
-    subprocess.run([str(args.zig.resolve()),"objcopy","--output-target","binary",str(stage0_elf),str(tail_path)],check=True)
-    tail=tail_path.read_bytes()
+    stage0_binary=output/"resident-stage0.bin"
+    subprocess.run([str(args.zig.resolve()),"objcopy","--output-target","binary",str(stage0_elf),str(stage0_binary)],check=True)
+    tail=stage0_binary.read_bytes()
     stage0_audit=verify_payload(stage0_elf.read_bytes(),tail,base=0x88100000,limit=0x88160000)
     tail+=bytes((-len(tail))%64);tail_path.write_bytes(tail)
     patched,manifest=patch_resident_development(dump,tail,vendor_reference=args.vendor_reference.read_bytes())
@@ -177,6 +194,7 @@ def main():
                      "user_directed_unverified_reset":reset_evidence if args.user_directed_unverified_reset else None,
                      "reset_cold_entry_enabled":reset_evidence is not None,
                      "entropy_source":"Jitterentropy-3.4.0/CNTPCT_EL0/SHA3-256" if args.device_entropy_trial else "host"})
+    manifest.update(ci_policy)
     (output/"manifest.json").write_text(json.dumps(manifest,indent=2)+"\n",encoding="utf-8")
     print(json.dumps({"development_build":True,"bytes":len(tail),"sha256":manifest["tail_sha256"],"nand_written":False,"flashable_release":False}))
 

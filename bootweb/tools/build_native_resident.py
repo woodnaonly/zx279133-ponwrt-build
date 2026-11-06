@@ -19,6 +19,7 @@ from build import NATIVE_FLAGS, SOURCES, RAM_PINS, SPI_PINS, NAND_WRITE_PINS, lw
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT))
 from host.core import Core,BASE
+from ci_profile import load_ci_profile
 
 
 def main():
@@ -27,18 +28,26 @@ def main():
     source=p.add_mutually_exclusive_group(required=True)
     source.add_argument("--current-backup",type=Path,help="fresh complete ECC backup; freshness must still be established by the installation owner")
     source.add_argument("--reference-boot",type=Path,help="OFFLINE-ONLY 2 MiB artifact reference; never substitutes for the fresh pre-install backup")
-    p.add_argument("--probe-report",type=Path,required=True)
+    entry=p.add_mutually_exclusive_group(required=True)
+    entry.add_argument("--probe-report",type=Path)
+    entry.add_argument("--ci-offline-profile",type=Path,help="fixed public-baseline compile-only target; never RAM evidence or install authority")
     p.add_argument("--native241-continuous",action="store_true",help="distinct strict native241 system Web target; requires explicit continuous-power confirmation at runtime")
     p.add_argument("--zig",type=Path,default=ROOT/".build/toolchain/zig-x86_64-windows-0.14.1/zig.exe")
     p.add_argument("--lwip-dir",type=Path,default=ROOT.parents[1]/"uboot-an758x/lib/lwip/lwip/src")
     a=p.parse_args()
     try:
-        probe=json.loads(a.probe_report.read_text(encoding="utf-8"))
-        if not all(probe.get(k) is True for k in ("ram_probe_pass","alias_restored","cache_restored")):
-            raise ValueError("verified RAM entry/ABI/cache restoration evidence is missing")
+        if a.ci_offline_profile and (a.current_backup or not a.native241_continuous):
+            raise ValueError("CI mode requires --reference-boot --native241-continuous; no device backups")
+        if not a.ci_offline_profile:
+            probe=json.loads(a.probe_report.read_text(encoding="utf-8"))
+            if not all(probe.get(k) is True for k in ("ram_probe_pass","alias_restored","cache_restored")):
+                raise ValueError("verified RAM entry/ABI/cache restoration evidence is missing")
         data=(a.current_backup or a.reference_boot).read_bytes()
         if len(data)!=(0x10000000 if a.current_backup else 0x200000):
             raise ValueError("wrong length for the explicit backup/reference input mode")
+        ci_policy={}
+        if a.ci_offline_profile:
+            ci_policy=load_ci_profile(a.ci_offline_profile,data)
         stage2=data[0x20000:0x180000]
         current_sha=hashlib.sha256(stage2).hexdigest()
         checker=Core().lib
@@ -98,6 +107,7 @@ def main():
                     (ROOT/"adapter/vendor_resident.c",ROOT/"adapter/vendor_nand.c",ROOT/"adapter/vendor_bounded_spi.c",
                      ROOT/"src/bounded_spi.c",ROOT/"src/budget.c",ROOT/"src/flash.c",ROOT/"src/resident_image.c",
                      ROOT/"src/install_image.c",ROOT/"src/nand_gate.c",ROOT/"src/service.c",ROOT/"adapter/lwip/bridge.c")}}
+        policy.update(ci_policy)
         (output/"resident-native-policy.json").write_text(json.dumps(policy,indent=2)+"\n",encoding="utf-8")
         print(json.dumps({"native_payload_bytes":binary.stat().st_size,"sha256":policy["payload_sha256"],
                           "write_gate":"runtime-backup-identity-continuous-confirmation" if a.native241_continuous else "timing-unverified","nand_written":False}))

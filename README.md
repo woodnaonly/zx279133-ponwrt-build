@@ -108,7 +108,12 @@ cable, so phase 2 replaces that step with `kexec` from the system that is runnin
 ## Phase 2: SK-D840N without a serial console
 
 Workflow `ZX279133 SK-D840N Build`, matrix mode `initramfs` and `flash`
-(`workflow_dispatch` lets you run one of them).
+(`workflow_dispatch` lets you run one of them). The default `all` also runs an
+independent Windows `bootweb` job; `bootweb` selects only that job, while the
+legacy `both` still means the two firmware modes. Bootweb publishes a separate
+offline-only native241 candidate prerelease, pinned to the public original
+svn308776 bootloader. It is not a LuCI upgrade or permission to flash. See
+[`bootweb/docs/CI-RELEASE.md`](bootweb/docs/CI-RELEASE.md) for the files and limits.
 
 | artifact | what it is |
 | --- | --- |

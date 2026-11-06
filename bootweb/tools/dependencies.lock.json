@@ -6,10 +6,21 @@
   },
   "lwip": {
     "version": "2.2.0",
+    "repository": "https://github.com/pbs05/uboot-an758x.git",
+    "revision": "4b91e112c345b8a4ad4f954775f3f4955f2cafb2",
+    "source_path": "lib/lwip/lwip/src",
     "source_and_headers_sha256": "a0745184761ef4eedcc8d52d411fdadcbab772c1c5a7e507ccfb43a224b63284",
     "license_sha256": "ef4aac92e05e87cd1cdc140870ed52206ba03d4a7fe46c1e11d7ffa6c87d252b",
     "hash_algorithm": "SHA256 of sorted compact JSON mapping selected source + all include headers to file SHA256",
     "hashed_file_count": 181,
     "hardware_drivers": "none"
+  },
+  "public_boot": {
+    "repository": "https://github.com/huxiangjs/SK-D840N-OpenWRT",
+    "revision": "011319bed96959107423a223e975b6e78d87ce68",
+    "path": "binary/boot.bin",
+    "bytes": 2097152,
+    "sha256": "0f8efd0c8cb1083e813bcf6a3c6a138670fad5f3d6ec79330b410c15afe1f941",
+    "stage2_sha256": "5b084490813b540c1a82ddf2e2d4de46080e6cfe47b15b2e6575bdf3fe198fe9"
   }
 }

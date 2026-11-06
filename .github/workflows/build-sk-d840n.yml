@@ -8,6 +8,8 @@ name: ZX279133 SK-D840N Build
 #
 # mode=initramfs -> RAM FIT .itb (trial via kexec from the running system)
 # mode=flash     -> uImage + dtb.bin + rootfs.jffs2 for the kernel/dtb/root partitions
+# mode=bootweb   -> public svn308776 native241 resident candidate (OFFLINE only)
+# mode=all      -> both firmware modes plus the independent bootweb job
 
 on:
   workflow_dispatch:
@@ -15,22 +17,31 @@ on:
       mode:
         description: '构建模式'
         required: false
-        default: 'both'
+        default: 'all'
         type: choice
-        options: ['both', 'initramfs', 'flash']
+        options: ['all', 'both', 'initramfs', 'flash', 'bootweb']
       clean_cache:
         description: '忽略 dl/ 缓存'
         required: false
         default: 'false'
         type: boolean
+      publish_release:
+        description: '发布 Release（RAM 对照测试请关闭）'
+        required: false
+        default: true
+        type: boolean
   push:
     paths:
       - .github/workflows/build-sk-d840n.yml
+      - bootweb/**
+      - tests/test_bootweb_ci_workflow.py
       - kernel-overlays/**
       - kernel-patches/**
       - overlays/**
       - configs/sk-d840n*
       - tests/test_sk_kernel.py
+      - tests/test_sk_tcp_optimization.py
+      - tests/sk_tcp_harness.h
       - scripts/configure-sk-d840n.sh
       - scripts/prepare-sk-d840n-ui.sh
       - scripts/sk-d840n-theme.sh
@@ -91,6 +102,7 @@ permissions: write-all
 jobs:
   check-led-gates:
     name: LED CI regression
+    if: github.event_name != 'workflow_dispatch' || inputs.mode != 'bootweb'
     runs-on: ubuntu-22.04
     timeout-minutes: 10
     steps:
@@ -102,6 +114,7 @@ jobs:
       - name: Exercise the workflow's DTS and LED gates
         run: |
           python3 tests/test_sk_kernel.py
+          python3 tests/test_sk_tcp_optimization.py --require-compiler
           python3 tests/test_kernel_version_single_source.py
           python3 tests/test_sk_lan1_phy_led.py
           python3 tests/test_sk_led_dts_gate.py
@@ -110,6 +123,7 @@ jobs:
 
   build:
     name: ${{ matrix.mode }}
+    if: github.event_name != 'workflow_dispatch' || inputs.mode != 'bootweb'
     needs: check-led-gates
     strategy:
       fail-fast: false
@@ -124,8 +138,8 @@ jobs:
         id: pick
         run: |
           want="${{ inputs.mode }}"
-          [ -z "$want" ] && want=both
-          if [ "$want" = both ] || [ "$want" = "${{ matrix.mode }}" ]; then
+          [ -z "$want" ] && want=all
+          if [ "$want" = all ] || [ "$want" = both ] || [ "$want" = "${{ matrix.mode }}" ]; then
             echo "run=true" >> "$GITHUB_OUTPUT"
           else
             echo "run=false" >> "$GITHUB_OUTPUT"
@@ -1896,6 +1910,7 @@ jobs:
       - name: Publish release
         if: >-
           success() && steps.pick.outputs.run == 'true' &&
+          (github.event_name != 'workflow_dispatch' || inputs.publish_release != false) &&
           ((matrix.mode == 'flash' && steps.package_flash.outputs.validated == 'true') ||
            (matrix.mode == 'initramfs' && steps.package_initramfs.outputs.validated == 'true'))
         uses: softprops/action-gh-release@v2
@@ -1984,7 +1999,7 @@ jobs:
           ignore_missing_files: true
 
       - name: Direct firmware download summary
-        if: success() && steps.pick.outputs.run == 'true' && matrix.mode == 'flash' && steps.package_flash.outputs.validated == 'true'
+        if: success() && steps.pick.outputs.run == 'true' && matrix.mode == 'flash' && steps.package_flash.outputs.validated == 'true' && (github.event_name != 'workflow_dispatch' || inputs.publish_release != false)
         run: |
           {
             echo '## ImmortalWrt 直刷固件'
@@ -1993,3 +2008,112 @@ jobs:
             echo '上传至 LuCI 固件升级页面，无需解压。Actions artifact 外层仍是 ZIP；上面的 Release 链接直接下载 .bin。'
             echo 'flash-set.tgz 用于维护/救援，不能直接上传至 LuCI；initramfs .itb 只用于 RAM 启动。'
           } >> "$GITHUB_STEP_SUMMARY"
+
+  bootweb:
+    name: native241 bootweb (offline candidate)
+    if: github.event_name != 'workflow_dispatch' || inputs.mode == 'all' || inputs.mode == 'bootweb'
+    runs-on: windows-2022
+    timeout-minutes: 40
+    permissions:
+      contents: write
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      PYTHONUTF8: '1'
+      PYTHONIOENCODING: utf-8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install pinned host dependencies
+        run: |
+          python -m pip install --disable-pip-version-check capstone==5.0.7 PyYAML==6.0.2
+          if ($LASTEXITCODE -ne 0) { throw 'Host dependency installation failed' }
+      - name: Check bootweb workflow contract
+        run: |
+          python -X utf8 tests/test_bootweb_ci_workflow.py
+          if ($LASTEXITCODE -ne 0) { throw 'Bootweb workflow contract failed' }
+      - name: Cache locked public dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            bootweb/.build/toolchain
+            bootweb/.build/ci-deps
+          key: bootweb-windows2022-${{ hashFiles('bootweb/tools/dependencies.lock.json') }}
+      - name: Prepare and verify public dependencies
+        run: |
+          python -X utf8 bootweb/tools/ci.py prepare
+          if ($LASTEXITCODE -ne 0) { throw 'Public dependency preparation failed' }
+      - name: Build and validate native241 candidate
+        id: package_bootweb
+        run: |
+          python -X utf8 bootweb/tools/ci.py build
+          if ($LASTEXITCODE -ne 0) { throw 'Native241 offline build failed' }
+          python -X utf8 bootweb/tools/ci.py validate-dist
+          if ($LASTEXITCODE -ne 0) { throw 'Native241 publication gate failed' }
+          $writer = [System.IO.StreamWriter]::new($env:GITHUB_OUTPUT, $true, [System.Text.UTF8Encoding]::new($false))
+          try { $writer.WriteLine('validated=true') } finally { $writer.Dispose() }
+      - name: Upload bootweb failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sk-d840n-bootweb-failure-${{ github.run_attempt }}
+          if-no-files-found: ignore
+          path: bootweb/.build/ci-native241/reports/
+      - name: Upload validated bootweb outputs
+        if: success() && steps.package_bootweb.outputs.validated == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: sk-d840n-bootweb-native241
+          compression-level: 0
+          if-no-files-found: error
+          path: |
+            bootweb/.build/ci-native241/dist/sk-d840n-bootweb-native241-candidate.tar
+            bootweb/.build/ci-native241/dist/sk-d840n-bootweb-native241-tools.tgz
+            bootweb/.build/ci-native241/dist/sha256sums-bootweb
+      - name: Publish bootweb candidate release
+        if: success() && steps.package_bootweb.outputs.validated == 'true' && (github.event_name != 'workflow_dispatch' || inputs.publish_release != false)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: skd840n_bootweb_${{ github.run_number }}_${{ github.run_id }}
+          name: SK-D840N native241 bootweb candidate ${{ github.run_number }}
+          prerelease: true
+          fail_on_unmatched_files: true
+          body: |
+            ## SK-D840N native241 常驻 Web 恢复候选包
+
+            仅绑定公开 `svn308776` 原始 U-Boot 基底，stage2 SHA256：
+            `5b084490813b540c1a82ddf2e2d4de46080e6cfe47b15b2e6575bdf3fe198fe9`。
+            已安装其他常驻版本的设备不能直接套用。本包不能上传到 LuCI 或当前锁定的 Web U-Boot 自刷入口。
+
+            - `sk-d840n-bootweb-native241-candidate.tar`：严格三成员候选包，仅含 stage2；不是完整 boot 分区镜像。
+            - `sk-d840n-bootweb-native241-tools.tgz`：调试 ELF/BIN、源码、构建清单、指令审计、离线报告、许可证及说明。
+            - `sha256sums-bootweb`：两个下载包的 SHA256。
+
+            CI 通过只表示离线构建与校验通过，不代表本次候选包已完成实机验收或取得安装授权。
+            native241 系统恢复要求持续供电；安装仍需新的完整 ECC 备份、精确镜像核对及对应安装流程。
+            网页 U-Boot 自刷仍锁定，周期断电刷写预算、BTL 救援和 2.5G 性能均未由 CI 验证。
+          files: |
+            bootweb/.build/ci-native241/dist/sk-d840n-bootweb-native241-candidate.tar
+            bootweb/.build/ci-native241/dist/sk-d840n-bootweb-native241-tools.tgz
+            bootweb/.build/ci-native241/dist/sha256sums-bootweb
+      - name: Bootweb download summary
+        if: success() && steps.package_bootweb.outputs.validated == 'true' && (github.event_name != 'workflow_dispatch' || inputs.publish_release != false)
+        env:
+          RELEASE_BASE: https://github.com/${{ github.repository }}/releases/download/skd840n_bootweb_${{ github.run_number }}_${{ github.run_id }}
+        run: |
+          $writer = [System.IO.StreamWriter]::new($env:GITHUB_STEP_SUMMARY, $true, [System.Text.UTF8Encoding]::new($false))
+          try {
+            $writer.WriteLine('## native241 Bootweb 离线候选包')
+            $writer.WriteLine("[下载候选包]($env:RELEASE_BASE/sk-d840n-bootweb-native241-candidate.tar)")
+            $writer.WriteLine("[下载配套工具]($env:RELEASE_BASE/sk-d840n-bootweb-native241-tools.tgz)")
+            $writer.WriteLine("[SHA256]($env:RELEASE_BASE/sha256sums-bootweb)")
+            $writer.WriteLine('仅适用于公开 svn308776 原始基底。离线通过不等于实机验收；网页 U-Boot 自刷仍锁定。')
+          } finally { $writer.Dispose() }
