@@ -884,6 +884,7 @@ static int zx279133_eth_probe(struct platform_device *pdev)
 	mutex_init(&eth->datapath_lock);
 	mutex_init(&eth->np_ind_lock);
 	mutex_init(&eth->wanid_lock);
+	zx279133_tx_recovery_init(eth);
 	for (i = 0; i < ZX279133_CPU_TX_QUEUES; i++) {
 		eth->tx[i].slots = devm_kcalloc(dev, ZX279133_IDM_TX_DEPTH,
 						sizeof(*eth->tx[i].slots),
@@ -1095,6 +1096,12 @@ static int zx279133_eth_probe(struct platform_device *pdev)
 
 	eth->xpcs = xpcs_create_fwnode(of_fwnode_handle(pcs_np));
 	of_node_put(pcs_np);
+	if (IS_ERR(eth->xpcs))
+		return dev_err_probe(dev, PTR_ERR(eth->xpcs),
+				     "failed to create XPCS handle\n");
+	ret = devm_add_action_or_reset(dev, zx279133_xpcs_destroy, eth->xpcs);
+	if (ret)
+		return ret;
 
 	/*
 	 * The LAN lane's PCS, optional: a board whose outerphy hangs off XMAC0
@@ -1121,14 +1128,11 @@ static int zx279133_eth_probe(struct platform_device *pdev)
 		if (IS_ERR(eth->xpcs_lan))
 			return dev_err_probe(dev, PTR_ERR(eth->xpcs_lan),
 					     "failed to create the LAN XPCS\n");
+		ret = devm_add_action_or_reset(dev, zx279133_xpcs_destroy,
+					       eth->xpcs_lan);
+		if (ret)
+			return ret;
 	}
-	if (IS_ERR(eth->xpcs))
-		return dev_err_probe(dev, PTR_ERR(eth->xpcs),
-				     "failed to create XPCS handle\n");
-
-	ret = devm_add_action_or_reset(dev, zx279133_xpcs_destroy, eth->xpcs);
-	if (ret)
-		return ret;
 
 	ret = device_get_phy_mode(dev);
 	if (ret < 0)
@@ -1193,9 +1197,7 @@ static int zx279133_eth_probe(struct platform_device *pdev)
 	}
 	ndev->hw_features |= NETIF_F_HW_TC;
 	ndev->features |= NETIF_F_HW_TC;
-	ndev->hw_features |= NETIF_F_RXCSUM;
-	ndev->features |= NETIF_F_RXCSUM;
-	ndev->vlan_features |= NETIF_F_RXCSUM;
+	/* RX checksum offload requires a reliable per-packet hardware result. */
 	ndev->hw_features |= NETIF_F_RXHASH;
 	ndev->features |= NETIF_F_RXHASH;
 	ndev->xdp_features = NETDEV_XDP_ACT_BASIC | NETDEV_XDP_ACT_REDIRECT |
@@ -1229,7 +1231,7 @@ static int zx279133_eth_probe(struct platform_device *pdev)
 			.dev = dev,
 			.napi = &eth->napi,
 			.dma_dir = DMA_BIDIRECTIONAL,
-			.max_len = ZX279133_IDM_RX_FRAME_LIMIT,
+			.max_len = ZX279133_IDM_RX_DMA_SIZE,
 			.offset = ZX279133_IDM_RX_PAYLOAD_OFFSET,
 			.netdev = ndev,
 			.queue_idx = 0,
@@ -1325,6 +1327,9 @@ static int zx279133_eth_probe(struct platform_device *pdev)
 	ret = devm_add_action_or_reset(dev, zx279133_rx_mode_work_cancel, eth);
 	if (ret)
 		return ret;
+	ret = devm_add_action_or_reset(dev, zx279133_tx_recovery_cancel, eth);
+	if (ret)
+		return ret;
 	ret = devm_register_netdev(dev, ndev);
 	if (ret)
 		return dev_err_probe(dev, ret, "failed to register netdev\n");
@@ -1363,6 +1368,7 @@ static void zx279133_eth_shutdown(struct platform_device *pdev)
 	struct zx279133_eth *eth = container_of(service, struct zx279133_eth,
 					      lan_service);
 
+	zx279133_tx_recovery_cancel(eth);
 	zx279133_pon_cleanup(eth);
 	zx279133_shutdown(eth);
 }

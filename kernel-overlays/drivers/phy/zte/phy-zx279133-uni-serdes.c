@@ -53,9 +53,9 @@ struct zx279133_uni_serdes {
 	void __iomem *serdes;
 	struct clk_bulk_data clocks[2];
 	struct reset_control_bulk_data resets[2];
-	struct phy *phy;
-	/* Protects the powered state and clock/reset lifecycle. */
+	/* Protects the mode, powered state and clock/reset lifecycle. */
 	struct mutex lock;
+	/* The driver holds enabled clocks and may access MMIO while true. */
 	bool powered;
 	/* power_off() asks the next power_on() to rewrite the rate in place. */
 	bool rate_pending;
@@ -291,7 +291,9 @@ static int zx279133_uni_serdes_set_mode(struct phy *phy, enum phy_mode mode,
 	/* nppt powers the SerDes off, sets the mode and powers it back on again, so
 	 * storing it here is enough to make the next power_on() write this lane's image.
 	 */
+	mutex_lock(&priv->lock);
 	priv->submode = submode;
+	mutex_unlock(&priv->lock);
 
 	return 0;
 }
@@ -429,6 +431,8 @@ static int zx279133_uni_serdes_power_on(struct phy *phy)
 			if (!was_powered)
 				clk_bulk_disable_unprepare(ARRAY_SIZE(priv->clocks),
 							   priv->clocks);
+			else
+				priv->rate_pending = true;
 			goto out_unlock;
 		}
 		priv->powered = true;
@@ -496,6 +500,20 @@ out_unlock:
 	return ret;
 }
 
+/* Caller holds priv->lock; unlike a rate change, teardown releases clocks. */
+static void
+zx279133_uni_serdes_force_off_locked(struct zx279133_uni_serdes *priv)
+{
+	if (priv->powered) {
+		writel(readl(priv->serdes + ZX279133_UNI_SERDES_MODE_CTRL) &
+		       ~ZX279133_UNI_SERDES_ENABLE,
+		       priv->serdes + ZX279133_UNI_SERDES_MODE_CTRL);
+		clk_bulk_disable_unprepare(ARRAY_SIZE(priv->clocks), priv->clocks);
+		priv->powered = false;
+	}
+	priv->rate_pending = false;
+}
+
 static int zx279133_uni_serdes_power_off(struct phy *phy)
 {
 	struct zx279133_uni_serdes *priv = phy_get_drvdata(phy);
@@ -510,13 +528,7 @@ static int zx279133_uni_serdes_power_off(struct phy *phy)
 		mutex_unlock(&priv->lock);
 		return 0;
 	}
-	if (priv->powered) {
-		writel(readl(priv->serdes + ZX279133_UNI_SERDES_MODE_CTRL) &
-		       ~ZX279133_UNI_SERDES_ENABLE,
-		       priv->serdes + ZX279133_UNI_SERDES_MODE_CTRL);
-		clk_bulk_disable_unprepare(ARRAY_SIZE(priv->clocks), priv->clocks);
-		priv->powered = false;
-	}
+	zx279133_uni_serdes_force_off_locked(priv);
 	mutex_unlock(&priv->lock);
 
 	return 0;
@@ -533,8 +545,9 @@ static void zx279133_uni_serdes_cleanup(void *data)
 {
 	struct zx279133_uni_serdes *priv = data;
 
-	if (priv->phy)
-		zx279133_uni_serdes_power_off(priv->phy);
+	mutex_lock(&priv->lock);
+	zx279133_uni_serdes_force_off_locked(priv);
+	mutex_unlock(&priv->lock);
 }
 
 /*
@@ -574,8 +587,15 @@ static ssize_t zx279133_uni_serdes_console(struct file *file,
 					   size_t count, loff_t *ppos)
 {
 	struct zx279133_uni_serdes *priv = file->private_data;
+	enum {
+		ZX279133_UNI_DUMP,
+		ZX279133_UNI_WRITE,
+		ZX279133_UNI_RESET,
+	} cmd;
 	char buf[32];
 	unsigned int i;
+	ssize_t result = count;
+	int which = -1;
 
 	if (count >= sizeof(buf))
 		return -EINVAL;
@@ -584,6 +604,26 @@ static ssize_t zx279133_uni_serdes_console(struct file *file,
 	buf[count] = '\0';
 
 	if (!strncmp(buf, "dump", 4)) {
+		cmd = ZX279133_UNI_DUMP;
+	} else if (!strncmp(buf, "write", 5)) {
+		cmd = ZX279133_UNI_WRITE;
+		if (buf[5] == ' ') {
+			if (kstrtoint(buf + 6, 0, &which) || which < 0 || which > 2)
+				return -EINVAL;
+		}
+	} else if (!strncmp(buf, "reset", 5)) {
+		cmd = ZX279133_UNI_RESET;
+	} else {
+		return -EINVAL;
+	}
+
+	mutex_lock(&priv->lock);
+	if (!priv->powered) {
+		result = -EAGAIN;
+		goto out_unlock;
+	}
+
+	if (cmd == ZX279133_UNI_DUMP) {
 		const u32 *other = zx279133_uni_serdes_image(priv->image_sel);
 		unsigned int diff = 0;
 
@@ -604,41 +644,33 @@ static ssize_t zx279133_uni_serdes_console(struct file *file,
 			}
 		pr_info("uni serdes: %u of %d word(s) differ between image 0 and image %d\n",
 			diff, ZX279133_UNI_SERDES_PROFILE_WORDS, priv->image_sel);
-		return count;
+		goto out_unlock;
 	}
 
-	if (!strncmp(buf, "write", 5)) {
-		int which = priv->image_sel;
-
-		if (buf[5] == ' ') {
-			if (kstrtoint(buf + 6, 0, &which))
-				return -EINVAL;
-		}
-		if (which < 0 || which > 2)
-			return -EINVAL;
-
-		mutex_lock(&priv->lock);
+	if (cmd == ZX279133_UNI_WRITE) {
+		if (which < 0)
+			which = priv->image_sel;
 		priv->image_sel = which;
 		zx279133_uni_serdes_write_profile(priv);
 		writel(readl(priv->serdes + ZX279133_UNI_SERDES_MODE_CTRL) |
 			ZX279133_UNI_SERDES_ENABLE,
 			priv->serdes + ZX279133_UNI_SERDES_MODE_CTRL);
-		mutex_unlock(&priv->lock);
 		pr_info("uni serdes: image %d written again\n", which);
-		return count;
+		goto out_unlock;
 	}
 
-	if (!strncmp(buf, "reset", 5)) {
+	if (cmd == ZX279133_UNI_RESET) {
 		int ret;
 
-		mutex_lock(&priv->lock);
 		ret = zx279133_uni_serdes_reset_pulse(priv);
-		mutex_unlock(&priv->lock);
 		pr_info("uni serdes: reset pulse returned %d\n", ret);
-		return count;
+		if (ret)
+			result = ret;
 	}
 
-	return -EINVAL;
+out_unlock:
+	mutex_unlock(&priv->lock);
+	return result;
 }
 
 static const struct file_operations zx279133_uni_serdes_console_fops = {
@@ -690,7 +722,6 @@ static int zx279133_uni_serdes_probe(struct platform_device *pdev)
 		return dev_err_probe(dev, PTR_ERR(phy), "failed to create PHY\n");
 
 	phy_set_drvdata(phy, priv);
-	priv->phy = phy;
 	platform_set_drvdata(pdev, priv);
 
 	ret = devm_add_action_or_reset(dev, zx279133_uni_serdes_cleanup, priv);

@@ -62,8 +62,7 @@ static unsigned int zx279133_idm_rx_page_slot(u32 key)
 
 static void zx279133_idm_rx_prefetch_payload(struct page *page)
 {
-	u8 *data = page_address(page) + ZX279133_IDM_RX_PAYLOAD_OFFSET +
-		   ZX279133_IDM_RX_FRAME_OFFSET;
+	u8 *data = page_address(page) + ZX279133_IDM_RX_DATA_OFFSET;
 
 	prefetch(data);
 	prefetch(data + L1_CACHE_BYTES);
@@ -89,7 +88,8 @@ static int zx279133_idm_rx_track_page(struct zx279133_eth *eth,
 	unsigned int slot;
 	unsigned int i;
 
-	if (upper_32_bits(dma))
+	if (upper_32_bits(dma) ||
+	    upper_32_bits(dma + ZX279133_IDM_RX_DMA_SIZE - 1))
 		return -ERANGE;
 	if (WARN_ON(eth->rx_page_map_count >= ZX279133_IDM_RX_BUFFER_COUNT))
 		return -ENOSPC;
@@ -146,7 +146,8 @@ static int zx279133_idm_rx_track_xsk(struct zx279133_eth *eth,
 	unsigned int slot;
 	unsigned int i;
 
-	if (upper_32_bits(dma))
+	if (upper_32_bits(dma) ||
+	    upper_32_bits(dma + ZX279133_IDM_RX_DMA_SIZE - 1))
 		return -ERANGE;
 	if (WARN_ON(eth->rx_page_map_count >= ZX279133_IDM_RX_BUFFER_COUNT))
 		return -ENOSPC;
@@ -173,6 +174,22 @@ static int zx279133_idm_rx_track_xsk(struct zx279133_eth *eth,
 	return -ENOSPC;
 }
 
+static void zx279133_idm_rx_sync_for_device(struct zx279133_eth *eth,
+					   dma_addr_t dma)
+{
+	/* XDP can change both ends of a packet. Reposting always transfers the
+	 * entire hardware write window, not the last packet's adjusted length.
+	 * Match the CPU-side workaround for this non-coherent IDM block.
+	 */
+#if defined(CONFIG_HAS_DMA) && defined(CONFIG_DMA_NEED_SYNC)
+	__dma_sync_single_for_device(eth->dev, dma, ZX279133_IDM_RX_DMA_SIZE,
+				    DMA_BIDIRECTIONAL);
+#else
+	dma_sync_single_for_device(eth->dev, dma, ZX279133_IDM_RX_DMA_SIZE,
+				   DMA_BIDIRECTIONAL);
+#endif
+}
+
 static int __zx279133_idm_rx_post_page(struct zx279133_eth *eth,
 				       struct page *page)
 {
@@ -183,6 +200,7 @@ static int __zx279133_idm_rx_post_page(struct zx279133_eth *eth,
 	ret = zx279133_idm_rx_track_page(eth, page);
 	if (ret)
 		return ret;
+	zx279133_idm_rx_sync_for_device(eth, dma);
 	WRITE_ONCE(eth->rx_normal_bp[eth->rx_bp_prod],
 		   cpu_to_be32(lower_32_bits(dma)));
 	eth->rx_bp_prod = (eth->rx_bp_prod + 1) &
@@ -199,6 +217,7 @@ static int __zx279133_idm_rx_post_xsk(struct zx279133_eth *eth,
 	ret = zx279133_idm_rx_track_xsk(eth, xdp);
 	if (ret)
 		return ret;
+	zx279133_idm_rx_sync_for_device(eth, dma);
 	WRITE_ONCE(eth->rx_normal_bp[eth->rx_bp_prod],
 		   cpu_to_be32(lower_32_bits(dma)));
 	eth->rx_bp_prod = (eth->rx_bp_prod + 1) &
@@ -262,14 +281,18 @@ static unsigned int zx279133_idm_rx_flush_refill(struct zx279133_eth *eth)
 	return count;
 }
 
-static void
-zx279133_idm_rx_sync_xsk_for_device(struct zx279133_eth *eth, struct xdp_buff *xdp)
+static void zx279133_idm_rx_sync_xsk_for_cpu(struct zx279133_eth *eth,
+					  struct xdp_buff *xdp,
+					  unsigned int len)
 {
-	struct xsk_buff_pool *pool = eth->xsk_pool;
-	dma_addr_t dma = xsk_buff_xdp_get_dma(xdp);
-	u32 size = xsk_pool_get_rx_frame_size(pool);
-
-	xsk_buff_raw_dma_sync_for_device(pool, dma, size);
+#if defined(CONFIG_HAS_DMA) && defined(CONFIG_DMA_NEED_SYNC)
+	__dma_sync_single_for_cpu(eth->dev,
+				xsk_buff_xdp_get_dma(xdp) +
+				ZX279133_IDM_RX_FRAME_OFFSET,
+				len, DMA_BIDIRECTIONAL);
+#else
+	xsk_buff_dma_sync_for_cpu(xdp);
+#endif
 }
 
 static bool
@@ -389,17 +412,6 @@ static bool zx279133_idm_rx_is_jack(u32 word1)
 	return ((word1 >> 16) & 0x3f) == ZX279133_9132_OUTERPHY_PPU;
 }
 
-/* Whether word 1 names the port of a frame the PPU parsed for this side. */
-static bool zx279133_idm_rx_parsed(u32 word1, bool lan_source)
-{
-	u16 port = (word1 >> 16) & 0x3f;
-
-	if (lan_source)
-		return port == ZX279133_LAN_TX_PORT ||
-		       zx279133_idm_rx_lan_vport(word1);
-	return port == zx279133_tx_port;
-}
-
 /*
  * Whether the frame still carries an Ethernet type field.
  *
@@ -435,6 +447,7 @@ static u16 zx279133_idm_rx_restore_lan_l2(struct sk_buff *skb, u32 metadata0)
 	} else if ((l3_prefix & 0xf000) == 0x6000) {
 		protocol = ETH_P_IPV6;
 	} else if (l3_prefix == ARPHRD_ETHER &&
+		   skb->len >= 2 * ETH_ALEN + 4 &&
 		   get_unaligned_be16(skb->data + 2 * ETH_ALEN) == ETH_P_IP &&
 		   skb->data[2 * ETH_ALEN + 2] == ETH_ALEN &&
 		   skb->data[2 * ETH_ALEN + 3] == 4) {
@@ -482,22 +495,24 @@ static bool zx279133_idm_rx_preserve_dsa_vlan(struct vlan_ethhdr *vhdr)
 	return true;
 }
 
-static void zx279133_idm_rx_sync_for_device(struct zx279133_eth *eth,
-					    struct page *page, u16 len)
+static bool zx279133_idm_xdp_pass_valid(struct xdp_buff *xdp, bool xsk)
 {
-	dma_addr_t dma = page_pool_get_dma_addr(page);
+	unsigned long start = (unsigned long)xdp->data_hard_start;
+	unsigned long data = (unsigned long)xdp->data;
+	unsigned long end = (unsigned long)xdp->data_end;
+	unsigned long hard_end = xsk ? start + xdp->frame_sz :
+				(unsigned long)xdp_data_hard_end(xdp);
 
-	dma_sync_single_range_for_device(eth->dev, dma,
-					 ZX279133_IDM_RX_PAYLOAD_OFFSET +
-					 ZX279133_IDM_RX_FRAME_OFFSET, len,
-					 DMA_BIDIRECTIONAL);
+	/* XSK PASS copies into a new skb; page-pool PASS builds an skb in the
+	 * page and must leave its shared-info tailroom untouched.
+	 */
+	return !xdp_buff_has_frags(xdp) && data >= start && end >= data &&
+	       end <= hard_end && end - data >= ETH_HLEN;
 }
 
-/* XMAC IPC rejects checksum errors before IDM. Its protocol metadata alone
- * does not report checksum validity. Trust only the tested unfragmented
- * TCP/UDP formats; tunnels, extension headers and XDP-modified packets keep
- * software validation. The MAC error filter remains enabled when RXCSUM is
- * off, which disables only the stack's use of this validation result.
+/* Recognize transport layouts whose hardware hash can describe the skb.
+ * A parsed TCP/UDP header does not prove that its checksum is valid.
+ * Tunnels, extension headers and XDP-modified packets keep software hashing.
  */
 static bool zx279133_idm_rx_l4_valid(struct sk_buff *skb)
 {
@@ -698,24 +713,10 @@ static void zx279133_idm_find_broadcast(struct zx279133_eth *eth)
 /*
  * Give a received frame back to the CPU.
  *
- * The frame is at page + ZX279133_IDM_RX_PAYLOAD_OFFSET +
- * ZX279133_IDM_RX_FRAME_OFFSET: the buffer the driver handed the
- * hardware starts at page + ZX279133_IDM_RX_PAYLOAD_OFFSET
- * (__zx279133_idm_rx_post_page() hands out page_pool_get_dma_addr(page) +
- * PAYLOAD_OFFSET), and the frame follows the switch engine's own area
- * inside it.
- *
- * The low-level call is used rather than the page pool's helper, for two
- * reasons.
- *
- * The helper adds the pool's own offset to the offset it is handed: the
- * pool was created with .offset = ZX279133_IDM_RX_PAYLOAD_OFFSET, and it
- * invalidates [dma + offset + pool->p.offset, +len).  The offset to pass
- * is therefore *zero*.  Passing PAYLOAD_OFFSET invalidates the 256 bytes
- * *after* the frame, where there is nothing, and the frame stays in the
- * CPU's cache with whatever was there before - the initramfs' text, the
- * bridge's port bitmap, zeros.  That is what the board was reading all
- * along.
+ * Hardware starts at PAYLOAD_OFFSET and leaves FRAME_OFFSET bytes before
+ * the Ethernet frame. The page-pool helper already adds its configured
+ * PAYLOAD_OFFSET, so its additional offset is FRAME_OFFSET, not the full
+ * DATA_OFFSET.
  *
  * And the helper asks the device whether it has to be given back at all
  * (dma_dev_need_sync()), which the platform decides from the device tree.
@@ -723,14 +724,13 @@ static void zx279133_idm_find_broadcast(struct zx279133_eth *eth)
  * so the call that does not consult that flag is the one to make.
  */
 static void zx279133_idm_give_frame_back(struct zx279133_eth *eth,
-					 struct page *page, u16 len)
+					 struct page *page, unsigned int len)
 {
 #if defined(CONFIG_HAS_DMA) && defined(CONFIG_DMA_NEED_SYNC)
 	__dma_sync_single_for_cpu(eth->dev,
 				   page_pool_get_dma_addr(page) +
-				   ZX279133_IDM_RX_PAYLOAD_OFFSET +
-				   ZX279133_IDM_RX_FRAME_OFFSET,
-				   len, DMA_FROM_DEVICE);
+				   ZX279133_IDM_RX_DATA_OFFSET,
+				   len, DMA_BIDIRECTIONAL);
 #else
 	page_pool_dma_sync_for_cpu(zx279133_rx_page_pool(page), page,
 				   ZX279133_IDM_RX_FRAME_OFFSET, len);
@@ -762,7 +762,7 @@ static int zx279133_idm_rx_process_queue(struct zx279133_eth *eth,
 		unsigned int i;
 		u16 desc_index = eth->rx_cons[queue];
 		u16 refill_before = refill;
-		u16 len;
+		unsigned int len;
 		bool lan_source;
 		bool jack_source = false;
 		bool valid_dma;
@@ -853,8 +853,10 @@ static int zx279133_idm_rx_process_queue(struct zx279133_eth *eth,
 				u64_stats_inc(&stats->rx_page_alloc_failures);
 			}
 
-			xsk_buff_set_size(xdp, len);
-			xsk_buff_dma_sync_for_cpu(xdp);
+			xsk_buff_set_size(xdp, ZX279133_IDM_RX_FRAME_OFFSET + len);
+			xdp->data += ZX279133_IDM_RX_FRAME_OFFSET;
+			xdp->data_meta = xdp->data;
+			zx279133_idm_rx_sync_xsk_for_cpu(eth, xdp, len);
 			data = xdp->data;
 			if (!lan_source)
 				xdp_prog = rcu_dereference_bh(eth->xdp_prog);
@@ -867,6 +869,12 @@ static int zx279133_idm_rx_process_queue(struct zx279133_eth *eth,
 			case XDP_PASS:
 				if (xdp_prog)
 					u64_stats_inc(&stats->xdp_pass);
+				if (unlikely(!zx279133_idm_xdp_pass_valid(xdp, true))) {
+					zx279133_stats_rx_error(eth, ndev);
+					zx279133_stats_rx_length_error(eth, ndev);
+					zx279133_stats_rx_dropped(eth, ndev);
+					goto xsk_recycle;
+				}
 				data = xdp->data;
 				len = xdp->data_end - xdp->data;
 				break;
@@ -915,7 +923,6 @@ xsk_recycle:
 			if (replacement_xsk) {
 				xsk_buff_free(xdp);
 			} else {
-				zx279133_idm_rx_sync_xsk_for_device(eth, xdp);
 				if (zx279133_idm_rx_post_xsk(eth, xdp)) {
 					u64_stats_inc(&stats->rx_refill_post_failures);
 					xsk_buff_free(xdp);
@@ -956,8 +963,7 @@ xsk_recycle:
 		 */
 		zx279133_idm_give_frame_back(eth, page, len);
 		zx279133_idm_rx_prefetch_payload(page);
-		data = page_address(page) + ZX279133_IDM_RX_PAYLOAD_OFFSET +
-			ZX279133_IDM_RX_FRAME_OFFSET;
+		data = page_address(page) + ZX279133_IDM_RX_DATA_OFFSET;
 
 		/*
 		 * The frame's bytes, on request.
@@ -1036,7 +1042,8 @@ xsk_recycle:
 			zx279133_idm_dump_frame("frame", data, len);
 			__dma_sync_single_for_cpu(eth->dev,
 						 page_pool_get_dma_addr(page),
-						 PAGE_SIZE, DMA_FROM_DEVICE);
+						 ZX279133_RX_PAGE_SIZE,
+						 DMA_BIDIRECTIONAL);
 			zx279133_idm_dump_frame("raw", data, len);
 			/*
 			 * Where the frame is.  The bytes the driver reads
@@ -1053,8 +1060,9 @@ xsk_recycle:
 			 * this architecture is Normal non-cacheable memory,
 			 * so it is read as it is; there is nothing to sync.
 			 */
-			page_pool_dma_sync_for_cpu(zx279133_rx_page_pool(page),
-						   page, 0, PAGE_SIZE);
+			/* The raw dump already synchronized from the mapping base.
+			 * A page-pool offset plus PAGE_SIZE would exceed this page.
+			 */
 			zx279133_idm_dump_nonzero("page", page_address(page),
 						  ZX279133_RX_PAGE_SIZE);
 			/* The frames the switch's engine wrote: the test PC
@@ -1076,14 +1084,19 @@ xsk_recycle:
 				xdp_init_buff(&xdp, ZX279133_RX_PAGE_SIZE,
 					      &eth->xdp_rxq[(queue & 7) >> 2]);
 				xdp_prepare_buff(&xdp, page_address(page),
-						 ZX279133_IDM_RX_PAYLOAD_OFFSET +
-						 ZX279133_IDM_RX_FRAME_OFFSET,
+						 ZX279133_IDM_RX_DATA_OFFSET,
 						 len, false);
 				xdp_ran = true;
 				act = bpf_prog_run_xdp(xdp_prog, &xdp);
 				switch (act) {
 				case XDP_PASS:
 					u64_stats_inc(&stats->xdp_pass);
+					if (unlikely(!zx279133_idm_xdp_pass_valid(&xdp, false))) {
+						zx279133_stats_rx_error(eth, ndev);
+						zx279133_stats_rx_length_error(eth, ndev);
+						zx279133_stats_rx_dropped(eth, ndev);
+						goto xdp_recycle;
+					}
 					data = xdp.data;
 					len = xdp.data_end - xdp.data;
 					break;
@@ -1152,7 +1165,6 @@ xsk_recycle:
 				u64_stats_inc(&stats->rx_skb_alloc_failures);
 				zx279133_stats_rx_dropped(eth, ndev);
 			}
-			zx279133_idm_rx_sync_for_device(eth, page, len);
 			if (zx279133_idm_rx_post_page(eth, page)) {
 				u64_stats_inc(&stats->rx_refill_post_failures);
 				zx279133_rx_recycle_page(page);
@@ -1168,6 +1180,16 @@ deliver_skb:
 			struct dsa_port *cpu_dp = NULL;
 			struct sk_buff *tagged = NULL;
 			bool lan_dsa_active;
+
+			if (unlikely(!pskb_may_pull(skb, ETH_HLEN))) {
+				zx279133_stats_rx_dropped(eth, ndev);
+				zx279133_stats_rx_error(eth, ndev);
+				zx279133_stats_rx_length_error(eth, ndev);
+				dev_kfree_skb_any(skb);
+				goto release_desc;
+			}
+			/* No descriptor field proves checksum validity on every ingress. */
+			skb->ip_summed = CHECKSUM_NONE;
 
 			lan_dsa_active = READ_ONCE(eth->lan_dsa_active);
 			/* Factory CPU RX queues 0..7 belong to the external switch;
@@ -1253,12 +1275,6 @@ deliver_skb:
 				if (!dsa_header)
 					cpu_dp = eth->lan_ndev->dsa_ptr;
 			}
-			if (!xdp_ran && (rx_ndev->features & NETIF_F_RXCSUM) &&
-			    zx279133_idm_rx_parsed(word1, lan_source) &&
-			    zx279133_idm_rx_l4_valid(skb)) {
-				skb->ip_summed = CHECKSUM_UNNECESSARY;
-				u64_stats_inc(&stats->rx_hw_csum_packets);
-			}
 			/* The terminal PPU program marks only parsed transport tuples.
 			 * XDP may have changed that tuple before XDP_PASS delivery.
 			 */
@@ -1272,6 +1288,9 @@ deliver_skb:
 			}
 			skb_record_rx_queue(skb, eth->xsk_pool ? 0 : (queue & 7) >> 2);
 			if (cpu_dp && cpu_dp->rcv) {
+				struct net_device *user_ndev;
+				unsigned int user_len;
+
 				tagged = cpu_dp->rcv(skb, eth->lan_ndev);
 				if (!tagged || !tagged->dev) {
 					/* The tagger does not free what it
@@ -1283,6 +1302,10 @@ deliver_skb:
 					dev_kfree_skb_any(tagged ? tagged : skb);
 					goto release_desc;
 				}
+				user_ndev = tagged->dev;
+				user_len = tagged->len;
+				/* This path bypasses the DSA core's user-port accounting. */
+				dev_sw_netstats_rx_add(user_ndev, user_len);
 				/*
 				 * eth_type_trans() answers ETH_P_XDSA when
 				 * the device it is handed is a DSA
@@ -1298,8 +1321,8 @@ deliver_skb:
 				 * be done once.
 				 */
 				tagged->protocol = eth_type_trans(tagged,
-								  tagged->dev);
-				netif_receive_skb(tagged);
+								  user_ndev);
+				napi_gro_receive(napi, tagged);
 			} else {
 				skb->protocol = eth_type_trans(skb, rx_ndev);
 				napi_gro_receive(napi, skb);
@@ -1313,7 +1336,6 @@ xdp_recycle:
 			zx279133_rx_recycle_page(page);
 			goto release_desc;
 		}
-		zx279133_idm_rx_sync_for_device(eth, page, len);
 
 reuse_buffer:
 		if (buffer.xsk) {
@@ -1686,7 +1708,9 @@ void zx279133_idm_tx_flush_queue_locked(struct zx279133_eth *eth,
 	struct zx279133_tx_ring *tx = &eth->tx[queue];
 	u32 count = tx->notify_pending;
 
-	if (!count)
+	if (!count || !READ_ONCE(eth->tx_prepared) ||
+	    !READ_ONCE(eth->hardware_prepared) ||
+	    test_bit(queue, &eth->tx_fault_queues))
 		return;
 	/* Vendor idm_cpu_nb_tx_update() requires DSB ST before publication. */
 	wmb();
@@ -1712,20 +1736,30 @@ unsigned int zx279133_idm_tx_reclaim_queue_locked(struct zx279133_eth *eth,
 {
 	struct zx279133_tx_ring *tx = &eth->tx[queue];
 	u32 done_reg = zx279133_idm_tx_done_reg(ZX279133_IDM_CPU_TX_FIRST + queue);
-	u16 done = readl(eth->base + ZX279133_IDM_BASE + done_reg) & 0xffff;
-	u16 completed = done - tx->done;
+	u16 done, completed;
 	u16 reclaimed;
 	u32 bytes[2] = {};
 	u16 packets[2] = {};
 	u16 xsk_completed = 0;
 
+	if (!READ_ONCE(eth->tx_prepared) ||
+	    !READ_ONCE(eth->hardware_prepared) ||
+	    test_bit(queue, &eth->tx_fault_queues))
+		return 0;
+
+	done = readl(eth->base + ZX279133_IDM_BASE + done_reg) & 0xffff;
+	completed = done - tx->done;
 	eth->tx_reclaim_polls++;
 	if (completed > tx->pending) {
 		if (net_ratelimit())
 			netdev_warn(eth->ndev,
 				    "TX queue %u: invalid completion delta %u (pending %u)\n",
 				    queue, completed, tx->pending);
-		completed = tx->pending;
+		/* An untrusted counter cannot prove DMA ownership has returned.
+		 * Keep mappings and the old baseline until hardware is stopped.
+		 */
+		zx279133_tx_recovery_request_locked(eth, queue, true);
+		return 0;
 	}
 	tx->done = done;
 	reclaimed = completed;
@@ -1775,7 +1809,7 @@ unsigned int zx279133_idm_tx_reclaim_queue_locked(struct zx279133_eth *eth,
 	if (xsk_completed)
 		xsk_tx_completed(eth->xsk_pool, xsk_completed);
 
-	if (!READ_ONCE(eth->tx_stopping) &&
+	if (!READ_ONCE(eth->tx_stopping) && !eth->tx_fault_queues &&
 	    tx->pending < ZX279133_IDM_TX_DEPTH - 1) {
 		if (__netif_subqueue_stopped(eth->ndev, queue))
 			netif_wake_subqueue(eth->ndev, queue);
@@ -1831,8 +1865,16 @@ bool zx279133_idm_tx_drain(struct zx279133_eth *eth)
 
 	do {
 		spin_lock_bh(&eth->tx_lock);
+		if (eth->tx_fault_queues) {
+			spin_unlock_bh(&eth->tx_lock);
+			return false;
+		}
 		zx279133_idm_tx_flush_locked(eth);
 		zx279133_idm_tx_reclaim_locked(eth);
+		if (eth->tx_fault_queues) {
+			spin_unlock_bh(&eth->tx_lock);
+			return false;
+		}
 		zx279133_omci_reclaim(eth);
 		if (!zx279133_idm_tx_pending(eth) && !eth->omci_pending) {
 			spin_unlock_bh(&eth->tx_lock);

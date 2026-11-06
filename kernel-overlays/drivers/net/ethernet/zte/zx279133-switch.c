@@ -940,6 +940,8 @@ static void zx279133_switch_lane_watch(struct work_struct *work)
 	if (priv->lane_start &&
 	    jiffies - priv->lane_start < msecs_to_jiffies(30000))
 		period = 20;
+	if (!zx279133_lan_service_control_begin(priv->service))
+		goto schedule_only;
 
 	/*
 	 * The far end's own word, every two seconds.
@@ -1095,6 +1097,8 @@ rearm:
 		zx279133_switch_lane_state(priv);
 	}
 
+	zx279133_lan_service_control_end(priv->service);
+schedule_only:
 	schedule_delayed_work(&priv->lane_work, msecs_to_jiffies(period));
 }
 
@@ -1943,6 +1947,9 @@ static void zx279133_switch_release(void *data)
 {
 	struct zx279133_switch *priv = data;
 
+	/* The release action runs before the older watcher cleanup action. */
+	cancel_delayed_work_sync(&priv->lane_work);
+
 	/*
 	 * The mirror image of the probe: the NPPT must stop handing frames to
 	 * the conduit before the conduit stops being openable, and the
@@ -1955,8 +1962,11 @@ static void zx279133_switch_release(void *data)
 		priv->datapath_ready = false;
 	}
 
-	zx279133_switch_xmac_restore(priv);
-	zx279133_switch_xpcs_restore(priv);
+	if (zx279133_lan_service_control_begin(priv->service)) {
+		zx279133_switch_xmac_restore(priv);
+		zx279133_switch_xpcs_restore(priv);
+		zx279133_lan_service_control_end(priv->service);
+	}
 	if (priv->serdes_powered) {
 		phy_power_off(priv->serdes);
 		priv->serdes_powered = false;
@@ -3975,6 +3985,10 @@ static int zx279133_switch_probe(struct platform_device *pdev)
 		return dev_err_probe(dev, ret,
 				     "failed to acquire shared NPPT/IDM datapath\n");
 	priv->datapath_held = true;
+	if (!zx279133_lan_service_control_begin(priv->service)) {
+		ret = -ENETDOWN;
+		goto err_datapath_put;
+	}
 
 	/*
 	 * The four internal-PHY MACs first.  They are the front end of every
@@ -3992,6 +4006,7 @@ static int zx279133_switch_probe(struct platform_device *pdev)
 	 * this driver is measured against.
 	 */
 	zx279133_switch_lane_snapshot(priv, "pre-serdes");
+	zx279133_lan_service_control_end(priv->service);
 
 	/*
 	 * Take the Uni SerDes handle before choosing the rate. The image is
@@ -4032,6 +4047,9 @@ static int zx279133_switch_probe(struct platform_device *pdev)
 	ret = devm_add_action_or_reset(dev, zx279133_switch_release, priv);
 	if (ret)
 		return ret;
+	if (!zx279133_lan_service_control_begin(priv->service))
+		return dev_err_probe(dev, -ENETDOWN,
+				     "shared datapath is unavailable for LAN configuration\n");
 
 	/*
 	 * Follow the RTL8226 system side. 1e:7580 low 6 bits are 0x16 for
@@ -4101,6 +4119,7 @@ static int zx279133_switch_probe(struct platform_device *pdev)
 	 * and nothing has programmed the lane since this probe.  The watcher
 	 * programs the current rate again when it finds the block empty.
 	 */
+	zx279133_lan_service_control_end(priv->service);
 	if (!priv->usxgmii) {
 		/*
 		 * The watch's fast window starts here, so that the thirty

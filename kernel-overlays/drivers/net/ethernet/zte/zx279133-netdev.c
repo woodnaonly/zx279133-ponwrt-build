@@ -18,6 +18,7 @@
 #include <linux/tcp.h>
 
 #include <net/page_pool/helpers.h>
+#include <net/ip.h>
 #include <net/xdp.h>
 #include <net/xdp_sock_drv.h>
 
@@ -33,14 +34,126 @@ u16 zx279133_tx_port = 4;
 module_param(zx279133_tx_port, ushort, 0644);
 MODULE_PARM_DESC(zx279133_tx_port, "IDM TX output port for frames sent on the NPPT device, and the port an RX frame must name to be counted there");
 
+static void zx279133_tx_recovery_work(struct work_struct *work);
+static int zx279133_datapath_restore_failed_locked(struct zx279133_eth *eth);
+
+void zx279133_tx_recovery_init(struct zx279133_eth *eth)
+{
+	INIT_DELAYED_WORK(&eth->tx_recovery_work, zx279133_tx_recovery_work);
+	mutex_init(&eth->lan_control_lock);
+	mutex_init(&eth->lan_mmio_lock);
+	eth->lan_mmio_enabled = false;
+	eth->tx_stopping = true;
+}
+
+void zx279133_tx_recovery_cancel(void *data)
+{
+	struct zx279133_eth *eth = data;
+
+	spin_lock_bh(&eth->tx_lock);
+	eth->tx_recovery_disabled = true;
+	eth->tx_recovery_queues = 0;
+	spin_unlock_bh(&eth->tx_lock);
+	/* Synchronous cancellation is reserved for devm cleanup and shutdown,
+	 * outside datapath_lock. ndo_stop must not cancel this work under RTNL.
+	 */
+	cancel_delayed_work_sync(&eth->tx_recovery_work);
+}
+
+static void zx279133_tx_recovery_queue_locked(struct zx279133_eth *eth,
+					     unsigned long queues)
+{
+	unsigned int i;
+
+	if (!queues)
+		return;
+	if (!eth->tx_recovery_queues) {
+		eth->tx_recovery_requests++;
+		eth->tx_recovery_epoch = eth->tx_epoch;
+	}
+	for (i = 0; i < ZX279133_CPU_TX_QUEUES; i++)
+		if ((queues & BIT(i)) && !(eth->tx_recovery_queues & BIT(i)))
+			eth->tx_recovery_done[i] = eth->tx[i].done;
+	eth->tx_recovery_queues |= queues;
+	mod_delayed_work(system_wq, &eth->tx_recovery_work, 0);
+}
+
+/* Caller holds tx_lock. A fault quarantines both logical TX devices. */
+void zx279133_tx_recovery_request_locked(struct zx279133_eth *eth,
+					 unsigned int queue,
+					 bool invalid_completion)
+{
+	bool stopping = READ_ONCE(eth->tx_stopping);
+	unsigned int i;
+
+	if (queue >= ZX279133_CPU_TX_QUEUES)
+		return;
+	if (invalid_completion) {
+		if (!(eth->tx_fault_queues & BIT(queue)))
+			eth->tx_invalid_completions++;
+		eth->tx_fault_queues |= BIT(queue);
+		WRITE_ONCE(eth->tx_stopping, true);
+		netif_tx_stop_all_queues(eth->ndev);
+		if (eth->lan_ndev)
+			netif_tx_stop_all_queues(eth->lan_ndev);
+	}
+	/* An invalid completion observed by drain belongs to that teardown. */
+	if (stopping || eth->tx_recovery_disabled || eth->tx_recovery_active ||
+	    !eth->tx_prepared || !READ_ONCE(eth->hardware_prepared) ||
+	    READ_ONCE(eth->datapath_failed))
+		return;
+	/* A restart is rearmed only by genuine, successfully reclaimed TX. */
+	if (eth->tx_recovery_attempted)
+		for (i = 0; i < ZX279133_CPU_TX_QUEUES; i++)
+			if (eth->tx[i].completed != eth->tx_recovery_baseline[i]) {
+				eth->tx_recovery_attempted = false;
+				break;
+			}
+	zx279133_tx_recovery_queue_locked(eth, BIT(queue));
+}
+
+/* No LAN control transaction may acquire datapath_lock. */
+static void zx279133_lan_mmio_set(struct zx279133_eth *eth, bool enabled)
+{
+	mutex_lock(&eth->lan_control_lock);
+	mutex_lock(&eth->lan_mmio_lock);
+	eth->lan_mmio_enabled = enabled;
+	mutex_unlock(&eth->lan_mmio_lock);
+	mutex_unlock(&eth->lan_control_lock);
+}
+
+static void zx279133_wan_phylink_start(struct zx279133_eth *eth)
+{
+	if (!eth->wan_phylink_started) {
+		phylink_start(eth->phylink);
+		eth->wan_phylink_started = true;
+	}
+}
+
+static void zx279133_wan_phylink_stop(struct zx279133_eth *eth)
+{
+	if (eth->wan_phylink_started) {
+		phylink_stop(eth->phylink);
+		eth->wan_phylink_started = false;
+	}
+}
+
+/* Caller holds tx_lock; the fault bit also covers the other logical device. */
+static bool zx279133_tx_available_locked(struct zx279133_eth *eth)
+{
+	return eth->tx_prepared && READ_ONCE(eth->hardware_prepared) &&
+		!READ_ONCE(eth->tx_stopping) && !eth->tx_fault_queues &&
+		!eth->tx_recovery_disabled && !READ_ONCE(eth->datapath_failed);
+}
+
 static int zx279133_shared_idm_prepare(struct zx279133_eth *eth)
 {
+	unsigned int i;
 	int ret;
 
 	ret = zx279133_idm_tx_prepare(eth);
 	if (ret)
 		return ret;
-	eth->tx_stopping = false;
 
 	ret = zx279133_idm_rx_prepare(eth);
 	if (ret) {
@@ -53,12 +166,23 @@ static int zx279133_shared_idm_prepare(struct zx279133_eth *eth)
 	napi_enable(&eth->lan_napi);
 	napi_enable(&eth->napi);
 	WRITE_ONCE(eth->napi_enabled, true);
+	spin_lock_bh(&eth->tx_lock);
+	eth->tx_epoch++;
+	eth->tx_recovery_queues = 0;
+	eth->tx_fault_queues = 0;
+	for (i = 0; i < ZX279133_CPU_TX_QUEUES; i++)
+		eth->tx_recovery_baseline[i] = eth->tx[i].completed;
+	WRITE_ONCE(eth->tx_stopping, false);
+	spin_unlock_bh(&eth->tx_lock);
 
 	return 0;
 }
 
 static void zx279133_shared_idm_abort(struct zx279133_eth *eth)
 {
+	spin_lock_bh(&eth->tx_lock);
+	WRITE_ONCE(eth->tx_stopping, true);
+	spin_unlock_bh(&eth->tx_lock);
 	napi_disable(&eth->lan_napi);
 	napi_disable(&eth->napi);
 	WRITE_ONCE(eth->napi_enabled, false);
@@ -123,7 +247,9 @@ static bool zx279133_shared_tx_pause(struct zx279133_eth *eth)
 	/* Publish the quiesce state before stopping either logical queue so TX
 	 * completion reclaim cannot wake one between the two disable calls.
 	 */
+	spin_lock_bh(&eth->tx_lock);
 	WRITE_ONCE(eth->tx_stopping, true);
+	spin_unlock_bh(&eth->tx_lock);
 	/* XDP and XSK producers test tx_stopping before taking tx_lock from
 	 * softirq context; wait for any that passed the test to finish.
 	 */
@@ -141,10 +267,22 @@ static void zx279133_shared_tx_resume(struct zx279133_eth *eth)
 {
 	bool rearm;
 
-	WRITE_ONCE(eth->tx_stopping, false);
 	spin_lock_bh(&eth->tx_lock);
+	if (eth->tx_fault_queues || eth->tx_recovery_disabled ||
+	    READ_ONCE(eth->datapath_failed) || !eth->tx_prepared ||
+	    !READ_ONCE(eth->hardware_prepared)) {
+		/* A partial logical stop may discover a fault while draining.
+		 * Its teardown is complete now; the remaining user needs recovery.
+		 */
+		if (eth->tx_fault_queues && !eth->tx_recovery_disabled &&
+		    !eth->tx_recovery_active && !eth->datapath_failed &&
+		    eth->tx_prepared && eth->hardware_prepared)
+			zx279133_tx_recovery_queue_locked(eth, eth->tx_fault_queues);
+		spin_unlock_bh(&eth->tx_lock);
+		return;
+	}
+	WRITE_ONCE(eth->tx_stopping, false);
 	rearm = zx279133_idm_tx_pending(eth);
-	spin_unlock_bh(&eth->tx_lock);
 	if (rearm)
 		mod_delayed_work(system_wq, &eth->tx_reclaim_work,
 				 msecs_to_jiffies(ZX279133_TX_RECLAIM_DELAY_MS));
@@ -155,12 +293,16 @@ static void zx279133_shared_tx_resume(struct zx279133_eth *eth)
 	    eth->lan_datapath_ready && eth->lan_ndev &&
 	    netif_running(eth->lan_ndev))
 		netif_tx_wake_all_queues(eth->lan_ndev);
+	spin_unlock_bh(&eth->tx_lock);
 }
 
 static void zx279133_shared_idm_release(struct zx279133_eth *eth,
 					struct net_device *ndev,
 					bool tx_quiesced)
 {
+	if (!ndev)
+		ndev = eth->ndev;
+	zx279133_lan_mmio_set(eth, false);
 	if (!tx_quiesced) {
 		netdev_warn(ndev,
 			    "TX did not quiesce; shutting down hardware before release\n");
@@ -179,6 +321,21 @@ static void zx279133_shared_idm_release(struct zx279133_eth *eth,
 	zx279133_idm_rx_release(eth);
 }
 
+/* Caller holds datapath_lock; never attach a quarantined ring. */
+static void zx279133_datapath_attach(struct zx279133_eth *eth)
+{
+	spin_lock_bh(&eth->tx_lock);
+	if (zx279133_tx_available_locked(eth)) {
+		netif_device_attach(eth->ndev);
+		if (eth->lan_ndev) {
+			netif_device_attach(eth->lan_ndev);
+			if (eth->lan_datapath_ready && netif_running(eth->lan_ndev))
+				netif_carrier_on(eth->lan_ndev);
+		}
+	}
+	spin_unlock_bh(&eth->tx_lock);
+}
+
 static int zx279133_open(struct net_device *ndev)
 {
 	struct zx279133_eth *eth = netdev_priv(ndev);
@@ -191,6 +348,11 @@ static int zx279133_open(struct net_device *ndev)
 		goto out_unlock;
 	}
 	first_user = !eth->datapath_users;
+	if (!first_user) {
+		ret = zx279133_datapath_restore_failed_locked(eth);
+		if (ret)
+			goto out_unlock;
+	}
 
 	if (first_user) {
 		ret = zx279133_hardware_prepare(eth);
@@ -215,11 +377,20 @@ static int zx279133_open(struct net_device *ndev)
 	if (ret)
 		goto err_idm_abort;
 
-	phylink_start(eth->phylink);
+	zx279133_wan_phylink_start(eth);
 	if (first_user)
 		zx279133_shared_rx_start(eth);
 	eth->datapath_users |= ZX279133_DATAPATH_USER_WAN;
-	netif_tx_start_all_queues(ndev);
+	WRITE_ONCE(eth->datapath_failed, false);
+	spin_lock_bh(&eth->tx_lock);
+	eth->tx_recovery_attempted = false;
+	spin_unlock_bh(&eth->tx_lock);
+	zx279133_lan_mmio_set(eth, true);
+	zx279133_datapath_attach(eth);
+	spin_lock_bh(&eth->tx_lock);
+	if (zx279133_tx_available_locked(eth))
+		netif_tx_start_all_queues(ndev);
+	spin_unlock_bh(&eth->tx_lock);
 	mutex_unlock(&eth->datapath_lock);
 
 	return 0;
@@ -260,6 +431,8 @@ static void zx279133_xmac_close(struct zx279133_eth *eth, u32 base, u32 ctrl)
 void zx279133_shutdown(struct zx279133_eth *eth)
 {
 	mutex_lock(&eth->datapath_lock);
+	zx279133_lan_mmio_set(eth, false);
+	zx279133_wan_phylink_stop(eth);
 	if (eth->hardware_prepared) {
 		mutex_lock(&eth->xmac_lock);
 		zx279133_xmac_close(eth, ZX279133_XMAC0_BASE,
@@ -288,53 +461,87 @@ static int zx279133_stop(struct net_device *ndev)
 	bool tx_quiesced;
 
 	mutex_lock(&eth->datapath_lock);
+	if (!(eth->datapath_users & ZX279133_DATAPATH_USER_WAN))
+		goto out_unlock;
 	last_user = eth->datapath_users == ZX279133_DATAPATH_USER_WAN;
+	if (eth->datapath_failed || !eth->hardware_prepared) {
+		zx279133_wan_phylink_stop(eth);
+		phylink_disconnect_phy(eth->phylink);
+		eth->datapath_users &= ~ZX279133_DATAPATH_USER_WAN;
+		goto put_runtime;
+	}
 	if (last_user)
 		zx279133_shared_rx_stop(eth);
 	tx_quiesced = zx279133_shared_tx_pause(eth);
-	phylink_stop(eth->phylink);
+	zx279133_wan_phylink_stop(eth);
 	phylink_disconnect_phy(eth->phylink);
 	eth->datapath_users &= ~ZX279133_DATAPATH_USER_WAN;
 	if (last_user) {
 		zx279133_shared_idm_release(eth, ndev, tx_quiesced);
-		if (eth->xpcs_runtime_held) {
-			pm_runtime_put(eth->xpcs_mdiodev->bus->parent);
-			eth->xpcs_runtime_held = false;
-		}
 	} else {
 		if (!tx_quiesced)
 			netdev_warn(ndev,
 				    "shared TX did not quiesce while LAN remains active\n");
 		zx279133_shared_tx_resume(eth);
 	}
+put_runtime:
+	if (last_user && eth->xpcs_runtime_held) {
+		pm_runtime_put(eth->xpcs_mdiodev->bus->parent);
+		eth->xpcs_runtime_held = false;
+	}
+out_unlock:
 	mutex_unlock(&eth->datapath_lock);
 
 	return 0;
 }
 
-static bool zx279133_tx_csum_supported(struct sk_buff *skb)
+static enum zx279133_tx_csum_fallback
+zx279133_tx_csum_reason(struct sk_buff *skb)
 {
 	const struct iphdr *iph;
 	unsigned int network = skb_network_offset(skb);
 	unsigned int transport = skb_transport_offset(skb);
 
-	if (skb->protocol != htons(ETH_P_IP) || skb->encapsulation ||
-	    network > 63 || transport > 63 ||
-	    skb_checksum_start_offset(skb) != transport ||
-	    skb->csum_offset != offsetof(struct tcphdr, check) ||
-	    skb_csum_is_sctp(skb))
-		return false;
+	if (!zx279133_tx_hw_csum)
+		return ZX279133_TX_CSUM_DISABLED;
+	if (skb->len < ETH_ZLEN)
+		return ZX279133_TX_CSUM_SHORT;
+	if (skb->protocol != htons(ETH_P_IP))
+		return ZX279133_TX_CSUM_PROTOCOL;
+	if (skb->encapsulation)
+		return ZX279133_TX_CSUM_ENCAP;
+	if (network > 63 || transport > 63)
+		return ZX279133_TX_CSUM_RANGE;
+	if (transport < network + sizeof(struct iphdr))
+		return ZX279133_TX_CSUM_TRANSPORT;
+	if (skb_checksum_start_offset(skb) != transport)
+		return ZX279133_TX_CSUM_START;
+	if (skb->csum_offset != offsetof(struct tcphdr, check))
+		return ZX279133_TX_CSUM_OFFSET;
+	if (skb_csum_is_sctp(skb))
+		return ZX279133_TX_CSUM_SCTP;
 	if (!pskb_may_pull(skb, transport + sizeof(struct tcphdr)))
-		return false;
+		return ZX279133_TX_CSUM_PULL;
 	iph = ip_hdr(skb);
 	/* DSA may have padded a short frame before it reaches the conduit.
 	 * IDM must not include that Ethernet padding in its TCP checksum.
 	 */
-	return iph->version == 4 && iph->ihl >= 5 &&
-		skb->len - network == ntohs(iph->tot_len) &&
-		transport == network + iph->ihl * 4 &&
-		iph->protocol == IPPROTO_TCP;
+	if (iph->version != 4)
+		return ZX279133_TX_CSUM_VERSION;
+	if (iph->ihl < 5)
+		return ZX279133_TX_CSUM_IHL;
+	if (ip_is_fragment(iph))
+		return ZX279133_TX_CSUM_FRAGMENT;
+	if (skb->len - network != ntohs(iph->tot_len))
+		return ZX279133_TX_CSUM_LENGTH;
+	if (transport != network + iph->ihl * 4)
+		return ZX279133_TX_CSUM_TRANSPORT;
+	if (iph->protocol != IPPROTO_TCP)
+		return ZX279133_TX_CSUM_NOT_TCP;
+	return ZX279133_TX_CSUM_OK;
 }
+
+static int zx279133_lan_strip_transport_vlan(struct sk_buff *skb, u8 *out_port);
 
 static netdev_tx_t zx279133_start_xmit_common(struct sk_buff *skb,
 					      struct net_device *hw_ndev,
@@ -353,34 +560,58 @@ static netdev_tx_t zx279133_start_xmit_common(struct sk_buff *skb,
 	bool arm_reclaim;
 	bool hw_csum = false;
 	bool sw_csum = false;
+	enum zx279133_tx_csum_fallback csum_reason = ZX279133_TX_CSUM_OK;
 
 	spin_lock_bh(&eth->tx_lock);
+	if (unlikely(!zx279133_tx_available_locked(eth))) {
+		netif_stop_subqueue(ndev, queue);
+		spin_unlock_bh(&eth->tx_lock);
+		return NETDEV_TX_BUSY;
+	}
 	if (unlikely(tx->pending >= ZX279133_IDM_TX_DEPTH - 1))
 		zx279133_idm_tx_reclaim_queue_locked(eth, queue);
-	if (unlikely(tx->pending >= ZX279133_IDM_TX_DEPTH - 1)) {
+	if (unlikely(!zx279133_tx_available_locked(eth) ||
+		     tx->pending >= ZX279133_IDM_TX_DEPTH - 1)) {
 		netif_stop_subqueue(ndev, queue);
 		txq_trans_update(ndev, txq);
-		zx279133_idm_tx_flush_queue_locked(eth, queue);
+		if (zx279133_tx_available_locked(eth))
+			zx279133_idm_tx_flush_queue_locked(eth, queue);
 		spin_unlock_bh(&eth->tx_lock);
 		return NETDEV_TX_BUSY;
 	}
 	spin_unlock_bh(&eth->tx_lock);
 
+	/* A NETDEV_TX_BUSY return must leave the transport tag intact: the
+	 * tag names the destination jack on a retry. Only mutate after the
+	 * initial ring-capacity check; later ring races consume/drop the skb.
+	 */
+	if (ndev != hw_ndev) {
+		int popped = zx279133_lan_strip_transport_vlan(skb, &lan_out_port);
+
+		if (popped < 0) {
+			atomic64_inc(&eth->tx_vlan_pop_errors);
+			goto drop;
+		}
+		if (popped)
+			atomic64_inc(&eth->tx_vlan_popped);
+	}
 	if (skb_linearize(skb))
 		goto drop;
 	if (skb->ip_summed == CHECKSUM_PARTIAL) {
-		hw_csum = zx279133_tx_hw_csum &&
-			skb->len >= ETH_ZLEN &&
-			zx279133_tx_csum_supported(skb);
+		csum_reason = zx279133_tx_csum_reason(skb);
+		hw_csum = csum_reason == ZX279133_TX_CSUM_OK;
 		if (!hw_csum) {
-			if (skb_checksum_help(skb))
+			if (skb_checksum_help(skb)) {
+				atomic64_inc(&eth->tx_csum_help_errors);
 				goto drop;
+			}
 			sw_csum = true;
 		}
 	}
 	if (skb_put_padto(skb, ETH_ZLEN)) {
 		spin_lock_bh(&eth->tx_lock);
-		zx279133_idm_tx_flush_queue_locked(eth, queue);
+		if (zx279133_tx_available_locked(eth))
+			zx279133_idm_tx_flush_queue_locked(eth, queue);
 		spin_unlock_bh(&eth->tx_lock);
 		zx279133_stats_tx_dropped(eth, ndev);
 		return NETDEV_TX_OK;
@@ -399,12 +630,15 @@ static netdev_tx_t zx279133_start_xmit_common(struct sk_buff *skb,
 		goto drop;
 
 	spin_lock_bh(&eth->tx_lock);
-	if (unlikely(tx->pending >= ZX279133_IDM_TX_DEPTH - 1))
+	if (zx279133_tx_available_locked(eth) &&
+	    unlikely(tx->pending >= ZX279133_IDM_TX_DEPTH - 1))
 		zx279133_idm_tx_reclaim_queue_locked(eth, queue);
-	if (unlikely(tx->pending >= ZX279133_IDM_TX_DEPTH - 1)) {
+	if (unlikely(!zx279133_tx_available_locked(eth) ||
+		     tx->pending >= ZX279133_IDM_TX_DEPTH - 1)) {
 		netif_stop_subqueue(ndev, queue);
 		txq_trans_update(ndev, txq);
-		zx279133_idm_tx_flush_queue_locked(eth, queue);
+		if (zx279133_tx_available_locked(eth))
+			zx279133_idm_tx_flush_queue_locked(eth, queue);
 		spin_unlock_bh(&eth->tx_lock);
 		dma_unmap_single(eth->dev, dma, skb->len, DMA_TO_DEVICE);
 		zx279133_stats_tx_dropped(eth, ndev);
@@ -442,8 +676,10 @@ static netdev_tx_t zx279133_start_xmit_common(struct sk_buff *skb,
 	slot->dma_mapped = true;
 	if (hw_csum)
 		eth->tx_hw_csum_packets++;
-	else if (sw_csum)
+	else if (sw_csum) {
 		eth->tx_sw_csum_packets++;
+		eth->tx_csum_fallback[csum_reason]++;
+	}
 	arm_reclaim = !tx->pending;
 	tx->producer = (tx->producer + 1) &
 				   (ZX279133_IDM_TX_DEPTH - 1);
@@ -465,7 +701,8 @@ static netdev_tx_t zx279133_start_xmit_common(struct sk_buff *skb,
 
 drop:
 	spin_lock_bh(&eth->tx_lock);
-	zx279133_idm_tx_flush_queue_locked(eth, queue);
+	if (zx279133_tx_available_locked(eth))
+		zx279133_idm_tx_flush_queue_locked(eth, queue);
 	spin_unlock_bh(&eth->tx_lock);
 	zx279133_stats_tx_dropped(eth, ndev);
 	dev_kfree_skb_any(skb);
@@ -518,14 +755,18 @@ int zx279133_xdp_enqueue(struct zx279133_eth *eth, struct xdp_frame *xdpf)
 	}
 
 	spin_lock_bh(&eth->tx_lock);
-	if (unlikely(tx->pending >= ZX279133_IDM_TX_DEPTH - 1))
+	if (zx279133_tx_available_locked(eth) &&
+	    unlikely(tx->pending >= ZX279133_IDM_TX_DEPTH - 1))
 		zx279133_idm_tx_reclaim_queue_locked(eth, 0);
-	if (unlikely(tx->pending >= ZX279133_IDM_TX_DEPTH - 1)) {
+	if (unlikely(!zx279133_tx_available_locked(eth) ||
+		     tx->pending >= ZX279133_IDM_TX_DEPTH - 1)) {
+		int ret = zx279133_tx_available_locked(eth) ? -ENOSPC : -ENETDOWN;
+
 		spin_unlock_bh(&eth->tx_lock);
 		if (dma_mapped)
 			dma_unmap_single(eth->dev, dma, xdpf->len,
 					 DMA_TO_DEVICE);
-		return -ENOSPC;
+		return ret;
 	}
 
 	producer = tx->producer;
@@ -586,11 +827,15 @@ int zx279133_xsk_rx_enqueue(struct zx279133_eth *eth, struct xdp_buff *xdp)
 	xsk_buff_raw_dma_sync_for_device(eth->xsk_pool, dma, len);
 
 	spin_lock_bh(&eth->tx_lock);
-	if (unlikely(tx->pending >= ZX279133_IDM_TX_DEPTH - 1))
+	if (zx279133_tx_available_locked(eth) &&
+	    unlikely(tx->pending >= ZX279133_IDM_TX_DEPTH - 1))
 		zx279133_idm_tx_reclaim_queue_locked(eth, 0);
-	if (unlikely(tx->pending >= ZX279133_IDM_TX_DEPTH - 1)) {
+	if (unlikely(!zx279133_tx_available_locked(eth) ||
+		     tx->pending >= ZX279133_IDM_TX_DEPTH - 1)) {
+		int ret = zx279133_tx_available_locked(eth) ? -ENOSPC : -ENETDOWN;
+
 		spin_unlock_bh(&eth->tx_lock);
-		return -ENOSPC;
+		return ret;
 	}
 
 	producer = tx->producer;
@@ -636,7 +881,15 @@ void zx279133_xsk_tx(struct zx279133_eth *eth)
 		return;
 
 	spin_lock_bh(&eth->tx_lock);
+	if (!zx279133_tx_available_locked(eth)) {
+		spin_unlock_bh(&eth->tx_lock);
+		return;
+	}
 	zx279133_idm_tx_reclaim_queue_locked(eth, 0);
+	if (!zx279133_tx_available_locked(eth)) {
+		spin_unlock_bh(&eth->tx_lock);
+		return;
+	}
 	while (tx->pending < ZX279133_IDM_TX_DEPTH - 1) {
 		struct zx279133_idm_desc *desc;
 		struct zx279133_tx_slot *slot;
@@ -711,7 +964,8 @@ void zx279133_xsk_tx(struct zx279133_eth *eth)
 void zx279133_xdp_flush(struct zx279133_eth *eth)
 {
 	spin_lock_bh(&eth->tx_lock);
-	zx279133_idm_tx_flush_locked(eth);
+	if (zx279133_tx_available_locked(eth))
+		zx279133_idm_tx_flush_locked(eth);
 	spin_unlock_bh(&eth->tx_lock);
 }
 
@@ -744,14 +998,21 @@ static void zx279133_datapath_suspend(struct zx279133_eth *eth)
 {
 	bool tx_quiesced;
 
+	zx279133_lan_mmio_set(eth, false);
 	netif_device_detach(eth->ndev);
-	if (eth->lan_ndev)
+	if (eth->lan_ndev) {
 		netif_device_detach(eth->lan_ndev);
+		netif_carrier_off(eth->lan_ndev);
+	}
+	if (!eth->hardware_prepared) {
+		WRITE_ONCE(eth->datapath_failed, true);
+		return;
+	}
 	zx279133_shared_rx_stop(eth);
 	tx_quiesced = zx279133_shared_tx_pause(eth);
-	if (eth->datapath_users & ZX279133_DATAPATH_USER_WAN)
-		phylink_stop(eth->phylink);
+	zx279133_wan_phylink_stop(eth);
 	zx279133_shared_idm_release(eth, eth->ndev, tx_quiesced);
+	WRITE_ONCE(eth->datapath_failed, true);
 }
 
 static int zx279133_datapath_resume(struct zx279133_eth *eth, bool require_hash)
@@ -766,16 +1027,129 @@ static int zx279133_datapath_resume(struct zx279133_eth *eth, bool require_hash)
 	if (ret) {
 		if (READ_ONCE(eth->hardware_prepared))
 			zx279133_hardware_unprepare(eth);
+		WRITE_ONCE(eth->datapath_failed, true);
+		spin_lock_bh(&eth->tx_lock);
+		WRITE_ONCE(eth->tx_stopping, true);
+		spin_unlock_bh(&eth->tx_lock);
 		return ret;
 	}
+	WRITE_ONCE(eth->datapath_failed, false);
 	if (eth->datapath_users & ZX279133_DATAPATH_USER_WAN)
-		phylink_start(eth->phylink);
+		zx279133_wan_phylink_start(eth);
 	zx279133_shared_rx_start(eth);
+	zx279133_lan_mmio_set(eth, true);
 	zx279133_shared_tx_resume(eth);
-	netif_device_attach(eth->ndev);
-	if (eth->lan_ndev)
-		netif_device_attach(eth->lan_ndev);
+	zx279133_datapath_attach(eth);
 	return 0;
+}
+
+static int zx279133_datapath_restore_failed_locked(struct zx279133_eth *eth)
+{
+	int ret;
+
+	if (!eth->datapath_failed || !eth->datapath_users)
+		return 0;
+	ret = zx279133_datapath_resume(eth, false);
+	if (!ret) {
+		spin_lock_bh(&eth->tx_lock);
+		eth->tx_recovery_attempted = false;
+		spin_unlock_bh(&eth->tx_lock);
+	}
+	return ret;
+}
+
+static void zx279133_tx_recovery_work(struct work_struct *work)
+{
+	struct zx279133_eth *eth =
+		container_of(to_delayed_work(work), struct zx279133_eth,
+			     tx_recovery_work);
+	unsigned long queues;
+	bool restart, needed = false;
+	unsigned int i;
+	int ret;
+
+	/* ndo_stop and unregister may hold RTNL while cancelling other work.
+	 * Never wait for RTNL here, including during device teardown.
+	 */
+	if (!rtnl_trylock()) {
+		spin_lock_bh(&eth->tx_lock);
+		if (!eth->tx_recovery_disabled && eth->tx_recovery_queues)
+			mod_delayed_work(system_wq, &eth->tx_recovery_work,
+					 msecs_to_jiffies(100));
+		spin_unlock_bh(&eth->tx_lock);
+		return;
+	}
+	mutex_lock(&eth->datapath_lock);
+	spin_lock_bh(&eth->tx_lock);
+	queues = eth->tx_recovery_queues;
+	if (eth->tx_recovery_disabled || !queues ||
+	    eth->tx_recovery_epoch != eth->tx_epoch ||
+	    !eth->datapath_users || !eth->hardware_prepared ||
+	    !eth->tx_prepared || eth->datapath_failed) {
+		eth->tx_recovery_queues = 0;
+		goto out_tx_unlock;
+	}
+	eth->tx_recovery_active = true;
+	for (i = 0; i < ZX279133_CPU_TX_QUEUES; i++) {
+		if (!(queues & BIT(i)))
+			continue;
+		if (!(eth->tx_fault_queues & BIT(i))) {
+			zx279133_idm_tx_flush_queue_locked(eth, i);
+			zx279133_idm_tx_reclaim_queue_locked(eth, i);
+		}
+		if ((eth->tx_fault_queues & BIT(i)) ||
+		    (eth->tx[i].pending &&
+		     eth->tx[i].done == eth->tx_recovery_done[i]))
+			needed = true;
+	}
+	eth->tx_recovery_queues = 0;
+	if (!needed) {
+		eth->tx_recovery_active = false;
+		spin_unlock_bh(&eth->tx_lock);
+		/* A failed LAN quiesce may have requested recovery while paused.
+		 * Progress can make a restart unnecessary, but WAN still needs TX.
+		 */
+		zx279133_shared_tx_resume(eth);
+		goto out_unlock;
+	}
+	if (eth->tx_recovery_attempted)
+		for (i = 0; i < ZX279133_CPU_TX_QUEUES; i++)
+			if (eth->tx[i].completed != eth->tx_recovery_baseline[i]) {
+				eth->tx_recovery_attempted = false;
+				break;
+			}
+	restart = !eth->tx_recovery_attempted;
+	eth->tx_recovery_attempted = true;
+	spin_unlock_bh(&eth->tx_lock);
+
+	zx279133_datapath_suspend(eth);
+	/* Without a valid completion since the previous restart, stop safely
+	 * instead of turning repeated watchdog notifications into a reset loop.
+	 */
+	ret = restart ? zx279133_datapath_resume(eth, false) : -EIO;
+	spin_lock_bh(&eth->tx_lock);
+	if (ret)
+		eth->tx_recovery_failures++;
+	else
+		eth->tx_recovery_restarts++;
+	eth->tx_recovery_active = false;
+	/* A new fault may have arrived after resume enabled NAPI again. */
+	if (!ret && eth->tx_fault_queues && !eth->tx_recovery_disabled)
+		zx279133_tx_recovery_queue_locked(eth, eth->tx_fault_queues);
+	spin_unlock_bh(&eth->tx_lock);
+	if (ret)
+		netdev_err(eth->ndev,
+			   "shared TX recovery failed (%d); datapath detached until down/up\n",
+			   ret);
+	else
+		netdev_warn(eth->ndev, "shared TX datapath restarted\n");
+	goto out_unlock;
+
+out_tx_unlock:
+	spin_unlock_bh(&eth->tx_lock);
+out_unlock:
+	mutex_unlock(&eth->datapath_lock);
+	rtnl_unlock();
 }
 
 static int zx279133_xsk_pool_cycle(struct zx279133_eth *eth,
@@ -788,9 +1162,12 @@ static int zx279133_xsk_pool_cycle(struct zx279133_eth *eth,
 
 	if (pool == old_pool)
 		return 0;
-	if (pool && xsk_pool_get_rx_frame_size(pool) <
-		    eth->ndev->mtu + ETH_HLEN + VLAN_HLEN)
+	if (pool && xsk_pool_get_rx_frame_size(pool) < ZX279133_IDM_RX_DMA_SIZE) {
+		netdev_err(eth->ndev,
+			   "AF_XDP RX needs %u DMA bytes after headroom; use 4096-byte chunks\n",
+			   (unsigned int)ZX279133_IDM_RX_DMA_SIZE);
 		return -EINVAL;
+	}
 	if (pool) {
 		xsk_pool_set_rxq_info(pool, &eth->xsk_rxq);
 		ret = xsk_pool_dma_map(pool, eth->dev, DMA_ATTR_SKIP_CPU_SYNC);
@@ -917,8 +1294,10 @@ static void zx279133_tx_timeout_common(struct zx279133_eth *eth,
 		pending_after = tx->pending;
 		if (reclaimed)
 			eth->tx_timeout_recoveries++;
-		else if (pending_after)
+		else if (pending_after) {
 			eth->tx_timeout_stalls++;
+			zx279133_tx_recovery_request_locked(eth, txqueue, false);
+		}
 	}
 	spin_unlock_bh(&eth->tx_lock);
 
@@ -983,8 +1362,7 @@ static int zx279133_change_mtu(struct net_device *ndev, int new_mtu)
 	struct zx279133_eth *eth = netdev_priv(ndev);
 	struct xsk_buff_pool *pool = READ_ONCE(eth->xsk_pool);
 
-	if (pool && xsk_pool_get_rx_frame_size(pool) <
-		    new_mtu + ETH_HLEN + VLAN_HLEN)
+	if (pool && xsk_pool_get_rx_frame_size(pool) < ZX279133_IDM_RX_DMA_SIZE)
 		return -EINVAL;
 	WRITE_ONCE(ndev->mtu, new_mtu);
 	return 0;
@@ -1206,10 +1584,37 @@ static u32 zx279133_hw_stat(struct zx279133_eth *eth, unsigned int offset)
 	return readl(eth->base + offset);
 }
 
+/* Appended after every existing statistic, including the dynamic RX groups. */
+static const char zx279133_tx_csum_names[][ETH_GSTRING_LEN] = {
+	"tx_csum_fb_disabled",
+	"tx_csum_fb_short",
+	"tx_csum_fb_protocol",
+	"tx_csum_fb_encap",
+	"tx_csum_fb_range",
+	"tx_csum_fb_start",
+	"tx_csum_fb_offset",
+	"tx_csum_fb_sctp",
+	"tx_csum_fb_pull",
+	"tx_csum_fb_version",
+	"tx_csum_fb_ihl",
+	"tx_csum_fb_length",
+	"tx_csum_fb_transport",
+	"tx_csum_fb_not_tcp",
+	"tx_csum_fb_fragment",
+	"tx_csum_help_errors",
+	"tx_vlan_pop_errors",
+	"tx_vlan_popped",
+	"tx_recovery_requests",
+	"tx_recovery_restarts",
+	"tx_recovery_failures",
+	"tx_invalid_completions",
+};
+
 static int zx279133_get_sset_count(struct net_device *ndev, int sset)
 {
 	if (sset == ETH_SS_STATS)
-		return ZX279133_STAT_COUNT + ZX279133_IDM_CPU_RX_QUEUES + 16;
+		return ZX279133_STAT_COUNT + ZX279133_IDM_CPU_RX_QUEUES + 16 +
+			ARRAY_SIZE(zx279133_tx_csum_names);
 	return -EOPNOTSUPP;
 }
 
@@ -1234,6 +1639,7 @@ static void zx279133_get_strings(struct net_device *ndev, u32 sset, u8 *data)
 	}
 	ethtool_puts(&data, "rx_hash_active");
 	ethtool_puts(&data, "rx_hash_loads");
+	memcpy(data, zx279133_tx_csum_names, sizeof(zx279133_tx_csum_names));
 }
 
 static void zx279133_get_ethtool_stats(struct net_device *ndev,
@@ -1246,6 +1652,8 @@ static void zx279133_get_ethtool_stats(struct net_device *ndev,
 	unsigned int start;
 	unsigned int i;
 
+	/* Recovery may gate the NPPT independently of ethtool's caller. */
+	mutex_lock(&eth->datapath_lock);
 	zx279133_fill_stats64(ndev, &eth->stats, &sw_stats);
 	data[ZX279133_STAT_RX_PACKETS] = sw_stats.rx_packets;
 	data[ZX279133_STAT_TX_PACKETS] = sw_stats.tx_packets;
@@ -1396,6 +1804,21 @@ static void zx279133_get_ethtool_stats(struct net_device *ndev,
 		READ_ONCE(eth->rx_refill_deficit_high_water);
 	data[ZX279133_STAT_RX_REFILL_RETRY_WORK_RUNS] =
 		atomic64_read(&eth->rx_refill_retry_work_runs);
+	data += ZX279133_STAT_COUNT + ZX279133_IDM_CPU_RX_QUEUES + 16;
+	spin_lock_bh(&eth->tx_lock);
+	for (i = 1; i < ZX279133_TX_CSUM_COUNT; i++)
+		*data++ = eth->tx_csum_fallback[i];
+	spin_unlock_bh(&eth->tx_lock);
+	*data++ = atomic64_read(&eth->tx_csum_help_errors);
+	*data++ = atomic64_read(&eth->tx_vlan_pop_errors);
+	*data++ = atomic64_read(&eth->tx_vlan_popped);
+	spin_lock_bh(&eth->tx_lock);
+	*data++ = eth->tx_recovery_requests;
+	*data++ = eth->tx_recovery_restarts;
+	*data++ = eth->tx_recovery_failures;
+	*data = eth->tx_invalid_completions;
+	spin_unlock_bh(&eth->tx_lock);
+	mutex_unlock(&eth->datapath_lock);
 }
 
 static void
@@ -1435,14 +1858,15 @@ static int zx279133_set_eee(struct net_device *ndev, struct ethtool_keee *eee)
 	if (ret)
 		return ret;
 
-	if (netif_running(ndev) &&
+	if (netif_running(ndev) && !READ_ONCE(eth->datapath_failed) &&
+	    READ_ONCE(eth->hardware_prepared) &&
 	    (old.eee_enabled != updated.eee_enabled ||
 	     old.tx_lpi_enabled != updated.tx_lpi_enabled ||
 	     old.tx_lpi_timer != updated.tx_lpi_timer ||
 	     !linkmode_equal(old.advertised, updated.advertised))) {
 		/* ZX279051 keeps carrier asserted across an EEE AN restart. */
-		phylink_stop(eth->phylink);
-		phylink_start(eth->phylink);
+		zx279133_wan_phylink_stop(eth);
+		zx279133_wan_phylink_start(eth);
 	}
 
 	return 0;
@@ -1742,14 +2166,22 @@ zx279133_lan_netdev_open(struct zx279133_lan_service *service,
 
 	mutex_lock(&eth->datapath_lock);
 	if (!(eth->datapath_users & ZX279133_DATAPATH_USER_LAN) ||
-	    !eth->lan_datapath_ready ||
-	    !READ_ONCE(eth->hardware_prepared)) {
+	    !eth->lan_datapath_ready) {
 		ret = -ENETDOWN;
 		goto out_unlock;
 	}
+	ret = zx279133_datapath_restore_failed_locked(eth);
+	if (ret)
+		goto out_unlock;
 
-	netif_carrier_on(ndev);
-	netif_tx_start_all_queues(ndev);
+	spin_lock_bh(&eth->tx_lock);
+	if (zx279133_tx_available_locked(eth)) {
+		netif_carrier_on(ndev);
+		netif_tx_start_all_queues(ndev);
+	} else {
+		ret = -ENETDOWN;
+	}
+	spin_unlock_bh(&eth->tx_lock);
 
 out_unlock:
 	mutex_unlock(&eth->datapath_lock);
@@ -1764,7 +2196,8 @@ zx279133_lan_netdev_stop(struct zx279133_lan_service *service,
 	bool tx_quiesced;
 
 	mutex_lock(&eth->datapath_lock);
-	if (eth->datapath_users & ZX279133_DATAPATH_USER_LAN) {
+	if ((eth->datapath_users & ZX279133_DATAPATH_USER_LAN) &&
+	    !eth->datapath_failed && eth->hardware_prepared) {
 		tx_quiesced = zx279133_shared_tx_pause(eth);
 		if (!tx_quiesced)
 			netdev_warn(ndev, "shared TX did not quiesce at LAN stop\n");
@@ -1781,7 +2214,12 @@ static int
 zx279133_lan_netdev_change_mtu(struct zx279133_lan_service *service,
 			       struct net_device *ndev, int new_mtu)
 {
+	struct zx279133_eth *eth = zx279133_lan_service_to_eth(service);
+	struct xsk_buff_pool *pool = READ_ONCE(eth->xsk_pool);
+
 	if (new_mtu < ETH_MIN_MTU || new_mtu > ZX279133_LAN_MAX_MTU)
+		return -EINVAL;
+	if (pool && xsk_pool_get_rx_frame_size(pool) < ZX279133_IDM_RX_DMA_SIZE)
 		return -EINVAL;
 
 	WRITE_ONCE(ndev->mtu, new_mtu);
@@ -1815,28 +2253,26 @@ zx279133_lan_netdev_setup_tc(struct zx279133_lan_service *service,
  * through the jack DSA chose instead of through whatever the last "txp" wrote
  * - which is the difference between one working jack and four.
  */
-static void zx279133_lan_strip_transport_vlan(struct sk_buff *skb, u8 *out_port)
+static int zx279133_lan_strip_transport_vlan(struct sk_buff *skb, u8 *out_port)
 {
-	u8 *data;
+	const struct vlan_ethhdr *veth;
+	u16 tci;
 	u16 vid;
+	int err;
 
 	*out_port = 0;
 
-	/* The frame has to be in one piece to have a hole taken out of it. */
-	if (skb->data_len && skb_linearize(skb))
-		return;
-	if (skb->len < VLAN_ETH_HLEN)
-		return;
-
-	data = skb->data;
-	if (data[12] != 0x81 || data[13] != 0x00)
-		return;
-
-	vid = ((u16)data[14] << 8) | data[15];
-	vid &= VLAN_VID_MASK;
+	if (!pskb_may_pull(skb, ETH_HLEN))
+		return -EINVAL;
+	if (((struct ethhdr *)skb->data)->h_proto != htons(ETH_P_8021Q))
+		return 0;
+	if (!pskb_may_pull(skb, VLAN_ETH_HLEN))
+		return -EINVAL;
+	veth = (const struct vlan_ethhdr *)skb->data;
+	vid = ntohs(veth->h_vlan_TCI) & VLAN_VID_MASK;
 	if (vid < ZX279133_LAN_TRANSPORT_VID_MIN ||
 	    vid > ZX279133_LAN_TRANSPORT_VID_MAX)
-		return;
+		return 0;
 
 	/* The tagger writes BASE + dp->index and the four UNI jacks are DSA
 	 * ports 4..7, so the VID the tag carries is the jack's PPU number
@@ -1848,40 +2284,22 @@ static void zx279133_lan_strip_transport_vlan(struct sk_buff *skb, u8 *out_port)
 	 * the DSA port 8, so it carries the VID 63 and the output port the
 	 * frame names is 5 (docs/92 §90).
 	 */
+	/*
+	 * Pop exactly the private, inline outer tag. __skb_vlan_pop() moves
+	 * only the MAC addresses and advances skb->data, keeping payload,
+	 * network/transport headers and CHECKSUM_PARTIAL's absolute start
+	 * together. The old full-payload memmove left header offsets stale.
+	 *
+	 * Do not use skb_vlan_pop(): it can also promote the customer's next
+	 * VLAN into metadata. That VLAN must remain inline on this conduit.
+	 */
+	skb_reset_mac_header(skb);
+	err = __skb_vlan_pop(skb, &tci);
+	if (err)
+		return err;
 	*out_port = vid - (ZX279133_LAN_TRANSPORT_VID_MIN -
 			   ZX279133_9132_UNI_PPU_FIRST);
-
-	/*
-	 * The tag is four bytes at offset 2 * ETH_ALEN: the TPID, the TCI
-	 * and then the frame's own ethertype.  Taking the tag off means
-	 * moving what follows it four bytes towards the front of the frame:
-	 * what is at offset 2 * ETH_ALEN + VLAN_HLEN moves to
-	 * 2 * ETH_ALEN, and the ethertype that was behind the tag ends up
-	 * in the ethertype field.
-	 *
-	 * The offsets here used to be ETH_HLEN, which is two bytes too
-	 * far: the copy started at the ethertype instead of at the
-	 * payload behind it, so the TPID stayed in the ethertype field
-	 * and the ethertype was thrown away.  The 9132's CPU port then
-	 * saw a TPID where there was no tag and took four bytes off that
-	 * frame as well, and what reached the wire was an ARP reply with
-	 * its ethertype and its hardware type cut out - 56 bytes instead
-	 * of 60, with 0x0800 where the ethertype should be.
-	 */
-	memmove(data + 2 * ETH_ALEN, data + 2 * ETH_ALEN + VLAN_HLEN,
-		skb->len - 2 * ETH_ALEN - VLAN_HLEN);
-	skb->len -= VLAN_HLEN;
-	skb->tail -= VLAN_HLEN;
-	skb->protocol = htons(((u16)data[2 * ETH_ALEN] << 8) |
-			      data[2 * ETH_ALEN + 1]);
-	/*
-	 * The transport header moved four bytes towards the front of the
-	 * frame, so the offset the software checksum path works from moves
-	 * with it.  (A frame whose checksum is already complete keeps it:
-	 * the checksum covers the payload, which did not move.)
-	 */
-	if (skb->ip_summed == CHECKSUM_PARTIAL)
-		skb->csum -= VLAN_HLEN;
+	return 1;
 }
 
 static netdev_tx_t
@@ -1896,8 +2314,6 @@ zx279133_lan_netdev_xmit(struct zx279133_lan_service *service,
 	    !READ_ONCE(eth->lan_datapath_ready) ||
 	    !READ_ONCE(eth->hardware_prepared))
 		return NETDEV_TX_BUSY;
-
-	zx279133_lan_strip_transport_vlan(skb, &out_port);
 
 	skb->dev = eth->ndev;
 	ret = zx279133_start_xmit_common(skb, eth->ndev, ndev, out_port);
@@ -1944,6 +2360,11 @@ static int zx279133_lan_datapath_get(struct zx279133_lan_service *service)
 		goto out_unlock;
 	}
 	first_user = !eth->datapath_users;
+	if (!first_user) {
+		ret = zx279133_datapath_restore_failed_locked(eth);
+		if (ret)
+			goto out_unlock;
+	}
 	if (first_user) {
 		ret = zx279133_hardware_prepare(eth);
 		if (ret)
@@ -1960,6 +2381,12 @@ static int zx279133_lan_datapath_get(struct zx279133_lan_service *service)
 		zx279133_shared_rx_start(eth);
 	}
 	eth->datapath_users |= ZX279133_DATAPATH_USER_LAN;
+	WRITE_ONCE(eth->datapath_failed, false);
+	spin_lock_bh(&eth->tx_lock);
+	eth->tx_recovery_attempted = false;
+	spin_unlock_bh(&eth->tx_lock);
+	zx279133_lan_mmio_set(eth, true);
+	zx279133_datapath_attach(eth);
 	mutex_unlock(&eth->datapath_lock);
 
 	return 0;
@@ -1987,10 +2414,13 @@ zx279133_lan_datapath_set_ready(struct zx279133_lan_service *service,
 		if (!ready) {
 			netif_tx_disable(eth->lan_ndev);
 			netif_carrier_off(eth->lan_ndev);
-		} else if ((eth->datapath_users & ZX279133_DATAPATH_USER_LAN) &&
-			   eth->hardware_prepared) {
-			netif_carrier_on(eth->lan_ndev);
-			netif_tx_wake_all_queues(eth->lan_ndev);
+		} else if (eth->datapath_users & ZX279133_DATAPATH_USER_LAN) {
+			spin_lock_bh(&eth->tx_lock);
+			if (zx279133_tx_available_locked(eth)) {
+				netif_carrier_on(eth->lan_ndev);
+				netif_tx_wake_all_queues(eth->lan_ndev);
+			}
+			spin_unlock_bh(&eth->tx_lock);
 		}
 	}
 	mutex_unlock(&eth->datapath_lock);
@@ -2000,6 +2430,8 @@ static int
 zx279133_lan_datapath_quiesce(struct zx279133_lan_service *service)
 {
 	struct zx279133_eth *eth = zx279133_lan_service_to_eth(service);
+	unsigned long queues;
+	unsigned int i;
 	bool tx_quiesced;
 	int ret = 0;
 
@@ -2009,10 +2441,29 @@ zx279133_lan_datapath_quiesce(struct zx279133_lan_service *service)
 	eth->lan_datapath_ready = false;
 	if (eth->lan_ndev && netif_running(eth->lan_ndev))
 		netif_tx_disable(eth->lan_ndev);
+	if (eth->datapath_failed || !eth->hardware_prepared)
+		goto out_unlock;
 	tx_quiesced = zx279133_shared_tx_pause(eth);
 	if (!tx_quiesced) {
-		netdev_err(eth->lan_ndev,
+		netdev_err(eth->lan_ndev ?: eth->ndev,
 			   "shared TX did not quiesce before LAN teardown\n");
+		/* Teardown may abort here while WAN remains open. Keep DMA owners
+		 * intact and hand the paused shared datapath to the RTNL worker.
+		 */
+		if (eth->datapath_users & ZX279133_DATAPATH_USER_WAN) {
+			queues = 0;
+			spin_lock_bh(&eth->tx_lock);
+			if (!eth->tx_recovery_disabled && !eth->tx_recovery_active) {
+				queues = eth->tx_fault_queues;
+				for (i = 0; i < ZX279133_CPU_TX_QUEUES; i++)
+					if (eth->tx[i].pending)
+						queues |= BIT(i);
+				zx279133_tx_recovery_queue_locked(eth, queues);
+			}
+			spin_unlock_bh(&eth->tx_lock);
+			if (!queues)
+				zx279133_shared_tx_resume(eth);
+		}
 		ret = -ETIMEDOUT;
 		goto out_unlock;
 	}
@@ -2033,23 +2484,29 @@ static void zx279133_lan_datapath_put(struct zx279133_lan_service *service)
 	if (!(eth->datapath_users & ZX279133_DATAPATH_USER_LAN))
 		goto out_unlock;
 	last_user = eth->datapath_users == ZX279133_DATAPATH_USER_LAN;
+	eth->lan_datapath_ready = false;
+	if (eth->datapath_failed || !eth->hardware_prepared) {
+		eth->datapath_users &= ~ZX279133_DATAPATH_USER_LAN;
+		goto put_runtime;
+	}
 	if (last_user)
 		zx279133_shared_rx_stop(eth);
 	tx_quiesced = zx279133_shared_tx_pause(eth);
 	eth->datapath_users &= ~ZX279133_DATAPATH_USER_LAN;
 	if (last_user) {
 		zx279133_shared_idm_release(eth, eth->lan_ndev, tx_quiesced);
-		if (eth->xpcs_runtime_held) {
-			pm_runtime_put(eth->xpcs_mdiodev->bus->parent);
-			eth->xpcs_runtime_held = false;
-		}
 	} else {
 		if (!tx_quiesced)
-			netdev_warn(eth->lan_ndev,
+			netdev_warn(eth->lan_ndev ?: eth->ndev,
 				    "shared TX did not quiesce while WAN remains active\n");
 		zx279133_shared_tx_resume(eth);
 	}
 
+put_runtime:
+	if (last_user && eth->xpcs_runtime_held) {
+		pm_runtime_put(eth->xpcs_mdiodev->bus->parent);
+		eth->xpcs_runtime_held = false;
+	}
 out_unlock:
 	mutex_unlock(&eth->datapath_lock);
 }
@@ -2066,8 +2523,13 @@ static u32 zx279133_lan_nppt_read(struct zx279133_lan_service *service,
 				  u32 offset)
 {
 	struct zx279133_eth *eth = zx279133_lan_service_to_eth(service);
+	u32 value = 0;
 
-	return readl(eth->base + offset);
+	mutex_lock(&eth->lan_mmio_lock);
+	if (eth->lan_mmio_enabled)
+		value = readl(eth->base + offset);
+	mutex_unlock(&eth->lan_mmio_lock);
+	return value;
 }
 
 static void zx279133_lan_nppt_write(struct zx279133_lan_service *service,
@@ -2075,7 +2537,29 @@ static void zx279133_lan_nppt_write(struct zx279133_lan_service *service,
 {
 	struct zx279133_eth *eth = zx279133_lan_service_to_eth(service);
 
-	writel(value, eth->base + offset);
+	mutex_lock(&eth->lan_mmio_lock);
+	if (eth->lan_mmio_enabled)
+		writel(value, eth->base + offset);
+	mutex_unlock(&eth->lan_mmio_lock);
+}
+
+static bool zx279133_lan_control_begin(struct zx279133_lan_service *service)
+{
+	struct zx279133_eth *eth = zx279133_lan_service_to_eth(service);
+
+	mutex_lock(&eth->lan_control_lock);
+	if (!eth->lan_mmio_enabled) {
+		mutex_unlock(&eth->lan_control_lock);
+		return false;
+	}
+	return true;
+}
+
+static void zx279133_lan_control_end(struct zx279133_lan_service *service)
+{
+	struct zx279133_eth *eth = zx279133_lan_service_to_eth(service);
+
+	mutex_unlock(&eth->lan_control_lock);
 }
 
 static void zx279133_lan_xmac_lock(struct zx279133_lan_service *service)
@@ -2121,6 +2605,8 @@ static int zx279133_lan_port_wan_set(struct zx279133_lan_service *service,
 }
 
 const struct zx279133_lan_service_ops zx279133_lan_service_ops = {
+	.control_begin = zx279133_lan_control_begin,
+	.control_end = zx279133_lan_control_end,
 	.get_rxfh = zx279133_lan_get_rxfh,
 	.set_rxfh = zx279133_lan_set_rxfh,
 	.get_rxfh_fields = zx279133_lan_get_rxfh_fields,

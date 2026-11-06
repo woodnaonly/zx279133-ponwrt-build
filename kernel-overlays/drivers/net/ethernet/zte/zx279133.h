@@ -10,6 +10,7 @@
 #include <linux/netdevice.h>
 #include <linux/phylink.h>
 #include <linux/ptp_clock_kernel.h>
+#include <linux/skbuff.h>
 #include <linux/workqueue.h>
 
 #include <net/xdp.h>
@@ -61,12 +62,10 @@ struct led_trigger;
  * where this file's own LAN receive path maps 1..4 to the four UNIs
  * (zx279133-idm.c:346 zx279133_idm_rx_lan_vport).
  *
- * One variable therefore cannot be both numbers, but it does not have to be: the
- * comparison at zx279133-idm.c:372 only decides CHECKSUM_UNNECESSARY (its one
- * caller sets skb->ip_summed, at 1215), so whichever value is wrong for the
- * direction costs an offload and loses no frame. Splitting it is a separate
- * question from making this jack carry traffic, and it is recorded here so the
- * next reader does not "fix" the RX side by changing this number.
+ * TX destination and RX source numbers need not match. RX checksum validation
+ * is left to software: a parsed descriptor and a matching source port do not
+ * prove that the packet's checksum passed. Do not change this TX destination
+ * merely to make it match an RX source-port observation.
  *
  * The parameter exists because finding a number by build-per-candidate is not
  * feasible here:
@@ -908,8 +907,14 @@ extern u16 zx279133_tx_port;
 #define ZX279133_MAX_MTU		ZX279133_LAN_USER_MAX_MTU
 #define ZX279133_IDM_RX_FRAME_LIMIT	(ZX279133_MAX_MTU + ETH_HLEN + \
 					 VLAN_HLEN)
+#define ZX279133_IDM_RX_DATA_OFFSET	(ZX279133_IDM_RX_PAYLOAD_OFFSET + \
+					 ZX279133_IDM_RX_FRAME_OFFSET)
+#define ZX279133_IDM_RX_DMA_SIZE		(ZX279133_IDM_RX_FRAME_OFFSET + \
+					 ZX279133_IDM_RX_FRAME_LIMIT)
 #define ZX279133_RX_PAGE_ORDER		0
 #define ZX279133_RX_PAGE_SIZE		(PAGE_SIZE << ZX279133_RX_PAGE_ORDER)
+static_assert(ZX279133_IDM_RX_PAYLOAD_OFFSET + ZX279133_IDM_RX_DMA_SIZE <=
+	      SKB_WITH_OVERHEAD(ZX279133_RX_PAGE_SIZE));
 #define ZX279133_RX_REFILL_RECOVERY_BATCH	64
 #define ZX279133_RX_REFILL_RETRY_MS	100
 
@@ -1219,6 +1224,27 @@ struct zx279133_wanid_slot {
 	unsigned int snat_users;
 };
 
+/* A software fallback keeps its original safety checks; expose why it ran. */
+enum zx279133_tx_csum_fallback {
+	ZX279133_TX_CSUM_OK,
+	ZX279133_TX_CSUM_DISABLED,
+	ZX279133_TX_CSUM_SHORT,
+	ZX279133_TX_CSUM_PROTOCOL,
+	ZX279133_TX_CSUM_ENCAP,
+	ZX279133_TX_CSUM_RANGE,
+	ZX279133_TX_CSUM_START,
+	ZX279133_TX_CSUM_OFFSET,
+	ZX279133_TX_CSUM_SCTP,
+	ZX279133_TX_CSUM_PULL,
+	ZX279133_TX_CSUM_VERSION,
+	ZX279133_TX_CSUM_IHL,
+	ZX279133_TX_CSUM_LENGTH,
+	ZX279133_TX_CSUM_TRANSPORT,
+	ZX279133_TX_CSUM_NOT_TCP,
+	ZX279133_TX_CSUM_FRAGMENT,
+	ZX279133_TX_CSUM_COUNT,
+};
+
 struct zx279133_eth {
 	struct device *dev;
 	struct net_device *ndev;
@@ -1380,6 +1406,25 @@ struct zx279133_eth {
 	u64 tx_timeout_stalls;
 	u64 tx_hw_csum_packets;
 	u64 tx_sw_csum_packets;
+	/* Recovery state and counters are protected by tx_lock. */
+	unsigned long tx_fault_queues;
+	unsigned long tx_recovery_queues;
+	u64 tx_epoch;
+	u64 tx_recovery_epoch;
+	u16 tx_recovery_done[ZX279133_CPU_TX_QUEUES];
+	u64 tx_recovery_baseline[ZX279133_CPU_TX_QUEUES];
+	bool tx_recovery_disabled;
+	bool tx_recovery_active;
+	bool tx_recovery_attempted;
+	u64 tx_recovery_requests;
+	u64 tx_recovery_restarts;
+	u64 tx_recovery_failures;
+	u64 tx_invalid_completions;
+	/* Submitted software-fallback packets, protected by tx_lock. */
+	u64 tx_csum_fallback[ZX279133_TX_CSUM_COUNT];
+	atomic64_t tx_csum_help_errors;
+	atomic64_t tx_vlan_pop_errors;
+	atomic64_t tx_vlan_popped;
 	atomic64_t rx_irq_count;
 	atomic64_t idm_local_irq_count;
 	/*
@@ -1411,6 +1456,11 @@ struct zx279133_eth {
 	struct mutex xmac_lock;
 	/* Serializes ownership of the shared NPPT/IDM datapath. */
 	struct mutex datapath_lock;
+	/* LAN control transactions never call back into datapath_lock. */
+	struct mutex lan_control_lock;
+	/* Serializes the service's MMIO gate against individual accesses. */
+	struct mutex lan_mmio_lock;
+	bool lan_mmio_enabled;
 	/* Serializes multi-register NP indirect table accesses. */
 	struct mutex np_ind_lock;
 	/* Serializes read-modify-write of shared WANID table entries. */
@@ -1419,6 +1469,7 @@ struct zx279133_eth {
 	struct napi_struct napi;
 	struct napi_struct lan_napi;
 	struct delayed_work tx_reclaim_work;
+	struct delayed_work tx_recovery_work;
 	struct delayed_work rx_refill_work;
 	/* Copies the WAN unicast list (macvlans) into the SPA ONU MAC slots. */
 	struct work_struct rx_mode_work;
@@ -1439,6 +1490,8 @@ struct zx279133_eth {
 	struct mutex ptp_cmd_lock;
 	unsigned long datapath_users;
 	bool hardware_prepared;
+	bool datapath_failed;
+	bool wan_phylink_started;
 	bool rx_hash_active;
 	bool rx_hash_ipv6_active;
 	u32 rx_hash_loads;
@@ -1591,6 +1644,11 @@ int zx279133_idm_rx_prepare(struct zx279133_eth *eth);
 void zx279133_idm_rx_release(struct zx279133_eth *eth);
 void zx279133_idm_tx_flush_locked(struct zx279133_eth *eth);
 void zx279133_idm_tx_reclaim_work(struct work_struct *work);
+void zx279133_tx_recovery_init(struct zx279133_eth *eth);
+void zx279133_tx_recovery_cancel(void *data);
+void zx279133_tx_recovery_request_locked(struct zx279133_eth *eth,
+					 unsigned int queue,
+					 bool invalid_completion);
 bool zx279133_idm_tx_drain(struct zx279133_eth *eth);
 int zx279133_idm_tx_prepare(struct zx279133_eth *eth);
 void zx279133_idm_tx_deactivate(struct zx279133_eth *eth);
