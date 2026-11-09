@@ -182,7 +182,14 @@ extern u16 zx279133_tx_port;
  */
 #define ZX279133_LAN_TX_WORD4		0x003e0000
 #define zx279133_tx_word4_bit23		0
-#define zx279133_tx_hw_csum		1
+/*
+ * Keep IDM TX checksum generation disabled until its wire output is verified.
+ * Run 345 booted and answered ICMP but could not establish SSH/HTTP; clearing
+ * br-lan's TX checksum feature restored both without a reboot (2026-11-09).
+ * Do not advertise HW_CSUM to eth0, the LAN conduit or its bridge descendants.
+ * CHECKSUM_PARTIAL still falls back to skb_checksum_help() in the TX path.
+ */
+#define zx279133_tx_hw_csum		0
 
 /*
  * The BMU geometry, as the vendor's own board runs it.
