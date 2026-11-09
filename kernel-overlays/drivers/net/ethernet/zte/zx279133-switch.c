@@ -3817,7 +3817,17 @@ zx279133_switch_outerphy_apply_speed_locked(struct zx279133_switch *priv,
 		speed = SPEED_1000;
 	}
 
-	phy_power_off(priv->serdes);
+	/*
+	 * Drop only a reference acquired by this consumer.  An initial off
+	 * takes the generic PHY power_count from 0 to -1, so the following
+	 * on skips the provider and leaves the Uni SerDes unprogrammed.
+	 */
+	if (priv->serdes_powered) {
+		ret = phy_power_off(priv->serdes);
+		if (ret)
+			return ret;
+		priv->serdes_powered = false;
+	}
 	ret = phy_set_mode_ext(priv->serdes, PHY_MODE_ETHERNET, iface);
 	if (ret)
 		return ret;
