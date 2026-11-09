@@ -47,6 +47,7 @@
 #define ZX279133_UNI_SERDES_POLL_US		2000
 #define ZX279133_UNI_SERDES_TIMEOUT_US		2000000
 #define ZX279133_UNI_RESET_PHASE_US		4300
+#define ZX279133_UNI_RATE_DIAG_LIMIT		3
 
 struct zx279133_uni_serdes {
 	struct device *dev;
@@ -59,6 +60,8 @@ struct zx279133_uni_serdes {
 	bool powered;
 	/* power_off() asks the next power_on() to rewrite the rate in place. */
 	bool rate_pending;
+	/* Bound cold-entry diagnostics even when the lane watchdog retries. */
+	unsigned int rate_diag_count;
 	int submode;
 	/* Which of the three images to write: 0 = the tree's own 1G one,
 	 * 1 = the loader's 2.5G one, 2 = the vendor's 2.5G one (see the
@@ -403,10 +406,57 @@ static int zx279133_uni_serdes_program_rate(struct zx279133_uni_serdes *priv)
 	return 0;
 }
 
+/*
+ * Read-only observation, not a cold-start fix. Caller holds priv->lock AND
+ * enabled clocks, including after a failed program_rate() but before cleanup.
+ * priv->powered may still be false on that first attempt. Do not expose these
+ * reads through an unguarded asynchronous debugfs/MMIO path.
+ */
+static void
+zx279133_uni_serdes_rate_snapshot(struct zx279133_uni_serdes *priv,
+				 const char *stage, int result)
+{
+	u32 mode = 0, word0 = 0, word50 = 0, value, mask;
+	u32 sc_pll, pll, rx;
+	unsigned int i, diff1g = 0, diff2g5 = 0;
+	int reset_rx, reset_tx;
+
+	lockdep_assert_held(&priv->lock);
+	for (i = 0; i < ZX279133_UNI_SERDES_PROFILE_WORDS; i++) {
+		value = readl(priv->serdes + i * 4);
+		mask = ~0U;
+		if (!i)
+			word0 = value;
+		if (i * 4 == ZX279133_UNI_SERDES_IMAGE_WORD)
+			word50 = value;
+		if (i * 4 == ZX279133_UNI_SERDES_MODE_CTRL) {
+			mode = value;
+			mask &= ~ZX279133_UNI_SERDES_ENABLE;
+		}
+		if ((value & mask) != (zx279133_uni_1g_profile[i] & mask))
+			diff1g++;
+		if ((value & mask) != (zx279133_uni_1gbase_x_profile[i] & mask))
+			diff2g5++;
+	}
+	sc_pll = readl(priv->serdes + ZX279133_UNI_SERDES_SC_PLL);
+	pll = readl(priv->serdes + ZX279133_UNI_SERDES_PLL_STATUS);
+	rx = readl(priv->serdes + ZX279133_UNI_SERDES_RX_STATUS);
+	/* Negative status means unavailable/error, not "reset deasserted". */
+	reset_rx = reset_control_status(priv->resets[0].rstc);
+	reset_tx = reset_control_status(priv->resets[1].rstc);
+	dev_info(priv->dev,
+		 "LAN1_RATE_DIAG attempt=%u stage=%s result=%d submode=%d powered=%u pending=%u pclk=%lu ref50m=%lu reset_rx=%d reset_tx=%d mode=%#x word0=%#x word50=%#x diff1g=%u diff2g5=%u sc_pll=%#x pll=%#x rx=%#x\n",
+		 priv->rate_diag_count, stage, result, priv->submode,
+		 priv->powered, priv->rate_pending,
+		 clk_get_rate(priv->clocks[0].clk),
+		 clk_get_rate(priv->clocks[1].clk), reset_rx, reset_tx,
+		 mode, word0, word50, diff1g, diff2g5, sc_pll, pll, rx);
+}
+
 static int zx279133_uni_serdes_power_on(struct phy *phy)
 {
 	struct zx279133_uni_serdes *priv = phy_get_drvdata(phy);
-	bool was_powered;
+	bool was_powered, diagnose;
 	u32 status;
 	int ret;
 
@@ -426,7 +476,14 @@ static int zx279133_uni_serdes_power_on(struct phy *phy)
 			goto out_unlock;
 		}
 
+		diagnose = priv->rate_diag_count < ZX279133_UNI_RATE_DIAG_LIMIT;
+		if (diagnose) {
+			priv->rate_diag_count++;
+			zx279133_uni_serdes_rate_snapshot(priv, "before", 0);
+		}
 		ret = zx279133_uni_serdes_program_rate(priv);
+		if (diagnose)
+			zx279133_uni_serdes_rate_snapshot(priv, "after", ret);
 		if (ret) {
 			if (!was_powered)
 				clk_bulk_disable_unprepare(ARRAY_SIZE(priv->clocks),

@@ -44,6 +44,8 @@ on:
       - tests/sk_tcp_harness.h
       - tests/test_sk_lan1_power.py
       - tests/sk_lan1_power_harness.h
+      - tests/test_sk_serdes_diag.py
+      - tests/sk_serdes_diag_harness.h
       - tests/fixtures/phy-core-power.inc
       - scripts/configure-sk-d840n.sh
       - scripts/prepare-sk-d840n-ui.sh
@@ -119,6 +121,7 @@ jobs:
           python3 tests/test_sk_kernel.py
           python3 tests/test_sk_tcp_optimization.py --require-compiler
           python3 tests/test_sk_lan1_power.py --require-compiler
+          python3 tests/test_sk_serdes_diag.py --require-compiler
           python3 tests/test_kernel_version_single_source.py
           python3 tests/test_sk_lan1_phy_led.py
           python3 tests/test_sk_led_dts_gate.py
