@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-2.0-only
 """Compile actual provider diagnostics against clock/lock lifecycle mocks.
 
-This checks observation safety and unchanged error paths, not PLL hardware.
+This checks observation safety and cold/warm lifecycle errors, not PLL hardware.
 """
 from pathlib import Path
 import re
@@ -73,7 +73,7 @@ class SerdesDiagnosticTests(unittest.TestCase):
 
     def test_snapshot_before_clock_enable_is_rejected(self):
         def mutation(body, snapshot):
-            anchor = "\t\tif (!was_powered) {"
+            anchor = "\t\tif (!was_powered) {\n\t\t\tret = clk_bulk_prepare_enable"
             self.assertEqual(body.count(anchor), 1)
             return body.replace(anchor, '\t\tzx279133_uni_serdes_rate_snapshot(priv, "unsafe", 0);\n' + anchor), snapshot
         self.assertNotEqual(self.run_contract(mutation), 0)
@@ -92,6 +92,22 @@ class SerdesDiagnosticTests(unittest.TestCase):
     def test_diagnostic_reset_pulse_is_rejected(self):
         self.assertNotEqual(self.run_contract(lambda body, snapshot: (
             body, snapshot.replace("\tlockdep_assert_held(&priv->lock);", "\tlockdep_assert_held(&priv->lock);\n\tzx279133_uni_serdes_reset_pulse(priv);"))), 0)
+
+    def test_missing_cold_reset_deassert_is_rejected(self):
+        self.assertNotEqual(self.run_contract(lambda body, snapshot: (
+            re.sub(r"ret = reset_control_bulk_deassert\(ARRAY_SIZE\(priv->resets\),\s*priv->resets\);", "ret = 0;", body), snapshot)), 0)
+
+    def test_missing_cold_settle_delay_is_rejected(self):
+        self.assertNotEqual(self.run_contract(lambda body, snapshot: (
+            re.sub(r"usleep_range\(ZX279133_UNI_RESET_PHASE_US,\s*ZX279133_UNI_RESET_PHASE_US \+ 500\);", "(void)0;", body), snapshot)), 0)
+
+    def test_warm_reset_deassert_is_rejected(self):
+        self.assertNotEqual(self.run_contract(lambda body, snapshot: (
+            body.replace("\t\tif (!was_powered) {\n\t\t\tret = reset_control_bulk_deassert", "\t\tif (true) {\n\t\t\tret = reset_control_bulk_deassert"), snapshot)), 0)
+
+    def test_diagnostic_reset_deassert_is_rejected(self):
+        self.assertNotEqual(self.run_contract(lambda body, snapshot: (
+            body, snapshot.replace("\tlockdep_assert_held(&priv->lock);", "\tlockdep_assert_held(&priv->lock);\n\treset_control_bulk_deassert(ARRAY_SIZE(priv->resets), priv->resets);"))), 0)
 
     def test_snapshot_without_provider_mutex_is_rejected(self):
         self.assertNotEqual(self.run_contract(lambda body, snapshot: (

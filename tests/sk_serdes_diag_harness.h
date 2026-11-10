@@ -19,7 +19,7 @@ void *memcpy(void *destination, const void *source, size_t count) {
 #define __iomem
 #define BIT(x) (1U << (x))
 #define ARRAY_SIZE(x) (sizeof(x) / sizeof((x)[0]))
-#define CHECK(x) do { if (!(x)) return __LINE__; } while (0)
+#define CHECK(x) do { if (!(x)) return (__LINE__ % 254) + 1; } while (0)
 #define PHY_INTERFACE_MODE_SGMII 2
 #define PHY_INTERFACE_MODE_2500BASEX 3
 struct mutex { int held; };
@@ -38,6 +38,7 @@ static struct zx279133_uni_serdes priv_instance;
 static struct phy phy_instance = { &priv_instance };
 static int invariant_error, clock_refs, enable_failure, program_result, program_calls;
 static int writes, reads, reset_reads, reset_pulses, matches, logs;
+static int deassert_calls, deassert_successes, settle_calls, deassert_failure;
 static unsigned int last_diff1g, last_diff2g5, last_attempt;
 static int last_reset_rx, last_reset_tx, last_result;
 static void mutex_lock(struct mutex *p) { if (p->held) invariant_error++; p->held++; }
@@ -56,6 +57,20 @@ static u32 readl(const void *address) {
 static void writel(u32 value, void *address) { guarded(); writes++; *(u32 *)address = value; }
 static unsigned long clk_get_rate(struct clk *c) { guarded(); return c->rate; }
 static int reset_control_status(struct reset_control *r) { guarded(); reset_reads++; return r->status; }
+static int reset_control_bulk_deassert(size_t count, struct reset_control_bulk_data *resets) {
+    guarded(); deassert_calls++;
+    if (priv_instance.powered || count != 2) invariant_error++;
+    if (deassert_failure) return -6;
+    deassert_successes++;
+    for (size_t i = 0; i < count; ++i)
+        if (resets[i].rstc->status >= 0) resets[i].rstc->status = 0;
+    return 0;
+}
+static void usleep_range(unsigned int minimum, unsigned int maximum) {
+    guarded(); settle_calls++;
+    if (minimum != 4300 || maximum != 4800 || settle_calls != deassert_successes || deassert_failure)
+        invariant_error++;
+}
 static int clk_bulk_prepare_enable(size_t count, struct clk_bulk_data *clocks) {
     (void)count; (void)clocks;
     if (!priv_instance.lock.held) invariant_error++;
@@ -94,7 +109,10 @@ static void dev_info(struct device *dev, const char *format, ...) {
 static struct zx279133_uni_serdes *phy_get_drvdata(struct phy *p) { return p->priv; }
 static bool zx279133_uni_serdes_rate_matches(struct zx279133_uni_serdes *p) { (void)p; guarded(); return matches; }
 static int zx279133_uni_serdes_program_rate(struct zx279133_uni_serdes *p) {
-    (void)p; guarded(); program_calls++; return program_result;
+    guarded(); program_calls++;
+    if (!p->powered && (!deassert_successes || settle_calls != deassert_successes || deassert_failure)) invariant_error++;
+    if (reset_instances[0].status > 0 || reset_instances[1].status > 0) invariant_error++;
+    return program_result;
 }
 static int zx279133_uni_serdes_reset_pulse(struct zx279133_uni_serdes *p) {
     (void)p; guarded(); reset_pulses++; return 0;
@@ -112,6 +130,7 @@ static void reset_state(void) {
     reset_instances[0].status = 1; reset_instances[1].status = -524;
     invariant_error = clock_refs = enable_failure = program_result = program_calls = 0;
     writes = reads = reset_reads = reset_pulses = matches = logs = 0;
+    deassert_calls = deassert_successes = settle_calls = deassert_failure = 0;
     last_diff1g = last_diff2g5 = last_attempt = 0;
     last_reset_rx = last_reset_tx = last_result = 0;
 }
@@ -120,7 +139,20 @@ int main(void) {
     reset_state(); enable_failure = 1;
     CHECK(zx279133_uni_serdes_power_on(&phy_instance) == -5);
     CHECK(!reads && !reset_reads && !logs && !clock_refs && !priv_instance.rate_diag_count);
+    CHECK(!deassert_calls && !settle_calls && !program_calls);
     CHECK(!invariant_error && !priv_instance.lock.held);
+    /* Cold reset failure is not ignored; no settling, profile write or leaked ref. */
+    for (int mode = PHY_INTERFACE_MODE_SGMII; mode <= PHY_INTERFACE_MODE_2500BASEX; mode++) {
+        reset_state(); priv_instance.submode = mode; deassert_failure = 1;
+        CHECK(zx279133_uni_serdes_power_on(&phy_instance) == -6);
+        CHECK(deassert_calls == 1 && !settle_calls && !program_calls && !clock_refs && !priv_instance.powered);
+        CHECK(logs == 2 && last_result == -6 && !writes && !reset_pulses && !invariant_error && !priv_instance.lock.held);
+        /* The next cold attempt must retry deassert, not fake a successful init. */
+        deassert_failure = 0;
+        CHECK(zx279133_uni_serdes_power_on(&phy_instance) == 0);
+        CHECK(deassert_calls == 2 && settle_calls == 1 && program_calls == 1 && clock_refs == 1 && priv_instance.powered);
+        CHECK(!reset_pulses && !invariant_error && !priv_instance.lock.held);
+    }
     /* First/cold failures stay unpowered and release exactly their clock ref. */
     for (int mode = PHY_INTERFACE_MODE_SGMII; mode <= PHY_INTERFACE_MODE_2500BASEX; mode++) {
         reset_state(); priv_instance.submode = mode; program_result = -110;
@@ -130,9 +162,14 @@ int main(void) {
             CHECK(logs == (attempt < 3 ? attempt : 3) * 2);
         }
         CHECK(program_calls == 30 && reset_reads == 12 && last_attempt == 3);
-        CHECK(last_reset_rx == 1 && last_reset_tx == -524 && last_result == -110);
-        CHECK(!writes && !reset_pulses);
+        CHECK(last_reset_rx == 0 && last_reset_tx == -524 && last_result == -110);
+        CHECK(!writes && !reset_pulses && deassert_calls == 30 && settle_calls == 30);
     }
+    /* Reproduce the actual cold entry: RX released, TX held. No assert pulse. */
+    reset_state(); reset_instances[0].status = 0; reset_instances[1].status = 1;
+    CHECK(zx279133_uni_serdes_power_on(&phy_instance) == 0);
+    CHECK(last_reset_rx == 0 && last_reset_tx == 0 && deassert_calls == 1 && settle_calls == 1);
+    CHECK(!reset_pulses && !invariant_error && priv_instance.powered && clock_refs == 1);
     /* Powered/rate-change failure: keep clocks and mark a pending retry. */
     reset_state(); CHECK(zx279133_uni_serdes_power_on(&phy_instance) == 0);
     CHECK(clock_refs == 1 && priv_instance.powered && logs == 2);
@@ -143,7 +180,15 @@ int main(void) {
     CHECK(priv_instance.powered && priv_instance.rate_pending && clock_refs == 1 && logs == 4);
     program_result = 0; CHECK(zx279133_uni_serdes_power_on(&phy_instance) == 0);
     CHECK(!priv_instance.rate_pending && clock_refs == 1 && logs == 6);
-    CHECK(!writes && !reset_pulses && !invariant_error && !priv_instance.lock.held);
+    CHECK(!writes && !reset_pulses && deassert_calls == 1 && settle_calls == 1 && !invariant_error && !priv_instance.lock.held);
+    /* An already-running lane is not reset, even when reprogramming its rate. */
+    reset_state(); priv_instance.powered = true; clock_refs = 1;
+    reset_instances[0].status = reset_instances[1].status = 0; matches = 1;
+    CHECK(zx279133_uni_serdes_power_on(&phy_instance) == 0);
+    CHECK(!deassert_calls && !settle_calls && !logs && !program_calls && clock_refs == 1);
+    priv_instance.rate_pending = true;
+    CHECK(zx279133_uni_serdes_power_on(&phy_instance) == 0);
+    CHECK(!deassert_calls && !settle_calls && !reset_pulses && program_calls == 1 && clock_refs == 1 && !invariant_error);
     /* Profile comparison ignores only enable, not unrelated mode/rate bits. */
     for (int mode = 0; mode < 2; mode++) {
         reset_state();

@@ -481,7 +481,22 @@ static int zx279133_uni_serdes_power_on(struct phy *phy)
 			priv->rate_diag_count++;
 			zx279133_uni_serdes_rate_snapshot(priv, "before", 0);
 		}
-		ret = zx279133_uni_serdes_program_rate(priv);
+		/*
+		 * A cold loader path can leave TX held in reset even though RX is
+		 * released. Writing the rate image cannot release either reset.
+		 * Deassert only on first power-on: never pulse a working lane or
+		 * disturb the reset lifecycle during an in-place rate change.
+		 */
+		ret = 0;
+		if (!was_powered) {
+			ret = reset_control_bulk_deassert(ARRAY_SIZE(priv->resets),
+						  priv->resets);
+			if (!ret)
+				usleep_range(ZX279133_UNI_RESET_PHASE_US,
+					     ZX279133_UNI_RESET_PHASE_US + 500);
+		}
+		if (!ret)
+			ret = zx279133_uni_serdes_program_rate(priv);
 		if (diagnose)
 			zx279133_uni_serdes_rate_snapshot(priv, "after", ret);
 		if (ret) {
