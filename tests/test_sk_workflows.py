@@ -70,6 +70,7 @@ BRINGUP_STEPS = [
     "Gate: the built kernel is 7.3.4",
     "Gate: the board device tree compiles against the 7.3 tree",
     "Collect the images",
+    "Validate and export the partitions",
     "Upload the images",
 ]
 
@@ -330,6 +331,23 @@ def main():
     failures.check(any(str(step.get("uses") or "").startswith("actions/upload-artifact")
                        for step in upload),
                    "the upload step uses actions/upload-artifact")
+
+    # The board trial needs the three partition files, and the only honest
+    # way to get them is to take them out of the image the build produced:
+    # the release line's own tool validates the sysupgrade (fwtool metadata,
+    # CRC, board compatibility, member sizes, JFFS2 magic, and that the
+    # uImage decompresses to exactly the Image that was built) and exports
+    # the members verbatim.
+    print("\nthe 7.3 line validates the image and exports the partitions")
+    export_text = step_run_text(bringup, "build", "Validate and export the partitions")
+    failures.check(export_text != "", "the export step has a body")
+    failures.check("check_sysupgrade.py" in export_text,
+                   "the export step validates the sysupgrade image")
+    failures.check("arch/arm64/boot/Image" in export_text,
+                   "the export step compares against the kernel that was built")
+    for member in ("flash-uImage", "flash-dtb.bin", "flash-rootfs.jffs2"):
+        failures.check(member in export_text,
+                       f"the export step writes {member}")
 
     return failures.report("workflows")
 

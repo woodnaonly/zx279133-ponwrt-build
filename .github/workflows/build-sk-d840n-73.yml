@@ -594,6 +594,49 @@ jobs:
           cp -a "$BIN"/. images/
           ls -l images
 
+      # Validate the native sysupgrade image and export its members.
+      # This is the release line's own tool: it checks the fwtool metadata
+      # and its CRC, the board's compatibility string, that every member
+      # fits its partition, that the root really is a JFFS2 image - and
+      # that the uImage decompresses to exactly the Image that was built.
+      # It also writes the three partition files the flasher writes, which
+      # is what the board trial needs.
+      #
+      # The raw Image is looked for in two places because the kernel is an
+      # external tree here: the tree itself, and the build directory
+      # OpenWrt made for it.
+      - name: Validate and export the partitions
+        run: |
+          set -e
+          BIN=openwrt/bin/targets/zte/zx279133
+          RAW=""
+          for candidate in "$KERNEL_TREE/arch/arm64/boot/Image" \
+                            openwrt/build_dir/target-*/linux-*/linux-$KVER/arch/arm64/boot/Image; do
+            for f in $candidate; do
+              [ -f "$f" ] && RAW="$f" && break
+            done
+            [ -n "$RAW" ] && break
+          done
+          [ -n "$RAW" ] || { echo "::error::no raw Image for linux-$KVER"; exit 1; }
+          echo "raw kernel: $RAW"
+          SYS=$( { ls "$BIN"/*sysupgrade.bin 2>/dev/null || true; } | head -1 )
+          if [ -z "$SYS" ]; then
+            echo "::warning::no sysupgrade image under $BIN - nothing to validate or export"
+            exit 0
+          fi
+          echo "sysupgrade image: $SYS"
+          python3 tools/check_sysupgrade.py \
+            --image "$SYS" \
+            --raw-kernel "$RAW" \
+            --fwtool openwrt/staging_dir/host/bin/fwtool \
+            --export-dir . > sysupgrade-report.json
+          cat sysupgrade-report.json
+          ls -l flash-uImage flash-dtb.bin flash-rootfs.jffs2 \
+                flash-sysupgrade.bin immortalwrt-sk-d840n-sysupgrade.bin
+          cp -a flash-uImage flash-dtb.bin flash-rootfs.jffs2 \
+                flash-sysupgrade.bin immortalwrt-sk-d840n-sysupgrade.bin \
+                sysupgrade-report.json images/
+
       - name: Upload the images
         uses: actions/upload-artifact@v4
         with:
