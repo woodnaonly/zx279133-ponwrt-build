@@ -653,6 +653,55 @@ jobs:
           done
           grep -iE '^CONFIG_(ZTE_ZX279133|REALTEK|MDIO_ZX|NETFILTER)' "$KC" || true
 
+      # A device tree node whose "compatible" names a driver that was not
+      # built is SKIPPED SILENTLY by the kernel: the board boots, logs
+      # nothing wrong, and simply has no network port.  The release line has
+      # a gate for that; the 7.3 line had none, and the 7.3 tree is where
+      # the switch driver, the PON stack and the 9132 programming are our
+      # own code.
+      #
+      # What is asked here is not "is the driver in the tree" but "is the
+      # driver in the kernel that was built": a compatible string is in the
+      # image only when the driver that registers it was compiled in, and a
+      # driver built as a module puts its string into the .ko instead.  So
+      # this is also the check that would catch a driver of ours going back
+      # to being a module - the mistake this line already made once, when
+      # the NPU driver was "=m" and the image had no NPU in it at all.
+      #
+      # The gate is not the release line's awk program copied: it is a tool
+      # of this repository's own, because the release line's version would
+      # go red on the 7.3 tree over one node - the RGMII register window,
+      # which has a read-only probe in the 6.18 tree and deliberately has no
+      # driver in the 7.3 one (docs/101 八之五.9: a trade-off, not a gap).
+      # That node is carried as an exception with its reason, and the tool
+      # prints the exception rather than passing over it in silence.
+      - name: 'Gate: every compatible the device tree names has a driver'
+        run: |
+          set -e
+          KT=$( { ls -d openwrt/build_dir/target-*/linux-*/linux-$KVER 2>/dev/null || true; } | head -1 )
+          [ -n "$KT" ] || KT="$KERNEL_TREE"
+          IMG=""
+          for candidate in "$KT/arch/arm64/boot/Image" \
+                            "$KERNEL_TREE/arch/arm64/boot/Image"; do
+            [ -f "$candidate" ] && IMG="$candidate" && break
+          done
+          [ -n "$IMG" ] || {
+            echo "::error::no built kernel image for linux-$KVER; what is there:"
+            ls -l "$KT/arch/arm64/boot/" 2>&1 || true
+            exit 1; }
+          DTS=""
+          for candidate in "$KT/arch/arm64/boot/dts/zte/zx279133-sk-d840n.dts" \
+                            "$KERNEL_TREE/arch/arm64/boot/dts/zte/zx279133-sk-d840n.dts"; do
+            [ -f "$candidate" ] && DTS="$candidate" && break
+          done
+          [ -n "$DTS" ] || {
+            echo "::error::no board device tree for linux-$KVER; what is there:"
+            ls -l "$KT/arch/arm64/boot/dts/zte/" 2>&1 || true
+            exit 1; }
+          echo "kernel image: $IMG"
+          echo "device tree:  $DTS"
+          python3 tools/check-sk-dtb-compat.py --dts "$DTS" --image "$IMG"
+
       # The bring-up line's whole purpose is an image to put on the board,
       # and until the images are collected there is nothing to flash.  The
       # build has already made them under bin/targets - this step does not

@@ -42,6 +42,12 @@
    而且每一种失败在板子上都长得像「内核起不来」。已补上，并先在本机用
    kconfig 自己的三值依赖逻辑证明了那 39 个符号在这棵 7.3 树上**不会被夹成
    `=m`**。见 7.14。
+9. **7.3 线此前也没有「dtb 的每个 compatible 都有驱动」这道门禁**：一个没有驱动
+   的 compatible 会被内核**静默跳过**，板子照常起来，只是没有那个口。
+   这道门禁不能照抄 6.18 的版本（会因 RGMII 那个节点变红），
+   所以重写成了 `tools/check-sk-dtb-compat.py`，而且问的是更强的问题：
+   **compatible 字符串在不在已编译的内核镜像里**——所以它同时是
+   「驱动有没有退回成模块」的探测器。见 7.15。
 
 ---
 
@@ -301,15 +307,11 @@ CONFIG_EXTERNAL_KERNEL_TREE=<树>   OpenWrt 把这棵树当自己的内核目录
    要塞进固定 8 MiB 的 `kernel` 分区；镜像 profile 的 `KERNEL_SIZE := 8192k`
    会让 OpenWrt 自己拒绝超尺寸的镜像，但「Collect the images」步会把字节数
    打进 annotation，超了就一眼看得见。
-7. **6.18 线还有两道「镜像好不好用」的门禁没搬到 7.3 线**：
-   `Gate: every dtb compatible has a driver in this kernel`（每个 `compatible`
-   在这颗内核里是不是真有驱动——一个没有驱动的 compatible 会被内核**静默跳过**，
-   板子照常起来，只是没有那个口）和
+7. **6.18 线还有一道「镜像好不好用」的门禁没搬到 7.3 线**：
    `Gate: ONU UI, protocol service and firewall4 reached the image`
    （根文件系统里有没有 LuCI、协议服务、firewall4）。
-   本轮补的是第三道（合并配置门禁），见 7.14。
-   前者要重新核对 7.3 树里 `zte,zx279133-*` 的 compatibles 集合（7.3 树多了
-   我们自己移植的交换表驱动与 PON/OMCI 栈），后者要 rootfs 清单。
+   本轮补的是合并配置门禁（7.14）和 dtb compatible 门禁（7.15）。
+   前者要 rootfs 清单，7.3 线现在还没有产出会列清单的步骤。
    另：「7.3 线要不要把整套 netfilter 钉成内置」——**不需要，它本来就是内置的**，
    见 7.14.2。
 
@@ -1115,24 +1117,86 @@ kconfig 把请求值和符号的**可见性**取 AND（`scripts/kconfig/symbol.c
 
 #### 7.14.6 未做
 
-6.18 那道 `Gate: every dtb compatible has a driver in this kernel`（400 多行 awk）
-和 `Gate: ONU UI, protocol service and firewall4 reached the image`
-**还没有搬过来**。前者要重新核对 7.3 树里 `zte,zx279133-*` 的 compatibles 集合，
-后者要 rootfs 清单；两者都值得做，但都不影响本节那道门禁的成立。
+6.18 那道 `Gate: ONU UI, protocol service and firewall4 reached the image`
+（根文件系统里有没有 LuCI、协议服务、firewall4）**还没有搬过来**。
+它要 rootfs 清单，7.3 线现在还没有产出会列清单的步骤。
 
-本机已经先把前者的**内容**查了一遍（`scratch/dtb_compat73.py`，读板级 DTS 源码，
+另一道（`Gate: every dtb compatible has a driver in this kernel`）**已经搬了**，
+但不是照抄：见 7.15。
+
+---
+
+### 7.15 dtb compatible 有驱动：这道门禁不能照抄，所以重写了一遍
+
+**判决**：6.18 线有一道门禁问「板级 DTS 里每个 `compatible` 在这颗内核里是不是
+真有驱动」。它**不能照抄**到 7.3 线上——照抄会因为一个节点变红。
+但它问的问题恰恰是 7.3 线最该问的，所以**重写了一个本仓库自己的工具**。
+
+#### 7.15.1 为什么不能照抄
+
+6.18 那道门禁扫的是 **编译出来的 dtb**（`dtc -I dtb -O dts`），并且对
+**每一个** `zte,zx279133-*` 的 compatible 做**整行匹配**
+（`grep -Fxq`，不是子串——因为子串搜索会把 `zte,zx279133-pon` 判成"存在"，
+只因为 `zte,zx279133-pon-serdes` 存在）。
+
+本机把这道门禁的**内容**先查了一遍（`scratch/dtb_compat73.py`，读板级 DTS 源码，
 因为本机没有 dtc）：7.3 板级 DTS 一共 **8 个 compatible**，
 其中 7 个在这棵 7.3 树里都有驱动，**只有 `zte,zx279133-rgmii` 没有**——
-而那正是第八之五.9 判明「取舍不是缺口」的那一项（6.18 有只读探针，7.3 没有）。
+而那正是八之五.9 判明「取舍不是缺口」的那一项（6.18 有只读探针，7.3 没有）。
 
-⇒ **所以这道门禁不能照搬**：照搬会在 7.3 线上因 RGMII 变红，
-必须带一份**明写理由**的例外清单。这是「照抄发布线」这件事在本项目里第二次不成立
-（第一次是 `pin_y` 被 kconfig 夹掉）。
+⇒ 照抄会在这一个节点上变红。所以例外清单必须**明写理由**，
+而不是把检查放宽。
 
-> 查这一遍时本机脚本自己也错了一次：`compatible = "zte,zx279133-rgmii"` 是
-> **一个**字符串，逗号在引号里面；按逗号切会把一个 compatible 切成两个
-> （`zte` 和 `zx279133-rgmii`）。6.18 那道门禁的注释里已经记着同一个坑
-> （dtc 写出来的列表是 `\0` 分隔的）。
+#### 7.15.2 新工具问的是更强的问题
+
+`tools/check-sk-dtb-compat.py` 问的不是「驱动在不在树里」，而是
+**「compatible 字符串在不在已编译的内核镜像里」**：
+
+- 驱动是**内建**时，它的 `of_match_table` 字符串在 `vmlinux` 里；
+- 驱动是**模块**时，字符串在 `.ko` 里，不在 `vmlinux` 里。
+
+⇒ 所以这道门禁同时是「驱动有没有退回成模块」的探测器，
+而那正是 7.3 线**已经犯过一次**的错（NPU 驱动 `=m` ⇒ 镜像里根本没有 NPU，
+也没有任何东西会加载它）。
+
+#### 7.15.3 写这个工具时抓到的四个坑（都在设备树解析上）
+
+1. **节点可以带标签**：`nppt: ethernet@19000000 {`。正则不认标签，
+   这个节点就**根本没被打开**，它的 compatible 记到了**父节点**头上——
+   而父节点是 `soc`。
+2. **板级树用 `&label { status = "okay"; }` 打开节点**。这个覆盖必须落到
+   它命名的那个节点上；不落的话，nppt 节点会保留 dtsi 里的 `"disabled"`，
+   于是门禁**跳过它**——而那恰恰是整道门禁最该看的一个节点。
+   这是**假放过**，比假报错更糟。
+3. **compatible 列表可以跨行**：`compatible = "zte,zx279133-uart", "arm,pl011",`
+   后面还有几行。只看单行会漏掉整个 uart 节点。
+4. **注释里也会出现 compatible**：板级树把厂商树的那一段**引用**在注释块里，
+   不剥注释就会凭空多出一个节点。
+
+另外两条是**规则**而不是 bug：
+5. **只查 `zte,zx279133-*` 这一族**。设备树里有大量**不是**设备 compatible 的
+   字符串——`arm,cortex-a53` 是 CPU 类型，cpu 驱动用 `cpu_type` 匹配，
+   根本没有 `of_match_table`；要求它有驱动字符串是在要求不可能的事。
+   6.18 那道门禁画的是同一条线，而这一族正是风险所在（每一个都是我们手搬的，
+   或者我们依赖的）。
+6. **有 fallback 的节点由 fallback 服务**：primary 没有驱动但 fallback 有，
+   不是错误（内核会绑到 fallback）；fallback 也没有才是错误。
+
+#### 7.15.4 ⇒ 门禁与验证
+
+- 7.3 线新增步 **`Gate: every compatible the device tree names has a driver`**，
+  跑 `python3 tools/check-sk-dtb-compat.py --dts <板级 DTS> --image <编出来的 Image>`。
+- 例外清单只有一条（`zte,zx279133-rgmii`），**带理由**；
+  契约测试**直接 import 工具**读那个清单（不在测试里抄第二份，抄的会漂），
+  并断言：清单**恰好**是这一条、每条理由不短于 80 字符。
+- **反向验证**：新增 6 处变异（工作流 4 处 + 工具 2 处），
+  其中「例外清单多一条」与「例外不写理由」都要转红。
+  连同之前的 22 处，共 **29 处**全绿。
+- **本机行为级演练**（`scratch/dtbcompat_check.py`）：
+  真实板级树必须过（且 RGMII 的例外要被**打印出来**）；
+  去掉 `zte,zx279133-nppt` / `zte,zx279133-switch` 的驱动字符串 ⇒ 转红并点名；
+  去掉 primary 但留着 fallback ⇒ 仍然绿并说明「falls back to 'arm,pl011'」；
+  去掉 fallback ⇒ 转红并点名；注释里的那个 RGMII 副本**不得**被算成第二个节点。
 
 ---
 
@@ -1958,4 +2022,10 @@ python3 scratch/boardgate_check.py
 # 22) 工作流里每一个 run: 块都必须能当 shell 解析
 python3 scratch/wf_shell_parse.py \
         --workflow ci-build-repo/.github/workflows/build-sk-d840n-73.yml
+
+# 23) dtb compatible 门禁的演练：真板级树必须过，缺驱动必须红
+python3 scratch/dtbcompat_check.py
+
+# 24) 板级 DTS 的 compatible 与 7.3 树的驱动对照
+python3 scratch/dtb_compat73.py --tree scratch/test73c
 ```

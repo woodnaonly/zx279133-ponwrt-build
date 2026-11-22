@@ -25,6 +25,7 @@ The last one matters as much as the parse: the 7.3 line is driven by a path
 filter, so a patch series that lands outside the filter builds nothing and the
 green run says nothing about it.
 """
+import importlib.util
 import re
 import sys
 from pathlib import Path
@@ -68,6 +69,7 @@ BRINGUP_STEPS = [
     "Compile",
     "Gate: the zte drivers are built into the kernel",
     "Gate: the merged kernel config carries the board requirements",
+    "Gate: every compatible the device tree names has a driver",
     "Gate: the built kernel is 7.3.4",
     "Gate: the board device tree compiles against the 7.3 tree",
     "Collect the images",
@@ -376,6 +378,51 @@ def main():
                    "the board requirements gate checks the built-in command line")
     failures.check("mtdblock7" in board_gate,
                    "the board requirements gate rejects the SR1010 root device")
+
+    # A device tree node whose "compatible" names a driver that was not
+    # built is skipped silently by the kernel: the board boots, logs nothing
+    # wrong, and simply has no network port.  The 7.3 line had no gate for
+    # that, and it is the line where the switch driver, the PON stack and
+    # the 9132 programming are our own code.
+    #
+    # What is asked is not "is the driver in the tree" but "is the driver in
+    # the kernel that was built": a compatible string is in the image only
+    # when the driver that registers it was compiled in.  So this gate is
+    # also the one that would catch a driver of ours going back to being a
+    # module - the mistake this line already made once.
+    print("\nthe 7.3 line checks that the device tree's compatibles have drivers")
+    compat_gate = step_run_text(
+        bringup, "build", "Gate: every compatible the device tree names has a driver")
+    failures.check(compat_gate != "", "the compatible gate has a body")
+    failures.check("tools/check-sk-dtb-compat.py" in compat_gate,
+                   "the compatible gate runs the repository's own tool")
+    failures.check("arch/arm64/boot/Image" in compat_gate,
+                   "the compatible gate reads the kernel that was built")
+    failures.check("zx279133-sk-d840n.dts" in compat_gate,
+                   "the compatible gate reads the board device tree")
+    failures.check("--image" in compat_gate and "--dts" in compat_gate,
+                   "the compatible gate hands the tool both the image and the tree")
+
+    # The exception list is a decision, not an accident, so it is pinned
+    # here: one entry, and it has to say why.  An exception without a
+    # reason is how a gap becomes invisible.
+    tool = ROOT / "tools" / "check-sk-dtb-compat.py"
+    failures.check(tool.is_file(), "the compatible tool exists")
+    exceptions = {}
+    if tool.is_file():
+        # The list is read out of the tool itself rather than parsed out of
+        # its source: the tool is the thing that decides what is allowed to
+        # have no driver, so a second copy of the list here could drift from
+        # the one that actually runs.
+        spec = importlib.util.spec_from_file_location("sk_dtb_compat", tool)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        exceptions = dict(getattr(module, "EXCEPTIONS", {}))
+        failures.check(sorted(exceptions) == ["zte,zx279133-rgmii"],
+                       "the exception list is exactly the RGMII node")
+        for name, reason in sorted(exceptions.items()):
+            failures.check(len(reason) > 80,
+                           f"the exception for {name} says why")
 
     # The bring-up line's whole purpose is an image to put on the board.
     # Until the images are collected there is nothing to flash, so the line
