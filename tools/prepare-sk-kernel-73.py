@@ -67,6 +67,30 @@ def load_lock(path=LOCK):
     require(patches, "empty patch series")
     lock["patches"] = patches
     lock["manifest_sha256"] = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+
+    # Our own patches, applied after the vendored series.  They are optional:
+    # a tree that only carries cnjn's series is still a tree this lock
+    # describes, and the difference is recorded in the provenance file.
+    local = []
+    local_manifest_path = ROOT / lock["local_manifest"]
+    if local_manifest_path.exists():
+        local_manifest = json.loads(local_manifest_path.read_text(encoding="utf-8"))
+        require(local_manifest["base"]["version"] == lock["version"],
+                "the local series targets a different kernel version")
+        require(local_manifest["base"]["source_tar_sha256"] == lock["source_tar_sha256"],
+                "the local series targets a different base tarball")
+        for item in local_manifest["patches"]:
+            name = item["file"]
+            require(name.endswith(".patch") and "/" not in name and ".." not in name,
+                    f"unsafe patch name: {name}")
+            payload = (ROOT / lock["local_patches_dir"] / name).read_bytes()
+            require(len(payload) == item["bytes"], f"local patch size changed: {name}")
+            require(hashlib.sha256(payload).hexdigest() == item["sha256"],
+                    f"local patch SHA256 changed: {name}")
+            local.append((name, payload))
+        lock["local_manifest_sha256"] = hashlib.sha256(
+            local_manifest_path.read_bytes()).hexdigest()
+    lock["local_patches"] = local
     return lock
 
 
@@ -149,7 +173,7 @@ def extract(tarball, tree, version):
     return tree
 
 
-def apply_series(tree, patches, marker_payload):
+def apply_series(tree, series, marker_payload):
     """Apply the series, one patch at a time, refusing anything that does not
     apply cleanly.  A partially applied driver is worse than no driver: the
     tree would still compile and the board would still boot.
@@ -167,10 +191,12 @@ def apply_series(tree, patches, marker_payload):
             state = {}
         require(state.get("manifest_sha256") == marker_payload["manifest_sha256"],
                 "the tree carries a series marker from a different manifest")
+        require(state.get("local_manifest_sha256") == marker_payload["local_manifest_sha256"],
+                "the tree carries a series marker from a different local manifest")
         require(state.get("version") == marker_payload["version"],
                 "the tree carries a series marker for a different kernel version")
         print(f"Series already applied in {tree} (marker {MARKER_NAME})", flush=True)
-        return [], [name for name, _ in patches]
+        return [], [name for _, name, _ in series]
 
     # A tree that already carries the driver but no marker was prepared by
     # something else.  Applying the series on top of it would half-work, so
@@ -182,8 +208,8 @@ def apply_series(tree, patches, marker_payload):
             "it was prepared by another tool - refusing to apply the series twice")
 
     applied = []
-    for name, payload in patches:
-        path = tree / ".sk-series" / name
+    for origin, name, payload in series:
+        path = tree / ".sk-series" / origin / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(payload)
         check = subprocess.run(
@@ -191,15 +217,15 @@ def apply_series(tree, patches, marker_payload):
              "--check", "--whitespace=nowarn", str(path)],
             capture_output=True, text=True)
         if check.returncode != 0:
-            raise ValueError(f"{name} does not apply cleanly:\n{check.stderr.strip()}")
+            raise ValueError(f"{origin}/{name} does not apply cleanly:\n{check.stderr.strip()}")
         run = subprocess.run(
             ["git", "-c", "core.autocrlf=false", "-C", str(tree), "apply",
              "--whitespace=nowarn", str(path)],
             capture_output=True, text=True)
         if run.returncode != 0:
-            raise ValueError(f"{name} failed to apply:\n{run.stderr.strip()}")
-        applied.append(name)
-        print(f"Applied {name}", flush=True)
+            raise ValueError(f"{origin}/{name} failed to apply:\n{run.stderr.strip()}")
+        applied.append(f"{origin}/{name}")
+        print(f"Applied {origin}/{name}", flush=True)
 
     # A positive check, not just "git said OK": the series is supposed to
     # leave a driver, a board tree and the DSA tagger behind, and a tree
@@ -277,12 +303,15 @@ def main():
     tree = extract(tarball, args.tree, lock["version"])
     require(kernel_version(tree) == lock["version"],
             f"tree is Linux {kernel_version(tree)}, expected {lock['version']}")
+    series = ([("vendored", name, payload) for name, payload in lock["patches"]] +
+              [("local", name, payload) for name, payload in lock["local_patches"]])
     marker_payload = {
         "version": lock["version"],
         "manifest_sha256": lock["manifest_sha256"],
-        "patches": [name for name, _ in lock["patches"]],
+        "local_manifest_sha256": lock.get("local_manifest_sha256"),
+        "patches": ["%s/%s" % (origin, name) for origin, name, _ in series],
     }
-    applied, skipped = apply_series(tree, lock["patches"], marker_payload)
+    applied, skipped = apply_series(tree, series, marker_payload)
     if args.openwrt:
         update_openwrt_version(args.openwrt, lock)
 
@@ -295,12 +324,14 @@ def main():
         "upstream": lock["upstream"],
         "manifest": lock["manifest"],
         "manifest_sha256": lock["manifest_sha256"],
+        "local_manifest": lock["local_manifest"],
+        "local_manifest_sha256": lock.get("local_manifest_sha256"),
         "patches_applied": applied,
         "patches_already_present": skipped,
         "source_directory": tree.as_posix(),
     }
     args.report.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
-    print(f"Prepared Linux {lock['version']} with {len(applied)} vendored patches"
+    print(f"Prepared Linux {lock['version']} with {len(applied)} patches"
           + (f" ({len(skipped)} already present)" if skipped else ""))
 
 

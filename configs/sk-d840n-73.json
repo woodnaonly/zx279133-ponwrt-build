@@ -13,6 +13,9 @@
   ],
   "manifest": "kernel-patches/7.3/MANIFEST.json",
   "patches_dir": "kernel-patches/7.3",
+  "_local_comment": "Our own changes to the 7.3 tree, applied after cnjn's series. They are the values this board was measured at, and they are kept in a directory of their own so that the vendored series stays byte-for-byte the upstream one.",
+  "local_manifest": "kernel-patches/7.3-local/MANIFEST.json",
+  "local_patches_dir": "kernel-patches/7.3-local",
   "_upstream_comment": "The vendored series is cnjn/immortalwrt target/linux/zte/patches-7.3 at this commit. It carries the whole ZX279133 NPU driver, which is why the tree is prepared outside OpenWrt instead of being downloaded by it.",
   "upstream": {
     "repo": "https://github.com/cnjn/immortalwrt",

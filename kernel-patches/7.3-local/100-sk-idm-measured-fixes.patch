@@ -1,0 +1,155 @@
+Subject: [PATCH] net: zte: zx279133: carry the measured IDM register values to 7.3
+
+The 6.18 overlay of this repository carries a set of IDM register values that
+were measured on this board rather than copied from upstream.  Linux 7.3
+rewrote the driver, and the rewrite kept the vendor's register image mostly
+as it was - so every one of those measurements has to be carried over
+explicitly, or the 7.3 driver programs the IDM with values this board has
+never run with.
+
+What is measured, and where the evidence is:
+
+  * The control word.  np_133.ko's idm_init() does
+    (v & 0xf00fffff) | 0x01f00000 and then |= 0x1000: bits 20 through 24
+    are set, bit 12 is set and bit 13 never is.  The proven vendor image
+    reads back 0x01ff1007.  The 7.3 tree writes 0x00f00000 and |= 0x00003000
+    (bits 12 AND 13), with bit 24 behind a header switch that is off.  So
+    the header switch goes on and bit 13 goes away.
+
+  * +0x0010 is g_idm_rx_bp_retev_num_th, which the stock device tree gives
+    as 0x40.  The 7.3 tree writes 128.
+
+  * +0x0014..+0x0034 are the per-queue routing words, and the reset default
+    is what this board's own vendor module leaves them at.
+
+  * +0x0038, +0x0070, +0x0074, +0x0090 and +0x0094.  The RX descriptor
+    count is the per-queue depth minus the 24 queue headers
+    (idm_rx_desc_init: sub w1, w1, #0x18), not depth - 1.
+
+  * The interrupt mask at +0x0040 and the source-to-IRQ routing at
+    +0x44/+0x48/+0x4c/+0x50.  The vendor's board holds zero in the mask -
+    every source is unmasked, and idm_int_enable()/idm_int_disable() do the
+    read-modify-write from there.  The four routing words are copied word
+    for word from this board's working vendor 4.19 boot: np_133.ko prints
+    "irq[0..3] sg_idm_irq_mask_conf(0x71ffbfb 0x200000 0x400000 0x800404)"
+    and its idm_int_mask_configure_init() stores exactly those four words,
+    one per line, to those four registers.  The previous 0xf00f/0x00ff0000/
+    0/0x0f00 split stranded sources 4..7 and 24..26 on no line at all and
+    sent 8, 9, 11 to local-test and 16..20 to the "idm" line, which is
+    never requested.
+
+  * +0x0124 is 0x80, and +0x0490 is 0 and +0x2c8 carries field bits[29:24]
+    = 0x12.  The last one is the word that was actually wrong on this
+    board: read with /sbin/devmem2 on the flashed mainline it holds
+    0x00112233, so the field is 0x00 and has to be programmed.
+
+  * +0x00bc is the TX queue-8 doorbell, which the vendor's bring-up clears.
+
+  * uIDM_TX_CFG_DEPTH is 0 in the 7.3 header because no writer was found.
+    The value this board needs is 0x400.
+
+What this patch does NOT do: the buffer-pool layout.  The 6.18 overlay has a
+separate jumbo pool (rx_jumbo_bp_dma) and three free rings; the 7.3 tree
+has four free rings and no jumbo pool, so +0x10c/+0x110 (the pool sizes,
+which are ring depths and not byte counts) and the jumbo pool base cannot
+be moved as constants - the 7.3 driver first has to grow a jumbo pool.
+That is a separate patch, and it is the reason this one stops at the
+register values.
+
+--- a/drivers/net/ethernet/zte/zx279133-idm.c
++++ b/drivers/net/ethernet/zte/zx279133-idm.c
+@@ -1389,7 +1389,14 @@ static void zx279133_idm_tx_configure(struct zx279133_eth *eth)
+ 	value = eth->idm_cfg_saved[0];
+ 	value |= 0x000f0000;
+ 	value = (value & 0xf00fffff) | 0x00f00000;
+-	value |= 0x00003000;
++	/*
++	 * np_133.ko's idm_init() does (v & 0xf00fffff) | 0x01f00000 - bits 20
++	 * through 24 - and then |= 0x1000, so bit 12 is set and bit 13 never
++	 * is.  The proven vendor image reads back 0x01ff1007.  Bit 24 comes
++	 * from zx279133_idm_cfg_bit24 below; bit 13 is dropped here because
++	 * the vendor does not set it.
++	 */
++	value |= 0x00001000;
+ 	value = (value & 0x8fffffff) | (ZX279133_IDM_RX_CFG_DEPTH << 28);
+ 	if (zx279133_idm_cfg_bit24)
+ 		value |= BIT(24);
+@@ -1397,22 +1404,25 @@ static void zx279133_idm_tx_configure(struct zx279133_eth *eth)
+ 
+ 	writel(lower_32_bits(eth->rx_descs_dma), idm + 0x0008);
+ 	writel(ZX279133_IDM_TX_CFG_DEPTH << 16, idm + 0x000c);
+-	writel(128, idm + 0x0010);
++	writel(0x00000040, idm + 0x0010);
+ 	for (i = 0x14; i <= 0x34; i += 4)
+-		writel(0x00800080, idm + i);
+-	writel(50000, idm + 0x0038);
++		writel(0x00010001, idm + i);
++	writel(0x00001000, idm + 0x0038);
+ 	writel(0x06060606, idm + 0x0054);
+ 	writel(0x00060606, idm + 0x0058);
+ 	writel(0x07070707, idm + 0x005c);
+ 	writel(0x07070707, idm + 0x0060);
+-	writel(ZX279133_IDM_RX_QUEUE_DESC_DEPTH - 1, idm + 0x0070);
+-	writel(0x00000210, idm + 0x0074);
+-	writel(20, idm + 0x0090);
+-	writel(1, idm + 0x0094);
++	writel(ZX279133_IDM_RX_QUEUE_DESC_DEPTH - 0x18, idm + 0x0070);
++	writel(0, idm + 0x0074);
++	writel(0, idm + 0x0090);
++	writel(0, idm + 0x0094);
+ 	writel(ZX279133_IDM_DESC_MODE, idm + 0x00c0);
+-	writel(0, idm + 0x0124);
++	writel(0, idm + 0x0490);
++	writel((readl(idm + 0x02c8) & 0xc0ffffffu) | 0x12000000u, idm + 0x02c8);
++	writel(0x00000080, idm + 0x0124);
+ 	writel(0x00000f49, idm + 0x03fc);
+ 	writel(7, idm + 0x05c0);
++	writel(0, idm + 0x00bc);
+ 
+ 	/*
+ 	 * Remaining vendor idm_init()/idm_cfg_int() register image: the
+@@ -1420,13 +1430,12 @@ static void zx279133_idm_tx_configure(struct zx279133_eth *eth)
+ 	 * pool configuration, and the normal/jumbo/extra free-ring bases. The
+ 	 * active normal ring is DMA coherent; unused rings retain vendor offsets.
+ 	 */
+-	writel(0x07ffffff, idm + 0x0040);
+-	writel(ZX279133_IDM_DIRECT_RX_MASK, idm + 0x0044);
+-	writel(0x00ff0000, idm + 0x0048);
+-	/* No vendor buffer-release callback is used by the page_pool path. */
+-	writel(0, idm + 0x004c);
+-	writel(ZX279133_IDM_LOCAL_MASK, idm + 0x0050);
+-	writel(0x000007c1, idm + 0x006c);
++	writel(0, idm + 0x0040);
++	writel(0x071ffbfb, idm + 0x0044);
++	writel(0x00200000, idm + 0x0048);
++	writel(0x00400000, idm + 0x004c);
++	writel(0x00800404, idm + 0x0050);
++	writel(0x00000800, idm + 0x006c);
+ 
+ 	writel(lower_32_bits(eth->rx_normal_bp_dma), idm + 0x0104);
+ 	writel(lower_32_bits(eth->idm_base + ZX279133_IDM_FREE_RING1),
+--- a/drivers/net/ethernet/zte/zx279133.h
++++ b/drivers/net/ethernet/zte/zx279133.h
+@@ -39,7 +39,12 @@
+ #define zx279133_tx_pon_control		0x08000000
+ #define zx279133_tx_word4_bit23		0
+ #define zx279133_tx_hw_csum		1
+-#define zx279133_idm_cfg_bit24		0
++/*
++ * Bit 24 of the IDM control word.  The vendor's own idm_init() sets it
++ * ((v & 0xf00fffff) | 0x01f00000), and the proven vendor image reads
++ * back 0x01ff1007, so the bit is on for this board.
++ */
++#define zx279133_idm_cfg_bit24		1
+ 
+ #define ZX279133_BMU_REQUIRED_SIZE	0x00ecc000
+ #define ZX279133_SE_HASH_REQUIRED_SIZE	0x01000000
+@@ -429,7 +434,7 @@
+ #define ZX279133_IDM_RX_QUEUE_DESC_DEPTH 2048
+ #define ZX279133_IDM_RX_CFG_DEPTH	1
+ #define ZX279133_IDM_DESC_MODE		0
+-#define ZX279133_IDM_TX_CFG_DEPTH	0
++#define ZX279133_IDM_TX_CFG_DEPTH	0x400
+ 
+ /*
+  * Per-queue doorbells and completion counters, recovered from

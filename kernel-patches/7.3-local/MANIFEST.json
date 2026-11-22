@@ -1,0 +1,18 @@
+{
+  "series": "kernel-patches/7.3-local",
+  "purpose": "This repository's own changes to the 7.3 tree. It is applied AFTER kernel-patches/7.3 (cnjn's series), and it only contains changes that were measured on this board - values the vendor's own module and this board's flashed image agree on.",
+  "applies_after": "kernel-patches/7.3",
+  "base": {
+    "version": "7.3.4",
+    "source_tar_sha256": "b11b6df8295e8e991ff040b71aaa4994a8b55caa23b6b092907f195b5840fd1f",
+    "upstream_commit": "31e2ac4ded9c8896c7aefd3dcb9a46ef77440fbd"
+  },
+  "patches": [
+    {
+      "file": "100-sk-idm-measured-fixes.patch",
+      "sha256": "b10218362e2c885f20d6c00fb5bbef2862b7b058ece560d48b6549610a86cf29",
+      "bytes": 6846,
+      "what": "The IDM register values this board was measured at: the control word's bit 24 and bit 13, the RX retev threshold at +0x0010, the per-queue routing words, the interrupt mask and the source-to-IRQ routing, the descriptor depth, and the words at +0x0490, +0x2c8, +0x124 and +0xbc. The buffer-pool layout is deliberately NOT here: the 7.3 tree has no jumbo pool, so that part needs a patch of its own."
+    }
+  ]
+}

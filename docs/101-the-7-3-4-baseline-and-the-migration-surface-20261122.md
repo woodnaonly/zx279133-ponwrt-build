@@ -229,7 +229,9 @@ CONFIG_EXTERNAL_KERNEL_TREE=<树>   OpenWrt 把这棵树当自己的内核目录
 | `overlays-73/target/linux/zte/Makefile` | 7.3 线的 zte target（`KERNEL_PATCHVER:=7.3` + 外部树要求） |
 | `.github/workflows/build-sk-d840n-73.yml` | 7.3 通道：手动触发 + 7.3 相关路径推送触发；只出镜像，不发布 |
 | `scripts/configure-sk-d840n.sh` | 一处改动：把硬编码的 `target/linux/zte/zx279133/config-6.18` 换成版本无关的 `$KCFG` |
-| `kernel-patches/7.3/` | 39 个补丁的 vendored 副本 + `MANIFEST.json`（上游 repo/branch/commit/date + 每补丁 sha256/bytes） |
+| `kernel-patches/7.3/` | cnjn 的 39 个补丁的 vendored 副本 + `MANIFEST.json`（上游 repo/branch/commit/date + 每补丁 sha256/bytes） |
+| `kernel-patches/7.3-local/` | **我们自己的**补丁，applied 在 vendored 系列之后；当前是 IDM 实测修正那一片 |
+| `tools/func-surface-diff.py` | 两代驱动的函数面对照，输出「只在我们这边」与「只在 7.3 那边」两张工作清单 |
 | `pon/npu-reverse/` | 逆向产物留档：99 个 API、rodata、函数表、initrd 清单、目标 DTS |
 
 **没有动的东西**：`kernel-overlays/`（6.18 世代驱动，一行未改）、`overlays/`（OpenWrt 侧，
@@ -260,16 +262,38 @@ CONFIG_EXTERNAL_KERNEL_TREE=<树>   OpenWrt 把这棵树当自己的内核目录
 
 ## 七、下一步（按片重打，每片一次 CI）
 
-1. **IDM 实测修正**（约 6 个函数 + 若干寄存器写值）。7.3 的
-   `zx279133-idm.c` 与 6.18 的 bring-up 序列一致（行号也一致），所以
-   `TX_CFG_DEPTH 0x400`、`+0x0010=0x40`、`+0x0124=0x80`、BP 环按深度计算、
-   `BP_RING_SIZE 8192` 这些可以直接平移。**风险最低，先做。**
-2. **9132 交换表 / switch.c**（约 63 个函数）。这是 SK-D840N 四个 GE 口能不能活的问题。
+**已落地：第 1 片（IDM 实测修正）的寄存器部分**，见
+`kernel-patches/7.3-local/100-sk-idm-measured-fixes.patch`：
+
+* 控制字：bit 24 打开（`zx279133_idm_cfg_bit24` 0 → 1）、bit 13 去掉；
+* `+0x0010` = 0x40（`g_idm_rx_bp_retev_num_th`，来自原厂 DT）；
+* `+0x0014..+0x0034` 路由字 = 0x00010001；
+* `+0x0038` = 0x00001000；`+0x0070` = 深度 − 0x18（24 个队列头）、
+  `+0x0074/+0x0090/+0x0094` = 0；
+* 中断掩码 `+0x0040` = 0，IRQ 路由 `+0x44/+0x48/+0x4c/+0x50` 照抄厂商
+  `sg_idm_irq_mask_conf(0x71ffbfb 0x200000 0x400000 0x800404)`，
+  `+0x006c` = 0x800；
+* `+0x0490` = 0、`+0x2c8` 字段 = 0x12、`+0x0124` = 0x80、`+0x00bc` = 0；
+* 头文件 `ZX279133_IDM_TX_CFG_DEPTH` 0 → 0x400。
+
+打上之后，本机逐条比对确认：**两代之间剩下的写入差异只剩 BP 池布局**
+（`+0x0108` 的 jumbo 池基址、`+0x010c/+0x0110` 的按深度环大小）。
+
+**没搬的，按片来：**
+
+1. **IDM 的 BP 池布局**（第 1 片的剩余部分）。7.3 树有 **4 个 free ring、没有
+   jumbo 池**（6.18 世代是 3 个 free ring + 一个独立的 `rx_jumbo_bp_dma`），
+   而 `+0x010c/+0x0110` 写的是**环深度**而不是字节数
+   （正常 0x203d00 / jumbo 0x3d00，与厂商板实测一致）。所以这不是改常量，
+   而是**先让 7.3 驱动长出一个 jumbo 池**，再把环大小按深度算出来。
+2. **IDM 的其余重写**（RX page 跟踪、XSK、校验和判定、TX 回收等，约 78 个 hunk）。
+   这一块比我们 overlay 与 6.18 fork 的差异还大，属于驱动重写而不是移植。
+3. **9132 交换表 / switch.c**（约 63 个函数）。这是 SK-D840N 四个 GE 口能不能活的问题。
    需要把 6.18 世代的 `zx279133_9132_*` 挂到 7.3 的 `native.c`/`host.c` 结构上。
-3. **PON / OMCI**（约 56 个函数）。工作量最大，且和第 5 条「cnjn 会不会公开
+4. **PON / OMCI**（约 56 个函数）。工作量最大，且和第 5 条「cnjn 会不会公开
    npu-pon.ko」强相关。
-4. **RGMII 调试**（8 个函数）与 **netdev/main/mac 的健壮性修正**（约 28 个函数），
-   随 1~3 一起带。
+5. **RGMII 调试**（8 个函数）与 **netdev/main/mac 的健壮性修正**（约 28 个函数），
+   随 2~4 一起带。
 
 验收口径与 6.18 线一致：**CI 绿 + 门禁脚本全过 + 实机启动后
 `/proc/net/dev` 有预期网口、`ethtool -S` 计数在涨**。

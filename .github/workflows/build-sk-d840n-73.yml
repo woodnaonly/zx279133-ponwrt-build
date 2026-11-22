@@ -40,7 +40,7 @@ on:
   push:
     paths:
       - .github/workflows/build-sk-d840n-73.yml
-      - kernel-patches/7.3/**
+      - kernel-patches/**
       - tools/prepare-sk-kernel-73.py
       - tools/apply-sk-overlay-73.sh
       - tools/prepush.py
