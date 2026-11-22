@@ -370,6 +370,15 @@ def main():
                    "the prepare function calls the programming in order"
                    + (f" (it calls {ordered})" if ordered != CALL_ORDER else ""))
 
+    # The baseline read has to come before the first thing that writes the
+    # 9132's per-port words - otherwise it reports the driver's own words
+    # and not the bootloader's.
+    early = prepare.find("zx279133_nppu_early_prepare(")
+    baseline = prepare.find("zx279133_9132_port_words_read(")
+    report.require(baseline >= 0 and (early < 0 or baseline < early),
+                   "the baseline read comes before anything writes the "
+                   "9132's per-port words")
+
     print("the board device tree")
     dts = tree / "arch" / "arm64" / "boot" / "dts" / "zte" / "zx279133-sk-d840n.dts"
     if dts.is_file():

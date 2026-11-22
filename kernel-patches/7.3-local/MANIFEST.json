@@ -40,8 +40,8 @@
     },
     {
       "file": "150-sk-9132-switch-programming.patch",
-      "sha256": "1cc8b24997200b4a083b307d28580e50aa7223306154cef3bc17fb28acb5b953",
-      "bytes": 70935,
+      "sha256": "d7d6cc44d1f265bfaae9d842e17c7c1af98a2e5f53c13eb12634ac2fee8a206e",
+      "bytes": 71010,
       "what": "The 9132 switch chip's own programming, moved from the 6.18 generation's np.c word for word: the per-port words, the flood groups, the CPU path, the outport map, the isolation matrix, the protocol action table and the PHY enable. The 7.3 tree had the chip's DSA front end and none of this, so the four jacks and the 2.5G port were registered and never configured. The patch also adds the ERAM table bookkeeping the switch tables need - the SE allocator hands the blocks out in order, so a table's base is not a constant - and records the descriptors where the allocation happens. The IDM's source port is the 9132's PPU number, so the PPU is mapped onto the transport VID range, and the transmit drain reclaims the OMCI management queue that shares the ring."
     }
   ]

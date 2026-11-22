@@ -324,7 +324,7 @@ Not in this patch:
  			ret = zx279133_se_sdt_eram_write(eth, sdt_no, depth,
  							 base, a);
  			if (ret)
-@@ -2930,90 +3116,1507 @@ static void zx279133_sipc_final_restore(struct zx279133_eth *eth)
+@@ -2930,90 +3116,1508 @@ static void zx279133_sipc_final_restore(struct zx279133_eth *eth)
  	eth->sipc_final_prepared = false;
  }
  
@@ -1768,6 +1768,13 @@ Not in this patch:
 +	zx279133_spa_prepare(eth);
 +	dev_info(eth->dev, "NP init: SPA attributes done\n");
 +
++	/*
++	 * The 9132's own per-port words, read before anything writes them:
++	 * what the bootloader left is worth knowing and worth keeping.  This
++	 * has to come before the first thing that touches a port's words.
++	 */
++	zx279133_9132_port_words_read(eth);
++
 +	dev_info(eth->dev, "NP init: NPPU early setup begin\n");
 +	ret = zx279133_nppu_early_prepare(eth);
 +	if (ret) {
@@ -1807,12 +1814,6 @@ Not in this patch:
 +		goto err_route_off;
 +	}
 +	dev_info(eth->dev, "NP init: LAN port bring-up done\n");
-+
-+	/*
-+	 * The 9132's own per-port words, read before anything writes them:
-+	 * what the bootloader left is worth knowing and worth keeping.
-+	 */
-+	zx279133_9132_port_words_read(eth);
 +
 +	dev_info(eth->dev, "NP init: 9132 ports begin\n");
 +	ret = zx279133_9132_port_init(eth);

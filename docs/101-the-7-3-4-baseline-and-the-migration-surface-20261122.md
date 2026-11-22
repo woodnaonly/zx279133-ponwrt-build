@@ -1157,13 +1157,19 @@ OMCI 把帧写进 `eth->tx_descs + eth->omci_producer`，`omci_producer`
 ### 8之五.4 补丁 150：逐文件说明
 
 `kernel-patches/7.3-local/150-sk-9132-switch-programming.patch`
-（70935 字节，sha256 `1cc8b24997200b4a083b307d28580e50aa7223306154cef3bc17fb28acb5b953`），
-改 2 个文件、1685 行新增 / 65 行删除：
+（71010 字节，sha256 `d7d6cc44d1f265bfaae9d842e17c7c1af98a2e5f53c13eb12634ac2fee8a206e`），
+改 2 个文件、1686 行新增 / 65 行删除：
 
 | 文件 | 改了什么 |
 |---|---|
 | `drivers/net/ethernet/zte/zx279133-np.c` | 加 4 个头（`<linux/mdio.h>`、`<linux/mii.h>`、`<linux/of.h>`、`<linux/of_mdio.h>`）与 `#include "zx279133-9132.h"`；加 ERAM 表描述符与 4 个位操作助手；加 22 个 9132 编程函数与 6 张数据表；`zx279133_se_sdt_create()` 里记录 ERAM 描述符（4 行）；`zx279133_np_prepare()` 里按 6.18 的顺序调用这 10 步 |
 | `drivers/net/ethernet/zte/zx279133-idm.c` | `zx279133_idm_rx_lan_vport()` 加 PPU→transport VID 映射（7 行）；`zx279133_idm_tx_drain()` 回收 OMCI 管理队列并等 `omci_pending`（2 行） |
+
+**调用顺序必须与 6.18 一致**，其中一处容易放错：
+「端口字基线读取」（`zx279133_9132_port_words_read()`）在 6.18 里是
+**`zx279133_spa_prepare()` 之后、`zx279133_nppu_early_prepare()` 之前**——
+它的用途是读出 bootloader 留下的每端口字，放晚了读到的就是驱动自己写的值。
+门禁里有一条专门盯这个位置（反向验证已实测：挪到 SMCT 之后门禁转红）。
 
 搬运是**逐字**的：从 6.18 的 `np.c` 里按 44 个区块（1419 行，含注释）原样取出，
 按依赖顺序拼进 7.3 的 `np.c`。脚本 `scratch/port_9132.py` 会在写盘前拒绝两件事：
