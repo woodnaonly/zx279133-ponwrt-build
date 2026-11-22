@@ -121,6 +121,38 @@ jobs:
             python3-pyelftools bc dwarves qemu-utils qemu-user re2c rsync scons squashfs-tools subversion swig texinfo \
             uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev zstd
 
+      # The image's kernel is compressed by zopfli, not gzip.  The image
+      # profile's Build/skd840n-gzip runs
+      #   $(SKD840N_HOST_PYTHON) -u scripts/skd840n-mkgzip.py ...
+      # and that script does "import zopfli.gzip" with no fallback: the
+      # fixed 8 MiB kernel partition cannot be reached with gzip -9
+      # (measured on the 6.18 line: 8,397,374 bytes against 8,388,608,
+      # 8,766 over), which is the whole reason the script exists.
+      #
+      # So the build needs the Python binding, and it needs it under the
+      # interpreter the image profile is told to use: SKD840N_HOST_PYTHON,
+      # which the profile leaves at its default of "python3".
+      #
+      # The 6.18 release line has this step; the 7.3 line had none, so its
+      # image stage would have died with "ModuleNotFoundError: No module
+      # named 'zopfli'" - after the kernel had been compiled, which is the
+      # most expensive place to find out.
+      - name: The firmware tools
+        run: |
+          set -euo pipefail
+          python3 -m venv "$RUNNER_TEMP/skd840n-firmware-venv"
+          PY="$RUNNER_TEMP/skd840n-firmware-venv/bin/python"
+          "$PY" -m pip install --quiet --disable-pip-version-check 'zopfli==0.4.3' 'PyYAML==6.0.3'
+          echo "SKD840N_HOST_PYTHON=$PY" >> "$GITHUB_ENV"
+          # Assert the two things the image stage depends on: the binding
+          # is importable, and the script the image profile runs imports
+          # cleanly under this interpreter.  The import in mkgzip.py is at
+          # module level, so loading the module is the assertion.
+          "$PY" -c 'import zopfli.gzip; assert zopfli.gzip.compress(b"x"); print("zopfli is here")'
+          "$PY" -c 'import importlib.util; spec = importlib.util.spec_from_file_location("mkgzip", "tools/mkgzip.py"); module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module); print("mkgzip.py imports cleanly")'
+          grep -qx "SKD840N_HOST_PYTHON=$PY" "$GITHUB_ENV" || {
+            echo "::error::SKD840N_HOST_PYTHON did not reach the build"; exit 1; }
+
       # The OMCI engine is a Rust package: overlays/package/libs/libzxpon-omci
       # builds it with cargo for aarch64-unknown-linux-musl.  The 6.18 line
       # installs the toolchain in its own step; this line had none, so

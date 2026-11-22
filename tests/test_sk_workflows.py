@@ -50,6 +50,7 @@ BRINGUP_JOBS = {"check-gates", "build"}
 
 # The steps of the 7.3 line that carry the whole point of the line.
 BRINGUP_STEPS = [
+    "The firmware tools",
     "Rust 1.96.1 for the OMCI engine",
     "Prepare the Linux 7.3.4 tree",
     "Check the board layer against the 7.3 tree",
@@ -256,6 +257,21 @@ def main():
                        f"{workflow} adds the aarch64 musl target")
         failures.check("ZX_CARGO=" in text,
                        f"{workflow} hands ZX_CARGO to the build")
+
+    # The image's kernel is compressed by zopfli, not gzip: mkgzip.py does
+    # "import zopfli.gzip" with no fallback, because gzip -9 cannot fit the
+    # fixed 8 MiB kernel partition.  Without the binding the image stage
+    # dies with a ModuleNotFoundError - after the kernel has been compiled,
+    # which is the most expensive place to find out.
+    print("\nthe 7.3 line has the tools the image stage needs")
+    tools_text = step_run_text(bringup, "build", "The firmware tools")
+    failures.check(tools_text != "", "the firmware tools step has a body")
+    failures.check("zopfli==0.4.3" in tools_text,
+                   "the 7.3 line installs zopfli")
+    failures.check('SKD840N_HOST_PYTHON=$PY" >> "$GITHUB_ENV"' in tools_text,
+                   "the 7.3 line tells the image profile which python to use")
+    failures.check("spec_from_file_location" in tools_text,
+                   "the 7.3 line checks that the image's own script imports")
 
     print("\nthe gate jobs only name tests that exist")
     for workflow, job in ((RELEASE, "check-led-gates"), (BRINGUP, "check-gates")):

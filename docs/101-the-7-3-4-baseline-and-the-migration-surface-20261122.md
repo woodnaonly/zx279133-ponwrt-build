@@ -929,6 +929,58 @@ cnjn 的 7.3 树把 offload 从 NPU 驱动里拆成独立的 `fnoffload.o`
 
 ---
 
+### 7.13 7.3 线的镜像阶段缺 zopfli：内核编完了也会死在打包上
+
+**判决**：7.3 线**即使内核编译成功**，镜像阶段也会失败，
+因为压缩内核的脚本要 `import zopfli.gzip`，而这条线既没装 zopfli，
+也没告诉镜像 profile 该用哪个 python。
+
+证据链：
+
+1. **镜像的内核是用 zopfli 压的，不是 gzip。**
+   `overlays/target/linux/zte/image/Makefile:15-18` 的 `Build/skd840n-gzip` 是
+   ```make
+   define Build/skd840n-gzip
+   	$(SKD840N_HOST_PYTHON) -u $(TOPDIR)/scripts/skd840n-mkgzip.py $@ $@.new 10
+   	mv $@.new $@
+   endef
+   ```
+   而 `SKD840N_HOST_PYTHON ?= python3`——**默认是系统的 python3**。
+2. **`scripts/skd840n-mkgzip.py` 顶层就是 `import zopfli.gzip`，没有兜底。**
+   为什么非要 zopfli：这块板的 `kernel` 分区是固定 8 MiB（8,388,608 字节），
+   脚本自己的注释记着——`gzip -9` 最好的一次是 8,397,374 字节，**还差 8,766 字节**
+   （zlib 其它策略更差：Z_RLE 13.4 MB、Z_FIXED 9.4 MB、Z_HUFFMAN_ONLY 13.8 MB、
+   Z_FILTERED 9.3 MB），而 zopfli 十次迭代加分块是 8,069,537 字节。
+   `mtd write` 会**无声地截断**超长的镜像，只有 `mtd verify` 才看得出来。
+   ⇒ gzip 不是「更好的选择」，是**装不下**。
+3. **6.18 发布线有这一步，7.3 线没有。**
+   `build-sk-d840n.yml:180-190` 有「Prepare firmware tools and upgrade regression tests」：
+   建 venv、`pip install 'zopfli==0.4.3' 'PyYAML==6.0.3'`、
+   `echo "SKD840N_HOST_PYTHON=$PY" >> "$GITHUB_ENV"`。
+   `build-sk-d840n-73.yml` 里 **zopfli 一个字都没有**，
+   `SKD840N_HOST_PYTHON` 也没有 ⇒ 镜像阶段必然
+   `ModuleNotFoundError: No module named 'zopfli'`。
+4. **这个失败点很贵。** 它在 `make` 的**最后**（`target/install` 出镜像），
+   也就是说内核已经编译完、用户态包也装完了，才在最后一步炸。
+   前 13 轮之所以没报这个错，是因为它们更早就死在 `libzxpon-omci` 上。
+
+**⇒ 修复**：7.3 线补上同样的一步（「The firmware tools」），
+并带**两条断言**：zopfli 的绑定能被 import；
+`tools/mkgzip.py` 自己能被 import（它的 import 在顶层，所以「模块能加载」就是那条断言）。
+还断言 `SKD840N_HOST_PYTHON` 真的进了 `$GITHUB_ENV`——不然后面那两条都白做。
+
+**⇒ 门禁**：`tests/test_sk_workflows.py` 新增一节「the 7.3 line has the tools the
+image stage needs」：必须钉 `zopfli==0.4.3`、必须把 `SKD840N_HOST_PYTHON=$PY`
+写进 `GITHUB_ENV`、必须检查镜像自己的脚本能被加载。
+反向验证里对应三处变异，逐一转红在对应的检查上。
+
+**⇒ 本机这一轮的收获**：`scratch/mkgzip_import_check.py` 在本机跑那条断言
+（本机没有 zopfli，用一个桩替身顶上——要验的是**模块加载那段代码**，不是编码器），
+并且**同时验了反面**：一个顶层 import 会失败的脚本**必须**加载失败，
+否则这条断言就是空的。
+
+---
+
 ## 八、BP 池：逐槽位对照（第 1 片剩余部分的结论）
 
 **判决**：**BP 池布局在 7.3 上不需要移植。** 我们 6.18 世代那套写法是
