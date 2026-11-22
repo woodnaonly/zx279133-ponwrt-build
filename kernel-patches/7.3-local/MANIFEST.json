@@ -13,6 +13,18 @@
       "sha256": "b10218362e2c885f20d6c00fb5bbef2862b7b058ece560d48b6549610a86cf29",
       "bytes": 6846,
       "what": "The IDM register values this board was measured at: the control word's bit 24 and bit 13, the RX retev threshold at +0x0010, the per-queue routing words, the interrupt mask and the source-to-IRQ routing, the descriptor depth, and the words at +0x0490, +0x2c8, +0x124 and +0xbc. The buffer-pool layout is deliberately NOT here: the 7.3 tree has no jumbo pool, so that part needs a patch of its own."
+    },
+    {
+      "file": "110-sk-idm-rx-frame-offset.patch",
+      "sha256": "1c7f8c46ddbfa25b439bf7fb027d32211497cb89c92fc59b4a07630b6e12ec07",
+      "bytes": 8908,
+      "what": "The RX frame lands 0x80 bytes into the buffer the driver hands to the IDM on this board - run 160 printed a whole ARP request and a whole IP/UDP frame at buffer + 0x80 while the driver looked at the head of the page. Four places move together: the page pool's .offset (which is what the cache invalidation and the device-side sync are taken from), the frame's data pointer, the XDP buffer, and the AF_XDP pool size check. The offset is a read-only module parameter so that one boot with zx279133.rx_frame_offset=0 can settle it on the hardware."
+    },
+    {
+      "file": "120-sk-idm-bp-refill-protocol.patch",
+      "sha256": "aa047d626db7c4c06f3c2c50ad59c9488b3301155f4dd6b5d36896c93a02c7ca",
+      "bytes": 2223,
+      "what": "IDM+0x100 takes the buffer count encoded, not the count: the vendor's idm_new_bp_update() writes one 0x400 pulse per 1024 buffers and then the remainders. The 7.3 tree writes the count itself and posts 2048 buffers at start-up, which is exactly a multiple of 1024 - so the hardware is told the pool is empty at every boot. The 7.3 tree has a single pool, so only the vendor's normal-pool field is written."
     }
   ]
 }

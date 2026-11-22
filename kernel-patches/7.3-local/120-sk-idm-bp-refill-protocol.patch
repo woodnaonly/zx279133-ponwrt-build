@@ -1,0 +1,48 @@
+Subject: [PATCH] net: zte: zx279133: ring the buffer-pool doorbell the way the vendor does
+
+IDM+0x100 does not take a buffer count.  The vendor's idm_new_bp_update()
+writes one 0x400 pulse per 1024 buffers and then the two remainders - the
+normal pool in bits 15:0 and the jumbo pool in bits 31:16 - and the
+hardware reads the count out of those fields.  Writing the count itself
+announces no buffers at all, and a count that is a multiple of 1024
+announces zero buffers (docs/45).
+
+The 7.3 tree writes the count.  It posts 2048 buffers at start-up -
+ZX279133_IDM_RX_BUFFER_COUNT - and 2048 is exactly such a multiple, so the
+one write the hardware is given at every boot says that the pool is empty.
+
+The 7.3 tree has a single pool, so only the normal field is written here;
+the jumbo field of the vendor's sequence has no pool to talk about.
+
+--- a/drivers/net/ethernet/zte/zx279133-idm.c
++++ b/drivers/net/ethernet/zte/zx279133-idm.c
+@@ -247,8 +247,28 @@ static unsigned int zx279133_idm_rx_flush_refill(struct zx279133_eth *eth)
+ 	spin_lock_bh(&eth->rx_buffer_lock);
+ 	count = eth->rx_refill_pending;
+ 	if (count) {
++		void __iomem *idm = eth->base + ZX279133_IDM_BASE;
++		u32 i;
++
+ 		dma_wmb();
+-		writel(count, eth->base + ZX279133_IDM_BASE + ZX279133_IDM_BP_REFILL);
++		/*
++		 * IDM+0x100 does not take a buffer count.  The vendor's
++		 * idm_new_bp_update() writes one 0x400 pulse per 1024
++		 * buffers and then the two remainders - the normal pool in
++		 * bits 15:0 and the jumbo pool in bits 31:16.  The hardware
++		 * reads the count out of those fields, so writing the count
++		 * itself announces no buffers at all, and a count that is a
++		 * multiple of 1024 announces zero buffers.
++		 *
++		 * The 7.3 driver posts 2048 buffers at start-up -
++		 * ZX279133_IDM_RX_BUFFER_COUNT, and exactly such a multiple -
++		 * so the plain count would leave the hardware with an empty
++		 * pool at every boot.  The 7.3 tree has a single pool, so
++		 * only the normal field is written here.
++		 */
++		for (i = 0; i < (count >> 10); i++)
++			writel(0x400, idm + ZX279133_IDM_BP_REFILL);
++		writel(count & 0x3ff, idm + ZX279133_IDM_BP_REFILL);
+ 		eth->rx_refill_pending = 0;
+ 	}
+ 	spin_unlock_bh(&eth->rx_buffer_lock);

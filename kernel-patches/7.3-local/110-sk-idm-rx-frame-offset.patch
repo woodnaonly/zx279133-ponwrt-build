@@ -1,0 +1,206 @@
+Subject: [PATCH] net: zte: zx279133: read the RX frame where this board puts it
+
+The 6.18 overlay of this repository reads the received frame 0x80 bytes into
+the buffer it hands to the IDM, because on this board that is where the frame
+lands.  The 7.3 tree reads it at the payload offset, and hands the stack the
+bytes the page happened to hold before.
+
+The evidence is this board's own, and it is a measurement rather than a
+reading of code.  Run 160 printed the whole page a descriptor named: an ARP
+request and an IP/UDP frame, both whole, both at buffer + 0x80, with the
+bytes in front of them still holding what the page had held before - zeros
+in one run, 0xff in another.  The descriptor named the address the driver
+had posted, and the driver's own check insisted on it and held for every
+frame, so the frame was 128 bytes further in than the driver looked
+(docs/77).
+
+This is a property of the board and not of the driver generation: the IDM
+registers this patch builds on are the ones the board was measured at (the
+100-sk-idm-measured-fixes patch), and run 160 was taken after that patch was
+in.  So the measurement describes the same hardware the 7.3 tree drives.
+
+Four places have to move together, because they are four different ways of
+naming the same address:
+
+  * the pool's .offset, which is where the page pool believes the hardware
+    writes.  Both the cache invalidation (page_pool_dma_sync_for_cpu() adds
+    the pool's offset to the one it is handed) and the device-side sync
+    (page_pool_put_full_page()) are taken from it, so this is the one
+    place that carries the offset.
+
+  * the data pointer of the frame, and the XDP buffer that is handed to the
+    BPF program.
+
+  * the AF_XDP path, where the frame sits zx279133_idm_rx_frame_offset bytes
+    into the UMEM frame, so the size has to cover the gap and the data
+    pointer has to point at the frame.
+
+  * the size check on an AF_XDP pool, which has to leave room for the gap
+    as well.
+
+The offset is a module parameter, read-only on purpose: it has to be the
+same for every buffer of a pool, and a pool that is already posted cannot
+be moved under the hardware.  One boot with zx279133.rx_frame_offset=0 is
+enough to tell the two shapes apart on the board instead of on paper.
+
+--- a/drivers/net/ethernet/zte/zx279133-idm.c
++++ b/drivers/net/ethernet/zte/zx279133-idm.c
+@@ -23,6 +23,16 @@
+ 
+ #include "zx279133.h"
+ 
++/*
++ * How far into the buffer the driver hands to the IDM the frame actually
++ * lands.  Zero is what the upstream tree assumes; 0x80 is what this board
++ * was measured at (see the comment on ZX279133_IDM_RX_FRAME_OFFSET).
++ */
++unsigned int zx279133_idm_rx_frame_offset = ZX279133_IDM_RX_FRAME_OFFSET;
++module_param(zx279133_idm_rx_frame_offset, uint, 0444);
++MODULE_PARM_DESC(zx279133_idm_rx_frame_offset,
++	"Bytes between the address the driver hands to the IDM and the frame itself (0x80 on this board, 0 for the upstream layout)");
++
+ void zx279133_idm_set_masked(struct zx279133_eth *eth, u32 mask, bool masked)
+ {
+ 	void __iomem *idm = eth->base + ZX279133_IDM_BASE;
+@@ -60,7 +70,8 @@ static unsigned int zx279133_idm_rx_page_slot(u32 key)
+ 
+ static void zx279133_idm_rx_prefetch_payload(struct page *page)
+ {
+-	u8 *data = page_address(page) + ZX279133_IDM_RX_PAYLOAD_OFFSET;
++	u8 *data = page_address(page) + ZX279133_IDM_RX_PAYLOAD_OFFSET +
++		   zx279133_idm_rx_frame_offset;
+ 
+ 	prefetch(data);
+ 	prefetch(data + L1_CACHE_BYTES);
+@@ -419,7 +430,8 @@ static void zx279133_idm_rx_sync_for_device(struct zx279133_eth *eth,
+ 	dma_addr_t dma = page_pool_get_dma_addr(page);
+ 
+ 	dma_sync_single_range_for_device(eth->dev, dma,
+-					 ZX279133_IDM_RX_PAYLOAD_OFFSET, len,
++					 ZX279133_IDM_RX_PAYLOAD_OFFSET +
++					 zx279133_idm_rx_frame_offset, len,
+ 					 DMA_BIDIRECTIONAL);
+ }
+ 
+@@ -596,7 +608,16 @@ static int zx279133_idm_rx_process_queue(struct zx279133_eth *eth,
+ 				u64_stats_inc(&stats->rx_page_alloc_failures);
+ 			}
+ 
+-			xsk_buff_set_size(xdp, len);
++			/*
++			 * The frame is not at the head of the buffer: it is
++			 * zx279133_idm_rx_frame_offset bytes into it.  The
++			 * size therefore has to cover the gap as well, and
++			 * the data pointer has to point at the frame and
++			 * not at the buffer.
++			 */
++			xsk_buff_set_size(xdp, zx279133_idm_rx_frame_offset + len);
++			xdp->data += zx279133_idm_rx_frame_offset;
++			xdp->data_meta = xdp->data;
+ 			xsk_buff_dma_sync_for_cpu(xdp);
+ 			data = xdp->data;
+ 			if (!lan_source)
+@@ -681,9 +702,16 @@ xsk_recycle:
+ 		if (replacement) {
+ 			refill++;
+ 		}
++		/*
++		 * The pool is created with .offset = the payload offset plus
++		 * the frame offset, and page_pool_dma_sync_for_cpu() adds the
++		 * pool's offset to the one it is handed, so the offset to
++		 * pass here is zero.
++		 */
+ 		page_pool_dma_sync_for_cpu(zx279133_rx_page_pool(page), page, 0, len);
+ 		zx279133_idm_rx_prefetch_payload(page);
+-		data = page_address(page) + ZX279133_IDM_RX_PAYLOAD_OFFSET;
++		data = page_address(page) + ZX279133_IDM_RX_PAYLOAD_OFFSET +
++		       zx279133_idm_rx_frame_offset;
+ 
+ 		if (!lan_source) {
+ 			struct bpf_prog *xdp_prog =
+@@ -696,7 +724,8 @@ xsk_recycle:
+ 				xdp_init_buff(&xdp, ZX279133_RX_PAGE_SIZE,
+ 					      &eth->xdp_rxq[(queue & 7) >> 2]);
+ 				xdp_prepare_buff(&xdp, page_address(page),
+-						 ZX279133_IDM_RX_PAYLOAD_OFFSET,
++						 ZX279133_IDM_RX_PAYLOAD_OFFSET +
++						 zx279133_idm_rx_frame_offset,
+ 						 len, false);
+ 				xdp_ran = true;
+ 				act = bpf_prog_run_xdp(xdp_prog, &xdp);
+--- a/drivers/net/ethernet/zte/zx279133-main.c
++++ b/drivers/net/ethernet/zte/zx279133-main.c
+@@ -618,7 +618,15 @@ static int zx279133_eth_probe(struct platform_device *pdev)
+ 			.napi = &eth->napi,
+ 			.dma_dir = DMA_BIDIRECTIONAL,
+ 			.max_len = ZX279133_IDM_RX_FRAME_LIMIT,
+-			.offset = ZX279133_IDM_RX_PAYLOAD_OFFSET,
++			/*
++			 * The pool's offset is where the hardware writes
++			 * the frame, and both the cache invalidation and
++			 * the device-side sync of the page pool are taken
++			 * from it - so this is the one place that has to
++			 * carry the frame offset.
++			 */
++			.offset = ZX279133_IDM_RX_PAYLOAD_OFFSET +
++				   zx279133_idm_rx_frame_offset,
+ 			.netdev = ndev,
+ 			.queue_idx = 0,
+ 			.flags = PP_FLAG_DMA_MAP | PP_FLAG_DMA_SYNC_DEV,
+--- a/drivers/net/ethernet/zte/zx279133-netdev.c
++++ b/drivers/net/ethernet/zte/zx279133-netdev.c
+@@ -758,7 +758,8 @@ static int zx279133_xsk_pool_cycle(struct zx279133_eth *eth,
+ 	if (pool == old_pool)
+ 		return 0;
+ 	if (pool && xsk_pool_get_rx_frame_size(pool) <
+-		    eth->ndev->mtu + ETH_HLEN + VLAN_HLEN)
++		    zx279133_idm_rx_frame_offset + eth->ndev->mtu +
++		    ETH_HLEN + VLAN_HLEN)
+ 		return -EINVAL;
+ 	if (pool) {
+ 		xsk_pool_set_rxq_info(pool, &eth->xsk_rxq);
+@@ -953,7 +954,8 @@ static int zx279133_change_mtu(struct net_device *ndev, int new_mtu)
+ 	struct xsk_buff_pool *pool = READ_ONCE(eth->xsk_pool);
+ 
+ 	if (pool && xsk_pool_get_rx_frame_size(pool) <
+-		    new_mtu + ETH_HLEN + VLAN_HLEN)
++		    zx279133_idm_rx_frame_offset + new_mtu +
++		    ETH_HLEN + VLAN_HLEN)
+ 		return -EINVAL;
+ 	WRITE_ONCE(ndev->mtu, new_mtu);
+ 	return 0;
+--- a/drivers/net/ethernet/zte/zx279133.h
++++ b/drivers/net/ethernet/zte/zx279133.h
+@@ -405,6 +405,32 @@
+ #define ZX279133_MAX_MTU		ZX279133_LAN_USER_MAX_MTU
+ #define ZX279133_IDM_RX_FRAME_LIMIT	(ZX279133_MAX_MTU + ETH_HLEN + \
+ 					 VLAN_HLEN)
++/*
++ * The frame is not at the head of the buffer the driver hands to the IDM.
++ *
++ * The descriptor that comes back names the address the driver posted - the
++ * driver's own check insists on it, and it holds for every frame - and the
++ * frame is 128 bytes further in.  Run 160 printed the whole page: an ARP
++ * request and an IP/UDP frame, both whole, both at buffer + 0x80, with the
++ * bytes in front of them still holding whatever the page had held before
++ * (zeros in one run, 0xff in another).  So the driver was reading a buffer
++ * that had never been written and handing the stack that buffer's
++ * leftovers (docs/77).
++ *
++ * That is a property of this board, not of the driver generation: the IDM
++ * registers are already the ones this board was measured at (the 100-
++ * sk-idm-measured-fixes patch), and the measurement was taken after that
++ * patch was in.  The upstream tree reads the frame at the payload offset
++ * and hands the stack the leftovers.
++ *
++ * The value is a module parameter so that one boot with
++ * zx279133.rx_frame_offset=0 can settle the two shapes on the hardware
++ * instead of on paper.  It is read-only on purpose: the offset has to be
++ * the same for every buffer of a pool, and a pool that is already posted
++ * cannot be moved under the hardware.
++ */
++#define ZX279133_IDM_RX_FRAME_OFFSET	0x80
++extern unsigned int zx279133_idm_rx_frame_offset;
+ #define ZX279133_RX_PAGE_ORDER		0
+ #define ZX279133_RX_PAGE_SIZE		(PAGE_SIZE << ZX279133_RX_PAGE_ORDER)
+ #define ZX279133_RX_REFILL_RECOVERY_BATCH	64

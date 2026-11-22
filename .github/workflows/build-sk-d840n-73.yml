@@ -172,12 +172,22 @@ jobs:
       - name: Apply the OpenWrt-side overlays
         run: |
           cp -a overlays/. openwrt/
-          # overlays-73/ holds the one file that differs between the kernel
-          # lines on the OpenWrt side: the zte target itself.
+          # overlays-73/ holds the files that differ between the kernel
+          # lines on the OpenWrt side: the zte target itself and the
+          # subtarget defaults.
           cp -a overlays-73/. openwrt/
           test -f openwrt/target/linux/zte/image/Makefile
           grep -q 'Device/skyworth_sk-d840n' openwrt/target/linux/zte/image/Makefile
           grep -q 'KERNEL_PATCHVER:=7.3' openwrt/target/linux/zte/Makefile
+          # The subtarget defaults have to clear OpenWrt's tweak list.
+          # include/target.mk seeds it with "luci", the LuCI metapackage,
+          # and the metapackage pulls luci-light, which depends on
+          # luci-theme-bootstrap - so keeping the list would leave the
+          # resolved config with Bootstrap next to Argon and the theme
+          # check would refuse it.  Run 45012472909 is that failure.
+          test -f openwrt/target/linux/zte/zx279133/target.mk
+          grep -qx 'DEFAULT_PACKAGES.tweak:=' openwrt/target/linux/zte/zx279133/target.mk
+          grep -q 'luci-theme-argon' openwrt/target/linux/zte/zx279133/target.mk
 
       # The 7.3 fragments are named config-7.3, not config-6.18.  This is the
       # same edit the 6.18 line makes, with the other file names: a fragment
@@ -263,6 +273,24 @@ jobs:
             exit "$rc"
           fi
           set -e
+
+      # The theme check refuses a config that carries more than one theme,
+      # and the way Bootstrap got there was the tweak list: include/target.mk
+      # seeds it with "luci", the metapackage, and the metapackage pulls
+      # luci-light, which depends on luci-theme-bootstrap.  The 7.3 subtarget
+      # defaults clear the list, so the metapackage must not be in the
+      # resolved config - and if it is, the theme check passed for the wrong
+      # reason and the image would ship both themes.
+      - name: Gate: the resolved config carries exactly one theme
+        run: |
+          cd openwrt
+          if grep -q '^CONFIG_PACKAGE_luci=y' .config; then
+            echo "::error::the LuCI metapackage is selected, so luci-light will pull luci-theme-bootstrap in"
+            grep -E '^CONFIG_PACKAGE_luci(-theme-[a-z-]+)?=' .config || true
+            exit 1
+          fi
+          echo "--- the themes in the resolved config ---"
+          grep -E '^CONFIG_PACKAGE_luci-theme-' .config || true
 
       - name: Download packages
         working-directory: openwrt

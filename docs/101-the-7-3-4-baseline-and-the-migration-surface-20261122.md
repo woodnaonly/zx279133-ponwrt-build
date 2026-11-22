@@ -230,8 +230,10 @@ CONFIG_EXTERNAL_KERNEL_TREE=<树>   OpenWrt 把这棵树当自己的内核目录
 | `.github/workflows/build-sk-d840n-73.yml` | 7.3 通道：手动触发 + 7.3 相关路径推送触发；只出镜像，不发布 |
 | `scripts/configure-sk-d840n.sh` | 一处改动：把硬编码的 `target/linux/zte/zx279133/config-6.18` 换成版本无关的 `$KCFG` |
 | `kernel-patches/7.3/` | cnjn 的 39 个补丁的 vendored 副本 + `MANIFEST.json`（上游 repo/branch/commit/date + 每补丁 sha256/bytes） |
-| `kernel-patches/7.3-local/` | **我们自己的**补丁，applied 在 vendored 系列之后；当前是 IDM 实测修正那一片 |
+| `kernel-patches/7.3-local/` | **我们自己的**补丁，applied 在 vendored 系列之后；当前是 IDM 实测修正三片（`100` 寄存器值、`110` RX 帧落点、`120` BP 投递协议） |
+| `overlays-73/target/linux/zte/zx279133/target.mk` | 7.3 线的 subtarget 默认包：**清空 OpenWrt 的 `DEFAULT_PACKAGES.tweak`**，否则其中的 `luci` 元包会拉进 `luci-theme-bootstrap`（见 7.8） |
 | `tools/func-surface-diff.py` | 两代驱动的函数面对照，输出「只在我们这边」与「只在 7.3 那边」两张工作清单 |
+| `tools/idm-register-diff.py` | 以 `writel(...)` 语句为单位逐条对比两代的寄存器写入 |
 | `pon/npu-reverse/` | 逆向产物留档：99 个 API、rodata、函数表、initrd 清单、目标 DTS |
 
 **没有动的东西**：`kernel-overlays/`（6.18 世代驱动，一行未改）、`overlays/`（OpenWrt 侧，
@@ -351,7 +353,7 @@ run #1 的「本机复现成功」是**假通过**。本机复现环境
 
 ---
 
-### 7.7 run #3：feeds 修复生效，失败点前进了
+### 7.5 run #3：feeds 修复生效，失败点前进了
 
 **判决**：`Install feeds` 那一补**是对的**。run #3 的 Configure 仍然失败，
 但**报错换了**，而且是从「包根本没进来」变成「包进来了但多了一个」：
@@ -389,7 +391,7 @@ run #1 的「本机复现成功」是**假通过**。本机复现环境
 
 ---
 
-### 7.5 板级层的编译前提：本机预检（在 Compile 之前）
+### 7.6 板级层的编译前提：本机预检（在 Compile 之前）
 
 **判决**：板级层在 7.3 树上的内核 API 前提**全部满足**，本机可查的范围内
 没有编译风险；但**真正的编译只能在 CI 里发生**。
@@ -467,21 +469,298 @@ run #1 的「本机复现成功」是**假通过**。本机复现环境
 打上之后，本机逐条比对确认：**两代之间剩下的写入差异只剩 BP 池布局**
 （`+0x0108` 的 jumbo 池基址、`+0x010c/+0x0110` 的按深度环大小）。
 
+### 7.7 一次改动打红了 6.18 发布线（已修）
+
+**判决**：6e6992b2（系列号改为从内核树推导）**打红了 6.18 发布线**，
+run 45010155031（head `3dbf3003`）在「Rust 1.96.1 and offline ONU
+regression tests」这一步就红了，`Configure` 之后的步骤全被跳过。
+原因已定位并修好。
+
+**现象**：
+
+```
+FAIL: test_real_fragment_and_build_root_merge_is_idempotent (__main__.OffloadTests)
+AssertionError: 1 != 0 : Missing SK-D840N target kernel config
+```
+
+**根因**：那个提交把 `skd840n_pin_offload_fragments` 的系列号来源从
+写死的名字改成**内核树**，并把内核树设成了必填的第三个参数：
+
+```sh
+sk_off_series=$(skd840n_target_config_series "$sk_off_tree" "$sk_off_kernel") || {
+	echo 'Missing SK-D840N target kernel config' >&2; return 1; }
+```
+
+而仓库自己的门禁测试是这么调它的：
+
+```sh
+skd840n_pin_offload_fragments "$2" "$3"     # 只有两个参数
+```
+
+**没有内核树** ⇒ 推导失败 ⇒ 报「缺 SK-D840N 内核配置」。
+真实构建路径一直带着内核树，所以构建本身没坏，坏的是门禁测试——
+而门禁测试恰恰是发布线上的**第一道**关卡。
+
+**修法**：内核树仍然是首选来源，但不再是唯一来源。新增回退
+`skd840n_target_config_series_from_fragments()`：没有内核树时，从
+**subtarget 片段**（`target/linux/*/*/config-<series>`）取系列号。
+
+回退**不能用 `target/linux/generic`**：cnjn master 的 generic 目录里
+`config-6.12`、`config-6.18`、`config-7.3` **三个系列并存**，从那里取
+是三选一的猜测。subtarget 目录只有一个（master 的 `zx279133/` 里
+只有 `config-7.3`），万一出现多于一个，回退**拒绝而不是猜**。
+
+**证据**（本机四条路径全部验证）：
+
+| 场景 | 结果 |
+|---|---|
+| 内核树 = 7.3.4 | `7.3` |
+| 内核树 = 6.18 fork | `6.18` |
+| 无内核树，subtarget 一个片段 | `6.18` |
+| 无内核树，subtarget 两个候选 | **拒绝**（不猜） |
+
+`tests/test_sk_offload.py` 回到 10/10 通过（本地与 CI 同一份测试）。
+
+**教训**：改一个**共享**脚本时，它的调用方不止构建路径——**仓库自己的
+门禁测试也是调用方**。而门禁测试跑在发布线的最前面，所以它在发布线
+上的优先级高于任何构建步骤。
+
+---
+
+### 7.8 run #4：主题残留的根因，和一次被推翻的「排除」
+
+run #4（45012472909，head `1581854a`）在 Configure 失败，但这次的
+**诊断输出是决定性的**：
+
+```
+.config:30:warning: override: TARGET_zte_zx279133_DEVICE_skyworth_sk-d840n changes choice state
+#
+# configuration written to .config
+#
+CONFIG_PACKAGE_luci-theme-bootstrap=y
+Only Argon may be selected in the SK-D840N config
+--- the themes in the resolved config ---
+CONFIG_PACKAGE_luci-theme-argon=y
+CONFIG_PACKAGE_luci-theme-bootstrap=y
+--- the LuCI packages in the resolved config ---
+CONFIG_PACKAGE_luci=y
+CONFIG_PACKAGE_luci-light=y
+...
+```
+
+**判决**：resolved config 里同时有 argon 和 bootstrap，**而且有 `luci`
+元包和 `luci-light`**。这两条是 bootstrap 的来源。
+
+**根因（这次查到底了）**：
+
+```
+include/target.mk（OpenWrt 自己，两个分支都有）：
+  # For easy usage
+  DEFAULT_PACKAGES.tweak:=
+  	block-mount \
+  	default-settings-chn \
+  	kmod-nf-nathelper \
+  	luci              ← LuCI 元包
+```
+
+而 luci 树里：
+
+```
+collections/luci        LUCI_DEPENDS:= +luci-light +luci-app-package-manager
+collections/luci-light  LUCI_DEPENDS:= ... +luci-theme-bootstrap ...
+```
+
+**⇒ `luci`（默认包）→ `luci-light` → `luci-theme-bootstrap`。**
+
+**为什么 6.18 线没有这个问题**：cnjn 的 `sr1010-zx279133` 分支在
+`target/linux/zte/zx279133/target.mk` 里**清空**了 tweak 列表并给了自己
+的清单：
+
+```make
+DEFAULT_PACKAGES.tweak:=
+DEFAULT_PACKAGES += \
+	dnsmasq ethtool ip-full \
+	luci-base luci-mod-admin-full luci-theme-bootstrap \
+	uhttpd uhttpd-mod-ubus \
+	openssh-sftp-server
+```
+
+里面的 `luci-theme-bootstrap` 被 `scripts/sk-d840n-theme.sh` 的 sed 改成
+argon，所以 6.18 线的 resolved config 里只有 argon。
+
+**而 7.3 线构建自 cnjn 的 master，它的 `zx279133/target.mk` 根本没有
+tweak 清单** ⇒ 上游默认的 `luci` 留下 ⇒ 主题检查失败。
+
+**⇒ 修法**：7.3 线补一个 `overlays-73/target/linux/zte/zx279133/target.mk`，
+照 6.18 的做法清空 tweak 并给出自己的清单（主题直接写 argon，不依赖 sed）。
+CI 里加两条断言：overlay 文件里必须有 `DEFAULT_PACKAGES.tweak:=`；
+resolved config 里**不得**有 `CONFIG_PACKAGE_luci=y`（否则主题检查可能是
+因为错误的原因才通过的，镜像里会同时装两个主题）。
+
+**这一轮被推翻的「排除」**：上一轮记过「已排除 luci feed 依赖差异
+（两个 luci 树各 243 个构建文件，提到 bootstrap 的只有 4 处且两树完全
+一样）」。**这个排除是错的**：
+
+* 243 这个数字来自 **GitHub trees API 的截断**（recursive 查询有截断，
+  脚本没有检查 `truncated` 标志）。用 `git clone` 取完整树后是
+  **260 个构建文件**，多出来的那几个正是 cnjn 自己加进 fxfall/luci 的
+  包（`luci-app-passwall`、`luci-app-rclone` 等）。
+* 而且「两树完全一样」这个结论本身也不成立：两棵树的 `collections/luci`、
+  `collections/luci-light`、`themes/luci-theme-bootstrap` 和 `luci.mk`
+  **确实逐字相同**，但那不重要——**问题根本不在 luci 树里**，而在
+  OpenWrt 树的 `DEFAULT_PACKAGES.tweak`。
+
+**⇒ 方法论**：用「树 API 拉文件列表 + 逐个 raw 抓内容」做全量对比时，
+**必须先确认列表没有被截断**，否则「两树一样」只是「两边都被截成了
+一样的前 243 个文件」。
+
+---
+
+## 八、BP 池：逐槽位对照（第 1 片剩余部分的结论）
+
+**判决**：**BP 池布局在 7.3 上不需要移植。** 我们 6.18 世代那套写法是
+**为 6.18 的 free ring 内存布局写的**，把它搬到 7.3 会指向错误的内存。
+第 1 片的「BP 池布局」这一项可以关掉。
+
+**两代的 free ring 内存布局本来就不同**（这是全部矛盾的根源）：
+
+| | 6.18 世代（我们 overlay） | 7.3 公版 |
+|---|---|---|
+| `FREE_RING_SIZE` | `0x40000`（五个环**每个**都这么长） | `0x4000`（RX 两个）/ `0x40000`（TX 三个） |
+| `FREE_RING0` 起 | 0x1a0000，每环 +0x40000 | 0x1a0000，RX 两环各 +0x4000，TX 三环各 +0x40000 |
+| 环的语义 | FR0…FR4 | FR0 = RX normal，FR1 = RX jumbo，FR2/FR3/FR4 = TX normal / TX jumbo / CPU133 |
+
+**五个硬件槽位逐个对照**：
+
+| 槽位 | 7.3 公版 | 我们 6.18 世代 | 判定 |
+|---|---|---|---|
+| `+0x104` | `rx_normal_bp_dma`（独立分配） | `rx_normal_bp_dma`（独立分配） | 相同 |
+| `+0x108` | `FREE_RING1`（RX jumbo 位，**软件不用它**） | `rx_jumbo_bp_dma`（独立分配） | 语义不同 |
+| `+0x118` | `FREE_RING2` | `FREE_RING1` | **错位一位** |
+| `+0x11c` | `FREE_RING3` | `FREE_RING2` | **错位一位** |
+| `+0x408` | `FREE_RING4` | `FREE_RING3` | **错位一位** |
+
+**为什么我们 6.18 世代那套不能搬**：在 6.18 的布局里 `FREE_RING1` 是
+`FR0 + 0x40000`，在 7.3 的布局里 `FREE_RING1` 是 `FR0 + 0x4000`——
+**同一个名字在两代指向的内存差 0x3C000 字节**。照搬过去，三个 TX
+retrieval 环会指向 RX jumbo 环和 TX normal 环的位置。
+而且 7.3 公版的映射是**按厂商布局一一对应**的（FR1↔`+0x108`、
+FR2↔`+0x118`、FR3↔`+0x11c`、FR4↔`+0x408`），**公版是对的**，
+我们 6.18 世代那套才是错位的一方。
+
+**池大小寄存器也不需要改**：按我们自己的实测编码规则
+`(((depth >> 12) - 1) << 21) | (((free_depth >> 12) - 1) << 10) | BIT(8)`，
+7.3 的 `BP_RING_SIZE` = 4096 ⇒ `((1 - 1) << 21) | 0x3C00 | 0x100` =
+**`0x3d00`**——**正是公版写死的那个值**。公版在这里和我们的规则一致，
+因为 normal 环深度从 8192 变成 4096 时 `(depth >> 12) - 1` 正好是 0。
+
+**内存占用**：我们 `(8192 + 4096) × 4` = **48 KiB**（两块池），
+公版 `0x4000` = **16 KiB**（一块，4096 项）。
+
+**为什么跟随公版是对的**：**目标固件（cnjn 自己发布的 7.3 固件）用的就是
+公版的单池 4096 布局**——那份 `npu.ko` 就是 7.3 公版驱动集。跟随公版
+等于跟随目标固件，而不是跟随我们 6.18 世代那次改动。
+
+**未做 / 风险**：
+
+* 我们 6.18 世代的 **8192 深度**没有带到 7.3。cnjn 自己的固件用 4096 跑得通，
+  但那是公版的深度，不是这块板在 2.5G 满载下的实测深度。
+  **判据**：实机跑起来后看 `ethtool -S` 的 RX 欠载/丢包计数；
+  若出现欠载，再把 normal 池加深到 8192（那时 `+0x010c` 要改成 `0x203d00`，
+  `+0x108` 指向独立分配的 jumbo 池，且 TX 三个环必须保持公版的 FR2/FR3/FR4）。
+* **「布局」和「投递协议」是两件事，这里只判了布局。** 7.3 **有**
+  `zx279133_idm_rx_flush_refill`，只是它写的是 `writel(count, BP_REFILL)`，
+  而厂商的 `idm_new_bp_update()` 写的是「每 1024 个缓冲一次 0x400 脉冲，
+  再写余数（normal 在 bits 15:0、jumbo 在 bits 31:16）」。
+  **单池时 `writel(count)` 是否等价，没有实测依据**——厂商之所以按 1024
+  记账，很可能是因为硬件内部以 1024 为单位。
+  **⇒ 这一条要单独判**，判据是实机 RX 是否真的收得到帧
+  （`/proc/net/dev` 的 RX 计数在涨、`ethtool -S` 无欠载）。
+  我们的 6.18 实现在这里已经不是「布局」，而是**实测修正**，
+  与第 1 片同源，应当随第 1 片一起在 7.3 上验证。
+
+---
+
+## 八之二、第 2 片：RX 帧落点与 BP 投递协议（两个补丁）
+
+**判决**：两件事都**要移植**，各一个补丁。
+
+### 八之二.1 `110-sk-idm-rx-frame-offset.patch`：帧不在缓冲区的头
+
+**证据（本板自己的字节，run 160）**：驱动交给 IDM 的是「页 + 256 字节」，
+回来的描述符指的就是这个地址（驱动自己的检查坚持这一点，每一帧都通过），
+**而帧在这个地址再往后 0x80**。run 160 把整页打了出来：
+
+```
+page +0180: ffffffffffffff8447095bbd2c08060001
+page +0190: 0800060400018447095bbd2cc0a80919
+page +01a0: 000000000000c0a80901000000000000
+```
+
+完整读出来就是测试 PC 发来的 ARP request。**帧前面那 128 字节是页原来
+留下的内容**（一次运行是 0，另一次是 0xff）——驱动读的是一个从未被写
+过的页，交上去的每一帧都是那个页的残留（docs/77）。
+
+**为什么这条能直接搬到 7.3**：第 1 片已经把 IDM 寄存器对齐到本板的实测
+值，而 run 160 的测量**是在那次对齐之后**做的。所以它描述的是同一套
+硬件，而 7.3 线上的寄存器就是同一套。
+
+**四处必须一起动**（同一个地址的四种写法）：
+
+| 位置 | 改动 |
+|---|---|
+| page pool 的 `.offset` | 加帧偏移。缓存失效（`page_pool_dma_sync_for_cpu()` 会自己加 pool 的 offset）与设备侧同步（`page_pool_put_full_page()`）都从它取 |
+| 帧的 `data` 指针 | 加帧偏移 |
+| XDP 缓冲 | 加帧偏移 |
+| AF_XDP 池的尺寸检查 | 加上偏移后仍要放得下 |
+
+**做成只读模块参数**：`zx279133.rx_frame_offset`，默认 `0x80`。
+只读是故意的——一个池里所有缓冲的偏移必须一致，而已经交给硬件的池
+不能挪。**一次 `zx279133.rx_frame_offset=0` 的启动就能在板子上把两种
+形状分开**，不用在纸上争。
+
+### 八之二.2 `120-sk-idm-bp-refill-protocol.patch`：门铃要写编码，不写计数
+
+**判决**：上一轮判「单池时是否等价没有实测依据」，这一轮判掉了。
+
+`IDM+0x100` 不收缓冲计数。厂商的 `idm_new_bp_update()` 写的是
+**每 1024 个缓冲一次 `0x400` 脉冲，再写余数**（normal 在 bits 15:0、
+jumbo 在 bits 31:16），硬件从这些字段里读出计数。**写计数本身等于没写
+缓冲；计数是 1024 的倍数时等于写了零个缓冲**（docs/45 §2.3）。
+
+**而 7.3 在启动时正好投 2048 个缓冲**（`ZX279133_IDM_RX_BUFFER_COUNT`），
+**2048 正是 1024 的倍数** ⇒ 公版那一次写等于告诉硬件「池是空的」。
+
+**这不影响 cnjn 的目标固件**（它投的也是 2048，但用的是厂商自己的
+`npu.ko`），**也不影响公版在其他板上的表现**——它只说明**我们这条线**
+的 7.3 镜像不能照抄公版的那一次写。
+
+**7.3 只有单池**，所以只写厂商序列的 normal 字段。
+
+---
+
+## 九、下一步（按片重打，每片一次 CI）
+
 **没搬的，按片来：**
 
-1. **IDM 的 RX 缓冲池与投递协议**（第 1 片的剩余部分）。这不是改常量：
-   * 7.3 树只有**一个** coherent 缓冲数组（`FREE_RING_SIZE` = 0x4000 项），
-     硬件看到的是 4 个 free ring（`+0x108/+0x118/+0x11c/+0x408`），
-     环下标按 `BP_RING_SIZE`（4096）取模，池大小寄存器写死 0x3d00；
-   * 6.18 世代是**两块**（`BP_RING_SIZE` 8192 + `JUMBO_BP_RING_SIZE` 4096，
-     一次分配、jumbo 紧跟 normal），硬件看到的是 normal 池在 `+0x104`、
-     **jumbo 池在 `+0x108`**、3 个 free ring 在 `+0x118/+0x11c/+0x408`，
-     池大小按**环深度**算（normal 0x203d00 / jumbo 0x3d00，与厂商板实测一致）；
-   * 更要紧的是**投递协议**不同：厂商的 `idm_new_bp_update()` 每 1024 个
-     缓冲写一次 0x400 脉冲，再把余数按「normal 在 bits 15:0、jumbo 在
-     bits 31:16」写进同一个寄存器——写数量本身什么也没 announcing，
-     而数量是 1024 的倍数等于 announcing 零个缓冲。7.3 的实现没有这一套。
-   所以这一片是**重写 RX 缓冲池路径**，不是移植几个常量。
+1. **IDM 的 RX 缓冲池**：**布局已结论——不移植；投递协议已判——移植**。
+   * *布局*（五个槽位指向谁、池大小寄存器）：跟随 7.3 公版。逐槽位对照见
+     第八节——公版的映射按厂商布局一一对应，我们 6.18 世代那套是**为 6.18
+     的 free ring 内存布局写的**，搬过来会指向错误的内存。
+   * *投递协议*（refill 怎么通知硬件）：**已判，已落成第 2 片的第二个补丁**
+     `120-sk-idm-bp-refill-protocol.patch`。7.3 启动时投 2048 个缓冲，
+     正好是 1024 的倍数，公版的 `writel(count)` 在厂商的解码下等于
+     「零个缓冲」。
+   * **RX 帧落点 0x80**（本板实测，run 160）是第 2 片的第一个补丁
+     `110-sk-idm-rx-frame-offset.patch`，见第八之二节。它不是「池布局」，
+     是**帧在缓冲区里的位置**，两件事分开判才对。
+   * 第 1 片的寄存器修正已落地，打完之后两代 `zx279133_idm_tx_configure` 的
+     33 条 `writel` 里**只有 6 条不同，且全是 BP 池那几条**（见下）。
+   * **观察项**：我们 6.18 世代的 8192 深度没有带过来；若实机 `ethtool -S`
+     出现 RX 欠载，再加深（做法见第八节末）。
+   * **判据（实机）**：`/proc/net/dev` 的 RX 计数在涨、`ethtool -S` 无欠载；
+     若 RX 全 0，用 `zx279133.rx_frame_offset=0` 再启一次，把两种形状
+     在板子上分开。
 2. **IDM 的其余部分**。这一条原来是「约 78 个 hunk 的重写」，那是按 diff
    规模估的，**不精确**。按函数体逐个对照之后（`tools/func-body-diff.py`，
    两代 `zx279133-idm.c`），实际工作量小得多，也清楚得多：
@@ -496,14 +775,33 @@ run #1 的「本机复现成功」是**假通过**。本机复现环境
 
    要重写的 6 个（我们行数 / 7.3 行数，相同行占比）：
 
-   | 函数 | 我们 | 7.3 | 占比 |
-   |---|---|---|---|
-   | `zx279133_idm_rx_flush_refill` | 27 | 13 | 41% |
-   | `zx279133_idm_rx_lan_vport` | 12 | 6 | 33% |
-   | `zx279133_idm_rx_preserve_dsa_vlan` | 21 | 21 | 48% |
-   | `zx279133_idm_rx_sync_for_device` | 15 | 8 | 27% |
-   | `zx279133_idm_tx_configure` | **129** | 58 | 25% |
-   | `zx279133_idm_tx_drain` | 25 | 16 | 52% |
+   | 函数 | 我们 | 7.3 | 占比 | 备注 |
+   |---|---|---|---|---|
+   | `zx279133_idm_tx_configure` | **129** | 58 | 25% | **第 1 片已解决**，见下 |
+   | `zx279133_idm_rx_flush_refill` | 27 | 13 | 41% | 真要重写 |
+   | `zx279133_idm_rx_lan_vport` | 12 | 6 | 33% | 真要重写 |
+   | `zx279133_idm_rx_preserve_dsa_vlan` | 21 | 21 | 48% | 真要重写 |
+   | `zx279133_idm_rx_sync_for_device` | 15 | 8 | 27% | 真要重写 |
+   | `zx279133_idm_tx_drain` | 25 | 16 | 52% | 真要重写 |
+
+   **`tx_configure` 划掉的理由**：函数体差异大，是因为**注释和 BP 池那几行**，
+   不是寄存器值。按语句逐条比（`tools/idm-register-diff.py`，把
+   `writel(...)` 当比较单位）：
+
+   ```
+   zx279133_idm_tx_configure: ours 33 writes, theirs 33 writes
+   6 of 33 statements differ
+   ```
+
+   **那 6 条全部是 BP 池**：`+0x108`（jumbo 池 vs `FREE_RING1`）、
+   `+0x118/+0x11c/+0x408`（三个 retrieval 环错位一位）、
+   `+0x010c/+0x0110`（按深度编码 vs 写死 0x3d00）。
+   **其余 27 条——控制字、`+0x0010`、路由字、`+0x0038`、`+0x0070/+0x74/+0x90/+0x94`、
+   `+0x00bc`、`+0x0124`、`+0x02c8`、`+0x0490`、中断掩码与 IRQ 路由——两代逐条相同**，
+   因为第 1 片已经把它们改成了实测值。
+
+   **⇒ 第 1 片之后的 IDM 寄存器初始化已经拉齐，只剩 BP 池，而 BP 池跟随公版。**
+
 
    只在 6.18 世代、要作为新代码写进 7.3 的 10 个：
 
@@ -532,7 +830,7 @@ run #1 的「本机复现成功」是**假通过**。本机复现环境
 
 ---
 
-## 九、复现本文结论的命令
+## 十、复现本文结论的命令
 
 ```sh
 # 1) 7.3.4 底包 + 39 补丁（本机已跑通，约 3 分钟）
@@ -559,4 +857,10 @@ python3 ci-build-repo/tools/check-sk-board-api.py post \
 python3 ci-build-repo/tools/func-body-diff.py \
         ci-build-repo/kernel-overlays/drivers/net/ethernet/zte/zx279133-idm.c \
         linux-7.3.4/drivers/net/ethernet/zte/zx279133-idm.c
+
+# 6) IDM 的寄存器初始化：按 writel 语句逐条比（函数体差异的真实来源）
+python3 ci-build-repo/tools/idm-register-diff.py \
+        ci-build-repo/kernel-overlays/drivers/net/ethernet/zte/zx279133-idm.c \
+        linux-7.3.4/drivers/net/ethernet/zte/zx279133-idm.c \
+        zx279133_idm_tx_configure
 ```
