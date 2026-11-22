@@ -31,6 +31,12 @@
       "sha256": "ae88de05bdf9357c3f01662746cb1a9334545b50cb0a5b60ad00f849dcf03942",
       "bytes": 7267,
       "what": "The LAN service grows a control transaction, which is what the 9132 switch driver needs: a control sequence restores the XMAC image and then the XPCS image, and the XPCS restore takes the XMAC lock itself, so the transaction cannot be the XMAC lock. The patch adds the second mutex (lan_control_lock), the two service operations (control_begin and control_end), the parent's implementation of them, the Kconfig entry for the 9132 switch driver and the Makefile line that builds it."
+    },
+    {
+      "file": "140-sk-pon-omci-transport.patch",
+      "sha256": "99a75ffe459bf519f8ddaa3adcbe112d525309b5b798085629d26942fb857b28",
+      "bytes": 9129,
+      "what": "The XG-PON activation glue and the OMCI transport get their four hooks in the 7.3 tree. The optical RX signal detect is a GPIO on this board and the 7.3 tree's main.c had no GPIO at all, so the patch adds the work that polls it, the loss-of-signal LED trigger the board device tree names, the attach and the stop around the WAN netdev, the carrier kick in the link-up path, and the management queue's prepare in the transmit path. The tree's struct zx279133_eth grows the fields these need, and the three new objects join the NPU module."
     }
   ]
 }

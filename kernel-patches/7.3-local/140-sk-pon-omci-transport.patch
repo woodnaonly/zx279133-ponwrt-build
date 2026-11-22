@@ -1,0 +1,258 @@
+Subject: [PATCH] 140-sk-pon-omci-transport: the PON glue and the OMCI transport
+
+The XG-PON activation glue and the OMCI transport, wired into the 7.3
+driver set.
+
+The protocol core (zxpon.c, zxpon.h) and the two kernel files that use it
+(zx279133-pon.c, zx279133-omci.c) are not changed here: they come from
+this repository's own 7.3 driver tree, and this patch only gives them
+what the 7.3 tree has to provide.
+
+What the tree is missing is four hooks and one poll:
+
+  * The optical RX signal detect is a GPIO on this board, not a register.
+    The 7.3 tree's main.c had no GPIO at all, so the work that polls it
+    and publishes the loss-of-signal state is new here.  It also
+    registers the "zx279133-los" LED trigger the board device tree names
+    with linux,default-trigger.
+
+  * The WAN netdev is handed to the PON stack once it is registered, and
+    the stack is stopped again when the driver is torn down.
+
+  * The carrier follows the PON state, so the link-up path kicks it.
+
+  * The OMCI transport uses queue 0 of the IDM TX ring - the management
+    queue, below the queue the data path starts at - so the transmit
+    prepare has to claim that slot before the descriptor array is
+    cleared.
+
+The tree's struct zx279133_eth grows the fields these need: the eight
+omci_* counters and the buffer they live in, the GPIO, the LED trigger and
+the work that polls it.  The three new objects are built into the NPU
+module, which is where the rest of the driver lives.
+
+--- a/drivers/net/ethernet/zte/Makefile
++++ b/drivers/net/ethernet/zte/Makefile
+@@ -13,6 +13,7 @@ npu-y := zx279133-main.o zx279133-tm.o zx279133-np.o zx279133-idm.o \
+ 	       zx279133-ptp.o
+ 
+ npu-y += zx279133-host.o zx279133-native.o zx279133-meter.o zx279133-qos.o
++npu-y += zx279133-pon.o zx279133-omci.o zxpon.o
+ npu-$(CONFIG_ZTE_ZX279133_NATIVE_DEBUG) += zx279133-native-debug.o
+ 
+ obj-$(CONFIG_ZTE_ZX279133_LAN_CONDUIT) += zx279133-lan-conduit.o
+--- a/drivers/net/ethernet/zte/zx279133-idm.c
++++ b/drivers/net/ethernet/zte/zx279133-idm.c
+@@ -1514,13 +1514,21 @@ int zx279133_idm_tx_prepare(struct zx279133_eth *eth)
+ 	size_t size = sizeof(*eth->tx_descs) * ZX279133_IDM_TX_QUEUES *
+ 		      ZX279133_IDM_TX_DEPTH;
+ 	u32 ready;
+-	int i;
++	int i, ret;
+ 
+ 	ready = readl(eth->base + ZX279133_NP_READY);
+ 	if ((ready & ZX279133_NP_READY_MASK) != ZX279133_NP_READY_MASK)
+ 		return dev_err_probe(eth->dev, -EIO,
+ 				     "NPPT handoff is not ready: %#x\n", ready);
+ 
++	/* The management queue shares the descriptor array; claim its slot
++	 * before the array is cleared, so the hardware counter and the
++	 * driver's producer index stay in step.
++	 */
++	ret = zx279133_omci_prepare(eth);
++	if (ret)
++		return ret;
++
+ 	memset(eth->tx_descs, 0, size);
+ 
+ 	eth->idm_tx_base_saved = readl(eth->base + ZX279133_IDM_BASE +
+--- a/drivers/net/ethernet/zte/zx279133-mac.c
++++ b/drivers/net/ethernet/zte/zx279133-mac.c
+@@ -640,6 +640,7 @@ static void zx279133_mac_link_up(struct phylink_config *config,
+ 
+ out_unlock:
+ 	mutex_unlock(&eth->xmac_lock);
++	zx279133_pon_carrier_kick(eth->ndev);
+ }
+ 
+ static void zx279133_mac_disable_tx_lpi(struct phylink_config *config)
+--- a/drivers/net/ethernet/zte/zx279133-main.c
++++ b/drivers/net/ethernet/zte/zx279133-main.c
+@@ -8,6 +8,7 @@
+ #include <linux/dma-mapping.h>
+ #include <linux/etherdevice.h>
+ #include <linux/firmware.h>
++#include <linux/gpio/consumer.h>
+ #include <linux/hash.h>
+ #include <linux/if_vlan.h>
+ #include <linux/io.h>
+@@ -15,6 +16,7 @@
+ #include <linux/ip.h>
+ #include <linux/interrupt.h>
+ #include <linux/jiffies.h>
++#include <linux/leds.h>
+ #include <linux/mfd/syscon.h>
+ #include <linux/mdio.h>
+ #include <linux/module.h>
+@@ -265,6 +267,42 @@ static void zx279133_xmac_stats_work_cancel(void *data)
+ 	cancel_delayed_work_sync(&eth->xmac_stats_work);
+ }
+ 
++static void zx279133_pon_led_cancel(void *data)
++{
++	struct zx279133_eth *eth = data;
++
++	cancel_delayed_work_sync(&eth->pon_led_work);
++	led_trigger_unregister_simple(eth->los_trigger);
++}
++
++static void zx279133_pon_cleanup(void *data)
++{
++	struct zx279133_eth *eth = data;
++
++	/* Stop optical callbacks before tearing down the PON trigger/state. */
++	cancel_delayed_work_sync(&eth->pon_led_work);
++	zx279133_pon_stop();
++}
++
++static void zx279133_pon_led_work(struct work_struct *work)
++{
++	struct zx279133_eth *eth =
++		container_of(to_delayed_work(work), struct zx279133_eth,
++			     pon_led_work);
++	int rxsd;
++
++	if (!eth->opsd_gpio)
++		return;
++
++	rxsd = gpiod_get_value_cansleep(eth->opsd_gpio);
++	if (rxsd >= 0) {
++		led_trigger_event(eth->los_trigger, rxsd ? LED_OFF : LED_FULL);
++		zx279133_pon_note_rxsd(rxsd > 0);
++	}
++
++	schedule_delayed_work(&eth->pon_led_work, msecs_to_jiffies(200));
++}
++
+ static int zx279133_eth_probe(struct platform_device *pdev)
+ {
+ 	struct device *dev = &pdev->dev;
+@@ -317,6 +355,7 @@ static int zx279133_eth_probe(struct platform_device *pdev)
+ 	INIT_DELAYED_WORK(&eth->rx_refill_work,
+ 			  zx279133_idm_rx_refill_work);
+ 	INIT_WORK(&eth->rx_mode_work, zx279133_rx_mode_work);
++	INIT_DELAYED_WORK(&eth->pon_led_work, zx279133_pon_led_work);
+ 	mutex_init(&eth->xmac_lock);
+ 	mutex_init(&eth->datapath_lock);
+ 	mutex_init(&eth->np_ind_lock);
+@@ -324,6 +363,32 @@ static int zx279133_eth_probe(struct platform_device *pdev)
+ 	for (i = 0; i < ARRAY_SIZE(eth->clocks); i++)
+ 		eth->clocks[i].id = zx279133_clock_names[i];
+ 
++	/*
++	 * The optical RX signal detect is optional: without it the red LOS
++	 * trigger keeps its fail-safe "on" state. Optical detection must keep
++	 * running when a user disables the LED or chooses a different trigger.
++	 */
++	eth->opsd_gpio = devm_gpiod_get_optional(dev, "opsd", GPIOD_IN);
++	if (IS_ERR(eth->opsd_gpio)) {
++		ret = PTR_ERR(eth->opsd_gpio);
++		if (ret == -EPROBE_DEFER)
++			return ret;
++		dev_warn(dev, "no optical RX signal detect GPIO: %d\n", ret);
++		eth->opsd_gpio = NULL;
++	}
++
++	led_trigger_register_simple("zx279133-los", &eth->los_trigger);
++	if (!eth->los_trigger)
++		dev_warn(dev, "LOS LED trigger unavailable\n");
++	led_trigger_event(eth->los_trigger, LED_FULL);
++
++	ret = devm_add_action_or_reset(dev, zx279133_pon_led_cancel, eth);
++	if (ret)
++		return ret;
++
++	if (eth->opsd_gpio)
++		schedule_delayed_work(&eth->pon_led_work, 0);
++
+ 	ret = devm_clk_bulk_get(dev, ARRAY_SIZE(eth->clocks), eth->clocks);
+ 	if (ret)
+ 		return dev_err_probe(dev, ret, "failed to get clocks\n");
+@@ -728,6 +793,10 @@ static int zx279133_eth_probe(struct platform_device *pdev)
+ 	ret = devm_register_netdev(dev, ndev);
+ 	if (ret)
+ 		return dev_err_probe(dev, ret, "failed to register netdev\n");
++	zx279133_pon_attach(ndev);
++	ret = devm_add_action_or_reset(dev, zx279133_pon_cleanup, eth);
++	if (ret)
++		return ret;
+ 	dev_info(dev, "NPU probe: WAN netdev registered\n");
+ 
+ 	eth->lan_service.ops = &zx279133_lan_service_ops;
+--- a/drivers/net/ethernet/zte/zx279133.h
++++ b/drivers/net/ethernet/zte/zx279133.h
+@@ -19,6 +19,9 @@
+ #include "zx279133-lan.h"
+ #include "zx279133-qos.h"
+ 
++struct gpio_desc;
++struct led_trigger;
++
+ #define ZX279133_NUM_CLOCKS	6
+ #define ZX279133_NUM_IRQS	5
+ 
+@@ -742,6 +745,15 @@ struct zx279133_eth {
+ 	spinlock_t rx_buffer_lock;
+ 	atomic_t rx_poll_active;
+ 	struct zx279133_tx_ring tx[ZX279133_CPU_TX_QUEUES];
++	/* Queue 0 management traffic: single-flight, retained across timeouts. */
++	void *omci_buffer;
++	dma_addr_t omci_dma;
++	u16 omci_done;
++	u16 omci_producer;
++	bool omci_pending;
++	u64 omci_submitted;
++	u64 omci_completed;
++	int omci_error;
+ 	u32 idm_tx_base_saved;
+ 	u64 tx_doorbell_writes;
+ 	u64 tx_doorbell_descs;
+@@ -781,6 +793,14 @@ struct zx279133_eth {
+ 	struct delayed_work rx_refill_work;
+ 	/* Copies the WAN unicast list (macvlans) into the SPA ONU MAC slots. */
+ 	struct work_struct rx_mode_work;
++	/*
++	 * The vendor's pon_plat puts the optical RX signal detect on gpio2
++	 * pin 1. The work polls it and publishes the optional LOS trigger:
++	 * low means loss of signal, high means light present (docs/91).
++	 */
++	struct delayed_work pon_led_work;
++	struct gpio_desc *opsd_gpio;
++	struct led_trigger *los_trigger;
+ 	struct ptp_clock_info ptp_info;
+ 	struct ptp_clock *ptp_clock;
+ 	u32 ptp_agc_saved;
+@@ -975,4 +995,23 @@ extern const struct ethtool_ops zx279133_ethtool_ops;
+ extern const struct net_device_ops zx279133_netdev_ops;
+ extern const struct zx279133_lan_service_ops zx279133_lan_service_ops;
+ 
++/*
++ * The XG-PON activation glue.  The optical side is a state machine that runs
++ * on its own clock; the kernel only tells it when the WAN carrier moved and
++ * what the optical RX signal detect line says.
++ */
++void zx279133_pon_note_rxsd(int light);
++void zx279133_pon_carrier_kick(struct net_device *ndev);
++void zx279133_pon_attach(struct net_device *ndev);
++void zx279133_pon_stop(void);
++
++/*
++ * The OMCI transport.  Queue 0 of the IDM TX ring is a management queue, not
++ * an Ethernet queue: the data path starts at ZX279133_IDM_CPU_TX_FIRST.
++ */
++void zx279133_omci_reclaim(struct zx279133_eth *eth);
++int zx279133_omci_prepare(struct zx279133_eth *eth);
++int zx279133_omci_send(struct zx279133_eth *eth, u16 gem,
++			const u8 *frame, size_t length);
++
+ #endif /* __ZX279133_H__ */

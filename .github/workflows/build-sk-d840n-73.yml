@@ -45,6 +45,7 @@ on:
       - tools/apply-sk-overlay-73.sh
       - tools/check-sk-board-api.py
       - tools/check-sk-switch-api.py
+      - tools/check-sk-pon-api.py
       - kernel-overlays-73/**
       - tools/prepush.py
       - overlays-73/**
@@ -183,6 +184,19 @@ jobs:
       - name: Check the 9132 switch driver against the 7.3 tree
         run: |
           python3 tools/check-sk-switch-api.py \
+            --tree "$KERNEL_TREE" --repo "$GITHUB_WORKSPACE"
+
+      # The PON / OMCI stack is this repository's own code in the 7.3 tree
+      # as well, and it cannot be compiled here either.  What is checked
+      # instead: the protocol core is closed, every kernel name the stack
+      # calls is visible in the file's own include closure, the tree's eth
+      # structure carries the fields the stack uses, the four hooks - the
+      # attach, the stop, the carrier kick and the management queue's
+      # prepare - are where the tree expects them, the three objects are in
+      # the NPU module, and the LED class the new code needs is on.
+      - name: Check the PON / OMCI stack against the 7.3 tree
+        run: |
+          python3 tools/check-sk-pon-api.py \
             --tree "$KERNEL_TREE" --repo "$GITHUB_WORKSPACE"
 
       - name: Apply the OpenWrt-side overlays

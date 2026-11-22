@@ -230,9 +230,10 @@ CONFIG_EXTERNAL_KERNEL_TREE=<树>   OpenWrt 把这棵树当自己的内核目录
 | `.github/workflows/build-sk-d840n-73.yml` | 7.3 通道：手动触发 + 7.3 相关路径推送触发；只出镜像，不发布 |
 | `scripts/configure-sk-d840n.sh` | 一处改动：把硬编码的 `target/linux/zte/zx279133/config-6.18` 换成版本无关的 `$KCFG` |
 | `kernel-patches/7.3/` | cnjn 的 39 个补丁的 vendored 副本 + `MANIFEST.json`（上游 repo/branch/commit/date + 每补丁 sha256/bytes） |
-| `kernel-patches/7.3-local/` | **我们自己的**补丁，applied 在 vendored 系列之后；当前是 IDM 实测修正三片（`100` 寄存器值、`110` RX 帧落点、`120` BP 投递协议）**加第 3 片的 `130` LAN 控制事务** |
-| `kernel-overlays-73/drivers/net/ethernet/zte/` | **7.3 线专有的驱动树**：9132 交换表驱动本体 + `zx279133-9132.h`（9132 自己的寄存器图）+ `zx279133-lan1-led.h`。与 6.18 世代的 `kernel-overlays/` 并存，互不覆盖（见八之三） |
+| `kernel-patches/7.3-local/` | **我们自己的**补丁，applied 在 vendored 系列之后；当前是 IDM 实测修正三片（`100` 寄存器值、`110` RX 帧落点、`120` BP 投递协议）**加第 3 片的 `130` LAN 控制事务**与**第 4 片的 `140` PON/OMCI 接线** |
+| `kernel-overlays-73/drivers/net/ethernet/zte/` | **7.3 线专有的驱动树**：9132 交换表驱动本体 + `zx279133-9132.h`（9132 自己的寄存器图）+ `zx279133-lan1-led.h`，**加第 4 片的 PON/OMCI 五个文件**（`zxpon.c`/`zxpon.h`/`zx279133-pon.c`/`zx279133-omci.c`/`zx279133-omci-wire.h`）。与 6.18 世代的 `kernel-overlays/` 并存，互不覆盖（见八之三、八之四） |
 | `tools/check-sk-switch-api.py` | 第 3 片的编译前门禁：驱动用到的名字、内核 API、**LAN 服务契约**、构建接线，四项逐条核对（见八之三.3） |
+| `tools/check-sk-pon-api.py` | 第 4 片的编译前门禁：协议核心闭合、**内核名字在包含闭包里可见**、树侧契约、四个钩子、构建接线、LED 依赖（见八之四.5） |
 | `tests/test_sk_workflows.py` | 工作流自身的门禁：每个工作流文件可解析、7.3 线依赖的步骤都在、门禁点名的测试文件都存在、7.3 线的路径过滤覆盖这条线的输入（见 7.9） |
 | `overlays-73/target/linux/zte/zx279133/target.mk` | 7.3 线的 subtarget 默认包：**清空 OpenWrt 的 `DEFAULT_PACKAGES.tweak`**，否则其中的 `luci` 元包会拉进 `luci-theme-bootstrap`（见 7.8） |
 | `tools/func-surface-diff.py` | 两代驱动的函数面对照，输出「只在我们这边」与「只在 7.3 那边」两张工作清单 |
@@ -246,12 +247,15 @@ CONFIG_EXTERNAL_KERNEL_TREE=<树>   OpenWrt 把这棵树当自己的内核目录
 
 ## 六、未做 / 风险
 
-1. **我们自己的 171 个函数只搬了第 1~3 片。** 7.3 通道目前是「cnjn 的 7.3 驱动 +
-   我们的板级层 + IDM 三片 + 9132 交换表驱动」。
-   后果是明确的：**PON/OMCI 还没有**（cnjn 的树里没有 `zx279133-pon.c`、
-   `zxpon.c`、`zx279133-omci.c`），7.3 线目前只能验证 NPPT WAN 路径、
-   2.5G 口与（待编译验证的）9132 LAN 口。
-   **9132 驱动本身还没有被编译过**（本机无交叉工具链），实机对拍是它之后的下一道。
+1. **我们自己的 171 个函数只搬了第 1~4 片。** 7.3 通道目前是「cnjn 的 7.3 驱动 +
+   我们的板级层 + IDM 三片 + 9132 交换表驱动 + PON/OMCI 栈」。
+   剩下的是 RGMII（`zx279133-rgmii.c`）与健壮性修正（`tx_drain` 等）。
+   **这四个文件都还没有被编译过**（本机无交叉工具链），实机对拍是它之后的下一道。
+   **PON/OMCI 的上行没有接**——但 6.18 侧同样没有接（见八之四.7），
+   所以这不是 7.3 线独有的缺口。
+   **PON MAC 窗口一个寄存器都没碰**（厂商模块没有
+   `mode_xgpon_nsyn_cfg_133`），所以第 4 片只在没有光纤时也成立：
+   LOS 灯会跟着 `opsd` 翻，carrier 停在 O1，OMCI 队列空转。
 2. **没有编译验证。** 本机无 arm64 交叉工具链，编译只能走 CI；`build-sk-d840n-73.yml`
    是**第一次**运行，结果未知。
 3. **DTS 没有在本地编译过。** 本机没有 `dtc`，只能用「label 可解析 + 属性存在」
@@ -896,6 +900,198 @@ XMAC 锁**（`zx279133_switch_xmac_restore()` 内部 `xmac_lock`/`unlock`）。
 
 ---
 
+### 八之三.5 第 4 片的预先量化：PON / OMCI 栈（74 个函数）
+
+第 4 片的代码还没写，但**面已经量清楚了**，写之前先把账算出来：
+
+| 文件 | 函数 | 字节 | 性质 |
+|---|---|---|---|
+| `zxpon.c` / `zxpon.h` | 48 | 18078 | **协议核心**（AES-128/CMAC、PLOAM、OMCI 状态机） |
+| `zx279133-pon.c` | 23 | 10796 | 内核胶水：netlink、`omci` netdev、carrier、sysfs、LED 触发器 |
+| `zx279133-omci.c` | 3 | 3131 | 把 OMCI 帧投进 IDM 的**队列 0**（管理队列） |
+| `zx279133-omci-wire.h` | — | 635 | 三个描述符字（长度/控制/GEM），照抄 |
+
+**内核 API 缺口：0。** 三个文件调到的内核函数，7.3 树里全有；`zxpon_state` 与
+`zxpon_state_name` 是**我们自己**的 `zxpon.h` 里的（不是内核符号）。
+
+`zx279133-omci.c` 用到的 `struct zx279133_eth` 字段，7.3 树里也全有：
+`dev`、`base`、`datapath_lock`、`tx_descs`、`tx_prepared`、`tx_stopping`，
+以及 `ZX279133_IDM_BASE`、`ZX279133_IDM_TX_DEPTH`、
+`zx279133_idm_tx_done_reg()`、`zx279133_idm_tx_doorbell_reg()`、
+`struct zx279133_idm_desc`。**只差 8 个 `omci_*` 字段**（`omci_buffer`、
+`omci_dma`、`omci_done`、`omci_producer`、`omci_pending`、
+`omci_submitted`、`omci_completed`、`omci_error`）。
+
+**真正的移植工作不在代码，在四个钩子的落点**：
+
+| 钩子 | 6.18 世代的调用点 | 7.3 树的落点 | 难度 |
+|---|---|---|---|
+| `zx279133_pon_attach(ndev)` | `main.c:1336` | `main.c` 里 `devm_register_netdev()` 之后 | 直接 |
+| `zx279133_pon_carrier_kick(eth->ndev)` | `mac.c:730` | 7.3 用 **phylink**，`mac.c` 的 `link_up`/`link_down` | 要找准回调 |
+| `zx279133_pon_note_rxsd(light)` | `main.c:824` | **7.3 没有对应物** | 见下 |
+| `zx279133_pon_stop()` | `main.c:808`（清理动作） | `main.c` 的 `devm_add_action_or_reset()` | 直接 |
+
+**`rxsd` 是第 4 片唯一的真问题。** 它是**光模块的接收信号检测**，在我们侧
+不是寄存器而是一个 **GPIO**：`eth->opsd_gpio` 读 `opsd-gpios = <&gpio2 1
+GPIO_ACTIVE_HIGH>`（板级 DTS 第 396 行，**板级层已经在 7.3 树里了**）。
+7.3 的 `zx279133-main.c` 里**一个 GPIO 都没有**（实测：`gpio`/`gpiod` 零命中），
+所以这个轮询得随第 4 片一起写进去：不写，`zxpon_set_los()` 永远不会被调用，
+PON 的 carrier 永远不起来，OMCI 整条路径是死的。
+
+**另外两件要一起做的事**：LOS 灯的 LED 触发器（板级 DTS 用
+`linux,default-trigger = "zx279133-los"`，触发器名字由驱动注册），
+以及 `npu.ko` 的 Makefile 挂法（6.18 是 `zx279133-y`，7.3 是 `npu-y`，
+三个文件都没有自己的 `module_init`，所以进同一个模块即可）。
+
+**用户态那半边已经在 7.3 线上了**：`overlays/package/utils/zxpond/` 与
+`overlays/package/luci-app-sk-d840n-pon/` 由工作流的 `cp -a overlays/. openwrt/`
+带进去，`zxpond` 用的 `zxpon.c` 与内核侧是**同一份代码**（`#ifdef __KERNEL__`
+双栖）。
+
+**⇒ 第 4 片的判决**：**可以搬**，而且大部分是照抄；要新写的是
+`opsd` GPIO 的轮询与 LOS 触发器，以及 7.3 树侧的四个钩子落点。
+
+---
+
+## 八之四、第 4 片：PON / OMCI 栈（协议核心照抄 + 树侧四个钩子 + 一次 GPIO 轮询）
+
+八之三.5 把面量清楚了。这一节是把它做掉之后的记录。
+
+### 8之四.1 判决
+
+1. **协议核心照抄。** `zxpon.c`（48 个函数，18078 B）、`zxpon.h`（3778 B）
+   **逐字节**搬进 `kernel-overlays-73/`：文件里只有 `memcpy`/`memset`
+   和 AES/CMAC/PLOAM/OMCI 的算术，`#ifdef __KERNEL__` 那一半只多包了
+   `<linux/string.h>`。
+2. **两个内核文件照抄。** `zx279133-pon.c`（23 个函数，10796 B）、
+   `zx279133-omci.c`（3 个函数，3131 B）、
+   `zx279133-omci-wire.h`（635 B）**逐字节**搬进 7.3 专有驱动树。
+3. **树侧只差四个钩子和一次轮询**，写成补丁
+   `140-sk-pon-omci-transport.patch`（9129 B）。
+4. **「队列 0 是管理队列」这个前提在 7.3 里同样成立**——这是第 4 片唯一
+   可能整体翻车的假设，所以先查了它（见 8之四.2）。
+
+### 8之四.2 证据：描述符布局两代相同
+
+OMCI 把帧写进 `eth->tx_descs + eth->omci_producer`，`omci_producer`
+是 `0..TX_DEPTH-1`。如果 7.3 的数据面也用 0 号环，这一帧就会和数据帧
+抢描述符。实测两边都是：
+
+| | 数据面描述符下标 | 管理队列 |
+|---|---|---|
+| 6.18 | `tx_descs + (ZX279133_IDM_CPU_TX_FIRST + queue) * ZX279133_IDM_TX_DEPTH + producer`（`zx279133-netdev.c:650`） | 0 号环 |
+| 7.3 | `tx_descs + (ZX279133_IDM_CPU_TX_FIRST + queue) * ZX279133_IDM_TX_DEPTH + producer`（`zx279133-netdev.c:389`） | 0 号环 |
+
+`ZX279133_IDM_CPU_TX_FIRST` 两边都是 **1**（6.18 的 `zx279133.h:28`、
+7.3 的 `zx279133.h:26`），`ZX279133_IDM_TX_DEPTH` 两边都是 1024。
+⇒ 0 号环在两代里都是留给管理队列的，**OMCI 的下标不用改**。
+
+### 8之四.3 证据：内核 API 在 7.3 树里都还在
+
+本机没有 arm64 交叉工具链，编译只能走 CI（Compile 在作业第 70 分钟）。
+所以先用**包含图可达性**把编译器会问的问题问掉：对 7.3.4 树做
+`#include` 图的 BFS，看每个文件自己能不能看见它调用的每个名字。
+
+| 文件 | 用到的内核名字 | 结论 |
+|---|---|---|
+| `zxpon.c` | `memcpy`/`memset`/`uint8_t`/`uint16_t`/`uint32_t` | 全部可见（`<linux/string.h>` → `<linux/types.h>`） |
+| `zx279133-omci.c` | `readl`/`writel`/`lower_32_bits`/`upper_32_bits`/`cpu_to_le32`/`dmam_alloc_coherent`/`readl_poll_timeout`/`dma_rmb`/`wmb`/`mutex_*` | 全部可见（`readl`/`writel` 走 `<linux/iopoll.h>` → `<linux/io.h>`；`lower_32_bits` 在 `<linux/wordpart.h>`） |
+| `zx279133-pon.c` | 43 个（netlink、netdev、LED、sysfs、workqueue…） | 全部可见 |
+
+三个**在 7.3 里变过形状**的地方，单独查过：
+
+- **通用 netlink**：7.3 的 `net/netlink/Kconfig` 里**已经没有**
+  `CONFIG_GENERIC_NETLINK` 这个符号了——通用 netlink 变成无条件编译
+  （`net/netlink/Makefile` 的 `obj-y := af_netlink.o genetlink.o policy.o`），
+  `genl_register_family` 仍然以 `EXPORT_SYMBOL` 导出
+  （`net/netlink/genetlink.c:840`）。⇒ **7.3 线不需要任何 netlink 的
+  Kconfig 开关**，6.18 侧那句 `CONFIG_GENERIC_NETLINK` 的依赖在 7.3 里
+  是多余的。
+- **LED 触发器**：`led_trigger_register_simple` 在
+  `include/linux/leds.h:479` 被 `#ifdef CONFIG_LEDS_TRIGGERS` 包着，
+  而 `LEDS_TRIGGERS` 是 `menuconfig`、默认 n。cnjn 的
+  `target/linux/zte/zx279133/config-7.3` 里有 `CONFIG_LEDS_CLASS=y`
+  与 `CONFIG_LEDS_TRIGGERS=y`，**但这是第 4 片新引入的依赖**，
+  所以门禁里逐条查这两行。
+- **`dev->stats`**：`include/linux/netdevice.h:2292` 还在
+  （注释写着「not used by modern drivers」），`zxpon_omci_xmit()` 的
+  `dev->stats.tx_dropped++` 因此不用改。
+
+### 8之四.4 补丁 140：树侧到底改了什么
+
+`kernel-patches/7.3-local/140-sk-pon-omci-transport.patch`
+（sha256 `99a75ffe459bf519f8ddaa3adcbe112d525309b5b798085629d26942fb857b28`），
+改 5 个文件、119 行：
+
+| 文件 | 改动 | 为什么 |
+|---|---|---|
+| `zx279133.h` | 加 8 个 `omci_*` 字段 + `pon_led_work`/`opsd_gpio`/`los_trigger`；加 7 个函数声明 | 两个内核文件要用的字段和入口 |
+| `zx279133-main.c` | 加 `zx279133_pon_led_work`（200 ms 轮询 GPIO）、`zx279133_pon_cleanup`、`zx279133_pon_led_cancel`；probe 里取 GPIO、注册 LOS 触发器；`devm_register_netdev()` 之后 `zx279133_pon_attach()` | **7.3 的 main.c 里一个 GPIO 都没有**，不写这轮询，`zxpon_set_los()` 永远不会被调用，PON 的 carrier 永远不起来 |
+| `zx279133-mac.c` | `mac_link_up()` 末尾 `zx279133_pon_carrier_kick(eth->ndev)` | carrier 跟着 PON 状态走，链路起来时要重算一次 |
+| `zx279133-idm.c` | `zx279133_idm_tx_prepare()` 里先 `zx279133_omci_prepare()` 再 `memset` | 管理队列要和描述符数组的清零对齐，和 6.18 侧同序 |
+| `Makefile` | `npu-y += zx279133-pon.o zx279133-omci.o zxpon.o` | 三个文件没有自己的 `module_init`，进同一个模块 |
+
+**`mac_link_down()` 没有加 kick**，和 6.18 侧一致：6.18 的
+`zx279133_mac_link_down()` 里也没有。原因是 carrier 跟的是 PON 状态机，
+状态机自己每 100 ms 醒一次重算 carrier，link_down 的 kick 是冗余的。
+
+**GPIO 的取法也照抄 6.18**：`devm_gpiod_get_optional(dev, "opsd", GPIOD_IN)`，
+`-EPROBE_DEFER` 就返回（等 gpio2 注册），其它错误就当没有这根线。
+板级 DTS 第 396 行有 `opsd-gpios = <&gpio2 1 GPIO_ACTIVE_HIGH>`，
+7.3 树的 `arch/arm64/include/asm/…`（`zx279133.dtsi` 第 274 行）
+`gpio2: gpio@10d10080` 没有 `status` 属性（默认 okay），所以这根线拿得到。
+
+### 8之四.5 编译前的门禁：`tools/check-sk-pon-api.py`
+
+和第 3 片同一个路子，把编译器会问的问题在 CI 编译之前问掉：
+
+1. 五个文件在树里，且**与仓库带的那份逐字节相同**（sha256 比对）。
+2. **协议核心闭合**：`zxpon.h` 声明的每个函数在 `zxpon.c` 里有定义，
+   反之亦然。（`zxpon.c` 同时被用户态的 `zxpond` 编译，单边缺名字是那边的
+   链接错误。）
+3. **内核名字可见**：对每个文件算包含闭包，检查它调用的每个内核名字在
+   闭包里**有定义**——不是「某个头文件里有」，而是「这个文件看得见」。
+4. **内核侧契约**：树的 `zx279133.h` 声明那 7 个函数，
+   `struct zx279133_eth` 带那 11 个字段。
+5. **四个钩子在位**：`main.c` 的 attach/stop、`mac.c` 的 carrier kick、
+   `idm.c` 的 `zx279133_omci_prepare()`。
+6. **构建接线**：三个对象在 `npu-y` 里。
+7. **新引入的依赖**：板级 DTS 有 `opsd-gpios` 与
+   `linux,default-trigger = "zx279133-los"`；7.3 配置片段有
+   `CONFIG_LEDS_CLASS=y` 与 `CONFIG_LEDS_TRIGGERS=y`。
+
+### 8之四.6 验证（本机）
+
+- **补丁 140 在「vanilla+39+100+110+120+130」基准树上 `git apply --check` 通过**，
+  apply 之后的五个文件与手工编辑**逐字节一致**。
+- `tools/apply-sk-overlay-73.sh` 在测试树 `scratch/test73c` 上跑通：
+  「board layer applied …; the 7.3 driver set is intact」。脚本现在**多断言**
+  八个由 7.3 线带进树的文件与仓库那份逐字节相同（`cmp -s`）——
+  因为 PON/OMCI 的文件名与 6.18 世代同名，光靠「文件在不在」分不出是哪一代。
+- `tools/check-sk-pon-api.py` 全绿（含内核名字可见性、协议核心闭合、
+  四个钩子、构建接线、LED 依赖）。
+- 本机四条门禁测试全绿：`test_sk_workflows.py` OK、
+  `test_sk_kernel.py` 10/10、`test_sk_uboot.py` 21/21、
+  `test_sk_offload.py` 10/10（skipped=1）、`tools/prepush.py` 0 problems。
+- MANIFEST.json 里四个补丁的 sha256/bytes 全部校验 OK。
+
+### 8之四.7 未做
+
+1. **没有编译。** 这四个文件是 CI 第一次编译它们。
+2. **没有实机验证。** bench 被别的会话占着，本轮没做任何实机操作。
+   板上有光纤时才能验：LOS 灯随 `opsd` 翻转、`pon_state` 从 O1 往 O5 走、
+   `omci_transport` 的 `submitted`/`completed` 在涨。
+3. **上行（RX 方向的 PLOAM/OMCI 帧）没有接**——这不是第 4 片的缺口：
+   `zxpon_rx_ploam()`/`zxpon_rx_omci()` 在 **6.18 侧同样没有任何调用点**
+   （`kernel-overlays/` 全目录零命中）。OMCI 的上行是用户态的 `zxpond`
+   走 netlink 的 `OMCI_TX` 命令下去的。第 4 片忠实复制了 6.18 的状态。
+4. **PON MAC 窗口仍然没有编程。** `zx279133-pon.c` 的头注释写得很清楚：
+   厂商模块只有 `mode_xgpon_nsyn_cfg`、没有 `mode_xgpon_nsyn_cfg_133`，
+   所以那 49 字的 `xgpon_nsyn` 镜像不是这块板子该写的，`0x17000000`
+   的 PON MAC 窗口一个寄存器都没碰。
+
+---
+
 ## 九、下一步（按片重打，每片一次 CI）
 
 **没搬的，按片来：**
@@ -981,8 +1177,14 @@ XMAC 锁**（`zx279133_switch_xmac_restore()` 内部 `xmac_lock`/`unlock`）。
    Kconfig/Makefile。**未编译验证**——等 CI 的 Compile。
    接下来这一片剩下的是**实机对拍**：驱动能在 7.3 上编译不等于 LAN 口能通，
    判据是 conduit netdev 的 RX 计数在涨、四个 DSA 用户口的 link 状态正确。
-4. **PON / OMCI**（约 56 个函数）。工作量最大，且和第 5 条「cnjn 会不会公开
-   npu-pon.ko」强相关。
+4. **PON / OMCI**（约 56 个函数）。**第 4 片已落地**（见八之四）：协议核心与两个
+   内核文件逐字节搬进 `kernel-overlays-73/`，
+   `kernel-patches/7.3-local/140` 给 7.3 的树补上四个钩子、一次 `opsd` GPIO 轮询
+   与 LOS 触发器。**未编译验证**——等 CI 的 Compile。
+   这一片剩下的还是**实机对拍**：LOS 灯随 `opsd` 翻、`pon_state` 走 O1→O5、
+   `omci_transport` 的 `submitted`/`completed` 在涨。
+   和第 5 条「cnjn 会不会公开 npu-pon.ko」的强相关仍然存在：我们的栈只做
+   状态机与下行，上行是用户态 `zxpond` 走 netlink 下去的。
 5. **RGMII 调试**（8 个函数）与 **netdev/main/mac 的健壮性修正**（约 28 个函数），
    随 2~4 一起带。
 
@@ -1029,6 +1231,10 @@ python3 ci-build-repo/tools/idm-register-diff.py \
 python3 ci-build-repo/tools/check-sk-switch-api.py \
         --tree linux-7.3.4 --repo ci-build-repo
 
-# 8) 工作流自身的门禁（两条线都在推之前跑）
+# 8) 第 4 片：PON / OMCI 栈的编译前门禁（overlay 拷入之后）
+python3 ci-build-repo/tools/check-sk-pon-api.py \
+        --tree linux-7.3.4 --repo ci-build-repo
+
+# 9) 工作流自身的门禁（两条线都在推之前跑）
 python3 ci-build-repo/tests/test_sk_workflows.py
 ```

@@ -41,9 +41,8 @@ repo=$(CDPATH= cd -- "$script_dir/.." && pwd)
 
 # The 7.3 line's own driver tree.  It is not the 6.18 generation: the 9132
 # LAN switch driver is written against the 7.3 driver set's DSA API and its
-# LAN service, and it is the only file of ours that goes into the 7.3 tree
-# so far.  The other two files are its private header and the LAN1 LED
-# helper, which are self-contained.
+# LAN service, and the PON / OMCI stack is written against the 7.3 tree's
+# eth structure.  The rest are the private headers those two need.
 ( cd "$repo/kernel-overlays-73" && tar cf - . ) | ( cd "$tree" && tar xf - )
 
 # The NPU microcode.  config-7.3 sets CONFIG_EXTRA_FIRMWARE="zte/zx279133/
@@ -71,9 +70,6 @@ grep -q 'ZX279133_RTL8372N_USER_PORT_MAX[[:space:]]*8' \
 # What the copy must NOT have produced: the 6.18 driver files are still
 # absent, and the 7.3 driver is still the one that is there.
 for leftover in \
-	drivers/net/ethernet/zte/zx279133-pon.c \
-	drivers/net/ethernet/zte/zxpon.c \
-	drivers/net/ethernet/zte/zx279133-omci.c \
 	drivers/net/ethernet/zte/zx279133-rgmii.c \
 	drivers/net/phy/zte/phy-zx279133-uni-serdes.c ; do
 	[ ! -e "$tree/$leftover" ] || {
@@ -89,9 +85,30 @@ for kept in \
 	drivers/net/ethernet/zte/zx279133-switch.c \
 	drivers/net/ethernet/zte/zx279133-lan1-led.h \
 	drivers/net/ethernet/zte/zx279133-9132.h \
+	drivers/net/ethernet/zte/zx279133-pon.c \
+	drivers/net/ethernet/zte/zx279133-omci.c \
+	drivers/net/ethernet/zte/zx279133-omci-wire.h \
+	drivers/net/ethernet/zte/zxpon.c \
+	drivers/net/ethernet/zte/zxpon.h \
 	drivers/phy/zte/phy-zx279133-uni-serdes.c ; do
 	[ -f "$tree/$kept" ] || {
 		echo "the 7.3 driver file $kept is missing from the tree" >&2; exit 1; }
+done
+
+# The files the 7.3 line brings have to be the ones this repository
+# carries, and not the 6.18 generation's copies of the same names.
+for brought in \
+	drivers/net/ethernet/zte/zx279133-switch.c \
+	drivers/net/ethernet/zte/zx279133-9132.h \
+	drivers/net/ethernet/zte/zx279133-lan1-led.h \
+	drivers/net/ethernet/zte/zx279133-pon.c \
+	drivers/net/ethernet/zte/zx279133-omci.c \
+	drivers/net/ethernet/zte/zx279133-omci-wire.h \
+	drivers/net/ethernet/zte/zxpon.c \
+	drivers/net/ethernet/zte/zxpon.h ; do
+	cmp -s "$tree/$brought" "$repo/kernel-overlays-73/$brought" || {
+		echo "the tree's $brought is not the one the repository carries" >&2
+		exit 1; }
 done
 
 echo "board layer applied to $tree; the 7.3 driver set is intact"

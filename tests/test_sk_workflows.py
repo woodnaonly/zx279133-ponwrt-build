@@ -55,6 +55,7 @@ BRINGUP_STEPS = [
     "Apply the board layer",
     "Check the applied board layer",
     "Check the 9132 switch driver against the 7.3 tree",
+    "Check the PON / OMCI stack against the 7.3 tree",
     "Apply the OpenWrt-side overlays",
     "Enable /dev/mem in the 7.3 fragments",
     "Install feeds",
