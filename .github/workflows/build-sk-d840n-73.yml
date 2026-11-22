@@ -506,6 +506,53 @@ jobs:
           done
           grep -iE '^CONFIG_(ZTE_ZX279133|NET_DSA_TAG_ZX279133)' "$KC" || true
 
+      # The bring-up line's whole purpose is an image to put on the board,
+      # and until the images are collected there is nothing to flash.  The
+      # build has already made them under bin/targets - this step does not
+      # build a second image and does not re-compress anything: it collects
+      # what the build produced and reports the sizes.
+      #
+      # The kernel size is the one number that can stop the flash job: this
+      # board's device tree says "kernel 8192k@0x200000", so the gzip
+      # uImage has to fit in 8 MiB.  The image profile carries
+      # "KERNEL_SIZE := 8192k", so OpenWrt's image.mk already refuses to
+      # build one that does not fit - reaching this step means it fits.  The
+      # number is printed anyway, because "the image was built" and "the
+      # image fits" are two questions and only one of them was asked before.
+      # The NPU driver is now inside the kernel image (see the pin step
+      # above), so this number grew with it.
+      - name: Collect the images
+        run: |
+          set -e
+          BIN=openwrt/bin/targets/zte/zx279133
+          [ -d "$BIN" ] || {
+            echo "::error::no image directory at $BIN"; exit 1; }
+          ls -l "$BIN" || true
+          UI=""
+          for f in "$BIN"/*uImage*; do
+            [ -f "$f" ] && UI="$f" && break
+          done
+          if [ -n "$UI" ]; then
+            SIZE=$(stat -c %s "$UI")
+            echo "the kernel image is $SIZE bytes; the kernel partition is 8 MiB"
+            echo "::notice::kernel image: $SIZE bytes of 8388608"
+            [ "$SIZE" -le 8388608 ] || {
+              echo "::error::the kernel image does not fit the 8 MiB kernel partition" >&2
+              exit 1; }
+          else
+            echo "::warning::no kernel image under $BIN - the image profile did not make one"
+          fi
+          mkdir -p images
+          cp -a "$BIN"/. images/
+          ls -l images
+
+      - name: Upload the images
+        uses: actions/upload-artifact@v4
+        with:
+          name: sk-d840n-73-images-${{ matrix.mode }}
+          path: images/
+          retention-days: 14
+
       # The gate that says the thing that was built is the thing that was
       # asked for: the version in the tree, the version in the Image banner
       # and the version the modules are packaged under.

@@ -283,6 +283,16 @@ CONFIG_EXTERNAL_KERNEL_TREE=<树>   OpenWrt 把这棵树当自己的内核目录
 5. **目标固件的 PON 模块仍未公开。** 我们逆向出的 30 个 PON 钩子导出只在二进制里；
    等 cnjn 公开 `npu-pon.ko` 源码，我们自研的 PON/OMCI 栈要么对齐、要么让位——
    这个决策应该在 7.3 的 NPU 驱动跑通之后再做。
+6. **7.3 线现在只编译，不产出镜像。** 逐个步骤看过 `build-sk-d840n-73.yml`：
+   它的 build 作业到「Compile」和两道门禁就结束了，**没有 6.18 线那套打包步骤**
+   （`tools/check_sysupgrade.py` 校验、`flash-uImage`/`flash-dtb.bin`/
+   `flash-rootfs.jffs2`/`flash-sysupgrade.bin`/`flash-set.tgz`、以及
+   `upload-artifact`），唯一的 artifact 是 `if: failure()` 的构建日志。
+   ⇒ **实机对拍在镜像产出之前开不了工**：没有可刷的 7.3 镜像。
+   这一步要照 6.18 线补上（连同「kernel ≤ 8 MiB」的检查——NPU 进了 `vmlinux`
+   之后要放进固定 8 MiB 的 `kernel` 分区，7.3 的底子比 6.18 大）。
+   `matrix.mode` 目前只影响 `configure-sk-d840n.sh` 的第三个参数，
+   initramfs/flash 两路走的是同一条编译链。
 
 ---
 

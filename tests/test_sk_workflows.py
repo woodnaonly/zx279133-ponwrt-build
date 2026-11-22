@@ -68,6 +68,8 @@ BRINGUP_STEPS = [
     "Gate: the zte drivers are built into the kernel",
     "Gate: the built kernel is 7.3.4",
     "Gate: the board device tree compiles against the 7.3 tree",
+    "Collect the images",
+    "Upload the images",
 ]
 
 # The paths that decide whether a change to the 7.3 line starts a build.
@@ -293,6 +295,24 @@ def main():
     for symbol in ZTE_DRIVER_SYMBOLS:
         failures.check(symbol in gate_text,
                        f"the gate checks {symbol}")
+
+    # The bring-up line's whole purpose is an image to put on the board.
+    # Until the images are collected there is nothing to flash, so the line
+    # that compiles the kernel has to hand the images out as well - and the
+    # kernel has to fit the fixed 8 MiB partition the device tree names.
+    print("\nthe 7.3 line produces an image that fits the board")
+    collect_text = step_run_text(bringup, "build", "Collect the images")
+    failures.check(collect_text != "", "the collect step has a body")
+    failures.check("bin/targets/zte/zx279133" in collect_text,
+                   "the collect step takes the images OpenWrt built")
+    failures.check("-le 8388608" in collect_text,
+                   "the collect step checks the kernel against the 8 MiB partition")
+    upload = [step for step in steps_of(bringup, "build")
+              if str(step.get("name") or "") == "Upload the images"]
+    failures.check(bool(upload), "the 7.3 line has an upload step")
+    failures.check(any(str(step.get("uses") or "").startswith("actions/upload-artifact")
+                       for step in upload),
+                   "the upload step uses actions/upload-artifact")
 
     return failures.report("workflows")
 
