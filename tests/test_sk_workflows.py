@@ -518,6 +518,38 @@ def main():
         failures.check(member in export_text,
                        f"the export step writes {member}")
 
+    # The migration note keeps the count of the functions that have to be
+    # carried over from the 6.18 generation.  The previous version of that
+    # table was wrong: eight rows that added up to 161, while the tool
+    # measured 171.  The table is the list of what has to be ported, so a
+    # table that does not add up hides ten functions nobody wrote down -
+    # and it did, exactly: six in the switch table driver and four in the
+    # header that owns one lamp.  The check below parses the table and
+    # adds the numbers up; it does not look for the number 171 in the
+    # text, because that is what the table used to say.
+    print("\nthe migration note's increment table adds up")
+    note = ROOT / "docs" / "101-the-7-3-4-baseline-and-the-migration-surface-20261122.md"
+    failures.check(note.exists(), "the 7.3 migration note is in the repository")
+    failures.check((ROOT / "tools" / "func-port-coverage.py").exists(),
+                   "the tool that accounts for every function is in the repository")
+    if note.exists():
+        note_text = note.read_text(encoding="utf-8")
+        parts = note_text.split("### 3.5 ")
+        failures.check(len(parts) > 1, "the note has the increment section")
+        if len(parts) > 1:
+            section = parts[1].split("### 3.6 ")[0]
+            counts = []
+            for line in section.splitlines():
+                row = re.match(r"^\|\s*`([^`]+)`\s*\|\s*(\d+)\s*\|", line)
+                if row:
+                    counts.append((row.group(1), int(row.group(2))))
+            failures.check(len(counts) >= 10,
+                           "the table lists every file, not only the big ones")
+            failures.check(sum(count for _, count in counts) == 171,
+                           "the table adds up to the measured total of 171")
+            failures.check("tools/func-port-coverage.py" in note_text,
+                           "the note names the tool that accounts for the functions")
+
     return failures.report("workflows")
 
 

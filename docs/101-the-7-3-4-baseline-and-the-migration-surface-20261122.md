@@ -18,8 +18,12 @@
    `npu.o`**（`main+tm+np+idm+mac+netdev+offload-api+ptp+host+native+meter+qos`）。
    目标固件里的 `npu.ko` 正是这个结构。
 3. **我们自己的增量有 171 个函数、约 7900 行，是这次升级的主要成本。**
-   其中 **9132 交换表/LED 63 个、PON/OMCI 栈 56 个、RGMII 8 个、实测健壮性修正
-   约 44 个**。7.3 公版里**一个都没有对应物**——因为 cnjn 公开的 7.3 树**没有 PON 模块**。
+   按文件分：**9132 相关的 73 个**（`zx279133-np.c` 30、`zx279133-switch.c` 39、
+   `zx279133-lan1-led.h` 4）、**PON/OMCI 栈 56 个**（`zxpon.c` 37、
+   `zx279133-pon.c` 17、`zx279133-omci.c` 2）、**RGMII 调试 8 个**、
+   **其余健壮性修正 34 个**（netdev 12、main 10、idm 6、mac 6）。
+   7.3 公版里**一个都没有对应物**——因为 cnjn 公开的 7.3 树**没有 PON 模块**。
+   这 171 个函数**逐条都有归属**，账本见 3.5 与八之七。
 4. **CI 走「外部树」模式，与已验证的 6.18 线同构。** cnjn 自己的 zte target 在
    master 上明确禁止 `CONFIG_EXTERNAL_KERNEL_TREE`（它要 OpenWrt 自己下载底包并打
    `patches-7.3`）；我们反过来：自己准备「vanilla 7.3.4 + 39 补丁」，再把树交给
@@ -143,16 +147,31 @@ functions: ours=327 theirs=367 common=156 only_ours=171 only_theirs=211
 
 ### 3.5 我们自己的增量清单（171 个函数）
 
-| 板块 | 函数数 | 主要文件 | 7.3 公版有没有 |
-|---|---|---|---|
-| 9132 交换表 / 端口 / 洪泛 / MF 镜像 | 24 | `zx279133-np.c` | 没有 |
-| 9132 交换芯片 / LED / MDIO / XPCS | 39 | `zx279133-switch.c` | 没有 |
-| PON / OMCI 栈（PLOAM MIC、T-CONT、GEM、OMCI 队列、AES） | 56 | `zxpon.c`、`zx279133-pon.c`、`zx279133-omci.c` | 没有 |
-| RGMII 调试 | 8 | `zx279133-rgmii.c` | 没有 |
-| IDM 实测修正（BP 环配置、RX 头定位、广播查找） | 6 | `zx279133-idm.c` | 没有 |
-| TX 恢复 / phylink 生命周期 / LAN 控制 | 12 | `zx279133-netdev.c` | 没有 |
-| BMU 阈值 / RED 网关 / vendor 重配 / 诊断转储 | 10 | `zx279133-main.c` | 没有 |
-| SOPC 就绪 / XPCS 设备 / XMAC 复位掩码 | 6 | `zx279133-mac.c` | 没有 |
+这张表是**实测**出来的，不是手写的：口径是「6.18 世代的
+`kernel-overlays/drivers/net/ethernet/zte` 对 vanilla `linux-7.3.4`
+里没有的函数」，工具是仓库自己的 `tools/func-surface-diff.py`，
+复跑命令见第十节。
+
+| 文件 | 函数数 | 这一块是什么 |
+|---|---|---|
+| `zx279133-switch.c` | 39 | 9132 交换芯片、LED、MDIO、XPCS |
+| `zxpon.c` | 37 | PON 协议核心：PLOAM MIC、T-CONT、GEM、OMCI 队列、AES |
+| `zx279133-np.c` | 30 | 9132 交换表 / 端口 / 洪泛 / MF 镜像，**加 ERAM 与 PPU 的基础设施** |
+| `zx279133-pon.c` | 17 | PON 栈与网设备的接线 |
+| `zx279133-netdev.c` | 12 | TX 恢复 / phylink 生命周期 / LAN 控制 |
+| `zx279133-main.c` | 10 | BMU 阈值 / RED 网关 / vendor 重配 / 诊断转储 |
+| `zx279133-rgmii.c` | 8 | RGMII 调试 |
+| `zx279133-idm.c` | 6 | IDM 实测修正：BP 环配置、RX 头定位、广播查找 |
+| `zx279133-mac.c` | 6 | SOPC 就绪 / XPCS 设备 / XMAC 复位掩码 |
+| `zx279133-lan1-led.h` | 4 | LAN1 那盏灯的 claim / read / set / restore |
+| `zx279133-omci.c` | 2 | OMCI 队列的准备与回收 |
+| **合计** | **171** | |
+
+**上一版这张表是错的**：只有 8 行、相加 161，比总数少 10 个——
+`zx279133-np.c` 的 6 个（ERAM/PPU 基础与 debugfs 的拆除），
+以及整个 `zx279133-lan1-led.h`（4 个）没有被记账。
+**总数 171 是对的，分解是错的**，而分解正是「要不要搬」的清单，
+所以这个错不是排版问题。
 
 7.3 公版**没有 PON 模块**（`npu-pon.ko` 在目标固件里有、公开树里没有），
 这意味着：我们自研的 PON/OMCI 栈不是「被 7.3 取代的东西」，而是**站在公开树
@@ -259,6 +278,7 @@ CONFIG_EXTERNAL_KERNEL_TREE=<树>   OpenWrt 把这棵树当自己的内核目录
 | `tests/test_sk_workflows.py` | 工作流自身的门禁：每个工作流文件可解析、7.3 线依赖的步骤都在、门禁点名的测试文件都存在、7.3 线的路径过滤覆盖这条线的输入（见 7.9） |
 | `overlays-73/target/linux/zte/zx279133/target.mk` | 7.3 线的 subtarget 默认包：**清空 OpenWrt 的 `DEFAULT_PACKAGES.tweak`**，否则其中的 `luci` 元包会拉进 `luci-theme-bootstrap`（见 7.8） |
 | `tools/func-surface-diff.py` | 两代驱动的函数面对照，输出「只在我们这边」与「只在 7.3 那边」两张工作清单 |
+| `tools/func-port-coverage.py` | **按能力对账**：171 个函数逐条必须有归属（同名 / 账本写明搬到哪 / 有处置记录），未记账即非零退出；账本指着的目标函数必须真在 7.3 树里（见八之七） |
 | `tools/idm-register-diff.py` | 以 `writel(...)` 语句为单位逐条对比两代的寄存器写入 |
 | `pon/npu-reverse/` | 逆向产物留档：99 个 API、rodata、函数表、initrd 清单、目标 DTS |
 
@@ -269,11 +289,21 @@ CONFIG_EXTERNAL_KERNEL_TREE=<树>   OpenWrt 把这棵树当自己的内核目录
 
 ## 六、未做 / 风险
 
-1. **我们自己的 171 个函数只搬了第 1~5 片。** 7.3 通道目前是「cnjn 的 7.3 驱动 +
-   我们的板级层 + IDM 三片 + 9132 交换表驱动 + PON/OMCI 栈 + **9132 芯片编程**」。
-   剩下的是 RGMII（`zx279133-rgmii.c`，**判为取舍不是缺口**，见八之五.9）
-   与 TX 故障隔离/恢复机制（**判为不整体移植**，见八之五.9）。
-   **这五个文件都还没有被编译过**（本机无交叉工具链），实机对拍是它之后的下一道。
+1. **我们自己的 171 个函数逐条都有归属，但「搬了」不等于「同名」。**
+   7.3 通道目前是「cnjn 的 7.3 驱动 + 我们的板级层 + IDM 三片 + 9132 交换表驱动
+   + PON/OMCI 栈 + **9132 芯片编程**」。
+   实测对账（八之七，`tools/func-port-coverage.py`）：
+   **125 个同名对上**、**27 个由 7.3 树以别的名字、别的形状实现**
+   （vendor 兼容重配、BMU 阈值、RED 网关、SOPC、数据面模型，7.3 各换了机制）、
+   **19 个有明确处置**：RGMII 的 8 个（**取舍不是缺口**，见八之五.9）、
+   TX 故障隔离/恢复的 8 个（**不整体移植**，见八之五.9）、
+   9132 debugfs 控制台的 4 个（7.3 树有自己的 `native_*_io` 端点），
+   外加 1 个只做调试打印的函数。**未记账 0 个。**
+   ⇒ 「剩下的是 RGMII 与 TX 恢复」这个说法**按函数名看是对的、按能力看是错的**：
+   那些函数名之所以不在 7.3 树里，是因为 7.3 树用另一套机制做同一件事。
+   **但这五片还没有一次成功的编译记录**——本机无交叉工具链，编译只能走 CI；
+   7.3 线此前每一轮都死在下载阶段（见 7.16），所以第一轮完整编译的结果还不知道。
+   实机对拍是它之后的下一道。
    **PON/OMCI 的上行没有接**——但 6.18 侧同样没有接（见八之四.7），
    所以这不是 7.3 线独有的缺口。
    **PON MAC 窗口一个寄存器都没碰**（厂商模块没有
@@ -1987,6 +2017,69 @@ void zx279133_pon_note_rxsd(int light)
 **未做**：没有在真机上跑过这个脚本（本机没有板子，也没有 7.3 镜像）；
 演练用的是合成树，**不能替代实机读数**。
 
+### 八之七、按能力对账，而不是按函数名
+
+**判决：171 这个数字是对的，但「按函数名核对」这条办法是错的，
+所以本文此前的「剩下的是 RGMII 与 TX 恢复」这句话也是错的。**
+
+**为什么按名字对不行。** 第 1~2 片的补丁改的是 7.3 树里**已经存在**的函数：
+`100` 改 `zx279133_idm_tx_configure()` 的寄存器值，
+`110` 改 `zx279133_idm_rx_page_slot()` 用的帧落点，
+`120` 改 `zx279133_idm_rx_flush_refill()`。
+6.18 世代那三个对应的函数叫 `zx279133_idm_bp_ring_cfg()`、
+`zx279133_idm_rx_find_header()`、`zx279133_idm_find_broadcast()`——
+**一个名字都不在 7.3 树里**。
+⇒ 按名字核对，这三个会被判成「没搬」；实际上第 1~2 片搬了，
+而且 7.3 树**根本不需要**「找头」这个函数，因为帧落点是固定的 0x80。
+
+**那 7.3 树自己怎么做的。** 7.3 树不是缺这些能力，是用另一套机制做：
+
+| 6.18 世代的函数 | 7.3 树里的对应物 |
+|---|---|
+| `zx279133_bmu_threshold_fixup()` | `zx279133_bmu_prepare()` / `zx279133_bmu_restore()`（`zx279133-tm.c`） |
+| `zx279133_red_gate_clear()` / `_restore()` | `zx279133_red_prepare()` / `zx279133_red_restore()`（`zx279133-tm.c`） |
+| `zx279133_red_vendor_fixup()` | `zx279133_red_np1_prepare()` / `_restore()`（`zx279133-tm.c`） |
+| `zx279133_tm_vendor_fixup()` | `zx279133_tm_prepare()` / `zx279133_tm_restore()`（`zx279133-tm.c`） |
+| `zx279133_sopc_duplex_mask()` / `_ready()` / `_send_enable()` | `zx279133_sopc_prepare()` / `zx279133_sopc_restore()`（`zx279133-tm.c`） |
+| `zx279133_xmac_base()` / `zx279133_xmac_reset_mask()` | `zx279133_xmac_reset()`（`zx279133-mac.c`） |
+| `zx279133_ppu_get_me_val()` / `zx279133_ppu_me_word()` | `zx279133_ppu_me_stats_read()` / `zx279133_ppu_me_diagnostics_read()`（`zx279133-np.c`） |
+| `zx279133_datapath_attach()` | `zx279133_lan_datapath_get()` / `zx279133_lan_datapath_put()`（`zx279133-netdev.c`） |
+| `zx279133_lan_mmio_set()` | `zx279133_lan_nppt_write()` / `_read()`（第 3 片的 LAN 控制事务） |
+| `zx279133_lan_strip_transport_vlan()` | 第 5 片的 PPU → transport VID 映射（`zx279133_idm_rx_lan_vport()`） |
+| `zx279133_wan_phylink_start()` / `_stop()` | `zx279133-netdev.c` 里直接调 `phylink_start()` / `phylink_stop()` |
+| `zx279133_idm_rx_has_ethertype()` | `eth_type_trans()`（`zx279133-idm.c`） |
+| `zx279133_idm_xdp_pass_valid()` | `zx279133-netdev.c` 的 XDP 路径里的 `xdp_buff_has_frags()` 与长度检查 |
+
+**账本。** 新工具 `tools/func-port-coverage.py` 把这件事变成可复跑的检查：
+它拿 6.18 世代的驱动目录与 7.3 树对照，对**只有 6.18 有的每一个函数**，
+要求它落进三个桶之一：
+
+1. **同名在 7.3 树里** —— 125 个；
+2. **账本里写着它搬到了哪里**（`CARRIED` 表，27 个）——
+   **表里写的目标函数必须真的在 7.3 树里**，否则工具报「账本指着不存在的东西」；
+3. **有处置记录**（`DISPOSITIONS` 表，19 个）——
+   每条处置都必须说清 7.3 树用的是什么，不是「我们没搬」。
+
+三个桶都不在 ⇒ **缺口**，工具非零退出。
+
+**反向验证**（`scratch/reverse_check_port_coverage.py`，本机已跑通）：
+删掉一条账本条目、删掉一条处置、把账本里的目标函数改成树里没有的名字，
+工具**都必须转红**，且必须点名它丢了哪一条。
+
+**为什么相似度不能当判据。** 工具本来还有一个「函数体相似度 ≥ 60% 就算搬过」的兜底，
+实测发现它会**掩盖账本的缺失**：`zx279133_bmu_threshold_fixup()` 与某个
+不相干的短函数恰好有 60% 的行重合，删掉账本条目后工具照样绿。
+⇒ 已删掉这个兜底：**只有账本算数**，相似度只作为「最接近的是谁」的线索打印。
+
+**未做**：
+- 账本目前是**人工核实**的结论（本机逐个读过 6.18 侧的实现、在 7.3 树里找到出处）；
+  没有进 CI（它需要 vanilla 7.3 树，而 CI 只准备打过补丁的树）。
+- 27 个「换名搬过去」的对应物，是**能力层面**的对应，不是逐行等价；
+  它们能不能在板子上真的工作，要等实机对拍。
+- 「125 个同名对上」只说明名字在，**不说明实现没变**；
+  同名的那些函数里有多少是逐字相同、多少是重写，需要另用
+  `tools/func-body-diff.py` 逐个文件比（IDM 那一个文件已经比过，见第九节）。
+
 ---
 
 ## 九、下一步（按片重打，每片一次 CI）
@@ -2203,6 +2296,15 @@ python3 scratch/dtbcompat_check.py
 
 # 24) 板级 DTS 的 compatible 与 7.3 树的驱动对照
 python3 scratch/dtb_compat73.py --tree scratch/test73c
+
+# 25) 171 个函数逐条对账：每个都要有归属（同名 / 账本写明搬到哪 / 有处置），
+#     未记账即非零退出；账本指着的目标函数必须真在 7.3 树里
+python3 ci-build-repo/tools/func-port-coverage.py \
+        ci-build-repo/kernel-overlays/drivers/net/ethernet/zte \
+        scratch/test73c/drivers/net/ethernet/zte
+
+# 26) 这道对账的反向验证：改坏四处必须转红
+python3 scratch/reverse_check_port_coverage.py
 ```
 
 第十节的 18~24 号命令里，`cfg73_sim.py` 与 `kdeps73.py` 是**一对**：
@@ -2210,3 +2312,6 @@ python3 scratch/dtb_compat73.py --tree scratch/test73c
 不会被 kconfig 夹成 `=m`。`boardgate_check.py` 吃的正是前者的产物，
 所以这两条命令合起来回答的是同一个问题：
 **「7.3 线新增的那道合并配置门禁，会不会永远变红」**——答案是不会。
+
+25 与 26 号命令是**另一对**：25 号回答「171 个函数有没有落到地上」，
+26 号证明这个回答不是靠「没查所以没报」蒙混过去的。
