@@ -554,6 +554,105 @@ jobs:
           done
           grep -iE '^CONFIG_(ZTE_ZX279133|NET_DSA_TAG_ZX279133)' "$KC" || true
 
+      # The release line has a gate that reads the merged kernel .config of
+      # the kernel it actually ships and asserts that the board's
+      # requirements are in it.  The 7.3 line had only the four zte driver
+      # symbols, so a configuration that lost the Realtek PHY, the netfilter
+      # family, the panic timeout or the built-in command line would have
+      # produced an image that builds cleanly and does not work - and the
+      # failure would only show up on the board, as "no network port" or as
+      # a boot that waits forever for a root device this board never makes.
+      #
+      # Every symbol is checked against the merged .config, never against
+      # the fragment that was edited: a symbol that does not exist in the
+      # tree, and a tristate symbol whose dependency is modular, are both
+      # dropped in silence - kconfig takes the AND of the requested value
+      # with the symbol's visibility (scripts/kconfig/symbol.c), so a
+      # fragment can say =y while the kernel says =m.
+      #
+      # The list is the release line's, and it was checked against the 7.3
+      # tree before it was copied here: all 39 symbols exist in a 7.3 tree,
+      # all 39 come out =y out of the three config-7.3 fragments plus the
+      # offload profile, and no symbol in any of their dependency chains is
+      # modular - so none of them can be clamped back to =m.  The chain was
+      # walked with the tree's own Kconfig files, not by reading the
+      # fragments, because that is the only place a clamp can happen.
+      - name: 'Gate: the merged kernel config carries the board requirements'
+        run: |
+          set -e
+          KC=$( { ls -d openwrt/build_dir/target-*/linux-*/linux-$KVER/.config 2>/dev/null || true; } | head -1 )
+          [ -n "$KC" ] || {
+            echo "::error::no merged kernel .config for linux-$KVER; what is there:"
+            ls -d openwrt/build_dir/target-*/linux-* 2>&1 || true
+            exit 1; }
+          echo "kernel config: $KC"
+          # What the failing symbol actually *is* is the whole question, and
+          # it has four different answers that look identical from the
+          # outside: =y (it is not, since we are in the failure branch), =m,
+          # an explicit "# ... is not set", or absent from .config altogether -
+          # and the last one means the symbol name does not exist in this
+          # kernel's Kconfig, which defconfig then drops without a word.
+          dump_config_state() {
+            for k in "$@"; do
+              if grep -qx "CONFIG_$k=y" "$KC"; then
+                printf '    %-34s =y\n' "CONFIG_$k"
+              elif v=$(grep -m1 -E "^(CONFIG_$k=|# CONFIG_$k is not set$)" "$KC"); then
+                printf '    %s\n' "$v"
+              else
+                printf '    %-34s <not mentioned in .config at all>\n' "CONFIG_$k"
+              fi
+            done
+          }
+          # required: without these the board cannot be reached, read, or
+          # routed at all, and a missing one looks exactly like "the kernel
+          # does not boot".
+          required="CC_OPTIMIZE_FOR_SIZE REALTEK_PHY LEDS_GPIO GPIO_ZX279133 GPIO_SYSFS PSTORE PSTORE_CONSOLE PSTORE_RAM MAGIC_SYSRQ MAGIC_SYSRQ_SERIAL DYNAMIC_DEBUG DYNAMIC_DEBUG_CORE NETFILTER NF_CONNTRACK NF_CONNTRACK_MARK NF_NAT NF_TABLES NF_TABLES_INET NF_TABLES_IPV4 NF_TABLES_IPV6 NFT_CT NFT_NAT NFT_MASQ NFT_REDIR NFT_REJECT NFT_REJECT_INET NFT_REJECT_IPV4 NFT_REJECT_IPV6 NFT_FIB NFT_FIB_INET NFT_FIB_IPV4 NFT_FIB_IPV6 NFT_LOG NFT_LIMIT NFT_QUOTA NFT_NUMGEN NF_FLOW_TABLE NF_FLOW_TABLE_INET NFT_FLOW_OFFLOAD"
+          # reported: bring-up instruments.  Worth having, never worth a red
+          # run - the pin is still attempted, only the blocking is dropped,
+          # and the state is published either way, so nothing is hidden.
+          reported="DEVMEM STRICT_DEVMEM IO_STRICT_DEVMEM DETECT_HUNG_TASK SOFTLOCKUP_DETECTOR IKCONFIG IKCONFIG_PROC VETH"
+          for s in $required; do
+            grep -qx "CONFIG_$s=y" "$KC" || {
+              echo "::error::CONFIG_$s is not built into the kernel" >&2
+              echo "    config file: $KC" >&2
+              echo "    --- the failing symbol, on its own ---" >&2
+              dump_config_state "$s" >&2
+              echo "    --- every symbol this gate asserts, as it actually stands ---" >&2
+              dump_config_state $required >&2
+              exit 1; }
+          done
+          # -Os keeps every selected feature while fitting the fixed kernel
+          # partition; check the merged config, not just the two inputs
+          # configure pinned.
+          grep -qx '# CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE is not set' "$KC" || {
+            echo "::error::kernel optimization reverted to -O2" >&2
+            dump_config_state CC_OPTIMIZE_FOR_SIZE CC_OPTIMIZE_FOR_PERFORMANCE >&2
+            exit 1; }
+          # CONFIG_PANIC_TIMEOUT=1 (cnjn's generic config) means a panic
+          # prints and then reboots one second later.  Zero leaves the
+          # message on the console forever, which is the difference between
+          # "the kernel said why" and "the board is cycling".
+          grep -qx 'CONFIG_PANIC_TIMEOUT=0' "$KC" || {
+            echo "::error::CONFIG_PANIC_TIMEOUT is not 0 - a panic would reboot before the console could be read" >&2
+            dump_config_state PANIC_TIMEOUT >&2
+            exit 1; }
+          # The built-in command line is the reason the last image waited
+          # forever for a root device this board never creates: SR1010's
+          # flash layout is not ours, and root is mtdblock5 here.
+          grep -qx 'CONFIG_CMDLINE="console=ttyAMA0,115200n8 root=/dev/mtdblock5 rootfstype=jffs2 ro rootwait clk_ignore_unused pd_ignore_unused"' "$KC" || {
+            echo "::error::CONFIG_CMDLINE is not the pinned cmdline" >&2
+            grep -iE '^CONFIG_CMDLINE' "$KC" >&2 || echo "no CONFIG_CMDLINE at all" >&2
+            exit 1; }
+          ! grep -q 'mtdblock7' "$KC" || {
+            echo "::error::a mtdblock7 cmdline is still in the kernel config" >&2
+            exit 1; }
+          for s in $reported; do
+            st=$( { grep -m1 -E "^(CONFIG_$s=|# CONFIG_$s is not set$)" "$KC"; } || true )
+            [ -n "$st" ] || st="CONFIG_$s absent from .config - no such symbol, or a dependency turned it off"
+            echo "::warning::$st"
+          done
+          grep -iE '^CONFIG_(ZTE_ZX279133|REALTEK|MDIO_ZX|NETFILTER)' "$KC" || true
+
       # The bring-up line's whole purpose is an image to put on the board,
       # and until the images are collected there is nothing to flash.  The
       # build has already made them under bin/targets - this step does not

@@ -67,6 +67,7 @@ BRINGUP_STEPS = [
     "Download packages",
     "Compile",
     "Gate: the zte drivers are built into the kernel",
+    "Gate: the merged kernel config carries the board requirements",
     "Gate: the built kernel is 7.3.4",
     "Gate: the board device tree compiles against the 7.3 tree",
     "Collect the images",
@@ -191,6 +192,20 @@ def referenced_tests(text):
     return sorted(set(re.findall(r"tests/[\w./-]+\.(?:py|sh)", text)))
 
 
+def shell_list(text, name):
+    """The words of a shell variable assignment: name="A B C" -> ["A", "B", "C"].
+
+    The two workflows keep their symbol lists in a shell variable, and the
+    point of comparing them is to compare what the shell would actually use -
+    so the value is read the way the shell reads it, not with a regexp that
+    happens to match today.
+    """
+    match = re.search(r'^\s*%s="([^"]*)"' % re.escape(name), text, re.MULTILINE)
+    if not match:
+        return []
+    return match.group(1).split()
+
+
 def main():
     failures = Failures()
 
@@ -313,6 +328,54 @@ def main():
     for symbol in ZTE_DRIVER_SYMBOLS:
         failures.check(symbol in gate_text,
                        f"the gate checks {symbol}")
+
+    # The board's other requirements have to be in the merged kernel config
+    # too, and the release line already knows how to say that.  Without this
+    # the 7.3 line would build an image that has no Realtek PHY, no
+    # netfilter and the wrong built-in command line - and every one of those
+    # failures looks like "the kernel does not boot" on the board.
+    #
+    # The contract is that the 7.3 line asserts the *same* symbols the
+    # release line asserts, not a copy of them: a copy drifts, and a drift
+    # here is silent.  So the two lists are read out of the two workflows
+    # and compared.
+    print("\nthe 7.3 line asserts the release line's kernel requirements")
+    board_gate = step_run_text(bringup, "build",
+                               "Gate: the merged kernel config carries the board requirements")
+    failures.check(board_gate != "", "the board requirements gate has a body")
+    failures.check(".config" in board_gate,
+                   "the board requirements gate reads a merged kernel .config")
+    failures.check("config-7.3" not in board_gate,
+                   "the board requirements gate does not read the fragment that was pinned")
+    failures.check('grep -qx "CONFIG_$s=y"' in board_gate,
+                   "the board requirements gate asserts the value is =y, not merely present")
+    release_gate = run_text(release, "build")
+    release_required = shell_list(release_gate, "required")
+    bringup_required = shell_list(board_gate, "required")
+    failures.check(bool(release_required),
+                   "the release line's required list was found")
+    failures.check(release_required == bringup_required,
+                   "the 7.3 line asserts exactly the symbols the release line asserts"
+                   f" ({len(release_required)} symbols)")
+    if release_required and release_required != bringup_required:
+        missing = sorted(set(release_required) - set(bringup_required))
+        extra = sorted(set(bringup_required) - set(release_required))
+        if missing:
+            print(f"        missing on the 7.3 line: {' '.join(missing)}")
+        if extra:
+            print(f"        extra on the 7.3 line: {' '.join(extra)}")
+    for symbol in ("REALTEK_PHY", "NF_FLOW_TABLE", "NFT_FLOW_OFFLOAD",
+                   "CC_OPTIMIZE_FOR_SIZE"):
+        failures.check(symbol in bringup_required,
+                       f"the 7.3 line requires {symbol} to be built in")
+    failures.check("# CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE is not set" in board_gate,
+                   "the board requirements gate refuses an -O2 kernel")
+    failures.check("CONFIG_PANIC_TIMEOUT=0" in board_gate,
+                   "the board requirements gate refuses a panicking-and-rebooting kernel")
+    failures.check("root=/dev/mtdblock5" in board_gate,
+                   "the board requirements gate checks the built-in command line")
+    failures.check("mtdblock7" in board_gate,
+                   "the board requirements gate rejects the SR1010 root device")
 
     # The bring-up line's whole purpose is an image to put on the board.
     # Until the images are collected there is nothing to flash, so the line

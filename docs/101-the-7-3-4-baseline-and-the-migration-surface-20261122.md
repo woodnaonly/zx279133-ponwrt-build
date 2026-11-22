@@ -36,6 +36,12 @@
 7. **7.3 线即使编译过了，镜像里也不会有 NPU**：cnjn 的 `config-7.3` 把驱动定成
    模块，而本仓库没有加载它们的机制；`pin_y` 也救不了，因为 kconfig 会把
    「依赖是模块」的 tristate 夹成 `=m`。已修（四个符号钉成 `=y`），见 7.12。
+8. **7.3 线此前只查了 4 个驱动符号，没有 6.18 线那道「读合并配置、断言板子全部
+   要求」的门禁**：一份丢了 Realtek PHY、丢了整族 netfilter、或者带着 SR1010 的
+   `mtdblock7` 内核命令行的配置，照样能编出一个「构建成功但不好用」的镜像，
+   而且每一种失败在板子上都长得像「内核起不来」。已补上，并先在本机用
+   kconfig 自己的三值依赖逻辑证明了那 39 个符号在这棵 7.3 树上**不会被夹成
+   `=m`**。见 7.14。
 
 ---
 
@@ -295,6 +301,17 @@ CONFIG_EXTERNAL_KERNEL_TREE=<树>   OpenWrt 把这棵树当自己的内核目录
    要塞进固定 8 MiB 的 `kernel` 分区；镜像 profile 的 `KERNEL_SIZE := 8192k`
    会让 OpenWrt 自己拒绝超尺寸的镜像，但「Collect the images」步会把字节数
    打进 annotation，超了就一眼看得见。
+7. **6.18 线还有两道「镜像好不好用」的门禁没搬到 7.3 线**：
+   `Gate: every dtb compatible has a driver in this kernel`（每个 `compatible`
+   在这颗内核里是不是真有驱动——一个没有驱动的 compatible 会被内核**静默跳过**，
+   板子照常起来，只是没有那个口）和
+   `Gate: ONU UI, protocol service and firewall4 reached the image`
+   （根文件系统里有没有 LuCI、协议服务、firewall4）。
+   本轮补的是第三道（合并配置门禁），见 7.14。
+   前者要重新核对 7.3 树里 `zte,zx279133-*` 的 compatibles 集合（7.3 树多了
+   我们自己移植的交换表驱动与 PON/OMCI 栈），后者要 rootfs 清单。
+   另：「7.3 线要不要把整套 netfilter 钉成内置」——**不需要，它本来就是内置的**，
+   见 7.14.2。
 
 ---
 
@@ -981,6 +998,127 @@ image stage needs」：必须钉 `zopfli==0.4.3`、必须把 `SKD840N_HOST_PYTHO
 （本机没有 zopfli，用一个桩替身顶上——要验的是**模块加载那段代码**，不是编码器），
 并且**同时验了反面**：一个顶层 import 会失败的脚本**必须**加载失败，
 否则这条断言就是空的。
+
+---
+
+### 7.14 7.3 线没有 6.18 那道「合并配置」门禁：镜像会编出来，但不一定能用
+
+**判决**：7.3 线此前只有一道「四个 zte 驱动符号是不是 `=y`」的门禁，
+而 6.18 发布线有一道更宽的门禁：它读**实际出货那颗内核**的合并 `.config`，
+断言 **39 个符号**是 `=y`，另外断言优化级别、`PANIC_TIMEOUT` 和内建命令行。
+⇒ 一份丢了 Realtek PHY、丢了整族 netfilter、或者带着 SR1010 的 `mtdblock7`
+内核命令行的配置，**照样能编出一个「构建成功」的镜像**，
+而这几种失败在板子上全都长得像「内核起不来」。
+已补上这道门禁；补之前先在本机证明了它在这棵 7.3 树上**不会永远变红**。
+
+#### 7.14.1 证据：两条线的步骤差在哪
+
+`scratch/stepdiff.py`（新增）把两条工作流的步骤清单逐条对照：
+6.18 线 44 步、7.3 线 30 步。6.18 独有的步骤里，有三道问的是
+「镜像到底好不好用」，而不是「镜像有没有编出来」：
+
+| 6.18 独有步骤 | 它问什么 |
+|---|---|
+| `Assert the kernel really has the PHY driver`（`build-sk-d840n.yml:1202-1342`） | 合并 `.config` 里那 39 个符号是不是 `=y`；`CC_OPTIMIZE_FOR_PERFORMANCE` 是不是没开；`PANIC_TIMEOUT` 是不是 0；`CONFIG_CMDLINE` 是不是那条钉死的命令行；有没有 `mtdblock7` |
+| `Gate: ONU UI, protocol service and firewall4 reached the image` | 根文件系统里有没有 LuCI、协议服务、firewall4 |
+| `Gate: every dtb compatible has a driver in this kernel` | 板级 DTS 里每个 `compatible` 在这颗内核里是不是真有驱动 |
+
+7.3 线当时**一道都没有**。第一道是本节补的；第二、三道见第六节未做项。
+
+#### 7.14.2 一个曾被挂着的未决项，现在有答案
+
+「7.3 线要不要把整套 netfilter 也钉成内置（6.18 的做法）？」——**答案是：已经是了。**
+
+- `configs/sk-d840n-offload.config` 里有 **49 个** `=y` 符号，整族 netfilter 都在里面
+  （`NETFILTER` / `NF_CONNTRACK` / `NF_NAT` / `NF_TABLES` / `NFT_*` / `NF_FLOW_TABLE` /
+  `NFT_FLOW_OFFLOAD` / `VETH` / `NET_SCH_*`）。
+- `scripts/sk-d840n-offload.sh` 的 `skd840n_pin_offload_fragments` 把它**写进三个
+  `config-7.3` 片段**（`target/linux/generic`、`zte`、`zte/zx279133`），
+  每个片段里都先删掉旧行再追加 `=y`。
+- 所以「裸片段里 netfilter 是 `=m`」这件事只描述 **Configure 之前**的状态；
+  Configure 之后（也就是编译时看到的那份配置）它们全是 `=y`。
+  本机预言机重放整条序列后实测：39 个必需符号 + 4 个 zte 符号，**全部 `=y`**。
+
+⇒ 换句话说，7.3 线在 netfilter 这件事上**从来没有落后过 6.18 线**；
+落后的只是「有没有一道门禁去确认它」。
+
+#### 7.14.3 「写了 `=y`」不等于「会是 `=y`」
+
+kconfig 把请求值和符号的**可见性**取 AND（`scripts/kconfig/symbol.c`）：
+依赖是模块，tristate 就被夹成 `=m`，bool 就被夹成 `=n`——**全程无警告无报错**。
+所以要证明某个符号真的是 `=y`，必须对着**整条依赖链**证明，不能对着被改的片段证明。
+
+本机为此做了两件工具（都在 `scratch/`，不进仓库）：
+
+- `scratch/cfg73_sim.py`：**重放整条配置序列**并产出合并后的 `.config`。
+  它的每一个钉子都是从仓库自己的文件里**读出来**的，不是抄在这里的：
+  三个 `config-7.3` 片段来自 cnjn 的克隆，工作流的 `/dev/mem` 编辑、
+  四个驱动钉子来自 7.3 工作流，`pin_y` 名单、`CC_OPTIMIZE_FOR_SIZE`、
+  `PANIC_TIMEOUT=0`、`CONFIG_CMDLINE` 来自 `scripts/configure-sk-d840n.sh`，
+  49 个 netfilter 符号来自 `configs/sk-d840n-offload.config`。
+  合并规则是 kconfig 的规则：**后写的赢**。
+- `scratch/kdeps73.py`：拿**树自己的 Kconfig 文件**走依赖闭包，
+  按 kconfig 的三值逻辑求值（`y`=真、`m`=模、`n`/未定义=假；
+  `!` 翻转真假但不动模；`&&`/`||` 按 kconfig 的规则归约）。
+
+**结论：47 个符号（39 必需 + 4 zte + 4 抽查）全部 `value=y` 且 `visibility=yes`，
+没有任何一个符号的依赖链上是 `=m`** ⇒ 它们在 7.3 线上**不会被夹**，
+这道门禁**不会永远变红**。
+
+> 预言机自己也错了四次，每一个都记在这里，因为它们全都让结论**看起来比实际更绿**：
+> ① `fragments[2] = subtarget` 把后来的 offload 钉子覆盖回去了；
+> ② `pin()` 会再加一次 `CONFIG_` 前缀，于是 `CONFIG_CMDLINE` 变成了
+> `CONFIG_CONFIG_CMDLINE`；
+> ③ `arch/um/Kconfig`（User Mode Linux，不参与 arm64 构建）也定义了
+> `MAGIC_SYSRQ`，而且 `depends on MCONSOLE`，解析器先抢到了它；
+> ④ 未在本树定义的符号被当成「真」，而 kconfig 里它是 `n`——
+> 于是 `depends on !UML` 被算成不成立。
+> 前两条让 22 个符号看起来是红的，后两条让 `MAGIC_SYSRQ` 看起来是红的。
+> **教训**：预言机的结论要自己挑错，数字对不上时先怀疑工具。
+
+#### 7.14.4 ⇒ 修复
+
+7.3 线新增一步 **`Gate: the merged kernel config carries the board requirements`**：
+读合并后的内核 `.config`，断言
+
+- 那 **39 个符号**是 `=y`（清单**与 6.18 线逐字相同**）；
+- `# CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE is not set`；
+- `CONFIG_PANIC_TIMEOUT=0`；
+- `CONFIG_CMDLINE="console=ttyAMA0,115200n8 root=/dev/mtdblock5 rootfstype=jffs2 ro rootwait clk_ignore_unused pd_ignore_unused"`；
+- 配置里**不得出现** `mtdblock7`；
+
+失败时用 `::error::` 逐条报出**那个符号的实际状态**（`=y` / `=m` / `is not set` /
+`.config` 里根本没有），并且把整张清单的状态一起打出来——
+这四种情况从外面看一模一样，而它们是四个不同的原因。
+仪器类符号（`DEVMEM` / `DETECT_HUNG_TASK` / `IKCONFIG_PROC` / `VETH` …）
+照 6.18 的做法**只警告不拦**。
+
+#### 7.14.5 ⇒ 门禁与验证
+
+- `tests/test_sk_workflows.py` 新增一节「the 7.3 line asserts the release line's
+  kernel requirements」。它**不是**把 39 个名字抄一份——抄的会漂。
+  它把两条工作流里的 `required="..."` 各自读出来**逐字比较**，
+  所以任何一边改了清单而另一边没改，门禁立刻转红。
+  另外还断言：门禁读的是合并 `.config`（不是被钉的片段）、
+  断言的是 `=y`（不是「出现过」）、并且 `-O2` / `PANIC_TIMEOUT` /
+  内建命令行 / `mtdblock7` 四条都在。
+- **反向验证**：新增 7 处变异（少一个符号、把 `=y` 放宽成「出现过」、
+  改去读片段、去掉 `-O2` 拒绝、去掉 panic 拒绝、改掉内建命令行、
+  整步删掉），逐个转红在**指定**的那条检查上。连同原有的 15 处，共 **22 处**全绿。
+- **行为级演练**（新增 `scratch/boardgate_check.py`）：把工作流里那一步的 shell
+  原样取出来，喂给它**预言机产出的那份真实合并配置**——
+  ①必须通过（这证明门禁接受这条线真要编出来的那份配置）；
+  然后逐个破坏：Realtek PHY 变模块 / netfilter 变模块 / 优化级别变 `-O2` /
+  `PANIC_TIMEOUT` 变 1 / 命令行改成 `mtdblock7` / 符号在 `.config` 里根本不存在 /
+  压根没有 `.config`——七种都必须转红，**并且红的原因要说对**。
+  本机七关全绿。
+
+#### 7.14.6 未做
+
+6.18 那道 `Gate: every dtb compatible has a driver in this kernel`（400 多行 awk）
+和 `Gate: ONU UI, protocol service and firewall4 reached the image`
+**还没有搬过来**。前者要重新核对 7.3 树里 `zte,zx279133-*` 的 compatibles 集合，
+后者要 rootfs 清单；两者都值得做，但都不影响本节那道门禁的成立。
 
 ---
 
@@ -1787,4 +1925,23 @@ python3 scratch/reverse_check_workflow.py
 # 17) 四个驱动并进同一个内核会不会撞名（用本机编出的目标码）
 python3 scratch/dup_syms.py --objdir scratch/kobj \
         --nm <llvm-nm.exe>
+
+# 18) 两条工作流的步骤清单对照（谁有谁没有）
+python3 scratch/stepdiff.py --repo ci-build-repo
+
+# 19) 7.3 线的合并配置预言机：重放整条配置序列，产出合并后的 .config
+python3 scratch/cfg73_sim.py --repo ci-build-repo \
+        --openwrt scratch/cnjn-iw --tree scratch/test73c
+
+# 20) kconfig 的三值依赖闭包：证明那 39+4 个符号在这棵树上不会被夹成 =m
+python3 scratch/kdeps73.py ZTE_ZX279133_ETH ZTE_ZX279133_SWITCH \
+        ZTE_ZX279133_FNOFFLOAD ZTE_ZX279133_LAN_CONDUIT REALTEK_PHY \
+        --tree scratch/test73c --config scratch/cfg73/config-7.3.sim --quiet
+
+# 21) 合并配置门禁的行为级演练：喂真配置必须过，七种破坏必须红
+python3 scratch/boardgate_check.py
+
+# 22) 工作流里每一个 run: 块都必须能当 shell 解析
+python3 scratch/wf_shell_parse.py \
+        --workflow ci-build-repo/.github/workflows/build-sk-d840n-73.yml
 ```
