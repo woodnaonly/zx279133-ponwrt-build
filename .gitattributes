@@ -138,3 +138,10 @@ overlays/target/linux/zte/zx279133/firmware/** -text -diff
 # in this directory that existed before.
 overlays-73/** text eol=lf
 configs/** text eol=lf
+
+# kernel-overlays-73/ is the 7.3 line's own driver tree, and it is copied
+# straight into the kernel tree by tools/apply-sk-overlay-73.sh, exactly like
+# kernel-overlays/ is.  The same reasoning applies: with core.autocrlf=true a
+# Windows checkout would rewrite the 9132 switch driver to CRLF, and the file
+# the compiler reads would not be the file the gate read.
+kernel-overlays-73/** text eol=lf

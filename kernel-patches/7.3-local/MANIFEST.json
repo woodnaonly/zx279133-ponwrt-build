@@ -25,6 +25,12 @@
       "sha256": "aa047d626db7c4c06f3c2c50ad59c9488b3301155f4dd6b5d36896c93a02c7ca",
       "bytes": 2223,
       "what": "IDM+0x100 takes the buffer count encoded, not the count: the vendor's idm_new_bp_update() writes one 0x400 pulse per 1024 buffers and then the remainders. The 7.3 tree writes the count itself and posts 2048 buffers at start-up, which is exactly a multiple of 1024 - so the hardware is told the pool is empty at every boot. The 7.3 tree has a single pool, so only the vendor's normal-pool field is written."
+    },
+    {
+      "file": "130-sk-lan-control-transaction.patch",
+      "sha256": "ae88de05bdf9357c3f01662746cb1a9334545b50cb0a5b60ad00f849dcf03942",
+      "bytes": 7267,
+      "what": "The LAN service grows a control transaction, which is what the 9132 switch driver needs: a control sequence restores the XMAC image and then the XPCS image, and the XPCS restore takes the XMAC lock itself, so the transaction cannot be the XMAC lock. The patch adds the second mutex (lan_control_lock), the two service operations (control_begin and control_end), the parent's implementation of them, the Kconfig entry for the 9132 switch driver and the Makefile line that builds it."
     }
   ]
 }

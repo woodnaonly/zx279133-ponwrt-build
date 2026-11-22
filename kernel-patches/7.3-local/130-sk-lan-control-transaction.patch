@@ -1,0 +1,168 @@
+Subject: [PATCH] 7.3: give the LAN service a control transaction and build the 9132 switch
+
+The SK-D840N's LAN switch is the 9132, and the driver for it needs one
+thing the 7.3 tree's LAN service does not have: a control transaction that
+spans the XMAC window and the PCS window.
+
+The transaction is not the XMAC lock.  A control sequence restores the XMAC
+image and then the XPCS image, and the XPCS restore takes the XMAC lock
+itself, so using xmac_lock as the transaction would deadlock.  The 6.18
+generation of this repository's driver set solved it with a second mutex,
+lan_control_lock, and two service operations, control_begin and
+control_end.
+
+This patch carries that arrangement over to the 7.3 tree:
+
+  - struct zx279133_eth grows a lan_control_lock, next to the XMAC lock.
+  - the LAN service grows control_begin and control_end, and
+    zx279133_lan_service_valid() now requires them - a child that asks for a
+    transaction the parent does not provide has to be refused at probe time
+    rather than at the first restore.
+  - the parent implements the two operations: the lock, and the unlock.
+
+The tree's own RTL8372N driver does not need the transaction - it is the
+same chip family and takes the XMAC lock for its own sequences - so nothing
+in the tree changes behaviour; the service only grows.
+
+The Kconfig entry and the Makefile line are in the same patch because the
+9132 driver is the reason the service grows: the driver is built as
+zx279133-switch.o out of kernel-overlays-73/, which the 7.3 line copies
+into the tree.  It has to be built in rather than a module, because the
+board device tree names the switch node and nothing in the RAM image loads
+modules.
+
+scripts/configure-sk-d840n.sh already pins CONFIG_ZTE_ZX279133_SWITCH=y in
+the target fragment - that pin was a no-op on this line until the symbol
+existed, because defconfig drops a symbol it does not know in silence.
+
+--- a/drivers/net/ethernet/zte/Kconfig
++++ b/drivers/net/ethernet/zte/Kconfig
+@@ -76,4 +76,26 @@ config ZTE_ZX279133_RTL8372N
+ 	  user ports through the dedicated ZX279133 LAN conduit.
+ 
+ 
++config ZTE_ZX279133_SWITCH
++	tristate "ZTE ZX279133 on-board LAN switch driver"
++	depends on ZTE_ZX279133_ETH
++	select ZTE_ZX279133_LAN_CONDUIT
++	depends on PHY_ZX279133_UNI_SERDES
++	depends on PCS_XPCS
++	depends on NET_DSA
++	select NET_DSA_TAG_ZX279133_RTL8372N
++	depends on LEDS_CLASS
++	help
++	  Build the driver for the LAN switch this board carries, the 9132.
++	  Its CPU port sits on the XMAC0 LAN lane exactly where the RTL8372N's
++	  CPU port sits on the SR1010, so this driver owns the XMAC0 datapath
++	  and the XPCS0 lane, and programs the switch behind them. The 9132's
++	  own port attributes and its internal PHYs are programmed by the NPPT
++	  driver, which reaches them over the PPU's indirect register window.
++
++	  The four UNI ports are registered as DSA user ports through the
++	  same LAN conduit and the same transport-VID tagger the SR1010's
++	  RTL8372N uses, because the transport VIDs are the same ones this
++	  board's 9132 ports already carry as their PVID.
++
+ endif # NET_VENDOR_ZTE
+--- a/drivers/net/ethernet/zte/Makefile
++++ b/drivers/net/ethernet/zte/Makefile
+@@ -17,6 +17,7 @@ npu-$(CONFIG_ZTE_ZX279133_NATIVE_DEBUG) += zx279133-native-debug.o
+ 
+ obj-$(CONFIG_ZTE_ZX279133_LAN_CONDUIT) += zx279133-lan-conduit.o
+ obj-$(CONFIG_ZTE_ZX279133_RTL8372N) += zx279133-rtl8372n.o
++obj-$(CONFIG_ZTE_ZX279133_SWITCH) += zx279133-switch.o
+ 
+ obj-$(CONFIG_ZTE_ZX279133_FNOFFLOAD) += fnoffload.o
+ fnoffload-y := zx279133-offload.o
+--- a/drivers/net/ethernet/zte/zx279133-lan.h
++++ b/drivers/net/ethernet/zte/zx279133-lan.h
+@@ -35,6 +35,8 @@ struct zx279133_lan_service_ops {
+ 			struct ethtool_rxfh_param *rxfh, struct netlink_ext_ack *extack);
+ 	int (*get_rxfh_fields)(struct zx279133_lan_service *service,
+ 			       struct ethtool_rxfh_fields *fields);
++	bool (*control_begin)(struct zx279133_lan_service *service);
++	void (*control_end)(struct zx279133_lan_service *service);
+ 	u32 (*nppt_read)(struct zx279133_lan_service *service, u32 offset);
+ 	void (*nppt_write)(struct zx279133_lan_service *service, u32 offset,
+ 			   u32 value);
+@@ -79,7 +81,8 @@ struct zx279133_lan_service {
+ static inline bool
+ zx279133_lan_service_valid(const struct zx279133_lan_service *service)
+ {
+-	return service && service->ops && service->ops->nppt_read &&
++	return service && service->ops && service->ops->control_begin &&
++	       service->ops->control_end && service->ops->nppt_read &&
+ 	       service->ops->nppt_write && service->ops->xmac_lock &&
+ 	       service->ops->xmac_unlock && service->ops->datapath_get &&
+ 	       service->ops->datapath_set_ready &&
+@@ -94,6 +97,26 @@ zx279133_lan_service_valid(const struct zx279133_lan_service *service)
+ 	       service->ops->get_rxfh_fields;
+ }
+ 
++/*
++ * A successful begin holds the LAN control transaction until end.
++ *
++ * The transaction is the parent's own LAN control lock, which is not the XMAC
++ * lock: a control sequence touches the XMAC window and the PCS window, and
++ * the XPCS restore inside one of those sequences takes the XMAC lock itself.
++ * Do not call datapath lifecycle operations while that transaction is held.
++ */
++static inline bool
++zx279133_lan_service_control_begin(struct zx279133_lan_service *service)
++{
++	return service->ops->control_begin(service);
++}
++
++static inline void
++zx279133_lan_service_control_end(struct zx279133_lan_service *service)
++{
++	service->ops->control_end(service);
++}
++
+ static inline u32
+ zx279133_lan_service_nppt_read(struct zx279133_lan_service *service, u32 offset)
+ {
+--- a/drivers/net/ethernet/zte/zx279133-netdev.c
++++ b/drivers/net/ethernet/zte/zx279133-netdev.c
+@@ -2080,6 +2080,21 @@ static void zx279133_lan_nppt_write(struct zx279133_lan_service *service,
+ 	writel(value, eth->base + offset);
+ }
+ 
++static bool zx279133_lan_control_begin(struct zx279133_lan_service *service)
++{
++	struct zx279133_eth *eth = zx279133_lan_service_to_eth(service);
++
++	mutex_lock(&eth->lan_control_lock);
++	return true;
++}
++
++static void zx279133_lan_control_end(struct zx279133_lan_service *service)
++{
++	struct zx279133_eth *eth = zx279133_lan_service_to_eth(service);
++
++	mutex_unlock(&eth->lan_control_lock);
++}
++
+ static void zx279133_lan_xmac_lock(struct zx279133_lan_service *service)
+ {
+ 	struct zx279133_eth *eth = zx279133_lan_service_to_eth(service);
+@@ -2129,6 +2144,8 @@ static int zx279133_lan_vlan_sync(struct zx279133_lan_service *service,
+ }
+ 
+ const struct zx279133_lan_service_ops zx279133_lan_service_ops = {
++	.control_begin = zx279133_lan_control_begin,
++	.control_end = zx279133_lan_control_end,
+ 	.get_rxfh = zx279133_lan_get_rxfh,
+ 	.set_rxfh = zx279133_lan_set_rxfh,
+ 	.get_rxfh_fields = zx279133_lan_get_rxfh_fields,
+--- a/drivers/net/ethernet/zte/zx279133.h
++++ b/drivers/net/ethernet/zte/zx279133.h
+@@ -766,6 +766,8 @@ struct zx279133_eth {
+ 	spinlock_t irq_lock;
+ 	/* Serializes shared XMAC reset and SOPC state with the LAN child. */
+ 	struct mutex xmac_lock;
++	/* Serializes a LAN control transaction across the XMAC and PCS windows. */
++	struct mutex lan_control_lock;
+ 	/* Serializes ownership of the shared NPPT/IDM datapath. */
+ 	struct mutex datapath_lock;
+ 	/* Serializes multi-register NP indirect table accesses. */

@@ -39,6 +39,13 @@ repo=$(CDPATH= cd -- "$script_dir/.." && pwd)
 	--exclude='./.sk-series-applied.json' \
 	. ) | ( cd "$tree" && tar xf - )
 
+# The 7.3 line's own driver tree.  It is not the 6.18 generation: the 9132
+# LAN switch driver is written against the 7.3 driver set's DSA API and its
+# LAN service, and it is the only file of ours that goes into the 7.3 tree
+# so far.  The other two files are its private header and the LAN1 LED
+# helper, which are self-contained.
+( cd "$repo/kernel-overlays-73" && tar cf - . ) | ( cd "$tree" && tar xf - )
+
 # The NPU microcode.  config-7.3 sets CONFIG_EXTRA_FIRMWARE="zte/zx279133/
 # mcode_intel.bin" with CONFIG_EXTRA_FIRMWARE_DIR="firmware", which the
 # kernel resolves against its own source tree, so the file has to sit in the
@@ -64,12 +71,10 @@ grep -q 'ZX279133_RTL8372N_USER_PORT_MAX[[:space:]]*8' \
 # What the copy must NOT have produced: the 6.18 driver files are still
 # absent, and the 7.3 driver is still the one that is there.
 for leftover in \
-	drivers/net/ethernet/zte/zx279133-switch.c \
 	drivers/net/ethernet/zte/zx279133-pon.c \
 	drivers/net/ethernet/zte/zxpon.c \
 	drivers/net/ethernet/zte/zx279133-omci.c \
 	drivers/net/ethernet/zte/zx279133-rgmii.c \
-	drivers/net/ethernet/zte/zx279133-lan1-led.h \
 	drivers/net/phy/zte/phy-zx279133-uni-serdes.c ; do
 	[ ! -e "$tree/$leftover" ] || {
 		echo "the 6.18 driver file $leftover reached the 7.3 tree" >&2; exit 1; }
@@ -81,6 +86,9 @@ for kept in \
 	drivers/net/ethernet/zte/zx279133-offload.c \
 	drivers/net/ethernet/zte/zx279133-idm.c \
 	drivers/net/ethernet/zte/zx279133-offload-api.c \
+	drivers/net/ethernet/zte/zx279133-switch.c \
+	drivers/net/ethernet/zte/zx279133-lan1-led.h \
+	drivers/net/ethernet/zte/zx279133-9132.h \
 	drivers/phy/zte/phy-zx279133-uni-serdes.c ; do
 	[ -f "$tree/$kept" ] || {
 		echo "the 7.3 driver file $kept is missing from the tree" >&2; exit 1; }

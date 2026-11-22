@@ -230,7 +230,10 @@ CONFIG_EXTERNAL_KERNEL_TREE=<树>   OpenWrt 把这棵树当自己的内核目录
 | `.github/workflows/build-sk-d840n-73.yml` | 7.3 通道：手动触发 + 7.3 相关路径推送触发；只出镜像，不发布 |
 | `scripts/configure-sk-d840n.sh` | 一处改动：把硬编码的 `target/linux/zte/zx279133/config-6.18` 换成版本无关的 `$KCFG` |
 | `kernel-patches/7.3/` | cnjn 的 39 个补丁的 vendored 副本 + `MANIFEST.json`（上游 repo/branch/commit/date + 每补丁 sha256/bytes） |
-| `kernel-patches/7.3-local/` | **我们自己的**补丁，applied 在 vendored 系列之后；当前是 IDM 实测修正三片（`100` 寄存器值、`110` RX 帧落点、`120` BP 投递协议） |
+| `kernel-patches/7.3-local/` | **我们自己的**补丁，applied 在 vendored 系列之后；当前是 IDM 实测修正三片（`100` 寄存器值、`110` RX 帧落点、`120` BP 投递协议）**加第 3 片的 `130` LAN 控制事务** |
+| `kernel-overlays-73/drivers/net/ethernet/zte/` | **7.3 线专有的驱动树**：9132 交换表驱动本体 + `zx279133-9132.h`（9132 自己的寄存器图）+ `zx279133-lan1-led.h`。与 6.18 世代的 `kernel-overlays/` 并存，互不覆盖（见八之三） |
+| `tools/check-sk-switch-api.py` | 第 3 片的编译前门禁：驱动用到的名字、内核 API、**LAN 服务契约**、构建接线，四项逐条核对（见八之三.3） |
+| `tests/test_sk_workflows.py` | 工作流自身的门禁：每个工作流文件可解析、7.3 线依赖的步骤都在、门禁点名的测试文件都存在、7.3 线的路径过滤覆盖这条线的输入（见 7.9） |
 | `overlays-73/target/linux/zte/zx279133/target.mk` | 7.3 线的 subtarget 默认包：**清空 OpenWrt 的 `DEFAULT_PACKAGES.tweak`**，否则其中的 `luci` 元包会拉进 `luci-theme-bootstrap`（见 7.8） |
 | `tools/func-surface-diff.py` | 两代驱动的函数面对照，输出「只在我们这边」与「只在 7.3 那边」两张工作清单 |
 | `tools/idm-register-diff.py` | 以 `writel(...)` 语句为单位逐条对比两代的寄存器写入 |
@@ -243,11 +246,12 @@ CONFIG_EXTERNAL_KERNEL_TREE=<树>   OpenWrt 把这棵树当自己的内核目录
 
 ## 六、未做 / 风险
 
-1. **我们自己的 171 个函数一个都没搬。** 7.3 通道目前是「cnjn 的 7.3 驱动 + 我们的板级层」。
-   后果是明确的：**四个 GE LAN 口（9132 交换芯片）在 7.3 上没有驱动**
-   （cnjn 的 `zx279133-rtl8372n.c` 是给 SR1010 的 RTL8372N 用的，我们的板级 DTS 本来
-   就把 SR1010 的 DSA 节点去掉了），**PON/OMCI 也没有**。7.3 线目前只能验证
-   NPPT WAN 路径与 2.5G 口。
+1. **我们自己的 171 个函数只搬了第 1~3 片。** 7.3 通道目前是「cnjn 的 7.3 驱动 +
+   我们的板级层 + IDM 三片 + 9132 交换表驱动」。
+   后果是明确的：**PON/OMCI 还没有**（cnjn 的树里没有 `zx279133-pon.c`、
+   `zxpon.c`、`zx279133-omci.c`），7.3 线目前只能验证 NPPT WAN 路径、
+   2.5G 口与（待编译验证的）9132 LAN 口。
+   **9132 驱动本身还没有被编译过**（本机无交叉工具链），实机对拍是它之后的下一道。
 2. **没有编译验证。** 本机无 arm64 交叉工具链，编译只能走 CI；`build-sk-d840n-73.yml`
    是**第一次**运行，结果未知。
 3. **DTS 没有在本地编译过。** 本机没有 `dtc`，只能用「label 可解析 + 属性存在」
@@ -614,6 +618,40 @@ resolved config 里**不得**有 `CONFIG_PACKAGE_luci=y`（否则主题检查可
 **必须先确认列表没有被截断**，否则「两树一样」只是「两边都被截成了
 一样的前 243 个文件」。
 
+### 7.9 run #5 与 run #6：工作流自己解析失败，以及 Configure 通过
+
+**run #5（2026-11-22，head `94335616`）报失败，但一个作业都没有。**
+GitHub 在**解析工作流文件**失败时的行为就是：建一个 run、判它失败、不建任何
+作业。所以唯一的证据只有 run 本身的结论。
+
+根因是那一步的**未加引号的 YAML 标量里带了冒号和空格**：
+
+```yaml
+      - name: Gate: the resolved config carries exactly one theme
+```
+
+整个文件因此不可解析，那一轮**根本没走到 Configure**——本来是要验证
+tweak 包修复的那一轮，什么也没验证。
+
+修法是给标量加引号，外加一个门禁把这件事挡住：`tests/test_sk_workflows.py`
+在**推仓库的这台机器上**检查两条线的形状——每个工作流文件都能解析、7.3 线
+依赖的步骤都还在、门禁作业点名的测试文件都存在、7.3 线的路径过滤覆盖这条线
+的输入（**补丁落在过滤之外就什么都不会构建，而那一轮绿灯什么都不能说明**）。
+它接在两条线的门禁作业里，在任何构建之前跑。
+
+> 仓库里早就有 `tests/check_workflow_yaml.py`，但它自己的注释写着「**没有**
+> 接进 CI」，路径写死成某一台机器的 `/mnt/c/ugit/SK-D840N4/...`，而且只看
+> 发布线那一条。它防不住这次的失败。
+
+**run #6（head `edc3db7b`）把 Configure 走通了。** 顺序是：
+`repository gates` 绿 → 准备 7.3.4 树 → 板级层预检 → 板级层拷入 → 板级层
+复检 → OpenWrt 侧 overlay → `/dev/mem` 片段 → feeds → **Configure 通过**
+→ 主题门禁通过 → Download → Compile。
+
+**⇒ 7.8 的根因判定成立**：`DEFAULT_PACKAGES.tweak` 清空之后，resolved config
+里不再有 `CONFIG_PACKAGE_luci=y`，`luci-theme-bootstrap` 也不再出现，主题
+只剩 argon。**7.3 线第一次拿到可编译的源码树。**
+
 ---
 
 ## 八、BP 池：逐槽位对照（第 1 片剩余部分的结论）
@@ -739,6 +777,125 @@ jumbo 在 bits 31:16），硬件从这些字段里读出计数。**写计数本�
 
 ---
 
+## 八之三、第 3 片：9132 交换表驱动（`switch.c` 整体移植）
+
+**判决**：**可以整体搬过去，搬法是「照抄 + 换名字」，不是重写。**
+这一片是 76 个函数、4150 行，和第 1、2 片（寄存器级的小改）不是一个量级，
+所以先量化，结论和预期相反。
+
+**先纠一个比错的对象**：7.3 树里**没有** `zx279133-switch.c`，只有
+`zx279133-rtl8372n.c`（243299 B）。乍看像「整体新写」，但
+`zx279133-rtl8372n.c` 是给**另一颗交换芯片**用的——Realtek RTL8372N 是
+SR1010 的 LAN 交换芯片；我们板上的 LAN 交换芯片是 Marvell 9132。7.3 树里
+`zx279133-rtl8372n.c` 的文件头自己就写着「the RTL8372N sits on the SR1010」。
+
+真正的对照对象是**我们自己**的 `kernel-overlays/.../zx279133-switch.c`
+（159177 B，76 个函数）。逐项量化：
+
+| 检查面 | 结果 |
+|---|---|
+| switch.c 用到的 `ZX279133_*`/`zx279133_*` 名字 | 201 个共用，**22 个只有我们这边有** |
+| switch.c 调到的**内核 API** | 46 个，**3 个 7.3 树里没有**（全是我们自己的 LED 辅助函数） |
+| DSA 操作表成员 | 13 个，**7.3 的 `dsa_switch_ops` 全部有，签名一致** |
+| LAN 服务算子 | 11 个里只有 `control_begin`/`control_end` 两代不同 |
+
+**为什么 DSA 那一项是「全部有」**：我们这份 `switch.c` 用的**已经是新代
+DSA API**——`port_bridge_join` 的第二个参数是 `struct dsa_bridge`（按值
+传）、带 `tx_fwd_offload` 与 `extack` 出参——而 7.3 树
+`include/net/dsa.h` 的 `dsa_switch_ops` 正是这一代。注册入口也一样：两边
+都是 `devm_kzalloc()` + `dsa_register_switch()`，树里的
+`zx279133-rtl8372n.c` 就是这么注册的。
+
+**22 个名字的来龙去脉**：其中 21 个是**9132 自己的寄存器图**
+（`ZX279133_SMAC_*` 那组内部 PHY MAC 块、`ZX279133_9132_OUTERPHY_PPU`、
+`ZX279133_XMAC0_SOPC_SEND_ENABLE`），它们在我们 6.18 世代的 `zx279133.h`
+里；7.3 的 `zx279133.h` 是**SoC 的**头文件，里面没有这些。⇒ 新开
+`zx279133-9132.h` 装这 21 个，值与出处逐字照抄。
+
+剩下 1 个是 `zx279133_lan_service_control_begin`，见下。
+
+### 8之三.1 `control_begin`/`control_end`：我们自己加的服务能力，要一起搬
+
+**它是什么**：一个**跨 XMAC 窗口与 PCS 窗口**的控制事务。4 处用到：lane
+监视器读远端、release 时的「恢复 XMAC 镜像 + 恢复 XPCS 镜像」、probe 里的
+两段。
+
+**为什么不能用 XMAC 锁代替**：控制序列里**恢复 XPCS 镜像那一步自己会取
+XMAC 锁**（`zx279133_switch_xmac_restore()` 内部 `xmac_lock`/`unlock`）。
+拿 `xmac_lock` 当事务锁会**自锁死**。
+
+**7.3 树里没有**：7.3 的 `zx279133-lan.h` 的服务算子表里没有这两个；我们
+6.18 世代的树里有（`zx279133-netdev.c` 的 `zx279133_lan_control_begin()`
+拿 `eth->lan_control_lock`）。
+
+⇒ 随第 3 片一起搬：`kernel-patches/7.3-local/130-sk-lan-control-transaction.patch`
+给 7.3 的树加：
+
+* `struct zx279133_eth` 里一把 `lan_control_lock`（紧挨 `xmac_lock`）；
+* 服务算子 `control_begin`/`control_end` 两个槽位 + 两个内联包装；
+* `zx279133_lan_service_valid()` 改为**要求**这两个算子——子驱动要了一个
+  父驱动没有的事务，要在 probe 时就被拒，而不是等到第一次恢复；
+* 父驱动侧的实现（加锁 / 解锁）。
+
+**树自己的 RTL8372N 驱动不需要这个事务**（同族芯片，序列自己取 XMAC 锁），
+所以**树的行为一点没变**，服务只是长出了两个算子。
+
+**Kconfig 与 Makefile 也在这一个补丁里**，因为服务长出来的原因就是 9132
+驱动：`CONFIG_ZTE_ZX279133_SWITCH` 与
+`obj-$(CONFIG_ZTE_ZX279133_SWITCH) += zx279133-switch.o`。
+
+> `scripts/configure-sk-d840n.sh` 早就 `pin_y ZTE_ZX279133_SWITCH` 了，
+> 在这条线上**一直是空转**——defconfig 会把不认识的符号**静默丢掉**。
+> 符号存在之后，这个 pin 才开始生效。
+
+### 8之三.2 落地位置：新的 `kernel-overlays-73/`
+
+**不覆盖 `kernel-overlays/`**：那是 6.18 世代的驱动集，发布线在用，一行都不能动。
+7.3 线的自有驱动树另开：
+
+| 文件 | 说明 |
+|---|---|
+| `kernel-overlays-73/drivers/net/ethernet/zte/zx279133-switch.c` | 9132 驱动本体（159 KB），文件头改成 7.3 的语境 |
+| `kernel-overlays-73/drivers/net/ethernet/zte/zx279133-9132.h` | 9132 的寄存器图（21 个宏），私有 |
+| `kernel-overlays-73/drivers/net/ethernet/zte/zx279133-lan1-led.h` | LAN1 LED 辅助（自包含，照抄） |
+
+`tools/apply-sk-overlay-73.sh` 改成**拷两份**：`kernel-overlays/`（去掉 6.18
+驱动目录与 PHY 目录）**和** `kernel-overlays-73/`；正反两面的断言清单同步
+更新——`zx279133-switch.c` 与 `zx279133-lan1-led.h` 从「不得出现」挪到
+「必须出现」。
+
+`.gitattributes` 加 `kernel-overlays-73/** text eol=lf`：**同一个理由**——
+`core.autocrlf=true` 的 Windows 检出会把驱动源码变成 CRLF，而编译器读到的
+文件就不是门禁读到的那个文件。
+
+### 8之三.3 编译前的门禁：`tools/check-sk-switch-api.py`
+
+本机没有 arm64 交叉工具链，编译只能走 CI，**而 Compile 在作业的第 70
+分钟**。所以把编译器会说的话先问一遍：
+
+1. 驱动带的三个文件都在树里；
+2. 驱动用到的每个 `ZX279133_*`/`zx279133_*` 名字都有定义（驱动自己 / 树的头文件 / 私有头）；
+3. 驱动调到的每个**内核函数**在树里存在；
+4. **服务契约**：驱动调用的每个 `zx279133_lan_service_*` 包装在树里、
+   它包的那个算子在算子表里、**父驱动真的提供了它**——最后这一条是链接
+   器七十分钟后才会说的话；
+5. 构建接线：Kconfig 符号、Makefile 对象、板级 DTS 节点、`configure` 脚本
+   的 pin，四者对得上。
+
+**本机实测**：在 `scratch/test73c`（vanilla + 39 补丁 + 100/110/120 + 板级层
++ 130 + `kernel-overlays-73/`）上**全部通过**。
+
+### 8之三.4 验证
+
+* 补丁 130 在「vanilla + 39 + 100 + 110 + 120」的基准树上**干净 apply**，
+  且 apply 后的结果与手工编辑**逐字节一致**（`git diff` 为空）。
+* `tools/apply-sk-overlay-73.sh` 在真树上跑通，文件清单断言全过。
+* 符号闭合检查：22 → **0**，内核 API 3 → **0**。
+* **未做**：本机没有编译器，**这份 `switch.c` 还没有被真正编译过**；
+  CI 的 Compile 是第一次编译。
+
+---
+
 ## 九、下一步（按片重打，每片一次 CI）
 
 **没搬的，按片来：**
@@ -818,8 +975,12 @@ jumbo 在 bits 31:16），硬件从这些字段里读出计数。**写计数本�
    `zx279133_idm_rx_prepare_dsa`、`zx279133_idm_rx_sync_xsk_for_device`。
 
    所以这一片可以按「先 6 个 REWRITE、再 10 个新增」切，**不是整块重写**。
-3. **9132 交换表 / switch.c**（约 63 个函数）。这是 SK-D840N 四个 GE 口能不能活的问题。
-   需要把 6.18 世代的 `zx279133_9132_*` 挂到 7.3 的 `native.c`/`host.c` 结构上。
+3. **9132 交换表 / switch.c**（76 个函数，4150 行）。这是 SK-D840N 四个 GE 口能不能活的问题。
+   **第 3 片已落地**（见八之三）：`kernel-overlays-73/` 带驱动本体与两个私有头，
+   `kernel-patches/7.3-local/130` 给 7.3 的 LAN 服务补上控制事务并接好
+   Kconfig/Makefile。**未编译验证**——等 CI 的 Compile。
+   接下来这一片剩下的是**实机对拍**：驱动能在 7.3 上编译不等于 LAN 口能通，
+   判据是 conduit netdev 的 RX 计数在涨、四个 DSA 用户口的 link 状态正确。
 4. **PON / OMCI**（约 56 个函数）。工作量最大，且和第 5 条「cnjn 会不会公开
    npu-pon.ko」强相关。
 5. **RGMII 调试**（8 个函数）与 **netdev/main/mac 的健壮性修正**（约 28 个函数），
@@ -863,4 +1024,11 @@ python3 ci-build-repo/tools/idm-register-diff.py \
         ci-build-repo/kernel-overlays/drivers/net/ethernet/zte/zx279133-idm.c \
         linux-7.3.4/drivers/net/ethernet/zte/zx279133-idm.c \
         zx279133_idm_tx_configure
+
+# 7) 第 3 片：9132 交换表驱动的编译前门禁（overlay 拷入之后）
+python3 ci-build-repo/tools/check-sk-switch-api.py \
+        --tree linux-7.3.4 --repo ci-build-repo
+
+# 8) 工作流自身的门禁（两条线都在推之前跑）
+python3 ci-build-repo/tests/test_sk_workflows.py
 ```

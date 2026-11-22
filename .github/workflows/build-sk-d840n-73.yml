@@ -44,6 +44,8 @@ on:
       - tools/prepare-sk-kernel-73.py
       - tools/apply-sk-overlay-73.sh
       - tools/check-sk-board-api.py
+      - tools/check-sk-switch-api.py
+      - kernel-overlays-73/**
       - tools/prepush.py
       - overlays-73/**
       - configs/sk-d840n-73.json
@@ -169,6 +171,19 @@ jobs:
         run: |
           python3 tools/check-sk-board-api.py post \
             --tree "$KERNEL_TREE" --report sk-board-api.json
+
+      # The 9132 LAN switch driver is this repository's own code in the 7.3
+      # tree, and it cannot be compiled on the machine that pushes this
+      # repository either.  So the things a compiler would say about it are
+      # checked here instead: every name it uses has to be defined, every
+      # kernel function it calls has to exist, the LAN service it talks to
+      # has to provide the operations it calls - including the control
+      # transaction that patch 130 adds - and the Kconfig symbol, the
+      # Makefile object and the device tree node have to line up.
+      - name: Check the 9132 switch driver against the 7.3 tree
+        run: |
+          python3 tools/check-sk-switch-api.py \
+            --tree "$KERNEL_TREE" --repo "$GITHUB_WORKSPACE"
 
       - name: Apply the OpenWrt-side overlays
         run: |

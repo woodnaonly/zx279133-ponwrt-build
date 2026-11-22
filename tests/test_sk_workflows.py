@@ -54,6 +54,7 @@ BRINGUP_STEPS = [
     "Check the board layer against the 7.3 tree",
     "Apply the board layer",
     "Check the applied board layer",
+    "Check the 9132 switch driver against the 7.3 tree",
     "Apply the OpenWrt-side overlays",
     "Enable /dev/mem in the 7.3 fragments",
     "Install feeds",
@@ -67,10 +68,12 @@ BRINGUP_STEPS = [
 # The paths that decide whether a change to the 7.3 line starts a build.
 BRINGUP_TRIGGERS = [
     "kernel-patches/**",
+    "kernel-overlays-73/**",
     "overlays-73/**",
     "tools/prepare-sk-kernel-73.py",
     "tools/apply-sk-overlay-73.sh",
     "tools/check-sk-board-api.py",
+    "tools/check-sk-switch-api.py",
     "scripts/configure-sk-d840n.sh",
     "configs/sk-d840n-73.json",
 ]
