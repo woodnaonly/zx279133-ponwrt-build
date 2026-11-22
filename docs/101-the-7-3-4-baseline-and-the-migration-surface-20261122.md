@@ -1233,7 +1233,7 @@ python3 ci-build-repo/tools/check-sk-switch-api.py \
 
 # 8) 第 4 片：PON / OMCI 栈的编译前门禁（overlay 拷入之后）
 python3 ci-build-repo/tools/check-sk-pon-api.py \
-        --tree linux-7.3.4 --repo ci-build-repo
+        --tree linux-7.3.4 --repo ci-build-repo --openwrt <openwrt-checkout>
 
 # 9) 工作流自身的门禁（两条线都在推之前跑）
 python3 ci-build-repo/tests/test_sk_workflows.py

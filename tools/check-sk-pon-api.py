@@ -361,6 +361,11 @@ def main():
     parser.add_argument("--repo", default=None,
                         help="the repository root, for the files the 7.3 line "
                              "carries and the config fragment it builds with")
+    parser.add_argument("--openwrt", default=None,
+                        help="the OpenWrt checkout, for the kernel config "
+                             "fragment the LED class comes from")
+    parser.add_argument("--config", action="append", default=None,
+                        help="a kernel config fragment to check, repeatable")
     args = parser.parse_args()
 
     tree = Path(args.tree)
@@ -488,6 +493,34 @@ def main():
             report.require(re.search(r"^CONFIG_LEDS_TRIGGERS=y\s*$", config, re.M)
                            is not None,
                            f"{fragment.name} turns the LED triggers on")
+
+    # The LED class and the LED triggers are the dependencies the new code
+    # creates.  They live in the OpenWrt tree's kernel config fragment, so
+    # that is where they have to be looked for - and if it cannot be found
+    # the check has to say so rather than pass quietly.
+    configs = list(args.config or [])
+    if args.openwrt:
+        openwrt = Path(args.openwrt)
+        configs += sorted(str(path) for path in
+                          openwrt.glob("target/linux/*/zx279133/config-*"))
+        configs += sorted(str(path) for path in
+                          openwrt.glob("target/linux/generic/config-*"))
+    if configs:
+        led_class = False
+        led_triggers = False
+        for name in configs:
+            config = read(Path(name))
+            if re.search(r"^CONFIG_LEDS_CLASS=y\s*$", config, re.M):
+                led_class = True
+            if re.search(r"^CONFIG_LEDS_TRIGGERS=y\s*$", config, re.M):
+                led_triggers = True
+        report.require(led_class,
+                       "the kernel config turns the LED class on")
+        report.require(led_triggers,
+                       "the kernel config turns the LED triggers on")
+    else:
+        report.note("no kernel config fragment was given, so the LED "
+                    "dependency could not be checked")
 
     return finish(report)
 

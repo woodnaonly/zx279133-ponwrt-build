@@ -197,7 +197,8 @@ jobs:
       - name: Check the PON / OMCI stack against the 7.3 tree
         run: |
           python3 tools/check-sk-pon-api.py \
-            --tree "$KERNEL_TREE" --repo "$GITHUB_WORKSPACE"
+            --tree "$KERNEL_TREE" --repo "$GITHUB_WORKSPACE" \
+            --openwrt openwrt
 
       - name: Apply the OpenWrt-side overlays
         run: |
