@@ -24,14 +24,38 @@ skd840n_target_config_series() {
 	printf '%s\n' "$sk_ts_version"
 }
 
+skd840n_target_config_series_from_fragments() {
+	# The fallback for a caller that has no kernel tree to read: pick the
+	# series out of the subtarget fragment, which is the fragment the board
+	# actually uses.
+	#
+	# It has to be the subtarget one and not target/linux/generic, because
+	# the generic directory carries every series the tree supports at once -
+	# cnjn's master has config-6.12, config-6.18 and config-7.3 side by side -
+	# so a series taken from there would be a guess among three.  The
+	# subtarget directory carries exactly one, and if it ever carries more
+	# than one this refuses rather than guessing.
+	sk_tf_tree=$1
+	sk_tf_series=$(ls "$sk_tf_tree"/target/linux/*/*/config-* 2>/dev/null |
+		sed -n 's|.*/config-\([0-9][0-9.]*\)$|\1|p' | sort -u)
+	[ -n "$sk_tf_series" ] || return 1
+	set -- $sk_tf_series
+	[ $# -eq 1 ] || return 1
+	printf '%s\n' "$1"
+}
+
 skd840n_pin_offload_fragments() {
 	sk_off_tree=$1
 	sk_off_profile=$2
 	sk_off_kernel=${3:-}
 	[ -s "$sk_off_profile" ] || { echo "Missing offload profile: $sk_off_profile" >&2; return 1; }
-	sk_off_series=$(skd840n_target_config_series "$sk_off_tree" "$sk_off_kernel") || {
-		echo 'Missing SK-D840N target kernel config' >&2; return 1;
-	}
+	if [ -n "$sk_off_kernel" ]; then
+		sk_off_series=$(skd840n_target_config_series "$sk_off_tree" "$sk_off_kernel") || {
+			echo 'Missing SK-D840N target kernel config' >&2; return 1; }
+	else
+		sk_off_series=$(skd840n_target_config_series_from_fragments "$sk_off_tree") || {
+			echo 'Missing SK-D840N target kernel config' >&2; return 1; }
+	fi
 	for sk_off_file in "target/linux/generic/config-$sk_off_series" \
 		"target/linux/zte/config-$sk_off_series" \
 		"target/linux/zte/zx279133/config-$sk_off_series"; do

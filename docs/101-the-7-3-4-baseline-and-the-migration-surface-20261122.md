@@ -351,9 +351,104 @@ run #1 的「本机复现成功」是**假通过**。本机复现环境
 
 ---
 
+### 7.7 run #3：feeds 修复生效，失败点前进了
+
+**判决**：`Install feeds` 那一补**是对的**。run #3 的 Configure 仍然失败，
+但**报错换了**，而且是从「包根本没进来」变成「包进来了但多了一个」：
+
+| | run #2 | run #3 |
+|---|---|---|
+| Configure 的最后一句 | `Argon is not built into the resolved SK-D840N config` | `Only Argon may be selected in the SK-D840N config` |
+| 含义 | Argon 的配方**没被解析**，`feeds/luci/luci.mk` 根本不存在 | Argon **已经**在 `.config` 里了，但 **bootstrap 主题也在** |
+
+也就是说 run #3 越过了「Argon 不存在」这一关，撞上了下一关：
+`.config` 里同时有 `CONFIG_PACKAGE_luci-theme-argon=y` 和
+`CONFIG_PACKAGE_luci-theme-bootstrap=y`，而断言要求**只有** Argon。
+
+**已经排除的路径**（都查过，都不成立）：
+
+| 怀疑 | 查证 | 结论 |
+|---|---|---|
+| master 的 `DEVICE_PACKAGES` 注入了 bootstrap | `target/linux/zte/image/Makefile` 里确实有 `DEVICE_PACKAGES := ... luci-theme-bootstrap ...`，但我们的 overlay 用自己的 image/Makefile **覆盖**了它——CI 的断言 `grep -q 'Device/skyworth_sk-d840n' openwrt/target/linux/zte/image/Makefile` 就是覆盖生效的证据 | 排除 |
+| `skd840n_select_theme` 的 sed 没生效 | 它的第二行 `s/^(CONFIG_PACKAGE_luci-theme-[^=[:space:]]+)=[ym]$/...` 对 `CONFIG_PACKAGE_luci-theme-bootstrap=y` 是匹配的，第三行还额外追加了 `# CONFIG_PACKAGE_luci-theme-bootstrap is not set` | 排除 |
+| 两线的初始 `.config` 不同 | master 与 sr1010-zx279133 分支的 `configs/zte_zx279133_sr1010_initramfs.config` **都**有 `CONFIG_PACKAGE_luci-theme-bootstrap=y`（master 在第 25 行） | 排除 |
+| `skd840n_select_theme` 第一行 sed 替换的主题名来源不同 | **这才是两线的差别**：6.18 线分支的 `target/linux/zte/zx279133/target.mk` 里有 `DEFAULT_PACKAGES += ... luci-theme-bootstrap`，那一行 sed 把它改成 argon，于是 defconfig 选 argon；**master 的 target.mk 里没有 `DEFAULT_PACKAGES`**，那条 sed 无事可做 | 部分成立，但这只能解释「argon 没被自动选上」，解释不了「bootstrap 又变回 y」 |
+| 某个被选中的包 select 了 bootstrap | **已排除**：把两个 luci 树（`immortalwrt/luci@ed7692cb` 与 `fxfall/luci@d438535`，各 243 个构建文件）完整扫了一遍，提到 `luci-theme-bootstrap` 的**只有四处**，而且**两个树完全一样**：`collections/luci-layer2`、`collections/luci-light`、`collections/luci-nginx` 依赖它，加上它自己的定义。依赖链是 `Package/luci`（元包，标题带 "(default)"）→ `+luci-light` → `+luci-theme-bootstrap` | 链存在，但**两线一样**，所以它不是两线的差异源 |
+
+**还缺的一环**：defconfig 之后 `.config` 里**到底哪些 luci 包被选中**。
+这正是断言报错时看不见的东西——工作流只取日志尾部 65 行，看不到全貌。
+
+**修法（诊断先行）**：把 `skd840n_check_theme_config` 的报错补成打印**全部**
+`CONFIG_PACKAGE_luci*` 行。这两行 grep 能一次分开两种情况：
+
+* 打印出来**只有** bootstrap ⇒ 它没被 unset 掉，是 sed 没作用到它；
+* 打印出来**还有** `luci` / `luci-light` ⇒ 是依赖链在 defconfig 期间把它拉了回来，
+  要从「谁选了 luci 元包」入手。
+
+修法确定之后，下一轮 CI 就能带上决定性的那一行输出。
+
 ---
 
-## 八、下一步（按片重打，每片一次 CI）
+### 7.5 板级层的编译前提：本机预检（在 Compile 之前）
+
+**判决**：板级层在 7.3 树上的内核 API 前提**全部满足**，本机可查的范围内
+没有编译风险；但**真正的编译只能在 CI 里发生**。
+
+**为什么要单独做这一步**：本机没有 arm64 交叉工具链，`Compile` 一失败就是
+一轮七十分钟。而板级层（板级 DTS / Unim NAND / DSA 头）是这次唯一**由我们
+新增**、且**在 7.3 公版里不存在**的代码——公版驱动集编译得再干净，也不能
+替我们保证这几个文件。
+
+**工具**：`tools/check-sk-board-api.py`，两个阶段。
+
+| 阶段 | 跑在什么时候 | 查什么 |
+|---|---|---|
+| `pre` | 树备好、overlay 还没拷进去 | 板级层要用的每个宏/类型/访问器在树里存在且形态正确；记下 cnjn 公版 DSA 头的宏值 |
+| `post` | overlay 拷完之后 | 板级文件已落位；DTS 的 include 与 label 全可解析；tagger 用到的宏我们的头里都有；宏值与公版逐个对照 |
+
+**本机结果**：两阶段 exit=0。
+
+**证据（关键的几条，都是会咬人的）**：
+
+* **7.3 把 `include/linux/nand_dev.h` 删了**，它的内容并进了
+  `include/linux/mtd/nand.h`。`unim.c` 调用的 `nanddev_get_ecc_conf()`
+  现在在 `mtd/nand.h:634`，芯片条目用的 `NAND_MEMORG` / `NAND_ECCREQ`
+  也在 `mtd/nand.h:41` / `:199`。它们可见**只因为**
+  `include/linux/mtd/spinand.h:5` 包含了 `mtd/nand.h`——这条包含链是契约，
+  所以工具查它，而不是假定它。
+* `struct spinand_manufacturer` 在 **spinand.h**（不是 nand.h），
+  字段 `id / name / chips / nchips / ops` 齐全，我们 overlay 的 `.id/.name/
+  .chips/.nchips/.ops` 五个赋值都有对应。
+* **7.x 把 DSA tagger 放在 `net/dsa/`**，不是 6.x 的 `drivers/net/dsa/`。
+  `net/dsa/tag_zx279133_rtl8372n.c` 与 6.18 树**逐字节一致**
+  （2774 B，sha256 前 16 位 `CEF5DB6538A1C789`）⇒ tagger 本身不用移植。
+* **cnjn 公版已经带 `include/net/dsa_zx279133_rtl8372n.h`**（303 B，
+  sha256 前 16 位 `1E5AFBCD378A1E88`，与 6.18 树那份逐字节一致），
+  我们的 overlay 会**覆盖**它。宏名相同 ⇒ 不会编译不过；宏值有一处**有意**
+  不同：
+
+  | 宏 | 公版 | 我们 | 出处 |
+  |---|---|---|---|
+  | `ZX279133_RTL8372N_USER_PORT_MIN` | 4 | 4 | 相同 |
+  | `ZX279133_RTL8372N_USER_PORT_MAX` | **7** | **8** | docs/92 §90：2.5G jack 是 9132 的第 5 个 UNI 口（DSA port 8），transport VID 55+8=**63**，超出公版的 55+7=62，公版会把这帧丢掉 |
+  | `ZX279133_RTL8372N_TRANSPORT_VID_BASE` | 55 | 55 | 相同 |
+
+  这正是 `post` 阶段要把两边逐个对照的原因：改这个值会改 tagger 在运行期
+  接受哪些 VID，**不能靠编译通过来判定它对**。
+* 板级 DTS 引用 13 个 label，在 7.3 的 `zx279133.dtsi` 里**全部可解析**；
+  三个 `#include` 的 dt-bindings 头都存在；dtb 进了
+  `arch/arm64/boot/dts/zte/Makefile`。
+
+**未做**：
+
+* 没有真正编译——本机没有 arm64 工具链，`Compile` 只能在 CI 里发生。
+* `unim_spinand_manufacturer` 往 `spinand_manufacturers[]` 的登记**不在
+  这个工具的检查范围**：那是 `scripts/configure-sk-d840n.sh` 在树备好之后
+  做的三处编辑（`spinand.h` 的 extern 声明、`core.c` 的表项、Makefile 的
+  `spinand-objs += unim.o`），脚本自己断言了这三处，所以在它改的地方查
+  它就够了。
+
+---
 
 **已落地：第 1 片（IDM 实测修正）的寄存器部分**，见
 `kernel-patches/7.3-local/100-sk-idm-measured-fixes.patch`：
@@ -387,8 +482,44 @@ run #1 的「本机复现成功」是**假通过**。本机复现环境
      bits 31:16」写进同一个寄存器——写数量本身什么也没 announcing，
      而数量是 1024 的倍数等于 announcing 零个缓冲。7.3 的实现没有这一套。
    所以这一片是**重写 RX 缓冲池路径**，不是移植几个常量。
-2. **IDM 的其余重写**（RX page 跟踪、XSK、校验和判定、TX 回收等，约 78 个 hunk）。
-   这一块比我们 overlay 与 6.18 fork 的差异还大，属于驱动重写而不是移植。
+2. **IDM 的其余部分**。这一条原来是「约 78 个 hunk 的重写」，那是按 diff
+   规模估的，**不精确**。按函数体逐个对照之后（`tools/func-body-diff.py`，
+   两代 `zx279133-idm.c`），实际工作量小得多，也清楚得多：
+
+   | 判定 | 个数 | 含义 |
+   |---|---|---|
+   | IDENTICAL | 27 | 去掉注释与空行后**逐字相同**，不用动 |
+   | similar（60–92%） | 9 | 大部分行相同，看一眼差异即可 |
+   | REWRITE（25–52%） | 6 | 真正要重写 |
+   | 只在 6.18 世代 | 10 | 7.3 里没有，要作为新代码写进去 |
+   | 只在 7.3 世代 | 4 | 7.3 新增，其中一个是我们改过名的 |
+
+   要重写的 6 个（我们行数 / 7.3 行数，相同行占比）：
+
+   | 函数 | 我们 | 7.3 | 占比 |
+   |---|---|---|---|
+   | `zx279133_idm_rx_flush_refill` | 27 | 13 | 41% |
+   | `zx279133_idm_rx_lan_vport` | 12 | 6 | 33% |
+   | `zx279133_idm_rx_preserve_dsa_vlan` | 21 | 21 | 48% |
+   | `zx279133_idm_rx_sync_for_device` | 15 | 8 | 27% |
+   | `zx279133_idm_tx_configure` | **129** | 58 | 25% |
+   | `zx279133_idm_tx_drain` | 25 | 16 | 52% |
+
+   只在 6.18 世代、要作为新代码写进 7.3 的 10 个：
+
+   * `zx279133_idm_bp_ring_cfg`（**就是第 1 片剩下的 BP 池布局**）
+   * `zx279133_idm_dump_frame` / `zx279133_idm_dump_nonzero`（寄存器转储）
+   * `zx279133_idm_find_broadcast` / `zx279133_idm_rx_find_header`
+   * `zx279133_idm_rx_has_ethertype` / `zx279133_idm_rx_is_jack`
+   * `zx279133_idm_xdp_pass_valid`
+   * `zx279133_idm_give_frame_back`
+   * `zx279133_idm_rx_sync_xsk_for_cpu` —— 7.3 里叫
+     `zx279133_idm_rx_sync_xsk_for_device`，**是改名不是新增**。
+
+   只在 7.3 侧的 4 个：`zx279133_idm_rx_count`、`zx279133_idm_rx_parsed`、
+   `zx279133_idm_rx_prepare_dsa`、`zx279133_idm_rx_sync_xsk_for_device`。
+
+   所以这一片可以按「先 6 个 REWRITE、再 10 个新增」切，**不是整块重写**。
 3. **9132 交换表 / switch.c**（约 63 个函数）。这是 SK-D840N 四个 GE 口能不能活的问题。
    需要把 6.18 世代的 `zx279133_9132_*` 挂到 7.3 的 `native.c`/`host.c` 结构上。
 4. **PON / OMCI**（约 56 个函数）。工作量最大，且和第 5 条「cnjn 会不会公开
@@ -416,4 +547,16 @@ sh ci-build-repo/tools/apply-sk-overlay-73.sh linux-7.3.4
 python3 ci-build-repo/tools/func-surface-diff.py \
         ci-build-repo/kernel-overlays/drivers/net/ethernet/zte \
         linux-7.3.4/drivers/net/ethernet/zte
+
+# 4) 板级层的编译前提预检（overlay 拷入前 / 拷入后各一次）
+python3 ci-build-repo/tools/check-sk-board-api.py pre \
+        --tree linux-7.3.4 --report board-api.json
+sh ci-build-repo/tools/apply-sk-overlay-73.sh linux-7.3.4
+python3 ci-build-repo/tools/check-sk-board-api.py post \
+        --tree linux-7.3.4 --report board-api.json
+
+# 5) IDM 的移植工作单：同名函数逐个比函数体
+python3 ci-build-repo/tools/func-body-diff.py \
+        ci-build-repo/kernel-overlays/drivers/net/ethernet/zte/zx279133-idm.c \
+        linux-7.3.4/drivers/net/ethernet/zte/zx279133-idm.c
 ```

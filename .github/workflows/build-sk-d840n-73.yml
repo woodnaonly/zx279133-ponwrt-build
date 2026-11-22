@@ -43,10 +43,15 @@ on:
       - kernel-patches/**
       - tools/prepare-sk-kernel-73.py
       - tools/apply-sk-overlay-73.sh
+      - tools/check-sk-board-api.py
       - tools/prepush.py
       - overlays-73/**
       - configs/sk-d840n-73.json
       - scripts/configure-sk-d840n.sh
+      # The Configure step sources these two, so a change in either of them
+      # changes what this line builds and has to start a build.
+      - scripts/sk-d840n-offload.sh
+      - scripts/sk-d840n-theme.sh
       - docs/101-*
 
 env:
@@ -134,9 +139,35 @@ jobs:
           test "$(make -s -C "$KERNEL_TREE" kernelversion)" = "$KVER"
           cat kernel-provenance-73.json
 
+      # The board layer is the only code in this repository that is new on the
+      # 7.3 line: cnjn's driver set has no Unim NAND driver and no SK-D840N
+      # device tree, so these files are ours and they have to fit the tree.
+      # Nothing on the machine that pushes this repository can compile them -
+      # there is no aarch64 cross toolchain there - so the kernel API they
+      # use is checked here instead, before the seventy-minute Compile.
+      #
+      # pre  runs on the tree before the overlay goes in: it checks that every
+      #      macro, type and accessor the new files use exists in the tree,
+      #      and records cnjn's own DSA header values as the baseline.
+      # post runs on the tree after the overlay went in: it checks that the
+      #      board files landed, that the device tree resolves, and that the
+      #      header the tagger now sees still defines every macro the tagger
+      #      uses - and it compares the values against the baseline, because a
+      #      changed macro value changes what the tagger accepts at runtime
+      #      and a green compile cannot tell that apart.
+      - name: Check the board layer against the 7.3 tree
+        run: |
+          python3 tools/check-sk-board-api.py pre \
+            --tree "$KERNEL_TREE" --report sk-board-api.json
+
       - name: Apply the board layer
         run: |
           sh tools/apply-sk-overlay-73.sh "$KERNEL_TREE"
+
+      - name: Check the applied board layer
+        run: |
+          python3 tools/check-sk-board-api.py post \
+            --tree "$KERNEL_TREE" --report sk-board-api.json
 
       - name: Apply the OpenWrt-side overlays
         run: |

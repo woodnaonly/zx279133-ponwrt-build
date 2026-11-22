@@ -24,7 +24,18 @@ skd840n_check_theme_config() (
 	}
 	if grep -E '^CONFIG_PACKAGE_luci-theme-[^=[:space:]]+=[ym]$' "$1" |
 		grep -vx 'CONFIG_PACKAGE_luci-theme-argon=y'; then
-		echo 'Only Argon may be selected in the SK-D840N config' >&2; exit 1
+		# Which theme survived, and which of the LuCI packages are selected
+		# around it, is the difference between "the fragment was rewritten
+		# wrongly" and "something re-selected it during defconfig" - and the
+		# two need different fixes.  A theme that is still there after
+		# defconfig was either never unset or was pulled back in by a
+		# package that depends on it.
+		echo 'Only Argon may be selected in the SK-D840N config' >&2
+		echo '--- the themes in the resolved config ---' >&2
+		grep -E '^CONFIG_PACKAGE_luci-theme-' "$1" >&2 || true
+		echo '--- the LuCI packages in the resolved config ---' >&2
+		grep -E '^CONFIG_PACKAGE_luci' "$1" >&2 || true
+		exit 1
 	fi
 )
 
