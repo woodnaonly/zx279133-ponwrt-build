@@ -467,6 +467,40 @@ def main():
         failures.check(package in listed,
                        f"the package gate requires {package} in the image")
 
+    # The 7.3 line had no download cache, and that is not only a speed
+    # question: one of the packages it needs is fetched with git, and run
+    # #14 (head 0af2270) failed on exactly that while the release line's
+    # run #364 at the same commit succeeded.  The two lines clone the same
+    # OpenWrt tree, so the same cache serves both - which only works if
+    # the key is the same.
+    print("\nthe 7.3 line caches the downloads the way the release line does")
+    bringup_cache = [step for step in steps_of(bringup, "build")
+                      if str(step.get("name") or "") == "Cache dl/"]
+    release_cache = [step for step in steps_of(release, "build")
+                     if str(step.get("name") or "") == "Cache dl/"]
+    failures.check(bool(bringup_cache), "the 7.3 line has a download cache")
+    failures.check(bool(release_cache), "the release line has a download cache")
+    if bringup_cache and release_cache:
+        bringup_with = bringup_cache[0].get("with") or {}
+        release_with = release_cache[0].get("with") or {}
+        failures.check(bringup_with.get("path") == release_with.get("path"),
+                       "both lines cache the same directory")
+        failures.check(bringup_with.get("key") == release_with.get("key"),
+                       "both lines use the same cache key, so they share it")
+
+    # The Compile step has to say which package failed and has to look for
+    # a failed download: a package that never got as far as being compiled
+    # has no log of its own, and the words it uses are not the compiler's.
+    print("\nthe 7.3 line's Compile step says which package failed and why")
+    compile_text = step_run_text(bringup, "build", "Compile")
+    failures.check(compile_text != "", "the Compile step has a body")
+    failures.check('logs/$(basename' in compile_text,
+                   "the Compile step reads the failing package's own log")
+    failures.check("could not resolve" in compile_text,
+                   "the Compile step looks for a failed download or clone")
+    failures.check("failed to build" in compile_text,
+                   "the Compile step names the package that failed")
+
     # The board trial needs the three partition files, and the only honest
     # way to get them is to take them out of the image the build produced:
     # the release line's own tool validates the sysupgrade (fwtool metadata,

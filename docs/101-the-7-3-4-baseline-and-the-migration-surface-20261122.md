@@ -1133,8 +1133,6 @@ firewall4 自己的规则生成器测试套件——那三项问的是**发布�
 6.18 的另一道（`Gate: every dtb compatible has a driver in this kernel`）
 **已经搬了，但不是照抄**：见 7.15。
 
----
-
 ### 7.15 dtb compatible 有驱动：这道门禁不能照抄，所以重写了一遍
 
 **判决**：6.18 线有一道门禁问「板级 DTS 里每个 `compatible` 在这颗内核里是不是
@@ -1206,6 +1204,92 @@ firewall4 自己的规则生成器测试套件——那三项问的是**发布�
   去掉 `zte,zx279133-nppt` / `zte,zx279133-switch` 的驱动字符串 ⇒ 转红并点名；
   去掉 primary 但留着 fallback ⇒ 仍然绿并说明「falls back to 'arm,pl011'」；
   去掉 fallback ⇒ 转红并点名；注释里的那个 RGMII 副本**不得**被算成第二个节点。
+
+---
+
+---
+
+### 7.16 run #14：失败点前移到 `libbpf`，而 6.18 线同一个 head 全部成功
+
+**判决**：run #14（head `0af2270`）**不再**报 Rust 包 `libzxpon-omci`——
+7.11 那个工具链问题过去了。失败点**前移**到 `package/libs/libbpf`。
+而这**不是内核的问题，也不是这个提交的问题**：6.18 发布线
+**同一个 head `0af2270`** 的 run #364 **所有作业全部成功**。
+
+#### 7.16.1 证据
+
+1. run #14 的两个作业（flash / initramfs）都死在 **Compile** 步，
+   而 annotation 只有四条，实质信息只有一行：
+   `ERROR: package/libs/libbpf failed to build.`
+2. **对照实验**：6.18 线 run #364（head `0af2270`，**同一个提交**）
+   的四个作业（LED CI regression / native241 bootweb / initramfs / flash）
+   **全部 success**。⇒ 仓库内容、包集、overlay 全都一样
+   ⇒ **libbpf 在这个项目里是能编出来的**。
+3. **libbpf 为什么会进镜像**：本仓库自己的 overlay
+   `overlays/package/network/utils/iproute2/Makefile`：
+   `Package/ip` 是 `DEPENDS:=+libnl-tiny +libbpf ...`，
+   `tc-tiny` / `tc-bpf` / `tc-full` 也都带 `+libbpf`。
+   而这个 overlay **两条线共用**。
+4. **它的源码是从 github 克隆的**（cnjn master `31e2ac4` 的
+   `package/libs/libbpf/Makefile`）：
+   ```
+   PKG_VERSION:=1.6.2
+   PKG_SOURCE_PROTO:=git
+   PKG_SOURCE_URL:=https://github.com/libbpf/libbpf
+   ```
+5. **两条线克隆的是同一个 OpenWrt 树**（同样的 `IW_URL` / `IW_SHA`）
+   ⇒ 需要的包完全相同。
+6. **6.18 线有 `dl/` 下载缓存，7.3 线没有。**
+   6.18 线的缓存里早就躺着 libbpf，每轮直接复用；
+   7.3 线每轮都重新克隆，而且**没有缓存兜底**。
+7. **为什么「包日志里什么都没有」**：一个**从没被编译过**的包**没有自己的日志**；
+   而下载/克隆失败的措辞是 "could not resolve" / "unable to access" / "fatal:"，
+   **没有一个**落在旧的诊断模式（"fatal error:"、"error:"、"command not found"…）里
+   ⇒ **诊断自己把原因漏掉了**，留下的只有包名。
+
+#### 7.16.2 ⇒ 修复一：让构建不再依赖那一次克隆
+
+7.3 线补上与发布线**同一把钥匙**的 `dl/` 缓存：
+
+```yaml
+      - name: Cache dl/
+        if: inputs.clean_cache != 'true'
+        uses: actions/cache@v4
+        with:
+          path: openwrt/dl
+          key: skd840n-dl-${{ matrix.mode }}-${{ hashFiles('configs/*.config', 'overlays/**') }}
+          restore-keys: skd840n-dl-
+```
+
+钥匙由**构建模式**与 `configs/` + `overlays/` 的哈希决定，而这两处在两条线里
+是同一批文件 ⇒ **两条线共用同一份缓存**，7.3 线会直接拿到发布线已经下好的 libbpf。
+（顺带：7.3 线每轮都在重新下载整个 feed，加了缓存之后到 Compile 的等待也短得多。）
+
+#### 7.16.3 ⇒ 修复二：让下一次失败能说出原因
+
+Compile 步现在按这个顺序取证：
+
+1. 从顶层日志里读出**失败的是哪个包**；
+2. 读那个包**自己的日志**的最后几行（**如果它有**）；
+3. **专门**搜下载/克隆失败的措辞（"could not resolve"、"unable to access"、
+   "RPC failed"、"fatal:"……）；
+4. 再退回到编译错误的模式。
+
+失败时用 `::error::cc:` 逐条发出（每步只留前 10 条，所以顺序有讲究：
+先包自己的日志，再下载失败，最后才是编译错误）。
+
+#### 7.16.4 本机验证
+
+- 提取包名的 `sed` 在**真实的日志行**上跑通：
+  `ERROR: package/libs/libbpf failed to build.` → `libs/libbpf`
+  → `basename` → `logs/libbpf.txt`。
+- 工作流里每一个 `run:` 块仍然都能 `bash -n`（`scratch/wf_shell_parse.py`）。
+- 反向验证新增 4 处（缓存步没了、缓存钥匙与发布线不同、
+  Compile 步不读包日志、Compile 步不搜下载失败），
+  逐个转红在**指定**的那条检查上。
+  其中「Compile 步不读包日志」**第一次没有转红**：
+  契约测试查的是 `logs/$(basename`，而变异只改掉了两处出现中的一处
+  （另一处没有 `PKGLOG=` 前缀）⇒ **又一次是「门禁比的是字符串而不是断言」**。
 
 ---
 

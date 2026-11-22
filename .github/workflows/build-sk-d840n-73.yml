@@ -412,6 +412,39 @@ jobs:
       # The feeds are also where luci-base comes from, and Argon depends on
       # it (LUCI_DEPENDS:=+luci-base ...), so the package could not have been
       # selected even with luci.mk present.
+      # The 7.3 line had no download cache, and that is not a performance
+      # question: it is a correctness one.
+      #
+      # The release line has had this cache for weeks, and the two lines
+      # clone the same OpenWrt tree (the same IW_URL and IW_SHA), so they
+      # need the same packages.  The 6.18 line's cache therefore holds
+      # packages the 7.3 line needs as well - and one of them is libbpf,
+      # whose source is a GIT clone:
+      #
+      #   package/libs/libbpf/Makefile
+      #     PKG_SOURCE_PROTO:=git
+      #     PKG_SOURCE_URL:=https://github.com/libbpf/libbpf
+      #
+      # libbpf is in the image because this repository's own iproute2
+      # overlay puts "DEPENDS:=+libbpf" on the ip and tc packages - and
+      # that overlay is used by both lines.  Run #14 (head 0af2270) failed
+      # with "ERROR: package/libs/libbpf failed to build", while the 6.18
+      # line's run #364 at the very same commit succeeded - so the package
+      # builds here, and what failed was fetching it.
+      #
+      # With the cache, the 7.3 line restores the package instead of
+      # cloning it from github on every run.  The cache is keyed the same
+      # way as the release line's, so the two lines share it: the key
+      # names the build mode and a hash of configs/ and overlays/, and
+      # those are the same directories in both lines.
+      - name: Cache dl/
+        if: inputs.clean_cache != 'true'
+        uses: actions/cache@v4
+        with:
+          path: openwrt/dl
+          key: skd840n-dl-${{ matrix.mode }}-${{ hashFiles('configs/*.config', 'overlays/**') }}
+          restore-keys: skd840n-dl-
+
       - name: Install feeds
         working-directory: openwrt
         # A clone that stalls must fail, not wait: git has no default
@@ -500,9 +533,35 @@ jobs:
             #
             # The package logs come first: they carry the reason.  The top
             # level lines say which package, which is the second question.
+            #
+            # But there is a third question, and run #14 (head 0af2270) is
+            # why it is here: which package failed.  Without it the
+            # annotation says "something failed" and the failing package's
+            # own log cannot be found, because its name is only in the top
+            # level log.
+            #
+            # And there is a fourth case: a package that never got as far
+            # as being compiled has no log of its own at all.  That is what
+            # a failed download looks like, and the words it uses are "could
+            # not resolve", "unable to access", "fatal:" - none of which
+            # the compiler-error pattern below matches.  So the search for
+            # it is a separate one, and it runs whether or not the package
+            # has a log.
+            FAILED=$(sed -n 's/^[[:space:]]*ERROR:[[:space:]]*package\/\([^[:space:]]*\) failed to build\..*/\1/p' ../compile.log | head -n 1)
+            echo "the package that failed: ${FAILED:-unknown}"
             {
-              grep -rnaEi "fatal error:|error:|error\[|undefined reference|undefined symbol|implicit declaration|No such file|command not found|not found|failed to resolve|cannot find" logs 2>/dev/null | head -n 12 || true
-              grep -naEi "\*\*\*|failed to build|No rule to make|\berror:" ../compile.log 2>/dev/null | head -n 8 || true
+              if [ -n "$FAILED" ]; then
+                PKGLOG="logs/$(basename "$FAILED").txt"
+                if [ -f "$PKGLOG" ]; then
+                  echo "--- the failing package's own log: $PKGLOG ---"
+                  tail -n 5 "$PKGLOG"
+                else
+                  echo "--- $FAILED has no log of its own: it never got as far as being compiled ---"
+                fi
+              fi
+              grep -naEi "Download of|failed to download|could not resolve|unable to access|RPC failed|error: unable to|fatal:" ../compile.log 2>/dev/null | head -n 6 || true
+              grep -rnaEi "fatal error:|error:|error\[|undefined reference|undefined symbol|implicit declaration|No such file|command not found|not found|failed to resolve|cannot find" logs 2>/dev/null | head -n 4 || true
+              grep -naEi "\*\*\*|failed to build|No rule to make|\berror:" ../compile.log 2>/dev/null | head -n 4 || true
             } | head -n 10 | while IFS= read -r line; do
               echo "::error::cc: $(printf '%s' "$line" | sed -e 's/%/%25/g' -e 's/#/%23/g' | tr -d '\r')"
             done
@@ -510,6 +569,11 @@ jobs:
               echo "### the compiler's own message"
               echo
               echo '```'
+              echo "the package that failed: ${FAILED:-unknown}"
+              if [ -n "$FAILED" ] && [ -f "logs/$(basename "$FAILED").txt" ]; then
+                tail -n 30 "logs/$(basename "$FAILED").txt"
+              fi
+              grep -naEi "Download of|failed to download|could not resolve|unable to access|RPC failed|error: unable to|fatal:" ../compile.log 2>/dev/null | head -n 20 || true
               grep -rnaEi "fatal error:|error:|error\[|undefined reference|undefined symbol|implicit declaration|No such file|command not found|not found|failed to resolve|cannot find" logs 2>/dev/null | head -n 30 || true
               grep -naEi "\*\*\*|failed to build|No rule to make|\berror:" ../compile.log 2>/dev/null | head -n 20 || true
               echo '```'
