@@ -361,29 +361,34 @@ jobs:
             # reason the build failed has to go into one, or the only thing
             # that can be said about a failed run is "exit code 2".
             #
-            # One annotation per line, not one escaped blob: GitHub keeps the
-            # first ten annotations of a step, and a blob of 3500 characters
-            # is one annotation that the ten-line ceiling does not apply to
-            # but a reader cannot read either.  The job summary has no such
-            # ceiling, so the same lines go there as well.
+            # Two places have to be read.  OpenWrt keeps each package's own
+            # build output under logs/, and the top level log only says which
+            # package failed - so the compiler's message is in the package's
+            # log, not in compile.log.  And the top level log's own failure
+            # line is "ERROR: failed to build package ..." in upper case, so
+            # the search has to be case insensitive or that line is missed
+            # too.
+            #
+            # The package logs come first: they carry the reason.  The top
+            # level lines say which package, which is the second question.
             {
-              grep -naE "fatal error:|\berror:|Error [0-9]+|implicit declaration|undefined reference|undefined symbol|No such file|not defined" \
-                ../compile.log 2>/dev/null | head -n 12 || true
-            } | while IFS= read -r line; do
+              grep -rnaEi "fatal error:|\berror:|undefined reference|undefined symbol|implicit declaration|No such file|not defined" logs 2>/dev/null | head -n 12 || true
+              grep -naEi "\*\*\*|failed to build|No rule to make|\berror:" ../compile.log 2>/dev/null | head -n 8 || true
+            } | head -n 10 | while IFS= read -r line; do
               echo "::error::cc: $(printf '%s' "$line" | sed -e 's/%/%25/g' -e 's/#/%23/g' | tr -d '\r')"
             done
             {
-              echo "### the compiler's own message (the 7.3 tree's build log)"
+              echo "### the compiler's own message"
               echo
               echo '```'
-              grep -naE "fatal error:|\berror:|Error [0-9]+|implicit declaration|undefined reference|undefined symbol|No such file|not defined" \
-                ../compile.log 2>/dev/null | head -n 20 || true
+              grep -rnaEi "fatal error:|\berror:|undefined reference|undefined symbol|implicit declaration|No such file|not defined" logs 2>/dev/null | head -n 30 || true
+              grep -naEi "\*\*\*|failed to build|No rule to make|\berror:" ../compile.log 2>/dev/null | head -n 20 || true
               echo '```'
               echo
-              echo "### the tail of the build log"
+              echo "### the tail of the top level build log"
               echo
               echo '```'
-              tail -n 60 ../compile.log
+              tail -n 40 ../compile.log
               echo '```'
             } >> "$GITHUB_STEP_SUMMARY"
           fi
