@@ -121,6 +121,37 @@ jobs:
             python3-pyelftools bc dwarves qemu-utils qemu-user re2c rsync scons squashfs-tools subversion swig texinfo \
             uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev zstd
 
+      # The OMCI engine is a Rust package: overlays/package/libs/libzxpon-omci
+      # builds it with cargo for aarch64-unknown-linux-musl.  The 6.18 line
+      # installs the toolchain in its own step; this line had none, so
+      # ZX_CARGO stayed empty, the package's Build/Compile ran "cargo build"
+      # with no cargo to run it, and the whole build died at the end of the
+      # Compile step with
+      #   ERROR: package/libs/libzxpon-omci failed to build.
+      # That is what runs 1 to 13 of this line reported, and the kernel was
+      # never the thing that failed.
+      #
+      # The assertions are the point of the step: without them the missing
+      # toolchain is only noticed fifty minutes later, in a package log
+      # nobody can read.
+      - name: Rust 1.96.1 for the OMCI engine
+        run: |
+          rustup toolchain install 1.96.1 --profile minimal
+          rustup target add --toolchain 1.96.1 aarch64-unknown-linux-musl
+          ZX_CARGO="$(rustup which --toolchain 1.96.1 cargo)"
+          if [ ! -x "$ZX_CARGO" ]; then
+            echo "::error::no cargo at $ZX_CARGO"; exit 1
+          fi
+          if [ ! -x "$(dirname "$ZX_CARGO")/rustc" ]; then
+            echo "::error::no rustc next to $ZX_CARGO"; exit 1
+          fi
+          if ! rustup target list --toolchain 1.96.1 --installed \
+              | grep -qx aarch64-unknown-linux-musl; then
+            echo "::error::the aarch64-unknown-linux-musl target is not installed"; exit 1
+          fi
+          "$ZX_CARGO" --version
+          echo "ZX_CARGO=$ZX_CARGO" >> "$GITHUB_ENV"
+
       - name: Clone the OpenWrt tree
         run: |
           git clone --depth 1 -b "$IW_BRANCH" "$IW_URL" openwrt
@@ -372,7 +403,7 @@ jobs:
             # The package logs come first: they carry the reason.  The top
             # level lines say which package, which is the second question.
             {
-              grep -rnaEi "fatal error:|\berror:|undefined reference|undefined symbol|implicit declaration|No such file|not defined" logs 2>/dev/null | head -n 12 || true
+              grep -rnaEi "fatal error:|error:|error\[|undefined reference|undefined symbol|implicit declaration|No such file|command not found|not found|failed to resolve|cannot find" logs 2>/dev/null | head -n 12 || true
               grep -naEi "\*\*\*|failed to build|No rule to make|\berror:" ../compile.log 2>/dev/null | head -n 8 || true
             } | head -n 10 | while IFS= read -r line; do
               echo "::error::cc: $(printf '%s' "$line" | sed -e 's/%/%25/g' -e 's/#/%23/g' | tr -d '\r')"
@@ -381,7 +412,7 @@ jobs:
               echo "### the compiler's own message"
               echo
               echo '```'
-              grep -rnaEi "fatal error:|\berror:|undefined reference|undefined symbol|implicit declaration|No such file|not defined" logs 2>/dev/null | head -n 30 || true
+              grep -rnaEi "fatal error:|error:|error\[|undefined reference|undefined symbol|implicit declaration|No such file|command not found|not found|failed to resolve|cannot find" logs 2>/dev/null | head -n 30 || true
               grep -naEi "\*\*\*|failed to build|No rule to make|\berror:" ../compile.log 2>/dev/null | head -n 20 || true
               echo '```'
               echo

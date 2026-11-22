@@ -27,8 +27,12 @@
 5. **驱动增量已按片重打五片，第 6 片是实机对拍。** 顺序是
    IDM（1~2 片）→ 9132 交换表驱动（3）→ PON/OMCI 栈（4）→ **9132 芯片本身的编程（5）**。
    每片一个补丁、每片一扇编译前的门禁、每片一次 CI。
-   **这五片都还没有被编译过**（本机无 arm64 交叉工具链），所以下一步是 CI 结论与实机对拍。
+   **这五片的代码在本机已全部通过 clang 的语法与符号检查**（`scratch/kcheck.py`，
+   见 7.11），但**还没有被真正编译过**（本机无 arm64 交叉工具链），所以下一步是
+   CI 结论与实机对拍。
    剩下的两项（RGMII 调试、TX 故障隔离/恢复）已各自判明，见八之五.9。
+6. **7.3 线 run #1~#13 的 Compile 失败与内核无关**：失败的是我们自己的 Rust 包
+   `libzxpon-omci`，因为这条线少了装 Rust 工具链的步骤（6.18 线有）。已修，见 7.11。
 
 ---
 
@@ -721,6 +725,68 @@ cc: 114:make: *** [.../openwrt/include/toplevel.mk:233: world] Error 1
 > 这一层的教训和上一层一样：**诊断要按失败信息实际所在的位置去找**。
 > 6.18 线只读顶层日志就够了，是因为它那条线的失败消息本来就落在顶层日志里；
 > 7.3 线照搬过去就会漏。两条线长得像，失败的位置不一样。
+
+### 7.11 run #13：编译失败的真因不在内核，在 Rust 包的工具链
+
+run #13（head `3f90c50`）第一次让诊断说出了**是哪个包**失败：
+
+```
+cc: 110:    ERROR: package/libs/libzxpon-omci failed to build.
+cc: 112:make: *** [.../openwrt/include/toplevel.mk:233: world] Error 1
+```
+
+**判决：失败的不是内核，是我们自己的用户态包，而且失败与 7.3 无关。**
+
+证据链：
+
+1. **失败的是 `package/libs/libzxpon-omci`**，它是本仓库
+   `overlays/package/libs/libzxpon-omci/` 里的一个 **Rust** 包（`omci/Cargo.toml`、
+   `Cargo.lock`，16 个 crate，直接依赖 `aes` 与 `cmac`）。
+2. 它的 `Build/Compile` 是这样的：
+   ```make
+   ZX_CARGO?=$(shell command -v cargo)
+   define Build/Compile
+   	cd $(PKG_BUILD_DIR) && RUSTC="$(dir $(ZX_CARGO))rustc" \
+   		RUSTFLAGS="-C target-cpu=cortex-a53" $(ZX_CARGO) build --release --locked \
+   		--target aarch64-unknown-linux-musl
+   endef
+   ```
+   工具链**只从环境变量 `ZX_CARGO` 来**，机器上找不到 `cargo` 就没有第二来源。
+3. **6.18 发布线有装工具链的步骤，7.3 线没有。**
+   `build-sk-d840n.yml` 的 build 作业里有「Rust 1.96.1 and offline ONU regression tests」：
+   ```sh
+   rustup toolchain install 1.96.1 --profile minimal
+   rustup target add --toolchain 1.96.1 aarch64-unknown-linux-musl
+   export ZX_CARGO="$(rustup which --toolchain 1.96.1 cargo)"
+   echo "ZX_CARGO=$ZX_CARGO" >> "$GITHUB_ENV"
+   ```
+   `build-sk-d840n-73.yml` 里**一个 rust 字都没有**（逐行比过两个工作流的步骤表）。
+   ⇒ 7.3 线上 `ZX_CARGO` 为空 ⇒ `cargo build` 没有 cargo 可执行 ⇒ 包构建失败 ⇒
+   顶层 `make` 以 `world Error 1` 收场。
+4. **这解释了 7.3 线从来没编成功过**：run #1 到 #13 的 Compile 失败是同一件事，
+   与我们搬的五个片无关。run #6（只有 IDM 三片）与 run #9（加第 3/4 片）失败在
+   同一处，也正是因为那时就已经缺工具链了。
+
+**⇒ 修复**：7.3 线补上同样的步骤，并**带断言**（cargo 存在、rustc 在旁边、
+musl target 已装），缺一件就地失败，而不是把这件事留到 50 分钟之后、包日志里。
+
+**⇒ 顺带把诊断的 pattern 补宽**：原来的 pattern 里没有 `command not found`，
+也没有 `error[`——cargo 的错误长成 `error[E0308]: ...`，两样都匹配不上，
+所以包日志里明明有原因，annotation 里却只有「哪个包失败」。现在 pattern 里有
+`error\[`、`command not found`、`not found`、`failed to resolve`、`cannot find`。
+
+**⇒ 门禁**：`tests/test_sk_workflows.py` 新增一节「the OMCI engine's toolchain is
+installed on both lines」，两条线都要有 `rustup toolchain install`、要有
+`aarch64-unknown-linux-musl`、要有 `ZX_CARGO=`。反向验证过：把 7.3 的
+`rustup toolchain install` 换掉，门禁立刻转红。
+
+**⇒ 本机这一轮的收获**：把 7.3 树用宿主 clang 做 `-fsyntax-only` 的检查器
+（`scratch/kcheck.py`）打通之后，**我们补丁碰过的 12 个驱动文件全部通过**
+（`np.c`/`idm.c`/`switch.c`/`pon.c`/`zxpon.c`/`omci.c`/`netdev.c`/`main.c`/`mac.c`/
+`offload.c`/`host.c`/`lan-conduit.c`），cnjn 那 39 个补丁碰过的 40 多个 `.c`
+也全部通过，DTS 预处理通过。**⇒ 内核这一侧本来就没有编译错误**，
+这与「失败的是 `libzxpon-omci`」互相印证。检查器还能编出目标码并按 modpost
+的规则查符号闭合（11 条疑似缺符号全是宏生成导出造成的误报，逐条核实过）。
 
 ---
 
@@ -1473,4 +1539,14 @@ python3 ci-build-repo/tools/check-sk-9132-api.py \
 
 # 10) 工作流自身的门禁（两条线都在推之前跑）
 python3 ci-build-repo/tests/test_sk_workflows.py
+
+# 11) 本机的编译预言机：clang 对 7.3 树做语法检查（秒级，代替 50 分钟的 CI）
+python3 scratch/mkcfg73.py                       # 合并 7.3 的配置片段
+python3 scratch/kcheck.py --tree scratch/test73c \
+        --config scratch/cfg73/config-7.3.merged \
+        --file drivers/net/ethernet/zte/zx279133-np.c \
+        --file drivers/net/ethernet/zte/zx279133-idm.c \
+        --gen scratch/kgen73
+# 加 --objdir scratch/kobj 会编出目标码并按 modpost 的规则查符号闭合；
+# --raw 打印编译器的原话。
 ```

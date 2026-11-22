@@ -50,6 +50,7 @@ BRINGUP_JOBS = {"check-gates", "build"}
 
 # The steps of the 7.3 line that carry the whole point of the line.
 BRINGUP_STEPS = [
+    "Rust 1.96.1 for the OMCI engine",
     "Prepare the Linux 7.3.4 tree",
     "Check the board layer against the 7.3 tree",
     "Apply the board layer",
@@ -215,6 +216,23 @@ def main():
     for path in BRINGUP_TRIGGERS:
         failures.check(path in triggers,
                        f"the 7.3 line rebuilds on {path}")
+
+    # The OMCI engine is a Rust package, and the package's Makefile takes
+    # the toolchain from ZX_CARGO - an environment variable, not a default
+    # that can be found on the machine.  The 7.3 line had no step that
+    # installed it, so every one of its builds died at the end of the
+    # Compile step with "ERROR: package/libs/libzxpon-omci failed to
+    # build" and nothing that said why.  The check is here so that a line
+    # cannot lose the toolchain again without a gate noticing.
+    print("\nthe OMCI engine's toolchain is installed on both lines")
+    for workflow, doc in ((RELEASE, release), (BRINGUP, bringup)):
+        text = run_text(doc, "build")
+        failures.check("rustup toolchain install" in text,
+                       f"{workflow} installs the Rust toolchain")
+        failures.check("aarch64-unknown-linux-musl" in text,
+                       f"{workflow} adds the aarch64 musl target")
+        failures.check("ZX_CARGO=" in text,
+                       f"{workflow} hands ZX_CARGO to the build")
 
     print("\nthe gate jobs only name tests that exist")
     for workflow, job in ((RELEASE, "check-led-gates"), (BRINGUP, "check-gates")):
