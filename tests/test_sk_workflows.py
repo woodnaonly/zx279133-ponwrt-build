@@ -89,6 +89,12 @@ BRINGUP_TRIGGERS = [
     "tools/check-sk-switch-api.py",
     "tools/check-sk-pon-api.py",
     "tools/check-sk-9132-api.py",
+    # The host compiler check and the shadow headers it needs: the build
+    # runs them, so a change to either of them changes what the build
+    # checks and has to start a build.
+    "tools/kcheck.py",
+    "tools/kshadow.py",
+    "tests/test_sk_kcheck.py",
     "scripts/configure-sk-d840n.sh",
     "configs/sk-d840n-73.json",
 ]

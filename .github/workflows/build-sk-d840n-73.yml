@@ -47,6 +47,9 @@ on:
       - tools/check-sk-switch-api.py
       - tools/check-sk-pon-api.py
       - tools/check-sk-9132-api.py
+      - tools/kcheck.py
+      - tools/kshadow.py
+      - tests/test_sk_kcheck.py
       - kernel-overlays-73/**
       - tools/prepush.py
       - overlays-73/**
