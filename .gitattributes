@@ -122,3 +122,19 @@ dtb/** -text
 # The rule is as narrow as the file it protects: one path, not the directory, and it
 # has to come after the `overlays/**` rule because the last matching rule wins.
 overlays/target/linux/zte/zx279133/firmware/** -text -diff
+
+# The trees the 7.3 line added, for the reason every other rule in this file is
+# here: with core.autocrlf=true a Windows checkout rewrites them to CRLF, and
+# the committed blobs are LF.
+#
+# overlays-73/target/linux/zte/Makefile is the one that would break rather than
+# merely look wrong.  It is copied into the OpenWrt tree and read by GNU make,
+# and a CR after "include $(INCLUDE_DIR)/target.mk" is part of the filename -
+# the same failure mode the 02_network rule above was written for, arriving
+# through a different door.
+#
+# configs/ is read by a JSON parser, which tolerates CRLF, so this rule is
+# hygiene rather than a repair; *.config above already covered the one file
+# in this directory that existed before.
+overlays-73/** text eol=lf
+configs/** text eol=lf
