@@ -2149,6 +2149,86 @@ void zx279133_pon_note_rxsd(int light)
   同名的那些函数里有多少是逐字相同、多少是重写，需要另用
   `tools/func-body-diff.py` 逐个文件比（IDM 那一个文件已经比过，见第九节）。
 
+### 八之八、第 6 片（实机对拍）：机械清单
+
+**判决**：前五片落成补丁，第 6 片是**板子上的对拍**。
+这一节是**操作顺序**：每一步该看什么、看到什么算过、不过怎么办。
+
+#### 八之八.1 前置：镜像与三件套
+
+CI 的「Validate and export the partitions」步会校验 sysupgrade 镜像
+（fwtool 元数据、CRC、板型兼容、各成员大小、JFFS2 魔数、
+以及 uImage 解压后**正好等于**编出来的那个 Image）并**原样导出**三个分区文件：
+
+| 文件 | 去处 | 多大 |
+|---|---|---|
+| `flash-uImage` | 内核分区 | 8 MiB |
+| `flash-dtb.bin` | DTB 分区 | 约 13 KiB |
+| `flash-rootfs.jffs2` | rootfs 分区 | 约 4.7 MiB |
+
+`staging/trial/flash-set.tgz` 是这三件套。
+**先校验再刷**：sha256 与 `staging/trial/sha256sums-trial` 对得上再动手。
+
+#### 八之八.2 刷机（两条路）
+
+| 路径 | 命令 | 什么时候用 |
+|---|---|---|
+| 只换内核与 DTB | `sh tools/flash-round.sh write` | 板子上装着的 jffs2 已经是 7.3 线的那套 |
+| 全量 | `sh tools/flash-round.sh write-root` | 第一次上 7.3 线，rootfs 也要换 |
+| 从正在运行的系统直接写 | `sh tools/flash-direct.sh write` | 已经证明能进 userspace，想少动一次 flash |
+
+设备是 `root@192.168.9.1`，密钥 `~/.ssh/id_onu`。
+`flash-round.sh` 的**第一次必须先跑 `dry`**：它只勘察 flash 并把载荷挂在
+`http://192.168.9.1/` 上，**一个字节都不写**。
+
+#### 八之八.3 第一次启动：三个观察点
+
+1. **串口**：内核 banner 的版本必须是 `7.3.4`（门禁已保证产物是它，
+   但 banner 是板子上真正跑的那一个）；
+2. **LOS 灯**：**有光 ⇒ 灯灭，无光 ⇒ 灯亮**（驱动是 `rxsd ? LED_OFF : LED_FULL`）；
+3. **网络口**：四个 DSA 用户口都要出现（`lan0 lan1 lan2 lan3 lan4`）。
+
+#### 八之八.4 对拍仪器
+
+```sh
+sh tools/trialsurvey.sh 10
+```
+
+它一次回答五个问题（见工具头部），每个计数**采两次**，
+灯与 `opsd` **也采两次**。判读表：
+
+| 观察 | 期望 | 不符时先查 |
+|---|---|---|
+| `lan-cpu0` 的 `rx_packets` 在涨 | 涨 | BP 池投递（补丁 120）、帧落点 0x80（补丁 110） |
+| `lan0..lan4` 都在、`carrier` 正确 | 都在 | 9132 驱动没注册（`dmesg \| grep 9132`） |
+| LOS 灯与 `opsd` **成对**读 | 有光⇒灭，无光⇒亮 | 只读灯不说事：必须同时有 `opsd` 的读数 |
+| `pon_state` 从 O1 往 O5 走 | 有光时走 | **无光时本就不该走** ⇒ 必须与 LOS 成对判读 |
+| `omci_transport` 的 `submitted`/`completed` 在涨 | 涨 | OMCI 队列（补丁 140） |
+
+**注意第三条与第四条是耦合的**：`zx279133_pon_note_rxsd()` 用的是**同一个**读数，
+所以「无光 ⇒ pon_state 不动」**不是故障**。
+
+#### 八之八.5 三片的专项判据
+
+| 片 | 判据 | 怎么读 |
+|---|---|---|
+| 第 3 片（9132 交换表驱动） | 交换表被写成厂商那张表 | bench 的 ERAM 读（`eram_read`）与文档 30/31/32 的表对 |
+| 第 4 片（PON/OMCI 栈） | `omci_transport` 两个计数在涨 | `trialsurvey.sh` 第 5 节 |
+| 第 5 片（9132 芯片编程） | 帧按 PPU→VID 映射落到 lan-cpu0 | `lan-cpu0` 的 RX 计数在涨，**且**收到的帧的 VLAN 与补丁 150 里那张 PPU→VID 映射一致 |
+
+#### 八之八.6 不符时的取证顺序
+
+1. `dmesg | grep -iE 'zx279133|9132|lan conduit|nppu'`（仪器第 7 节已经带这一条）；
+2. `/proc/net/dev` 与 `ethtool -S lan-cpu0`（看有没有 RX 欠载）；
+3. `cat /sys/kernel/debug/gpio`（`opsd` 的原始读数）；
+4. bench 的寄存器读（`nppt_reg` / `soc_read` / `eram_read`）。
+
+**不要**因为对拍不过就去整体移植 TX 故障隔离/恢复（**判为不整体移植**，见八之五.9），
+也不要顺手去动 RGMII（**取舍不是缺口**）。
+
+**未做**：这一节是**清单**，不是结论——它一行都还没有在 7.3 的镜像上跑过，
+因为镜像还没出来（见 7.16 与 7.17 的 CI 轮次）。
+
 ---
 
 ## 九、下一步（按片重打，每片一次 CI）
