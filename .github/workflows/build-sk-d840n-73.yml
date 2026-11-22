@@ -180,6 +180,40 @@ jobs:
         run: |
           python3 tools/prepush.py "$GITHUB_WORKSPACE"
 
+      # The 6.18 release line has this step and the 7.3 line did not, and the
+      # difference was worth two Configure failures (runs 45009499015 and
+      # 45010154919, both at "Argon is not built into the resolved SK-D840N
+      # config").
+      #
+      # The reason is a file, not a package list: the Argon recipe ends with
+      #   include $(TOPDIR)/feeds/luci/luci.mk
+      # (jerrykuku/luci-theme-argon Makefile:54).  Without the luci feed there
+      # is no luci.mk, so the recipe cannot be parsed, so the package never
+      # enters the package database, so defconfig drops
+      # CONFIG_PACKAGE_luci-theme-argon=y in silence - the same way it drops
+      # a config line for a symbol that does not exist.  The theme check then
+      # reports it, which is the only reason the failure was legible at all.
+      #
+      # The feeds are also where luci-base comes from, and Argon depends on
+      # it (LUCI_DEPENDS:=+luci-base ...), so the package could not have been
+      # selected even with luci.mk present.
+      - name: Install feeds
+        working-directory: openwrt
+        # A clone that stalls must fail, not wait: git has no default
+        # timeout, and a feed that half-arrives leaves the build that
+        # follows it waiting on a tree that never finishes arriving.
+        env:
+          GIT_HTTP_LOW_SPEED_LIMIT: 1000
+          GIT_HTTP_LOW_SPEED_TIME: 60
+          GIT_TERMINAL_PROMPT: 0
+        run: |
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+          # The theme check runs against the resolved .config, so the feed
+          # that carries it has to be there before Configure, not after.
+          test -f feeds/luci/luci.mk
+          test -f package/feeds/luci/luci-base/Makefile
+
       - name: Configure
         run: |
           set +e

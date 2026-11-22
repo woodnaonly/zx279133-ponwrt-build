@@ -260,9 +260,9 @@ CONFIG_EXTERNAL_KERNEL_TREE=<树>   OpenWrt 把这棵树当自己的内核目录
 
 ---
 
-## 七、7.3 通道的 CI 首跑记录
+## 七、7.3 通道的 CI 运行记录
 
-7.3 通道第一次运行（run #1）的结果与处理，按时间顺序：
+### 7.1 run #1（2026-11-22 09:50Z）
 
 | 阶段 | 结果 |
 |---|---|
@@ -271,12 +271,83 @@ CONFIG_EXTERNAL_KERNEL_TREE=<树>   OpenWrt 把这棵树当自己的内核目录
 | 本机复现 | ✅ 复现成功（用准备好的 7.3 树 + IW master 的稀疏检出 + 我们的 overlays 跑同一个脚本） |
 | 根因 | `scripts/sk-d840n-offload.sh` 把三个配置片段名写死成 `config-6.18` |
 | 修法 | 系列号从**内核树自己**的 `VERSION`/`PATCHLEVEL` 读出来；两个系列都验证过（7.3 树 → 7.3，6.18 fork → 6.18，发布线行为不变） |
-| run #2 | 待观察 |
 
-这条记录本身就是这套门禁存在的理由：**首跑失败点由一个断言精确指出，
-而不是让构建跑到一半才炸**。本机没有 arm64 工具链，但 Configure 这一步
-只改配置片段、不编译，所以它能在本机完整复现——这让修一轮的成本从
-「一次 CI（约两小时）」降到「一次本地脚本运行」。
+### 7.2 run #2（2026-11-22 09:59Z，head `3dbf3003`）
+
+| 阶段 | 结果 |
+|---|---|
+| `repository gates` | ✅ 通过 |
+| `Prepare the Linux 7.3.4 tree` | ✅ 通过（39 个 vendored 补丁 + 1 个本地补丁，CI 上干净 apply） |
+| `Apply the board layer` | ✅ 通过（板级 DTS / Unim / DSA 头 / 微码全部落地） |
+| `Apply the OpenWrt-side overlays` | ✅ 通过 |
+| `Enable /dev/mem in the 7.3 fragments` | ✅ 通过 |
+| `Check the overlay for what a compiler would have caught` | ✅ 通过 |
+| `initramfs` / `flash` 的 `Configure` | ❌ 失败：`Argon is not built into the resolved SK-D840N config` |
+
+**判决**：run #2 把失败点从「配置片段名写死」推进到了「defconfig 之后的
+主题断言」。前六步全绿说明**树准备与板级层重基在 CI 上是成立的**；
+剩下的失败与 7.3 内核无关，是 OpenWrt 侧少了一个步骤。
+
+**根因**：`jerrykuku/luci-theme-argon` 的 Makefile 最后一行是
+
+```
+include $(TOPDIR)/feeds/luci/luci.mk      # Makefile:54
+```
+
+7.3 工作流**没有「Install feeds」这一步**（6.18 发布线有，
+`build-sk-d840n.yml:782`），于是 `feeds/luci/luci.mk` 不存在 ⇒ Argon 的
+配方无法解析 ⇒ 这个包不进包数据库 ⇒ `make defconfig` 把
+`CONFIG_PACKAGE_luci-theme-argon=y` **静默丢弃**（和「符号不存在」的
+处理方式一样）⇒ 主题断言报错。
+
+CI 警告里还留着同一件事的另一个侧面：
+
+```
+WARNING: Makefile 'package/emortal/default-settings/Makefile' has a dependency on 'luci', which does not exist
+```
+
+`luci` 不存在 = luci feed 没装 = Argon 依赖的 `luci-base` 也不存在，
+即使 `luci.mk` 在也选不上。
+
+**修法**：在 7.3 工作流里补上与 6.18 线同构的 `Install feeds` 步骤
+（`feeds update -a` + `feeds install -a`），位置放在门禁之后、Configure
+之前，并对 `feeds/luci/luci.mk` 与 `package/feeds/luci/luci-base/Makefile`
+做存在性断言。
+
+### 7.3 这一轮暴露的方法论错误：本机复现的边界被高估了
+
+run #1 的「本机复现成功」是**假通过**。本机复现环境
+`scratch/ow73run` 里没有 `feeds/`、也没有 `package/luci-theme-argon`，
+但它的 `.config` 里**仍然留着** `CONFIG_PACKAGE_luci-theme-argon=y`——
+因为本机没有 `make`，`make defconfig` 根本没跑，那行配置也就从没被
+丢弃过。本机复现只走到了 `defconfig` **之前**。
+
+所以边界要写清楚：
+
+| 本机可复现 | 本机不可复现 |
+|---|---|
+| `Prepare` / `Apply board layer` / `Apply overlays` / `Enable /dev/mem` / `Check the overlay` | `make defconfig` 及其之后的**全部**断言 |
+| 任何「改配置片段」的脚本逻辑 | **符号不存在 → 被静默丢弃**这一类行为 |
+
+`defconfig` 丢弃无效符号时不出一声，所以「本地 .config 里还有那行」
+和「CI 上那行不见了」之间的差别，本机原理上看不见——除非先装上 feeds
+再跑 defconfig，而 defconfig 需要 make。
+
+这条边界就是「失败点由断言精确指出，而不是让构建跑到一半才炸」的价值
+所在：run #2 的报错落在 `skd840n_check_theme_config` 这一句断言上，
+而不是七十多分钟后的某个编译错误。
+
+### 7.4 拿日志的手段（无 token 的情况）
+
+本机没有 GitHub token，实测：
+
+* `GET /actions/jobs/<id>/logs` → **403**；
+* `GET /actions/artifacts/<id>/zip` → **401 Requires authentication**；
+* `GET /commits/<sha>/check-runs` → **可读**（偶发 504，重试即可）；
+* `GET /check-runs/<id>/annotations` → **可读**，工作流里
+  `echo "::error::$message"` 的正文就在这里。
+
+所以失败诊断走「check-run → annotations」，不是日志下载。
 
 ---
 
