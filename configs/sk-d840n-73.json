@@ -1,0 +1,30 @@
+{
+  "_comment": "Lock for the Linux 7.3 line. The patch series itself is vendored under kernel-patches/7.3/ and pinned by its own MANIFEST.json; this file pins the vanilla tarball and the OpenWrt metadata that has to agree with it.",
+  "line": "7.3",
+  "version": "7.3.4",
+  "source_tar": "linux-7.3.4.tar.xz",
+  "source_tar_sha256": "b11b6df8295e8e991ff040b71aaa4994a8b55caa23b6b092907f195b5840fd1f",
+  "source_tar_bytes": 162439264,
+  "_mirrors_comment": "kernel.org is the origin of record. The mirrors are fallbacks for the same file; the sha256 above is what decides which copy is the right one.",
+  "mirrors": [
+    "https://cdn.kernel.org/pub/linux/kernel/v7.x",
+    "https://mirror.nju.edu.cn/kernel.org/linux/kernel/v7.x",
+    "https://mirrors.edge.kernel.org/pub/linux/kernel/v7.x"
+  ],
+  "manifest": "kernel-patches/7.3/MANIFEST.json",
+  "patches_dir": "kernel-patches/7.3",
+  "_upstream_comment": "The vendored series is cnjn/immortalwrt target/linux/zte/patches-7.3 at this commit. It carries the whole ZX279133 NPU driver, which is why the tree is prepared outside OpenWrt instead of being downloaded by it.",
+  "upstream": {
+    "repo": "https://github.com/cnjn/immortalwrt",
+    "branch": "master",
+    "commit": "31e2ac4ded9c8896c7aefd3dcb9a46ef77440fbd",
+    "date": "2026-11-10",
+    "path": "target/linux/zte/patches-7.3"
+  },
+  "openwrt": {
+    "_comment": "The OpenWrt tree states LINUX_VERSION-7.3 = .1 and pins the sha256 of that tarball. This line builds 7.3.4, so the series and the hash are rewritten. The hash is the tarball's, so OpenWrt's own downloader would fetch the same bytes if it ever ran.",
+    "version_file": "target/linux/generic/kernel-7.3",
+    "version_line": "LINUX_VERSION-7.3",
+    "hash_line": "LINUX_KERNEL_HASH-7.3.4"
+  }
+}

@@ -1,0 +1,252 @@
+name: ZX279133 SK-D840N Build (Linux 7.3 line)
+
+# The 7.3 bring-up line.
+#
+# It builds the same board on the kernel generation the reference firmware
+# runs (Linux 7.3.4), with cnjn's rewritten ZX279133 NPU driver, and it does
+# NOT publish anything: the release line is build-sk-d840n.yml, and this
+# workflow only produces an image to look at.
+#
+# The kernel is not a submodule and not a fork here.  cnjn ships the driver
+# as a patch series (target/linux/zte/patches-7.3) that is applied to a
+# VANILLA linux-7.3.4, so this workflow:
+#
+#   1. fetches linux-7.3.4.tar.xz and refuses it unless its sha256 matches
+#      configs/sk-d840n-73.json,
+#   2. applies the vendored series in kernel-patches/7.3/ one patch at a time,
+#      refusing anything that does not apply cleanly,
+#   3. copies the board layer (device tree, Unim NAND, DSA VID range) on top,
+#      and the NPU microcode into the tree,
+#   4. hands the result to OpenWrt through CONFIG_EXTERNAL_KERNEL_TREE.
+#
+# Every step of 1-3 has been run on the build machine of this repository and
+# is the same code as tools/prepare-sk-kernel-73.py and
+# tools/apply-sk-overlay-73.sh.
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: '构建模式'
+        required: false
+        default: 'initramfs'
+        type: choice
+        options: ['initramfs', 'flash']
+      clean_cache:
+        description: '忽略 dl/ 缓存'
+        required: false
+        default: 'false'
+        type: boolean
+  push:
+    paths:
+      - .github/workflows/build-sk-d840n-73.yml
+      - kernel-patches/7.3/**
+      - tools/prepare-sk-kernel-73.py
+      - tools/apply-sk-overlay-73.sh
+      - tools/prepush.py
+      - overlays-73/**
+      - configs/sk-d840n-73.json
+      - scripts/configure-sk-d840n.sh
+      - docs/101-*
+
+env:
+  IW_URL: https://github.com/cnjn/ImmortalWrt
+  IW_BRANCH: master
+  # cnjn/ImmortalWrt master, 2026-11-10.  This is the commit that carries
+  # target/linux/zte/patches-7.3 and target/linux/zte/zx279133/config-7.3.
+  IW_SHA: 31e2ac4ded9c8896c7aefd3dcb9a46ef77440fbd
+  KVER: '7.3.4'
+  KERNEL_TREE: linux-7.3.4
+
+permissions: write-all
+
+jobs:
+  check-gates:
+    name: repository gates
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install DTS regression tools
+        run: |
+          sudo apt-get -qq update
+          sudo apt-get -qq install --no-install-recommends device-tree-compiler libfdt-dev python3-yaml
+      - name: Exercise the repository's own gates
+        run: |
+          python3 tests/test_sk_kernel.py
+          python3 tests/test_sk_led_dts_gate.py
+          python3 tests/test_sk_layout.py
+          python3 tests/test_sk_uboot.py
+
+  build:
+    name: ${{ matrix.mode }}
+    needs: check-gates
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [initramfs, flash]
+    runs-on: ubuntu-22.04
+    timeout-minutes: 400
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          sudo docker image prune --force || true
+          sudo -E apt-get -qq autoremove --purge || true
+          df -hT
+
+      - name: Init build environment
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo -E apt-get -qq update
+          sudo -E apt-get -qq install ack antlr3 asciidoc autoconf automake autopoint binutils bison \
+            build-essential bzip2 ccache clang cmake cpio curl device-tree-compiler ecj fastjar flex gawk gettext gcc-multilib \
+            g++-multilib git gnutls-dev gperf haveged help2man intltool lib32gcc-s1 libc6-dev-i386 libelf-dev \
+            libfdt-dev libglib2.0-dev libgmp3-dev libjson-c-dev libltdl-dev libmpc-dev libmpfr-dev libncurses-dev libncursesw5-dev \
+            libpython3-dev libreadline-dev libssl-dev libtool libyaml-dev libz-dev lld llvm lrzsz mkisofs msmtp \
+            nano ninja-build p7zip p7zip-full patch pkgconf python3 python3-pip python3-venv python3-ply python3-docutils \
+            python3-pyelftools bc dwarves qemu-utils qemu-user re2c rsync scons squashfs-tools subversion swig texinfo \
+            uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev zstd
+
+      - name: Clone the OpenWrt tree
+        run: |
+          git clone --depth 1 -b "$IW_BRANCH" "$IW_URL" openwrt
+          git -C openwrt fetch --depth 1 origin "$IW_SHA"
+          git -C openwrt checkout --detach "$IW_SHA"
+          test "$(git -C openwrt rev-parse HEAD)" = "$IW_SHA"
+          test -d openwrt/target/linux/zte/patches-7.3
+          test -f openwrt/target/linux/generic/kernel-7.3
+          test -f openwrt/target/linux/zte/zx279133/config-7.3
+
+      # The step the 6.18 line does not have.  It replaces the kernel fork
+      # with a vanilla tarball plus a pinned patch series, and it is the only
+      # place the 7.3 driver comes from.
+      - name: Prepare the Linux 7.3.4 tree
+        run: |
+          python3 tools/prepare-sk-kernel-73.py \
+            --tree "$KERNEL_TREE" \
+            --version "$KVER" \
+            --openwrt openwrt \
+            --report kernel-provenance-73.json
+          test "$(make -s -C "$KERNEL_TREE" kernelversion)" = "$KVER"
+          cat kernel-provenance-73.json
+
+      - name: Apply the board layer
+        run: |
+          sh tools/apply-sk-overlay-73.sh "$KERNEL_TREE"
+
+      - name: Apply the OpenWrt-side overlays
+        run: |
+          cp -a overlays/. openwrt/
+          # overlays-73/ holds the one file that differs between the kernel
+          # lines on the OpenWrt side: the zte target itself.
+          cp -a overlays-73/. openwrt/
+          test -f openwrt/target/linux/zte/image/Makefile
+          grep -q 'Device/skyworth_sk-d840n' openwrt/target/linux/zte/image/Makefile
+          grep -q 'KERNEL_PATCHVER:=7.3' openwrt/target/linux/zte/Makefile
+
+      # The 7.3 fragments are named config-7.3, not config-6.18.  This is the
+      # same edit the 6.18 line makes, with the other file names: a fragment
+      # that still says "not set" anywhere under target/linux outranks the
+      # pin, and the merged result is what decides the outcome.
+      - name: Enable /dev/mem in the 7.3 fragments
+        run: |
+          DEVMEM_OFF='# CONFIG_DEVMEM is not set'
+          for f in openwrt/target/linux/generic/config-7.3 \
+                   openwrt/target/linux/zte/config-7.3 \
+                   openwrt/target/linux/zte/zx279133/config-7.3; do
+            if [ -f "$f" ]; then
+              sed -i "s|^${DEVMEM_OFF}\$|CONFIG_DEVMEM=y|" "$f"
+              if grep -qxF "$DEVMEM_OFF" "$f"; then
+                echo "::error::$f still disables CONFIG_DEVMEM after the edit"; exit 1
+              fi
+              echo "  $f -> $(grep -cx 'CONFIG_DEVMEM=y' "$f") CONFIG_DEVMEM=y line(s)"
+            fi
+          done
+          LEFT=$(grep -rl -x "$DEVMEM_OFF" openwrt/target/linux/generic/config-7.3 \
+                 openwrt/target/linux/zte/config-7.3 openwrt/target/linux/zte/zx279133/config-7.3 2>/dev/null || true)
+          if [ -n "$LEFT" ]; then
+            echo "::error::a fragment still disables CONFIG_DEVMEM: $LEFT"; exit 1
+          fi
+          SUBCFG=openwrt/target/linux/zte/zx279133/config-7.3
+          if [ ! -f "$SUBCFG" ] || ! grep -qx 'CONFIG_DEVMEM=y' "$SUBCFG"; then
+            echo "::error::no CONFIG_DEVMEM=y in $SUBCFG, the fragment merged last"; exit 1
+          fi
+
+      - name: Check the overlay for what a compiler would have caught
+        run: |
+          python3 tools/prepush.py "$GITHUB_WORKSPACE"
+
+      - name: Configure
+        run: |
+          set +e
+          (
+            set -e
+            sh scripts/prepare-sk-d840n-ui.sh "$GITHUB_WORKSPACE/openwrt"
+            sh scripts/configure-sk-d840n.sh \
+              "$GITHUB_WORKSPACE/openwrt" \
+              "$GITHUB_WORKSPACE/$KERNEL_TREE" \
+              "${{ matrix.mode }}"
+          ) 2>&1 | tee sk-configure.log
+          rc=${PIPESTATUS[0]}
+          if [ "$rc" != 0 ]; then
+            message=$(tail -n 65 sk-configure.log | python3 -c 'import sys; s=sys.stdin.read()[-2600:]; print(s.replace("%","%25").replace("\r","").replace("\n","%0A"))')
+            echo "::error::$message"
+            exit "$rc"
+          fi
+          set -e
+
+      - name: Download packages
+        working-directory: openwrt
+        env:
+          CURL_OPTIONS: --speed-limit 100 --speed-time 120
+          WGET_OPTIONS: --read-timeout=120 --timeout=120
+        run: |
+          make download -j8
+          find dl -size -1024c -exec rm -f {} \;
+
+      - name: Compile
+        working-directory: openwrt
+        run: |
+          set -o pipefail
+          timeout --kill-after=60s 280m bash -c 'make -j"$(nproc)"' 2>&1 | tee ../compile.log || rc=$?
+          rc=${rc:-0}
+          echo "::group::the tail of the build log"
+          tail -n 200 ../compile.log
+          echo "::endgroup::"
+          exit "$rc"
+
+      # The gate that says the thing that was built is the thing that was
+      # asked for: the version in the tree, the version in the Image banner
+      # and the version the modules are packaged under.
+      - name: 'Gate: the built kernel is 7.3.4'
+        run: |
+          KT="$KERNEL_TREE"
+          python3 tools/prepare-sk-kernel-73.py --check-built "$KT" --version "$KVER"
+
+      - name: 'Gate: the board device tree compiles against the 7.3 tree'
+        run: |
+          KT="$KERNEL_TREE"
+          DTS=$KT/arch/arm64/boot/dts/zte
+          PFX=$KT/scripts/dtc/include-prefixes
+          dtc --version
+          f=$DTS/zx279133-sk-d840n.dts
+          cpp -nostdinc -undef -x assembler-with-cpp -D__DTS__ \
+              -I "$DTS" -I "$PFX" -I "$KT/include" "$f" -o /tmp/sk.pp.dts
+          dtc -q -I dts -O dtb -o /tmp/sk-d840n.dtb -i "$PFX" -i "$KT/include" /tmp/sk.pp.dts
+          test -s /tmp/sk-d840n.dtb
+          echo "the board device tree compiles"
+
+      - name: Upload the build log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sk-d840n-73-logs
+          path: |
+            compile.log
+            sk-configure.log
+            kernel-provenance-73.json
+          retention-days: 14

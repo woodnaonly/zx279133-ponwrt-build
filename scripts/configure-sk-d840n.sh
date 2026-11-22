@@ -470,8 +470,11 @@ printf 'CONFIG_PACKAGE_wrreg=y\n' >>.config
 # shared profile includes clsact/ingress, flower, redirect, pedit and csum
 # as well as nft flowtables; the final merged kernel is checked against it.
 skd840n_pin_offload_fragments . "$OFFLOAD_PROFILE"
+# $KCFG is the subtarget fragment this tree actually carries (config-6.18 on
+# the 6.18 line, config-7.3 on the 7.3 line), resolved by the glob above, so
+# this line does not have to know which kernel generation it is configuring.
 grep -hE "^(CONFIG_|# CONFIG_)(NETFILTER|NETFILTER_ADVANCED|NF_CONNTRACK|NF_NAT|NF_TABLES|NF_TABLES_IPV4|NFT_NAT|NFT_MASQ|VETH)=" \
-	target/linux/zte/zx279133/config-6.18
+	"$KCFG"
 
 # The NAT userspace.  Both images get it: a flashed root that cannot
 # masquerade is a router that only works on the bench.
