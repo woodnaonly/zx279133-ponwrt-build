@@ -930,6 +930,15 @@ jobs:
           cp -a flash-uImage flash-dtb.bin flash-rootfs.jffs2 \
                 flash-sysupgrade.bin immortalwrt-sk-d840n-sysupgrade.bin \
                 sysupgrade-report.json images/
+          # The manifest travels with the files: the artifact's listing is
+          # public but its content needs a session, so the image is fetched
+          # by hand - and a hand-fetched image has to be verifiable before
+          # it is written to a board.  The manifest is checked here too, so
+          # a manifest that does not describe the files cannot ship.
+          ( cd images && sha256sum flash-uImage flash-dtb.bin flash-rootfs.jffs2 \
+                flash-sysupgrade.bin immortalwrt-sk-d840n-sysupgrade.bin \
+                sysupgrade-report.json > sha256sums )
+          ( cd images && sha256sum -c sha256sums )
 
       - name: Upload the images
         uses: actions/upload-artifact@v4

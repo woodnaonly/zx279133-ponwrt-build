@@ -546,6 +546,19 @@ def main():
         failures.check(member in export_text,
                        f"the export step writes {member}")
 
+    # The images are fetched by hand: the artifact's listing is public but
+    # its content needs a session, so the file that comes down has to be
+    # verifiable before it is written to a board.  The manifest has to be
+    # built from the exported files and checked there and then.
+    print("\nthe exported images carry a manifest of their own")
+    failures.check("sha256sum" in export_text,
+                   "the export step writes a sha256 manifest")
+    failures.check("sha256sum -c" in export_text,
+                   "the export step checks the manifest it wrote")
+    failures.check("images/sha256sums" in export_text or
+                   "cd images" in export_text,
+                   "the manifest ends up in the artifact")
+
     # The host compiler checks the drivers before the build spends an hour
     # on them.  The list of files it checks has to be the list of the
     # files this repository touches - the .c files the patch series

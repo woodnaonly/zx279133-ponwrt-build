@@ -2172,8 +2172,18 @@ CI 的「Validate and export the partitions」步会校验 sysupgrade 镜像
 | `flash-dtb.bin` | DTB 分区 | 约 13 KiB |
 | `flash-rootfs.jffs2` | rootfs 分区 | 约 4.7 MiB |
 
-`staging/trial/flash-set.tgz` 是这三件套。
-**先校验再刷**：sha256 与 `staging/trial/sha256sums-trial` 对得上再动手。
+`staging/trial/flash-set.tgz` 是这三件套（6.18 线那一版的打包）。
+
+**怎么拿到手**：CI 把它们作为 artifact 上传（`sk-d840n-73-images-flash`）。
+artifact 的**列表**是公开的，**内容要登录态**
+⇒ 用带登录态的浏览器下载那个 zip，解开即得六个文件：
+三个分区文件、sysupgrade 镜像、校验报告，以及**一份 `sha256sums` 清单**。
+
+**先校验再刷**：解开后先 `sha256sum -c sha256sums`；
+清单对不上就不要碰板子。
+这份清单是 CI 那边跟文件一起生成的，**而且它自己也在 CI 里被校验过一遍**
+（导出步末尾的 `sha256sum -c`）——
+手取下来的东西必须能自证没坏。
 
 #### 八之八.2 刷机（两条路）
 
