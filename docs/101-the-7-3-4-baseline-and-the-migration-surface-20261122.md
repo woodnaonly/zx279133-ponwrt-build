@@ -35,7 +35,7 @@
    `libzxpon-omci`，因为这条线少了装 Rust 工具链的步骤（6.18 线有）。已修，见 7.11。
 7. **7.3 线即使编译过了，镜像里也不会有 NPU**：cnjn 的 `config-7.3` 把驱动定成
    模块，而本仓库没有加载它们的机制；`pin_y` 也救不了，因为 kconfig 会把
-   「依赖是模块」的 tristate 夹成 `=m`。已修（三个符号钉成 `=y`），见 7.12。
+   「依赖是模块」的 tristate 夹成 `=m`。已修（四个符号钉成 `=y`），见 7.12。
 
 ---
 
@@ -276,10 +276,9 @@ CONFIG_EXTERNAL_KERNEL_TREE=<树>   OpenWrt 把这棵树当自己的内核目录
    模块化不只是「要重新确认 kmod 依赖链」，而是**镜像里根本不会有驱动**——
    本仓库没有加载它们的机制，`pin_y` 也会被 kconfig 夹掉。7.3 线现在把
    `ZTE_ZX279133_ETH`/`_LAN_CONDUIT`/`_SWITCH` 钉成 `=y`，与 6.18 线一致。
-   **剩下的**：`fnoffload` 仍是模块（它的依赖 `NF_FLOW_TABLE` 在 7.3 里是 `=m`），
-   所以 7.3 线**没有硬件 flow offload**；`ZTE_ZX279133_RGMII` 在 7.3 树里
-   **没有 Kconfig**，配置脚本钉的符号会被 defconfig 静默丢掉（6.18 线上的
-   RGMII 只读探针在 7.3 上不存在）。
+   **剩下的**：`ZTE_ZX279133_RGMII` 在 7.3 树里**没有 Kconfig**，
+   配置脚本钉的符号会被 defconfig 静默丢掉（6.18 线上的 RGMII 只读探针
+   在 7.3 上不存在）。
 5. **目标固件的 PON 模块仍未公开。** 我们逆向出的 30 个 PON 钩子导出只在二进制里；
    等 cnjn 公开 `npu-pon.ko` 源码，我们自研的 PON/OMCI 栈要么对齐、要么让位——
    这个决策应该在 7.3 的 NPU 驱动跑通之后再做。
@@ -857,9 +856,29 @@ kconfig 静默夹成 `=m`。已修：7.3 线把三个符号钉成 `=y`，与 6.1
 
 **⇒ 修复**：在 7.3 工作流里加一步「Build the zte drivers into the kernel」，
 把 `ZTE_ZX279133_ETH`、`ZTE_ZX279133_LAN_CONDUIT`、`ZTE_ZX279133_SWITCH`
-写进**最后合并的那个片段**（`target/linux/zte/zx279133/config-7.3`），
-每写一个就断言一次；再在 Compile 之后加一道门禁，
-对着**合并后的内核 `.config`**（不是被改的片段）检查这三个符号是 `=y`。
+和 `ZTE_ZX279133_FNOFFLOAD` 写进**最后合并的那个片段**
+（`target/linux/zte/zx279133/config-7.3`），每写一个就断言一次；
+再在 Compile 之后加一道门禁，对着**合并后的内核 `.config`**（不是被改的片段）
+检查这四个符号是 `=y`。
+
+**⇒ 第四个符号（flow offload）为什么也钉**：
+cnjn 的 7.3 树把 offload 从 NPU 驱动里拆成独立的 `fnoffload.o`
+（`obj-$(CONFIG_ZTE_ZX279133_FNOFFLOAD) += fnoffload.o`），
+而 6.18 树把它放在复合目标 `zx279133-y` 里面（`kernel-overlays/.../Makefile:12`）
+⇒ 6.18 线上它是**内建**的，7.3 线上它是模块 ⇒ 不在镜像里。
+它自己的依赖 `NF_FLOW_TABLE` 由 `configs/sk-d840n-offload.config`
+（`CONFIG_NF_FLOW_TABLE=y`）在 Configure 步钉成内置
+（`scripts/sk-d840n-offload.sh` 的 `skd840n_pin_offload_fragments`
+把整份档子写进三个片段），所以 `=y` 是够得着的。
+不钉它，**整份 netfilter 档子就白进内核了**——那几十个符号是给 flow offload 用的。
+
+**⇒ 四个驱动并进同一个内核会不会符号冲突**：本机用编译预言机编出的目标码
+直接查过——`zx279133-offload.c.o`、`zx279133-switch.c.o`、
+`zx279133-lan-conduit.c.o` **一个全局符号都不定义**（里面的函数全是 `static`，
+`nm` 出来全是小写 `t`/`d`/`b`），全局名字只来自 NPU 驱动自己的那些目标码
+（`np.c.o` 有 23 个 `T`）。⇒ 四个链接单元合成一个镜像不会撞名。
+（`scratch/dup_syms.py` 就是干这个的。注意：**函数的 `static` 常常写在上一行**，
+用行级正则找「非 static 定义」会看漏——目标的 `nm` 结果才是准的。）
 
 **⇒ 为什么改在 7.3 工作流里而不是 `scripts/configure-sk-d840n.sh`**：
 那个脚本两条线共用，`KCFG` 在 7.3 线上是 `config-7.3`、在 6.18 线上是 `config-6.18`；
@@ -895,22 +914,17 @@ kconfig 静默夹成 `=m`。已修：7.3 线把三个符号钉成 `=y`，与 6.1
 - `scratch/reverse_check_workflow.py`：门禁的反向验证器，五处变异逐个跑。
 
 **未做 / 遗留**：
-1. **`fnoffload` 仍然是模块。** `ZTE_ZX279133_FNOFFLOAD` 依赖 `NF_FLOW_TABLE`，
-   而 7.3 的 `config-7.3` 里 `NF_FLOW_TABLE=m` ⇒ 被夹成 `=m` ⇒
-   `fnoffload.ko` **不在镜像里**，7.3 线**没有硬件 flow offload**。
-   6.18 线把整套 netfilter 钉成 `=y`（它的门禁 `required=` 列表里就有
-   `NF_FLOW_TABLE`/`NF_FLOW_TABLE_INET`/`NFT_FLOW_OFFLOAD`），
-   要对齐就得把 netfilter 整套也改成内建——那会显著改变内核体积，
-   **留到实机对拍确认 NPU 通路之后再决定**。
-2. **`ZTE_ZX279133_RGMII` 在 7.3 树里没有 Kconfig。**
+1. **`ZTE_ZX279133_RGMII` 在 7.3 树里没有 Kconfig。**
    `scripts/configure-sk-d840n.sh` 的 `pin_y ZTE_ZX279133_RGMII` 会往
    `config-7.3` 里写一个**不存在的符号**，defconfig 静默丢掉。
    ⇒ 6.18 线上那个「RGMII MAC 寄存器块只读探针」在 7.3 上不存在。
    这是取舍还是缺口，等对拍时看能不能读寄存器再判。
-3. **内核体积。** NPU 进 `vmlinux` 之后要放进固定的 8 MiB `kernel` 分区。
-   `-Os` 已经由 `skd840n_pin_kernel_size` 钉住，但 7.3 的底子比 6.18 大，
-   **flash 那一路可能撑不下**；撑不下的话是 `Image too big` 报错，不是静默失败。
-4. **`ZTE_ZX279133_RTL8372N` 仍是 `=m`。** 它是 SR1010 那块外挂 RTL8372N 的驱动，
+2. **内核体积。** NPU（加上 flow offload）进 `vmlinux` 之后要放进固定的
+   8 MiB `kernel` 分区。`-Os` 已经由 `skd840n_pin_kernel_size` 钉住，
+   但 7.3 的底子比 6.18 大，**flash 那一路可能撑不下**；
+   撑不下的话是 `Image too big` 报错，不是静默失败。
+   7.3 线的「Collect the images」步会把内核镜像的字节数打进 annotation。
+3. **`ZTE_ZX279133_RTL8372N` 仍是 `=m`。** 它是 SR1010 那块外挂 RTL8372N 的驱动，
    这块板子上没有对应节点，模块不加载即可，没有副作用。
 
 ---
@@ -1689,6 +1703,10 @@ python3 scratch/cpio_pick.py scratch/re_other_fw/fit/initrd-1.bin \
 # 15) 在本机跑工作流里那一步的 shell（从 YAML 原样取出，不复制）
 python3 scratch/pin_step_check.py
 
-# 16) 门禁的反向验证：五处变异逐个转红
+# 16) 门禁的反向验证：九处变异逐个转红
 python3 scratch/reverse_check_workflow.py
+
+# 17) 四个驱动并进同一个内核会不会撞名（用本机编出的目标码）
+python3 scratch/dup_syms.py --objdir scratch/kobj \
+        --nm <llvm-nm.exe>
 ```

@@ -96,13 +96,14 @@ SHARED_GATES = [
 ]
 
 # The zte drivers that have to end up inside the kernel image on the 7.3
-# line: the NPPT/IDM controller itself, the XMAC0 LAN conduit it owns and
-# the 9132 switch behind it.  The board's device tree names the switch
-# node, so all three have to be built in.
+# line: the NPPT/IDM controller itself, the XMAC0 LAN conduit it owns, the
+# 9132 switch behind it and the flow offload engine.  The board's device
+# tree names the switch node, so all four have to be built in.
 ZTE_DRIVER_SYMBOLS = [
     "ZTE_ZX279133_ETH",
     "ZTE_ZX279133_LAN_CONDUIT",
     "ZTE_ZX279133_SWITCH",
+    "ZTE_ZX279133_FNOFFLOAD",
 ]
 
 

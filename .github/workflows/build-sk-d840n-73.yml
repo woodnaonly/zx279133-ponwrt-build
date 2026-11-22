@@ -325,13 +325,28 @@ jobs:
       # 网卡驱动内建" out of that board's /proc/config.gz, with no .ko files
       # under /lib/modules at all.  These three pins put the 7.3 line on the
       # same footing.
+      #
+      # The fourth symbol is the flow offload driver.  cnjn's 7.3 tree
+      # splits it out of the NPU driver into its own fnoffload.o, while the
+      # 6.18 tree keeps it inside the composite - so on the 6.18 line it is
+      # built in, and on the 7.3 line it would be a module that never gets
+      # installed.  Its own dependency, NF_FLOW_TABLE, is pinned built-in
+      # by configs/sk-d840n-offload.config during the Configure step, so =y
+      # is reachable; without the driver that whole netfilter profile would
+      # be in the kernel for nothing.
+      #
+      # Putting all four in one image cannot collide: the offload, switch
+      # and conduit objects define no global symbol at all (every function
+      # in them is static), so the only global names in the image come from
+      # the NPU driver's own objects.
       - name: Build the zte drivers into the kernel
         run: |
           set -e
           DRVCFG=openwrt/target/linux/zte/zx279133/config-7.3
           [ -f "$DRVCFG" ] || {
             echo "::error::$DRVCFG is gone - the clone's layout changed"; exit 1; }
-          for sym in ZTE_ZX279133_ETH ZTE_ZX279133_LAN_CONDUIT ZTE_ZX279133_SWITCH; do
+          for sym in ZTE_ZX279133_ETH ZTE_ZX279133_LAN_CONDUIT ZTE_ZX279133_SWITCH \
+                     ZTE_ZX279133_FNOFFLOAD; do
             if grep -q "^CONFIG_${sym}=" "$DRVCFG"; then
               sed -i "s|^CONFIG_${sym}=.*|CONFIG_${sym}=y|" "$DRVCFG"
             elif grep -q "^# CONFIG_${sym} is not set\$" "$DRVCFG"; then
@@ -496,7 +511,8 @@ jobs:
             ls -l "$KERNEL_TREE/.config" 2>&1 || true
             exit 1; }
           echo "kernel config: $KC"
-          for s in ZTE_ZX279133_ETH ZTE_ZX279133_LAN_CONDUIT ZTE_ZX279133_SWITCH; do
+          for s in ZTE_ZX279133_ETH ZTE_ZX279133_LAN_CONDUIT ZTE_ZX279133_SWITCH \
+                   ZTE_ZX279133_FNOFFLOAD; do
             grep -qx "CONFIG_$s=y" "$KC" || {
               echo "::error::CONFIG_$s is not built into the kernel" >&2
               { grep -E "^CONFIG_${s}=|^# CONFIG_${s} is not set" "$KC" \
