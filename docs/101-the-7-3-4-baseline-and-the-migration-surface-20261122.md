@@ -307,11 +307,14 @@ CONFIG_EXTERNAL_KERNEL_TREE=<树>   OpenWrt 把这棵树当自己的内核目录
    要塞进固定 8 MiB 的 `kernel` 分区；镜像 profile 的 `KERNEL_SIZE := 8192k`
    会让 OpenWrt 自己拒绝超尺寸的镜像，但「Collect the images」步会把字节数
    打进 annotation，超了就一眼看得见。
-7. **6.18 线还有一道「镜像好不好用」的门禁没搬到 7.3 线**：
+7. **6.18 线那道「管理面进了镜像」的门禁只搬了一半**：
    `Gate: ONU UI, protocol service and firewall4 reached the image`
-   （根文件系统里有没有 LuCI、协议服务、firewall4）。
-   本轮补的是合并配置门禁（7.14）和 dtb compatible 门禁（7.15）。
-   前者要 rootfs 清单，7.3 线现在还没有产出会列清单的步骤。
+   跑的是 `scripts/check-sk-d840n-management.sh`，它要连带 8 个工具与测试
+   （staged root 的文件清单、主机侧的 ucode 解释器、firewall4 自己的规则生成器
+   测试套件）。那一整套问的是**发布线的产品面**，不是这次迁移；
+   而它的另一半——「包是不是真的装进了镜像，而不只是被选中」——
+   已经搬成 7.3 线的一道轻量门禁（`Gate: the image carries the packages
+   the board needs`，读 `bin/targets/**.manifest`）。
    另：「7.3 线要不要把整套 netfilter 钉成内置」——**不需要，它本来就是内置的**，
    见 7.14.2。
 
@@ -1118,11 +1121,17 @@ kconfig 把请求值和符号的**可见性**取 AND（`scripts/kconfig/symbol.c
 #### 7.14.6 未做
 
 6.18 那道 `Gate: ONU UI, protocol service and firewall4 reached the image`
-（根文件系统里有没有 LuCI、协议服务、firewall4）**还没有搬过来**。
-它要 rootfs 清单，7.3 线现在还没有产出会列清单的步骤。
+**只搬了一半**：搬过来的是「包是不是真的装进了镜像」这一半
+（7.3 线的新步 `Gate: the image carries the packages the board needs`，
+读 `bin/targets/**.manifest`，要求 `zxpond` / `libzxpon-omci` /
+`luci-app-sk-d840n-pon` / `luci-mod-system` / `firewall4` / `nftables` /
+`tc-tiny` / `luci-app-firewall` / `rpcd-mod-ucode` / `ucode-mod-fs` 都在里面）；
+**没搬的是** staged root 的文件清单、主机侧 ucode 解释器、
+firewall4 自己的规则生成器测试套件——那三项问的是**发布线的产品面**，
+不是这次迁移，而它们失败的话 7.3 线连镜像都出不来。
 
-另一道（`Gate: every dtb compatible has a driver in this kernel`）**已经搬了**，
-但不是照抄：见 7.15。
+6.18 的另一道（`Gate: every dtb compatible has a driver in this kernel`）
+**已经搬了，但不是照抄**：见 7.15。
 
 ---
 
@@ -2029,3 +2038,9 @@ python3 scratch/dtbcompat_check.py
 # 24) 板级 DTS 的 compatible 与 7.3 树的驱动对照
 python3 scratch/dtb_compat73.py --tree scratch/test73c
 ```
+
+第十节的 18~24 号命令里，`cfg73_sim.py` 与 `kdeps73.py` 是**一对**：
+前者产出「这条线真会编出来的合并配置」，后者证明那 39+4 个符号在这棵树上
+不会被 kconfig 夹成 `=m`。`boardgate_check.py` 吃的正是前者的产物，
+所以这两条命令合起来回答的是同一个问题：
+**「7.3 线新增的那道合并配置门禁，会不会永远变红」**——答案是不会。

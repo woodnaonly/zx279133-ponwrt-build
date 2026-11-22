@@ -73,6 +73,7 @@ BRINGUP_STEPS = [
     "Gate: the built kernel is 7.3.4",
     "Gate: the board device tree compiles against the 7.3 tree",
     "Collect the images",
+    "Gate: the image carries the packages the board needs",
     "Validate and export the partitions",
     "Upload the images",
 ]
@@ -441,6 +442,30 @@ def main():
     failures.check(any(str(step.get("uses") or "").startswith("actions/upload-artifact")
                        for step in upload),
                    "the upload step uses actions/upload-artifact")
+
+    # The packages the board needs have to be in the image, not merely
+    # selected: a package that defconfig keeps can still fail to install,
+    # and an image without the protocol daemon is an image the board comes
+    # up with nothing to talk to.
+    print("\nthe 7.3 line checks the image carries the packages the board needs")
+    package_gate = step_run_text(
+        bringup, "build", "Gate: the image carries the packages the board needs")
+    failures.check(package_gate != "", "the package gate has a body")
+    failures.check(".manifest" in package_gate,
+                   "the package gate reads the image manifest")
+    # The list is read out of the loop, not searched for as a string: the
+    # package names also appear in the gate's own error message, so a plain
+    # substring search would pass even after the list had lost them - which
+    # is exactly what the first version of this check did, and the reverse
+    # check caught it.
+    listed = []
+    loop = re.search(r"for package in ([^;]+);", package_gate)
+    if loop:
+        listed = loop.group(1).split()
+    failures.check(bool(listed), "the package gate has a package list")
+    for package in ("zxpond", "libzxpon-omci", "firewall4", "nftables"):
+        failures.check(package in listed,
+                       f"the package gate requires {package} in the image")
 
     # The board trial needs the three partition files, and the only honest
     # way to get them is to take them out of the image the build produced:

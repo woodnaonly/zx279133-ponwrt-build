@@ -742,6 +742,38 @@ jobs:
           cp -a "$BIN"/. images/
           ls -l images
 
+      # The packages the board needs have to be in the image, not merely
+      # selected in the configuration: a package that defconfig keeps can
+      # still fail to install, and an image without the protocol daemon is
+      # an image the board comes up with nothing to talk to.
+      #
+      # This is the manifest half of the release line's management gate.
+      # The other half - the staged root's files, the ucode interpreter, the
+      # firewall4 rule generator's own test suite - is deliberately not
+      # copied: that gate is about the release line's product surface, and
+      # this line's job is to produce a 7.3.4 image with the NPU in it.
+      # The package list is the release line's, and every one of them is
+      # already asserted in the resolved configuration by
+      # scripts/configure-sk-d840n.sh.
+      - name: 'Gate: the image carries the packages the board needs'
+        run: |
+          set -e
+          MANIFEST=$( { find openwrt/bin/targets -name '*.manifest' 2>/dev/null || true; } | head -1 )
+          [ -n "$MANIFEST" ] || {
+            echo "::error::no target image manifest under openwrt/bin/targets"
+            find openwrt/bin/targets -maxdepth 3 2>&1 | head -20 || true
+            exit 1; }
+          echo "manifest: $MANIFEST"
+          for package in zxpond libzxpon-omci luci-app-sk-d840n-pon \
+                         luci-mod-system firewall4 nftables tc-tiny \
+                         luci-app-firewall rpcd-mod-ucode ucode-mod-fs; do
+            grep -q "^$package " "$MANIFEST" || {
+              echo "::error::the image manifest is missing $package"
+              grep -E '^(zxpond|libzxpon-omci|luci-|firewall4|nftables|tc-|rpcd-|ucode-)' "$MANIFEST" || true
+              exit 1; }
+          done
+          echo "the image carries the management packages"
+
       # Validate the native sysupgrade image and export its members.
       # This is the release line's own tool: it checks the fwtool metadata
       # and its CRC, the board's compatibility string, that every member
