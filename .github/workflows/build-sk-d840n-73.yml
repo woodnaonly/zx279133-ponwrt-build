@@ -82,6 +82,7 @@ jobs:
           python3 tests/test_sk_led_dts_gate.py
           python3 tests/test_sk_layout.py
           python3 tests/test_sk_uboot.py
+          python3 tests/test_sk_workflows.py
 
   build:
     name: ${{ matrix.mode }}
@@ -281,7 +282,7 @@ jobs:
       # defaults clear the list, so the metapackage must not be in the
       # resolved config - and if it is, the theme check passed for the wrong
       # reason and the image would ship both themes.
-      - name: Gate: the resolved config carries exactly one theme
+      - name: 'Gate: the resolved config carries exactly one theme'
         run: |
           cd openwrt
           if grep -q '^CONFIG_PACKAGE_luci=y' .config; then
