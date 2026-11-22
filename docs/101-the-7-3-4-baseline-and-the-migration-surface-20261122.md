@@ -260,7 +260,29 @@ CONFIG_EXTERNAL_KERNEL_TREE=<树>   OpenWrt 把这棵树当自己的内核目录
 
 ---
 
-## 七、下一步（按片重打，每片一次 CI）
+## 七、7.3 通道的 CI 首跑记录
+
+7.3 通道第一次运行（run #1）的结果与处理，按时间顺序：
+
+| 阶段 | 结果 |
+|---|---|
+| `repository gates` | ✅ 通过 |
+| `initramfs` / `flash` 的 `Configure` | ❌ 失败：`Missing SK-D840N target kernel config` |
+| 本机复现 | ✅ 复现成功（用准备好的 7.3 树 + IW master 的稀疏检出 + 我们的 overlays 跑同一个脚本） |
+| 根因 | `scripts/sk-d840n-offload.sh` 把三个配置片段名写死成 `config-6.18` |
+| 修法 | 系列号从**内核树自己**的 `VERSION`/`PATCHLEVEL` 读出来；两个系列都验证过（7.3 树 → 7.3，6.18 fork → 6.18，发布线行为不变） |
+| run #2 | 待观察 |
+
+这条记录本身就是这套门禁存在的理由：**首跑失败点由一个断言精确指出，
+而不是让构建跑到一半才炸**。本机没有 arm64 工具链，但 Configure 这一步
+只改配置片段、不编译，所以它能在本机完整复现——这让修一轮的成本从
+「一次 CI（约两小时）」降到「一次本地脚本运行」。
+
+---
+
+---
+
+## 八、下一步（按片重打，每片一次 CI）
 
 **已落地：第 1 片（IDM 实测修正）的寄存器部分**，见
 `kernel-patches/7.3-local/100-sk-idm-measured-fixes.patch`：
@@ -281,11 +303,19 @@ CONFIG_EXTERNAL_KERNEL_TREE=<树>   OpenWrt 把这棵树当自己的内核目录
 
 **没搬的，按片来：**
 
-1. **IDM 的 BP 池布局**（第 1 片的剩余部分）。7.3 树有 **4 个 free ring、没有
-   jumbo 池**（6.18 世代是 3 个 free ring + 一个独立的 `rx_jumbo_bp_dma`），
-   而 `+0x010c/+0x0110` 写的是**环深度**而不是字节数
-   （正常 0x203d00 / jumbo 0x3d00，与厂商板实测一致）。所以这不是改常量，
-   而是**先让 7.3 驱动长出一个 jumbo 池**，再把环大小按深度算出来。
+1. **IDM 的 RX 缓冲池与投递协议**（第 1 片的剩余部分）。这不是改常量：
+   * 7.3 树只有**一个** coherent 缓冲数组（`FREE_RING_SIZE` = 0x4000 项），
+     硬件看到的是 4 个 free ring（`+0x108/+0x118/+0x11c/+0x408`），
+     环下标按 `BP_RING_SIZE`（4096）取模，池大小寄存器写死 0x3d00；
+   * 6.18 世代是**两块**（`BP_RING_SIZE` 8192 + `JUMBO_BP_RING_SIZE` 4096，
+     一次分配、jumbo 紧跟 normal），硬件看到的是 normal 池在 `+0x104`、
+     **jumbo 池在 `+0x108`**、3 个 free ring 在 `+0x118/+0x11c/+0x408`，
+     池大小按**环深度**算（normal 0x203d00 / jumbo 0x3d00，与厂商板实测一致）；
+   * 更要紧的是**投递协议**不同：厂商的 `idm_new_bp_update()` 每 1024 个
+     缓冲写一次 0x400 脉冲，再把余数按「normal 在 bits 15:0、jumbo 在
+     bits 31:16」写进同一个寄存器——写数量本身什么也没 announcing，
+     而数量是 1024 的倍数等于 announcing 零个缓冲。7.3 的实现没有这一套。
+   所以这一片是**重写 RX 缓冲池路径**，不是移植几个常量。
 2. **IDM 的其余重写**（RX page 跟踪、XSK、校验和判定、TX 回收等，约 78 个 hunk）。
    这一块比我们 overlay 与 6.18 fork 的差异还大，属于驱动重写而不是移植。
 3. **9132 交换表 / switch.c**（约 63 个函数）。这是 SK-D840N 四个 GE 口能不能活的问题。
@@ -300,7 +330,7 @@ CONFIG_EXTERNAL_KERNEL_TREE=<树>   OpenWrt 把这棵树当自己的内核目录
 
 ---
 
-## 八、复现本文结论的命令
+## 九、复现本文结论的命令
 
 ```sh
 # 1) 7.3.4 底包 + 39 补丁（本机已跑通，约 3 分钟）
