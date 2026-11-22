@@ -24,9 +24,11 @@
    master 上明确禁止 `CONFIG_EXTERNAL_KERNEL_TREE`（它要 OpenWrt 自己下载底包并打
    `patches-7.3`）；我们反过来：自己准备「vanilla 7.3.4 + 39 补丁」，再把树交给
    OpenWrt。好处是内核字节与补丁字节都被本仓库钉死、可离线复核。
-5. **本轮只搬了板级层，没搬驱动增量。** 7.3 通道先跑通「cnjn 的 7.3 驱动 +
-   我们的板级层」，我们的 NPU/9132/PON 增量按 IDM → 9132/switch → PON/OMCI
-   三片重打，每片一次 CI。这是本轮**最重要的一条未完成项**。
+5. **驱动增量已按片重打五片，第 6 片是实机对拍。** 顺序是
+   IDM（1~2 片）→ 9132 交换表驱动（3）→ PON/OMCI 栈（4）→ **9132 芯片本身的编程（5）**。
+   每片一个补丁、每片一扇编译前的门禁、每片一次 CI。
+   **这五片都还没有被编译过**（本机无 arm64 交叉工具链），所以下一步是 CI 结论与实机对拍。
+   剩下的两项（RGMII 调试、TX 故障隔离/恢复）已各自判明，见八之五.9。
 
 ---
 
@@ -230,10 +232,11 @@ CONFIG_EXTERNAL_KERNEL_TREE=<树>   OpenWrt 把这棵树当自己的内核目录
 | `.github/workflows/build-sk-d840n-73.yml` | 7.3 通道：手动触发 + 7.3 相关路径推送触发；只出镜像，不发布 |
 | `scripts/configure-sk-d840n.sh` | 一处改动：把硬编码的 `target/linux/zte/zx279133/config-6.18` 换成版本无关的 `$KCFG` |
 | `kernel-patches/7.3/` | cnjn 的 39 个补丁的 vendored 副本 + `MANIFEST.json`（上游 repo/branch/commit/date + 每补丁 sha256/bytes） |
-| `kernel-patches/7.3-local/` | **我们自己的**补丁，applied 在 vendored 系列之后；当前是 IDM 实测修正三片（`100` 寄存器值、`110` RX 帧落点、`120` BP 投递协议）**加第 3 片的 `130` LAN 控制事务**与**第 4 片的 `140` PON/OMCI 接线** |
-| `kernel-overlays-73/drivers/net/ethernet/zte/` | **7.3 线专有的驱动树**：9132 交换表驱动本体 + `zx279133-9132.h`（9132 自己的寄存器图）+ `zx279133-lan1-led.h`，**加第 4 片的 PON/OMCI 五个文件**（`zxpon.c`/`zxpon.h`/`zx279133-pon.c`/`zx279133-omci.c`/`zx279133-omci-wire.h`）。与 6.18 世代的 `kernel-overlays/` 并存，互不覆盖（见八之三、八之四） |
+| `kernel-patches/7.3-local/` | **我们自己的**补丁，applied 在 vendored 系列之后；当前是 IDM 实测修正三片（`100` 寄存器值、`110` RX 帧落点、`120` BP 投递协议）**加第 3 片的 `130` LAN 控制事务**、**第 4 片的 `140` PON/OMCI 接线**与**第 5 片的 `150` 9132 芯片编程** |
+| `kernel-overlays-73/drivers/net/ethernet/zte/` | **7.3 线专有的驱动树**：9132 交换表驱动本体 + `zx279133-9132.h`（9132 自己的寄存器图**与 4 个 PPU 号**）+ `zx279133-lan1-led.h`，**加第 4 片的 PON/OMCI 五个文件**（`zxpon.c`/`zxpon.h`/`zx279133-pon.c`/`zx279133-omci.c`/`zx279133-omci-wire.h`）。与 6.18 世代的 `kernel-overlays/` 并存，互不覆盖（见八之三、八之四、八之五） |
 | `tools/check-sk-switch-api.py` | 第 3 片的编译前门禁：驱动用到的名字、内核 API、**LAN 服务契约**、构建接线，四项逐条核对（见八之三.3） |
 | `tools/check-sk-pon-api.py` | 第 4 片的编译前门禁：协议核心闭合、**内核名字在包含闭包里可见**、树侧契约、四个钩子、构建接线、LED 依赖（见八之四.5） |
+| `tools/check-sk-9132-api.py` | 第 5 片的编译前门禁：编程在树里、**ERAM 描述符在分配处被记录**、名字闭合、内核 API 在、**没有重定义**、调用顺序、板级 DTS 的 PHY 总线（见八之五.7） |
 | `tests/test_sk_workflows.py` | 工作流自身的门禁：每个工作流文件可解析、7.3 线依赖的步骤都在、门禁点名的测试文件都存在、7.3 线的路径过滤覆盖这条线的输入（见 7.9） |
 | `overlays-73/target/linux/zte/zx279133/target.mk` | 7.3 线的 subtarget 默认包：**清空 OpenWrt 的 `DEFAULT_PACKAGES.tweak`**，否则其中的 `luci` 元包会拉进 `luci-theme-bootstrap`（见 7.8） |
 | `tools/func-surface-diff.py` | 两代驱动的函数面对照，输出「只在我们这边」与「只在 7.3 那边」两张工作清单 |
@@ -247,10 +250,11 @@ CONFIG_EXTERNAL_KERNEL_TREE=<树>   OpenWrt 把这棵树当自己的内核目录
 
 ## 六、未做 / 风险
 
-1. **我们自己的 171 个函数只搬了第 1~4 片。** 7.3 通道目前是「cnjn 的 7.3 驱动 +
-   我们的板级层 + IDM 三片 + 9132 交换表驱动 + PON/OMCI 栈」。
-   剩下的是 RGMII（`zx279133-rgmii.c`）与健壮性修正（`tx_drain` 等）。
-   **这四个文件都还没有被编译过**（本机无交叉工具链），实机对拍是它之后的下一道。
+1. **我们自己的 171 个函数只搬了第 1~5 片。** 7.3 通道目前是「cnjn 的 7.3 驱动 +
+   我们的板级层 + IDM 三片 + 9132 交换表驱动 + PON/OMCI 栈 + **9132 芯片编程**」。
+   剩下的是 RGMII（`zx279133-rgmii.c`，**判为取舍不是缺口**，见八之五.9）
+   与 TX 故障隔离/恢复机制（**判为不整体移植**，见八之五.9）。
+   **这五个文件都还没有被编译过**（本机无交叉工具链），实机对拍是它之后的下一道。
    **PON/OMCI 的上行没有接**——但 6.18 侧同样没有接（见八之四.7），
    所以这不是 7.3 线独有的缺口。
    **PON MAC 窗口一个寄存器都没碰**（厂商模块没有
@@ -1092,6 +1096,157 @@ OMCI 把帧写进 `eth->tx_descs + eth->omci_producer`，`omci_producer`
 
 ---
 
+## 八之五、第 5 片：9132 芯片本身的编程（`150-sk-9132-switch-programming.patch`）
+
+### 8之五.1 判决：第 3 片搬的是 DSA 前端，**芯片的编程没有搬**
+
+**判决：第 5 片的全部内容就是「把 9132 芯片本身的编程搬进 7.3 树」。**
+
+第 3 片把 `zx279133-switch.c`（DSA 前端）和 `zx279133-9132.h`（9132 自己的寄存器图）
+搬进了 7.3 线。但**芯片的编程不在 `switch.c` 里，在 6.18 侧的 `zx279133-np.c` 里**：
+
+- 6.18 的 `switch.c` 里 `zx279133_eram_table_set_bits` / `zx279133_eram_table_get_bits`
+  **零命中** ⇒ `switch.c` 不写 9132 的 ERAM 表；
+- 6.18 的 `zx279133-np.c` 里，9132 的编程是一整段：每端口属性字、CPU 通路、
+  flood 组、outport map、隔离矩阵、协议动作表、PHY 使能。
+
+所以 7.3 线上的 9132 会注册出 DSA 口，但**芯片不会被配置**：
+`zx279133_spa_indirect_read(eth, ppu, ZX279133_PPU_ATTR_REG, &attr)` 一次都没跑过，
+没有镜像、没有 CPU 路径、没有 flood 组指向 CPU 口 ⇒ 四个 GE 口与 2.5G 口不通。
+
+这一片把这段编程**逐字**搬过去（它是在这块板子上实测出来的），外加两处小改动。
+
+### 8之五.2 证据一：两代 `np.c` 的函数面对照
+
+| | 6.18 侧 | 7.3 侧 |
+|---|---|---|
+| `zx279133-np.c` 行数 | 6448 | 3108 |
+| 函数总数 | 114 | 90 |
+| 两边同名 | 74 | 74 |
+| 只在 6.18 侧 | **40** | — |
+| 只在 7.3 侧 | — | 16 |
+
+只在 6.18 侧的 40 个函数里：
+
+- **26 个**是本片要搬的 9132 编程（22 个 `zx279133_9132_*` + 4 个 `zx279133_eram_*`）；
+- 4 个是 PPU 的 ME 助手（`zx279133_ppu_me_word` 等）——**本片不搬**，被搬的代码不用它们；
+- 其余是 6.18 世代的其他增量。
+
+只在 7.3 侧的 16 个里有 `zx279133_native_eram_io` / `zx279133_native_spa_io`
+等——它们是 7.3 树自己的 debugfs 端点，替代 6.18 的 9132 控制台，
+**所以 6.18 的 `zx279133_9132_show`/`_write`/`_next_token`/`_xbasex_word`/
+`_off_aligned`/`_open`/`zx279133_9132_debugfs_init` 这一整套控制台不搬**。
+
+### 8之五.3 证据二：被搬的代码在 7.3 树里的依赖
+
+对 10 个入口函数做**调用闭包**（`scratch/closure9132.py`）：
+
+- 闭包共 **32 个函数**：26 个要搬 + 6 个 7.3 树里已经有了
+  （`zx279133_spa_indirect_read/write`、`zx279133_smmu0_read/write`、
+  `zx279133_mf_eram_attr_set`、`zx279133_mf_eram_entry_write`）；
+- 这 6 个助手的**签名在两代完全相同**（逐字比对，见 `scratch/check_port_dups.py`），
+  所以搬过来的代码一个字都不用改；
+- 用到的 `struct zx279133_eth` 字段只有两个：`dev`、`np_ind_lock`——**两个都在**；
+- 用到的内核 API 只有 7 个：`mdiobus_read`、`mdiobus_write`、`of_mdio_find_bus`、
+  `of_parse_phandle`、`of_node_put`，加两个宏 `MII_BMSR`、`BMSR_LSTATUS`
+  （后两个在 `include/uapi/linux/mii.h`，7.3 树里都在）；
+- 用到的 `ZX279133_*` 常量 35 个：3 个（`ZX279133_SMMU0_CMD_READ/WRITE`、
+  `ZX279133_SMMU0_WORDS`）7.3 树里已有，4 个是 9132 自己的 PPU 号（放进我们自己的
+  `zx279133-9132.h`），**其余 28 个由补丁带进 `np.c`**。
+
+### 8之五.4 补丁 150：逐文件说明
+
+`kernel-patches/7.3-local/150-sk-9132-switch-programming.patch`
+（70935 字节，sha256 `1cc8b24997200b4a083b307d28580e50aa7223306154cef3bc17fb28acb5b953`），
+改 2 个文件、1685 行新增 / 65 行删除：
+
+| 文件 | 改了什么 |
+|---|---|
+| `drivers/net/ethernet/zte/zx279133-np.c` | 加 4 个头（`<linux/mdio.h>`、`<linux/mii.h>`、`<linux/of.h>`、`<linux/of_mdio.h>`）与 `#include "zx279133-9132.h"`；加 ERAM 表描述符与 4 个位操作助手；加 22 个 9132 编程函数与 6 张数据表；`zx279133_se_sdt_create()` 里记录 ERAM 描述符（4 行）；`zx279133_np_prepare()` 里按 6.18 的顺序调用这 10 步 |
+| `drivers/net/ethernet/zte/zx279133-idm.c` | `zx279133_idm_rx_lan_vport()` 加 PPU→transport VID 映射（7 行）；`zx279133_idm_tx_drain()` 回收 OMCI 管理队列并等 `omci_pending`（2 行） |
+
+搬运是**逐字**的：从 6.18 的 `np.c` 里按 44 个区块（1419 行，含注释）原样取出，
+按依赖顺序拼进 7.3 的 `np.c`。脚本 `scratch/port_9132.py` 会在写盘前拒绝两件事：
+
+1. **重定义**——补丁带来的 30 个 `ZX279133_*` 宏若与树里已有的撞名就中止；
+2. **前向引用**——拼装后若有函数先于它调用的函数出现就中止。
+
+### 8之五.5 ERAM 表描述符：为什么必须一起搬
+
+9132 的表在 ERAM 里，而 **ERAM 表的基址不是常数**：`zx279133_se_sdt_create()` 用一个
+顺序分配器把块发出去，从块 12288 开始，每张表拿走剩下的块、下���张接在后面。
+硬件按 `(base << 7) + (width * index & ~0x7f)` 找表项——
+
+- 基址写错 ⇒ 硬件根本找不到那张表；
+- 表项宽度写错 ⇒ 硬件在错的位置读表项。
+
+6.18 的做法是：**在分配的那一刻把描述符记下来**（`zx279133_eram[sdt_no].base` /
+`.bit_len`），之后按表 id 查。7.3 的 `se_sdt_create()` 与 6.18 的**逐字相同**，
+只差那 4 行记录——所以补丁 150 在同一个位置加上它们，
+而不是在 `np.c` 里另抄一份分配逻辑。
+
+### 8之五.6 两个小改动
+
+**PPU → transport VID。** IDM 把帧的源端口放在描述符的 word 1 里，而在 9132 这条路上
+那个数是**芯片自己的 PPU 号**（四个 UNI 口是 PPU 1..4，2.5G 口的 lane 是 PPU 5），
+不是 transport VID。7.3 树的 `zx279133_idm_rx_lan_vport()` 只认 transport VID，
+于是从网口进来的帧**打不上任何标签**。补丁把 PPU 1..5 映射到 transport VID 59..63
+（`ZX279133_LAN_TRANSPORT_VID_MIN` + PPU − `ZX279133_9132_UNI_PPU_FIRST`）。
+
+**OMCI 管理队列。** OMCI 走的是 IDM TX 环的 **0 号队列**（管理队列，在数据面队列之下）。
+7.3 的 `zx279133_idm_tx_drain()` 只回收数据面队列，管理队列手里捏着描述符不放。
+补丁加了 `zx279133_omci_reclaim(eth)`，并把 `!eth->omci_pending` 一起等上。
+
+### 8之五.7 编译前的门禁：`tools/check-sk-9132-api.py`
+
+新增一扇门（与第 3、4 片同构），在 CI 里紧跟在 PON/OMCI 那扇之后跑，核对：
+
+- 编程的 26 个函数在树里；ERAM 表描述符与数组在；
+- **`se_sdt_create()` 里记录了基址与宽度**；
+- 块里用到的每个 `ZX279133_`/`zx279133_` 名字都有定义；
+- 私有头里有 4 个 PPU 号，且 `np.c` 与 `idm.c` 都 include 了它；
+- 树自己的 6 个助手在；
+- 7 个内核 API 在树里；
+- **`np.c` 与 `idm.c` 里没有名字被定义两次**（前置声明不算，`u64_stats_inc()`
+  这种宏调用不算）；
+- **`np_prepare()` 按 6.18 的顺序调用这 10 步**；
+- 板级 DTS 里有 `zx279133,uni-phy-bus`（PHY 使能要靠它找总线）；
+- 树里的私有头与仓库携带的那份**逐字节相同**。
+
+**双向验证**：对着打过补丁的树全绿；对着未打补丁的 vanilla 树**必须红**（已实测）。
+
+### 8之五.8 验证（本机）
+
+| 检查 | 结果 |
+|---|---|
+| 补丁 150 在 +140 基准树上 `git apply --check` | 通过 |
+| 整链（+120 → 130 → 140 → 150）apply | 通过，2 个文件 1685+/65− |
+| `check-sk-9132-api.py`（+150 + overlay 树） | 全绿 |
+| `check-sk-9132-api.py`（vanilla 树） | 按预期红 |
+| `check-sk-switch-api.py` / `check-sk-pon-api.py` | 未受影响，仍全绿 |
+| `tests/test_sk_workflows.py` | OK（新步骤与新路径过滤都在） |
+| `tests/test_sk_kernel.py` / `test_sk_uboot.py` | 10/10、21/21 |
+| `tools/prepush.py` | 0 problems |
+| 补丁文件换行 | 纯 LF（CR = 0） |
+
+### 8之五.9 未做
+
+1. **没有编译。** 这是 CI 第一次编译这段代码。
+2. **没有实机验证。** bench 被别的会话占着。
+   本片上板后应看到：四个 DSA 用户口的 link 状态正确、
+   conduit（XMAC0）的 RX 计数在涨、2.5G 口能收发。
+3. **TX 故障隔离与恢复机制不整体移植。** 它建立在 6.18 世代的
+   `zx279133_datapath_attach`/`datapath_failed` 模型上，**7.3 树没有这个模型**
+   （7.3 用 LAN service 的 `datapath_get`/`set_ready`/`put`），
+   而且 7.3 的 `tx_reclaim_queue_locked()` 对非法完成增量是**钳位**
+   （`completed = tx->pending`）而不是隔离。要搬就得连模型一起搬，是独立的一片。
+4. **RGMII（`zx279133-rgmii.c`）不搬。** 它只是 `0x15900000` 窗口的 debugfs
+   读写端点，而该块在本机全零、厂商 Linux 从不 bring up、2.5G 口其实是 9132 的铜口
+   ⇒ 它的价值只是「可复现地看到这块是死的」。这是一个**取舍**，不是缺口。
+5. **9132 的 debugfs 控制台不搬**（见 8之五.2），7.3 树有自己的 `native_*_io` 端点。
+
+---
+
 ## 九、下一步（按片重打，每片一次 CI）
 
 **没搬的，按片来：**
@@ -1185,8 +1340,17 @@ OMCI 把帧写进 `eth->tx_descs + eth->omci_producer`，`omci_producer`
    `omci_transport` 的 `submitted`/`completed` 在涨。
    和第 5 条「cnjn 会不会公开 npu-pon.ko」的强相关仍然存在：我们的栈只做
    状态机与下行，上行是用户态 `zxpond` 走 netlink 下去的。
-5. **RGMII 调试**（8 个函数）与 **netdev/main/mac 的健壮性修正**（约 28 个函数），
-   随 2~4 一起带。
+5. **9132 芯片本身的编程**（26 个函数 + 6 张表）。**第 5 片已落地**（见八之五）：
+   从 6.18 的 `np.c` 逐字搬进 7.3 的 `np.c`，并把 ERAM 表描述符的记录点补上；
+   `kernel-patches/7.3-local/150` 一个补丁改 2 个文件。
+   **未编译验证**——等 CI 的 Compile。这一片上板后的判据是
+   **四个 DSA 用户口的 link 状态正确、conduit 的 RX 计数在涨**。
+6. **RGMII 调试**（8 个函数）：**判为取舍，不搬**——它只是 `0x15900000` 窗口的
+   debugfs 端点，该块在本机全零、厂商 Linux 从不 bring up（见八之五.9）。
+7. **netdev/main/mac 的健壮性修正**（约 28 个函数）：核心是 **TX 故障隔离与恢复
+   机制**，**判为不整体移植**——它建立在 6.18 世代的 `datapath_attach`/`datapath_failed`
+   模型上，7.3 树没有这个模型，且 7.3 的 `tx_reclaim_queue_locked()` 对非法完成增量
+   是钳位而非隔离（见八之五.9）。这一条要单独成片，且要连模型一起搬。
 
 验收口径与 6.18 线一致：**CI 绿 + 门禁脚本全过 + 实机启动后
 `/proc/net/dev` 有预期网口、`ethtool -S` 计数在涨**。
@@ -1235,6 +1399,10 @@ python3 ci-build-repo/tools/check-sk-switch-api.py \
 python3 ci-build-repo/tools/check-sk-pon-api.py \
         --tree linux-7.3.4 --repo ci-build-repo --openwrt <openwrt-checkout>
 
-# 9) 工作流自身的门禁（两条线都在推之前跑）
+# 9) 第 5 片：9132 芯片编程的编译前门禁（overlay 拷入之后）
+python3 ci-build-repo/tools/check-sk-9132-api.py \
+        --tree linux-7.3.4 --repo ci-build-repo
+
+# 10) 工作流自身的门禁（两条线都在推之前跑）
 python3 ci-build-repo/tests/test_sk_workflows.py
 ```
