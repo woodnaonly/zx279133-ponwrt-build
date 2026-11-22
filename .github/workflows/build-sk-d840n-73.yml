@@ -355,6 +355,38 @@ jobs:
           echo "::group::the tail of the build log"
           tail -n 200 ../compile.log
           echo "::endgroup::"
+          if [ "$rc" != 0 ]; then
+            # The job log of a run is not readable without a GitHub login, but
+            # an annotation is: the annotations of a run are public.  So the
+            # reason the build failed has to go into one, or the only thing
+            # that can be said about a failed run is "exit code 2".
+            #
+            # One annotation per line, not one escaped blob: GitHub keeps the
+            # first ten annotations of a step, and a blob of 3500 characters
+            # is one annotation that the ten-line ceiling does not apply to
+            # but a reader cannot read either.  The job summary has no such
+            # ceiling, so the same lines go there as well.
+            {
+              grep -naE "fatal error:|\berror:|Error [0-9]+|implicit declaration|undefined reference|undefined symbol|No such file|not defined" \
+                ../compile.log 2>/dev/null | head -n 12 || true
+            } | while IFS= read -r line; do
+              echo "::error::cc: $(printf '%s' "$line" | sed -e 's/%/%25/g' -e 's/#/%23/g' | tr -d '\r')"
+            done
+            {
+              echo "### the compiler's own message (the 7.3 tree's build log)"
+              echo
+              echo '```'
+              grep -naE "fatal error:|\berror:|Error [0-9]+|implicit declaration|undefined reference|undefined symbol|No such file|not defined" \
+                ../compile.log 2>/dev/null | head -n 20 || true
+              echo '```'
+              echo
+              echo "### the tail of the build log"
+              echo
+              echo '```'
+              tail -n 60 ../compile.log
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
           exit "$rc"
 
       # The gate that says the thing that was built is the thing that was

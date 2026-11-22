@@ -660,6 +660,48 @@ tweak 包修复的那一轮，什么也没验证。
 里不再有 `CONFIG_PACKAGE_luci=y`，`luci-theme-bootstrap` 也不再出现，主题
 只剩 argon。**7.3 线第一次拿到可编译的源码树。**
 
+### 7.10 run #6 的 Compile 失败，和一个诊断盲区
+
+**run #6（head `edc3db7b`）在 Compile 步失败，退出码 2。**
+`initramfs` 作业跑了 50 分 14 秒，`flash` 作业同样。前面 16 个步骤全绿
+（含 Configure、主题门禁、Download packages），失败点在 `make` 内部。
+
+**但诊断是空的**：annotations 只有 GitHub 自己那句
+「Process completed with exit code 2」。原因是
+
+- 作业日志 `/actions/jobs/<id>/logs` 返回 **403**；
+- 构建日志 artifact `/actions/artifacts/<id>/zip` 返回 **401**
+  （列表公开，下载要鉴权）；
+- 浏览器打开作业页显示「**Sign in to view logs**」。
+
+**⇒ 盲区不在编译上，在诊断管线上。** 6.18 发布线早就有解法：Compile 步把
+编译器自己那几行**逐条重发成 `::error::cc:` annotation**，
+并把同样的内容写进 job summary。**annotation 是公开的，作业日志不是**——
+这一条差别决定了「能不能在没登录的机器上查出一个失败的原因」。
+7.3 线那一步是照搬 6.18 写的，但没有带这段诊断。
+
+修法：把 6.18 的做法搬进 7.3 的 Compile 步——
+
+```bash
+{
+  grep -naE "fatal error:|\berror:|Error [0-9]+|implicit declaration|undefined reference|undefined symbol|No such file|not defined" \
+    ../compile.log 2>/dev/null | head -n 12 || true
+} | while IFS= read -r line; do
+  echo "::error::cc: $(printf '%s' "$line" | sed -e 's/%/%25/g' -e 's/#/%23/g' | tr -d '\r')"
+done
+```
+
+**逐条发而不是发一个转义后的大块**：GitHub 对一个步骤只保留前 10 条 annotation，
+而一个 3500 字符的转义块既是**一条**（十行的上限对它不适用），读者也没法读。
+同样的内容再写进 `$GITHUB_STEP_SUMMARY`——那里没有条数上限。
+
+本机用一份假的编译日志验证过这段 shell：它确实逐条吐出带行号的错误行，
+`%` 与 `#` 的转义也对。
+
+> 这次的教训是**通用的**：一条 CI 线如果失败时说不出原因，
+> 那么「它失败」这件事本身就没有信息量。
+> 门禁（编译前）与诊断（编译后）是同一件事的两头。
+
 ---
 
 ## 八、BP 池：逐槽位对照（第 1 片剩余部分的结论）
