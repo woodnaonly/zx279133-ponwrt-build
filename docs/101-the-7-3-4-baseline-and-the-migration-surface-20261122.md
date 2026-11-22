@@ -33,6 +33,9 @@
    剩下的两项（RGMII 调试、TX 故障隔离/恢复）已各自判明，见八之五.9。
 6. **7.3 线 run #1~#13 的 Compile 失败与内核无关**：失败的是我们自己的 Rust 包
    `libzxpon-omci`，因为这条线少了装 Rust 工具链的步骤（6.18 线有）。已修，见 7.11。
+7. **7.3 线即使编译过了，镜像里也不会有 NPU**：cnjn 的 `config-7.3` 把驱动定成
+   模块，而本仓库没有加载它们的机制；`pin_y` 也救不了，因为 kconfig 会把
+   「依赖是模块」的 tristate 夹成 `=m`。已修（三个符号钉成 `=y`），见 7.12。
 
 ---
 
@@ -268,10 +271,15 @@ CONFIG_EXTERNAL_KERNEL_TREE=<树>   OpenWrt 把这棵树当自己的内核目录
    是**第一次**运行，结果未知。
 3. **DTS 没有在本地编译过。** 本机没有 `dtc`，只能用「label 可解析 + 属性存在」
    做静态核对。CI 里有 dtc 门禁，第一次跑就知道结果。
-4. **驱动是模块而非内置。** 7.3 的 `config-7.3` 里 `CONFIG_ZTE_ZX279133_ETH=m`，
-   而 6.18 线是内置。模块化意味着 `npu.ko` 要被打包并在启动时加载，
-   `kmod-*` 依赖链需要在 7.3 线上重新确认（cnjn 的 `target.mk` 没有列 kmod，
-   依赖可能来自 OpenWrt 的自动 kmod 推导）。
+4. ~~**驱动是模块而非内置。**~~ **已在本轮判明并修掉**，见 7.12：
+   7.3 的 `config-7.3` 里 `CONFIG_ZTE_ZX279133_ETH=m`，而 6.18 线是内置；
+   模块化不只是「要重新确认 kmod 依赖链」，而是**镜像里根本不会有驱动**——
+   本仓库没有加载它们的机制，`pin_y` 也会被 kconfig 夹掉。7.3 线现在把
+   `ZTE_ZX279133_ETH`/`_LAN_CONDUIT`/`_SWITCH` 钉成 `=y`，与 6.18 线一致。
+   **剩下的**：`fnoffload` 仍是模块（它的依赖 `NF_FLOW_TABLE` 在 7.3 里是 `=m`），
+   所以 7.3 线**没有硬件 flow offload**；`ZTE_ZX279133_RGMII` 在 7.3 树里
+   **没有 Kconfig**，配置脚本钉的符号会被 defconfig 静默丢掉（6.18 线上的
+   RGMII 只读探针在 7.3 上不存在）。
 5. **目标固件的 PON 模块仍未公开。** 我们逆向出的 30 个 PON 钩子导出只在二进制里；
    等 cnjn 公开 `npu-pon.ko` 源码，我们自研的 PON/OMCI 栈要么对齐、要么让位——
    这个决策应该在 7.3 的 NPU 驱动跑通之后再做。
@@ -787,6 +795,113 @@ installed on both lines」，两条线都要有 `rustup toolchain install`、要
 也全部通过，DTS 预处理通过。**⇒ 内核这一侧本来就没有编译错误**，
 这与「失败的是 `libzxpon-omci`」互相印证。检查器还能编出目标码并按 modpost
 的规则查符号闭合（11 条疑似缺符号全是宏生成导出造成的误报，逐条核实过）。
+
+---
+
+### 7.12 7.3 线的驱动是模块：镜像里不会有 NPU，而且 `pin_y` 会被 kconfig 夹掉
+
+**判决**：7.3 线**即使编译过了，出来的镜像里也没有 NPU 驱动**。
+这不是「kmod 依赖链要重新确认」这种软问题，是硬缺口；而 `configure-sk-d840n.sh`
+里那句 `pin_y ZTE_ZX279133_SWITCH` **在 7.3 线上不生效**——它写的 `=y` 会被
+kconfig 静默夹成 `=m`。已修：7.3 线把三个符号钉成 `=y`，与 6.18 发布线一致。
+
+证据链：
+
+1. **cnjn 的 `config-7.3` 把驱动定成模块。**
+   `target/linux/zte/zx279133/config-7.3:2513` 是 `CONFIG_ZTE_ZX279133_ETH=m`，
+   `:2517` 是 `CONFIG_ZTE_ZX279133_RTL8372N=m`。
+   合并后的三个片段里，`ZTE_ZX279133_SWITCH` **一个字都没有**（既不是 `=m`
+   也不是「is not set」），它是 `scripts/configure-sk-d840n.sh` 的 `pin_y` 加进去的。
+2. **本仓库没有任何机制加载这些模块。**
+   - `overlays/`、`overlays-73/` 下没有 `kmod-*` 包（只有 `mtd-rw` 一个自研包）；
+   - `overlays/target/linux/zte/zx279133/base-files/` 下**没有** `etc/modules.d/`；
+   - OpenWrt **不会**把树内模块放进 rootfs——只有被 `kmod-*` 包声明过的模块才会
+     被装进 `/lib/modules/<版本>/`，而没有 `/etc/modules.d/` 条目就没人 `modprobe`。
+   ⇒ `=m` 的后果不是「模块没自动加载」，而是**镜像里根本没有 `npu.ko`**。
+3. **6.18 发布线不是这样，而且有实机读数。**
+   `docs/07-sk-d840n-status-20261014.md:335` 记着从这台板子的 `/proc/config.gz` 里读到的
+   `CONFIG_ZTE_ZX279133_ETH=y  <-- 网卡驱动内建`；同一份记录里
+   `/lib/modules/6.18.38+/` 下 **0 个 `.ko`**、`/etc/modules.d` **整个不存在**
+   （`docs/07:11358-11360`）——所有需要的驱动都是内建的，镜像里一个可加载模块都没有。
+   ⇒ 6.18 线能在这块板子上跑起来，靠的就是「内建」，不是「打包 + 加载」。
+4. **厂商固件靠的是另一套东西，我们没有。**
+   从目标固件的 initrd（`fit/initrd-1.bin`，gzip + newc cpio）里挖出来的
+   `etc/modules.d/30-zte-npu` 内容是 `npu vlan_offload=1`，
+   `etc/modules-boot.d/30-zte-npu` 是指向它的符号链接；另有
+   `etc/modules.d/32-zte-npu-pon`（`npu-pon`）与
+   `etc/modules.d/42-zte-fnoffload`（`fnoffload vlan_offload=1`）。
+   那是**厂商自己的 rootfs** 里的 OpenWrt 模块装载机制，
+   而我们的 7.3 线是从 OpenWrt 现装的包树里长出来的，没有这一步。
+5. **`pin_y` 为什么救不了。**
+   `ZTE_ZX279133_SWITCH` 是 tristate 且 `depends on ZTE_ZX279133_ETH`。
+   kconfig 会把「依赖是模块」的 tristate 夹成 `=m`：
+   `scripts/kconfig/symbol.c:471-474` 取的是
+   `EXPR_AND(用户给的值, 符号的可见性)`，而依赖为模块时该符号的可见性是 `mod`
+   而不是 `yes`，所以 `EXPR_AND(yes, mod) = mod`。
+   ⇒ `=y` 被夹成 `=m`，**全程不报任何错**。
+6. **板级 DTS 确实点了这个交换芯片。**
+   `arch/arm64/boot/dts/zte/zx279133-sk-d840n.dts` 里有
+   `switch { compatible = "zte,zx279133-switch"; ... }`，
+   而 `zx279133-switch.c` 的 `of_match_table` 正是这个 compatible。
+   模块不会被自动加载 ⇒ 这个节点**永远不会 bind** ⇒ 四个 DSA 用户口不会出现。
+
+**⇒ 修复**：在 7.3 工作流里加一步「Build the zte drivers into the kernel」，
+把 `ZTE_ZX279133_ETH`、`ZTE_ZX279133_LAN_CONDUIT`、`ZTE_ZX279133_SWITCH`
+写进**最后合并的那个片段**（`target/linux/zte/zx279133/config-7.3`），
+每写一个就断言一次；再在 Compile 之后加一道门禁，
+对着**合并后的内核 `.config`**（不是被改的片段）检查这三个符号是 `=y`。
+
+**⇒ 为什么改在 7.3 工作流里而不是 `scripts/configure-sk-d840n.sh`**：
+那个脚本两条线共用，`KCFG` 在 7.3 线上是 `config-7.3`、在 6.18 线上是 `config-6.18`；
+在脚本里加 `pin_y ZTE_ZX279133_ETH` 会**同时改动 6.18 发布线的配置片段**。
+6.18 线本来就是 `=y`（上面第 3 条有读数），改了也是空操作，但发布线不该由
+一次 7.3 线的排查去碰。放在 7.3 工作流里，6.18 发布线一个字节都不动。
+
+**⇒ 门禁**：
+- `tests/test_sk_workflows.py` 新增一节「the 7.3 line builds the zte drivers into
+  the kernel」：钉的三个符号一个都不能少、必须写进最后合并的片段、
+  门禁必须读**合并后的 `.config`**（不许读片段）、必须断言 `=y`（不许只断言「存在」）。
+- **反向验证做过**：五处变异逐个转红且转红在正确的检查上——
+  ① 不钉 `LAN_CONDUIT`；② 钉到 `generic/config-7.3` 而不是 subtarget 的；
+  ③ 门禁改读片段；④ 门禁改成「存在即可」；⑤ 门禁不查 `SWITCH`。
+  （第一次跑时第 ② 项**没有转红**，因为 `/dev/mem` 那一步里也有同一个片段名，
+  变异打错了地方；把 pin 步的变量改名成 `DRVCFG` 之后才真正打到点上。
+  **这正是「门禁必须做反向验证」的意义：自己写的门禁自己也可能测不到点上。**）
+
+**⇒ 本机这一轮的收获**（四个 scratch 工装，都是为了不花 50 分钟去问 CI）：
+- `scratch/kobjmap73.py`：把 Kbuild 的 `obj-$(CONFIG_X)`、复合目标（`npu-y`）
+  和条件成员（`npu-$(CONFIG_X)`）解出来，回答「**哪些 `.c` 真会被编进内核**」。
+  写这个是因为「`obj-$(CONFIG_X)` 对应的 CONFIG 没开 ⇒ 那个文件被静默跳过」
+  这件事编译器不会告诉你，clang 检查器也不会——它只查被点名的文件。
+  本机跑出来的结论：7.3 树里 `zx279133-switch.c`、四个 `npu-y` 成员
+  **本来都会被编**（前提是 CONFIG 打开），`dinghai/en_pf.c` 与
+  `zx279133-native-debug.c` 不会（对应 CONFIG 没开）。
+- `scratch/cpio_pick.py`：按 magic 自动选解压器（gzip/xz/zstd/lz4）后读 newc cpio，
+  从目标固件的 initrd 里把 `/etc/modules.d/*` 挖出来——厂商怎么加载模块就是这么看见的。
+- `scratch/pin_step_check.py`：把工作流里那一步的 shell **从 YAML 里原样取出来**
+  （不复制，避免两边漂移），在 cnjn 的真实 `config-7.3` 副本上跑一遍，
+  验证「三种写法（有值 / is not set / 根本没有）」都能被改成 `=y`。
+  第一次跑就抓到我校验脚本自己写反了（查的是改**前**的行）——**工装也会骗人**。
+- `scratch/reverse_check_workflow.py`：门禁的反向验证器，五处变异逐个跑。
+
+**未做 / 遗留**：
+1. **`fnoffload` 仍然是模块。** `ZTE_ZX279133_FNOFFLOAD` 依赖 `NF_FLOW_TABLE`，
+   而 7.3 的 `config-7.3` 里 `NF_FLOW_TABLE=m` ⇒ 被夹成 `=m` ⇒
+   `fnoffload.ko` **不在镜像里**，7.3 线**没有硬件 flow offload**。
+   6.18 线把整套 netfilter 钉成 `=y`（它的门禁 `required=` 列表里就有
+   `NF_FLOW_TABLE`/`NF_FLOW_TABLE_INET`/`NFT_FLOW_OFFLOAD`），
+   要对齐就得把 netfilter 整套也改成内建——那会显著改变内核体积，
+   **留到实机对拍确认 NPU 通路之后再决定**。
+2. **`ZTE_ZX279133_RGMII` 在 7.3 树里没有 Kconfig。**
+   `scripts/configure-sk-d840n.sh` 的 `pin_y ZTE_ZX279133_RGMII` 会往
+   `config-7.3` 里写一个**不存在的符号**，defconfig 静默丢掉。
+   ⇒ 6.18 线上那个「RGMII MAC 寄存器块只读探针」在 7.3 上不存在。
+   这是取舍还是缺口，等对拍时看能不能读寄存器再判。
+3. **内核体积。** NPU 进 `vmlinux` 之后要放进固定的 8 MiB `kernel` 分区。
+   `-Os` 已经由 `skd840n_pin_kernel_size` 钉住，但 7.3 的底子比 6.18 大，
+   **flash 那一路可能撑不下**；撑不下的话是 `Image too big` 报错，不是静默失败。
+4. **`ZTE_ZX279133_RTL8372N` 仍是 `=m`。** 它是 SR1010 那块外挂 RTL8372N 的驱动，
+   这块板子上没有对应节点，模块不加载即可，没有副作用。
 
 ---
 
@@ -1549,4 +1664,21 @@ python3 scratch/kcheck.py --tree scratch/test73c \
         --gen scratch/kgen73
 # 加 --objdir scratch/kobj 会编出目标码并按 modpost 的规则查符号闭合；
 # --raw 打印编译器的原话。
+
+# 12) 哪些 .c 真会被编进内核（Kbuild 的 obj-$(CONFIG_X) 解析）
+python3 scratch/kobjmap73.py --tree scratch/test73c \
+        --config scratch/cfg73/config-7.3.merged
+
+# 13) 驱动在 7.3 里是内建还是模块（决定镜像里有没有它）
+python3 scratch/kcfg73.py
+
+# 14) 厂商固件怎么加载模块：从目标固件的 initrd cpio 里挖出来
+python3 scratch/cpio_pick.py scratch/re_other_fw/fit/initrd-1.bin \
+        etc/modules.d/30-zte-npu etc/modules-boot.d/30-zte-npu
+
+# 15) 在本机跑工作流里那一步的 shell（从 YAML 原样取出，不复制）
+python3 scratch/pin_step_check.py
+
+# 16) 门禁的反向验证：五处变异逐个转红
+python3 scratch/reverse_check_workflow.py
 ```

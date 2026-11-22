@@ -293,6 +293,57 @@ jobs:
             echo "::error::no CONFIG_DEVMEM=y in $SUBCFG, the fragment merged last"; exit 1
           fi
 
+      # The zte drivers have to be built into the kernel, not into modules.
+      #
+      # cnjn's config-7.3 carries CONFIG_ZTE_ZX279133_ETH=m, because the
+      # reference firmware loads npu.ko from /etc/modules-boot.d.  That file
+      # is in the firmware this repository reverse engineered, and it says
+      # exactly what the vendor's image does:
+      #   etc/modules.d/30-zte-npu       "npu vlan_offload=1"
+      #   etc/modules-boot.d/30-zte-npu  -> ../modules.d/30-zte-npu
+      #   etc/modules.d/32-zte-npu-pon   "npu-pon"
+      #   etc/modules.d/42-zte-fnoffload "fnoffload vlan_offload=1"
+      # Nothing here has that loader.  There is no kmod package for these
+      # modules, and OpenWrt does not put an in-tree module into the rootfs
+      # unless a kmod-* package declares it - so with =m the 7.3 image would
+      # come up with no NPU in it at all, and nothing in it would ever load
+      # one.
+      #
+      # The dependency makes it worse than a missing module.  kconfig clamps
+      # a tristate symbol whose dependency is modular to =m:
+      # scripts/kconfig/symbol.c:471-474 takes EXPR_AND of the requested
+      # value with the symbol's visibility, and a symbol that depends on a
+      # modular one is visible as "mod", not "yes".  So the
+      # CONFIG_ZTE_ZX279133_SWITCH=y that scripts/configure-sk-d840n.sh pins
+      # is silently demoted to =m while CONFIG_ZTE_ZX279133_ETH=m - and the
+      # board's own device tree names the 9132 switch node
+      # (compatible = "zte,zx279133-switch"), which a module can never bind,
+      # because nothing loads it.
+      #
+      # The 6.18 release line has this arrangement already, and the running
+      # image confirms it: docs/07 records "CONFIG_ZTE_ZX279133_ETH=y  <--
+      # 网卡驱动内建" out of that board's /proc/config.gz, with no .ko files
+      # under /lib/modules at all.  These three pins put the 7.3 line on the
+      # same footing.
+      - name: Build the zte drivers into the kernel
+        run: |
+          set -e
+          DRVCFG=openwrt/target/linux/zte/zx279133/config-7.3
+          [ -f "$DRVCFG" ] || {
+            echo "::error::$DRVCFG is gone - the clone's layout changed"; exit 1; }
+          for sym in ZTE_ZX279133_ETH ZTE_ZX279133_LAN_CONDUIT ZTE_ZX279133_SWITCH; do
+            if grep -q "^CONFIG_${sym}=" "$DRVCFG"; then
+              sed -i "s|^CONFIG_${sym}=.*|CONFIG_${sym}=y|" "$DRVCFG"
+            elif grep -q "^# CONFIG_${sym} is not set\$" "$DRVCFG"; then
+              sed -i "s|^# CONFIG_${sym} is not set\$|CONFIG_${sym}=y|" "$DRVCFG"
+            else
+              printf 'CONFIG_%s=y\n' "$sym" >>"$DRVCFG"
+            fi
+            grep -qx "CONFIG_${sym}=y" "$DRVCFG" || {
+              echo "::error::could not pin CONFIG_${sym}=y in $DRVCFG"; exit 1; }
+          done
+          grep -E '^CONFIG_ZTE_ZX279133' "$DRVCFG" || true
+
       - name: Check the overlay for what a compiler would have caught
         run: |
           python3 tools/prepush.py "$GITHUB_WORKSPACE"
@@ -424,6 +475,36 @@ jobs:
             } >> "$GITHUB_STEP_SUMMARY"
           fi
           exit "$rc"
+
+      # The pins above are an intention; the merged kernel config is the
+      # result.  A symbol that does not exist in the tree, and a tristate
+      # symbol whose dependency is modular, are both dropped in silence -
+      # and the image that comes out of that has no NPU in it, which looks
+      # exactly like a board that does not boot.  So the three symbols are
+      # checked against the kernel's own .config, the way the 6.18 line
+      # checks its PHY and its netfilter set.
+      - name: 'Gate: the zte drivers are built into the kernel'
+        run: |
+          set -e
+          KC=$( { ls -d openwrt/build_dir/target-*/linux-*/linux-$KVER/.config 2>/dev/null || true; } | head -1 )
+          if [ -z "$KC" ] && [ -f "$KERNEL_TREE/.config" ]; then
+            KC="$KERNEL_TREE/.config"
+          fi
+          [ -n "$KC" ] || {
+            echo "::error::no merged kernel .config for linux-$KVER; what is there:"
+            ls -d openwrt/build_dir/target-*/linux-* 2>&1 || true
+            ls -l "$KERNEL_TREE/.config" 2>&1 || true
+            exit 1; }
+          echo "kernel config: $KC"
+          for s in ZTE_ZX279133_ETH ZTE_ZX279133_LAN_CONDUIT ZTE_ZX279133_SWITCH; do
+            grep -qx "CONFIG_$s=y" "$KC" || {
+              echo "::error::CONFIG_$s is not built into the kernel" >&2
+              { grep -E "^CONFIG_${s}=|^# CONFIG_${s} is not set" "$KC" \
+                  || echo "    CONFIG_$s is absent from the merged config"; } >&2
+              grep -iE '^CONFIG_(ZTE_ZX279133|NET_DSA|PCS_XPCS|LEDS_CLASS|PHY_ZX279133)' "$KC" >&2 || true
+              exit 1; }
+          done
+          grep -iE '^CONFIG_(ZTE_ZX279133|NET_DSA_TAG_ZX279133)' "$KC" || true
 
       # The gate that says the thing that was built is the thing that was
       # asked for: the version in the tree, the version in the Image banner

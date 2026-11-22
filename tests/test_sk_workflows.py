@@ -60,10 +60,12 @@ BRINGUP_STEPS = [
     "Check the 9132 switch programming against the 7.3 tree",
     "Apply the OpenWrt-side overlays",
     "Enable /dev/mem in the 7.3 fragments",
+    "Build the zte drivers into the kernel",
     "Install feeds",
     "Configure",
     "Download packages",
     "Compile",
+    "Gate: the zte drivers are built into the kernel",
     "Gate: the built kernel is 7.3.4",
     "Gate: the board device tree compiles against the 7.3 tree",
 ]
@@ -89,6 +91,16 @@ SHARED_GATES = [
     "tests/test_sk_led_dts_gate.py",
     "tests/test_sk_layout.py",
     "tests/test_sk_uboot.py",
+]
+
+# The zte drivers that have to end up inside the kernel image on the 7.3
+# line: the NPPT/IDM controller itself, the XMAC0 LAN conduit it owns and
+# the 9132 switch behind it.  The board's device tree names the switch
+# node, so all three have to be built in.
+ZTE_DRIVER_SYMBOLS = [
+    "ZTE_ZX279133_ETH",
+    "ZTE_ZX279133_LAN_CONDUIT",
+    "ZTE_ZX279133_SWITCH",
 ]
 
 
@@ -160,6 +172,14 @@ def run_text(doc, job_name):
         if body:
             parts.append(str(body))
     return "\n".join(parts)
+
+
+def step_run_text(doc, job_name, step_name):
+    """The 'run:' body of one named step, empty when there is no such step."""
+    for step in steps_of(doc, job_name):
+        if str(step.get("name") or "") == step_name:
+            return str(step.get("run") or "")
+    return ""
 
 
 def referenced_tests(text):
@@ -239,6 +259,40 @@ def main():
         for test in referenced_tests(run_text(docs[workflow], job)):
             failures.check((ROOT / test).is_file(),
                            f"{workflow} runs {test}, which exists")
+
+    # The zte drivers have to be built into the kernel.  cnjn's config-7.3
+    # has CONFIG_ZTE_ZX279133_ETH=m because the reference firmware loads
+    # npu.ko from /etc/modules-boot.d; nothing here has that loader, and
+    # OpenWrt does not put an in-tree module into the rootfs unless a
+    # kmod-* package declares it.  With =m the 7.3 image would come up with
+    # no NPU in it at all - and the board's device tree names the 9132
+    # switch node, which a module can never bind.
+    #
+    # The pin has to reach the fragment that merges last, and the gate has
+    # to read the merged kernel .config rather than the fragment: a symbol
+    # that does not exist in the tree, and a tristate symbol whose
+    # dependency is modular, are both dropped in silence, so the fragment
+    # can say =y while the kernel says =m.
+    print("\nthe 7.3 line builds the zte drivers into the kernel")
+    pin_text = step_run_text(bringup, "build", "Build the zte drivers into the kernel")
+    failures.check(pin_text != "", "the pin step has a body")
+    failures.check("target/linux/zte/zx279133/config-7.3" in pin_text,
+                   "the pins go into the fragment that merges last")
+    for symbol in ZTE_DRIVER_SYMBOLS:
+        failures.check(symbol in pin_text,
+                       f"the 7.3 line pins {symbol}=y")
+    gate_text = step_run_text(bringup, "build",
+                               "Gate: the zte drivers are built into the kernel")
+    failures.check(gate_text != "", "the gate step has a body")
+    failures.check(".config" in gate_text,
+                   "the gate reads a merged kernel .config")
+    failures.check("config-7.3" not in gate_text,
+                   "the gate does not read the fragment it pinned")
+    failures.check('grep -qx "CONFIG_$s=y"' in gate_text,
+                   "the gate asserts the value is =y, not merely present")
+    for symbol in ZTE_DRIVER_SYMBOLS:
+        failures.check(symbol in gate_text,
+                       f"the gate checks {symbol}")
 
     return failures.report("workflows")
 
