@@ -37,6 +37,12 @@
       "sha256": "99a75ffe459bf519f8ddaa3adcbe112d525309b5b798085629d26942fb857b28",
       "bytes": 9129,
       "what": "The XG-PON activation glue and the OMCI transport get their four hooks in the 7.3 tree. The optical RX signal detect is a GPIO on this board and the 7.3 tree's main.c had no GPIO at all, so the patch adds the work that polls it, the loss-of-signal LED trigger the board device tree names, the attach and the stop around the WAN netdev, the carrier kick in the link-up path, and the management queue's prepare in the transmit path. The tree's struct zx279133_eth grows the fields these need, and the three new objects join the NPU module."
+    },
+    {
+      "file": "150-sk-9132-switch-programming.patch",
+      "sha256": "1cc8b24997200b4a083b307d28580e50aa7223306154cef3bc17fb28acb5b953",
+      "bytes": 70935,
+      "what": "The 9132 switch chip's own programming, moved from the 6.18 generation's np.c word for word: the per-port words, the flood groups, the CPU path, the outport map, the isolation matrix, the protocol action table and the PHY enable. The 7.3 tree had the chip's DSA front end and none of this, so the four jacks and the 2.5G port were registered and never configured. The patch also adds the ERAM table bookkeeping the switch tables need - the SE allocator hands the blocks out in order, so a table's base is not a constant - and records the descriptors where the allocation happens. The IDM's source port is the 9132's PPU number, so the PPU is mapped onto the transport VID range, and the transmit drain reclaims the OMCI management queue that shares the ring."
     }
   ]
 }

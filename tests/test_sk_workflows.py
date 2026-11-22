@@ -56,6 +56,7 @@ BRINGUP_STEPS = [
     "Check the applied board layer",
     "Check the 9132 switch driver against the 7.3 tree",
     "Check the PON / OMCI stack against the 7.3 tree",
+    "Check the 9132 switch programming against the 7.3 tree",
     "Apply the OpenWrt-side overlays",
     "Enable /dev/mem in the 7.3 fragments",
     "Install feeds",
@@ -75,6 +76,8 @@ BRINGUP_TRIGGERS = [
     "tools/apply-sk-overlay-73.sh",
     "tools/check-sk-board-api.py",
     "tools/check-sk-switch-api.py",
+    "tools/check-sk-pon-api.py",
+    "tools/check-sk-9132-api.py",
     "scripts/configure-sk-d840n.sh",
     "configs/sk-d840n-73.json",
 ]

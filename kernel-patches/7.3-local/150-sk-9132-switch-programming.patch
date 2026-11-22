@@ -1,0 +1,1896 @@
+Subject: [PATCH] 150-sk-9132-switch-programming: the 9132 switch, programmed
+
+The 9132 switch, programmed: the chip itself, the PPU to transport VID
+map, and the management queue's share of the transmit ring.
+
+The 7.3 tree got the 9132's DSA front end (zx279133-switch.c) and with it
+the chip's four UNI jacks and its 2.5G port as DSA user ports.  What it did
+not get is the chip's own programming.  The 6.18 generation puts that in
+zx279133-np.c, and the 7.3 tree's np.c has none of it: no per-port
+attribute word, no CPU path, no flood groups, no outport map, no isolation
+matrix.  A DSA port that the switch was never told about is a port that
+carries nothing, so on the 7.3 line the four jacks and the 2.5G jack were
+registered and dead.
+
+So this patch moves the 6.18 generation's 9132 programming over, word for
+word - it was measured on this board - and gives it the two things it
+needs from the tree:
+
+  * The ERAM table bookkeeping.  The switch's tables are looked up by the
+    same ids as the SE tables, and the hardware reads an entry at
+    (base << 7) + (width * index & ~0x7f).  A table written with the wrong
+    width is read in the wrong place; a table written at the wrong base is
+    not found at all.  The base of a table is not a constant: the SE
+    allocator hands the blocks out in order and it starts at block 12288.
+    The tree's se_sdt_create() already does that allocation, so it is
+    where the descriptors are recorded - four lines, in the place where
+    the driver tells the hardware where the table is.
+
+  * The PPU numbers.  The chip's own port numbers (1..4 are the four UNI
+    jacks, 5 is the 2.5G jack's port, 15 is the CPU trap) live in this
+    repository's own zx279133-9132.h, next to the rest of the chip's
+    definitions, and the tree's np.c and idm.c include it.
+
+The programming is called from the tree's np_prepare(), in the order the
+6.18 generation uses: the per-port words are read before anything writes
+them, the 2.5G lane's word set is written after everything else that
+writes a port's words, and the PHY is enabled after the chip itself has
+been programmed.
+
+Two smaller changes come with it:
+
+  * The IDM reports the source port of a frame in the descriptor's word 1,
+    and on the 9132 path that number is a PPU, not a transport VID.  The
+    tree's rx_lan_vport() only understood transport VIDs, so a frame that
+    came in on a jack was tagged with nothing.  The PPU is mapped onto the
+    transport VID range (PPU 1..5 becomes 59..63) before the tagger sees
+    it.
+
+  * The OMCI transport shares the IDM transmit ring: queue 0 is the
+    management queue, below the queue the data path starts at.  The
+    drain path only reclaimed the data queues, so the management queue
+    was left holding a descriptor.
+
+Not in this patch:
+
+  * The 9132's debugfs console (the 6.18 generation's own read/write
+    console).  The 7.3 tree has its own native_*_io endpoints for that.
+
+  * The TX fault isolation and recovery mechanism.  It is built on the 6.18
+    generation's datapath attach/failed model, which the 7.3 tree does not
+    have - the 7.3 tree's LAN service has datapath_get/set_ready/put
+    instead - and the 7.3 tree's tx_reclaim_queue_locked() clamps an
+    illegal completion to the ring's pending count rather than isolating
+    the queue.  Bringing the mechanism over would mean bringing the model
+    with it, which is a piece of work of its own.
+
+--- a/drivers/net/ethernet/zte/zx279133-idm.c
++++ b/drivers/net/ethernet/zte/zx279133-idm.c
+@@ -21,6 +21,7 @@
+ #include <net/xdp.h>
+ #include <net/xdp_sock_drv.h>
+ 
++#include "zx279133-9132.h"
+ #include "zx279133.h"
+ 
+ /*
+@@ -352,8 +353,22 @@ static u16 zx279133_idm_rx_lan_vport(u32 word1)
+ {
+ 	u16 port = (word1 >> 16) & 0x3f;
+ 
+-	return port >= ZX279133_LAN_TRANSPORT_VID_MIN &&
+-	       port <= ZX279133_LAN_TRANSPORT_VID_MAX ? port : 0;
++	if (port >= ZX279133_LAN_TRANSPORT_VID_MIN &&
++	    port <= ZX279133_LAN_TRANSPORT_VID_MAX)
++		return port;
++
++	/*
++	 * The source port is the 9132's own PPU number, not a transport VID:
++	 * the four UNI jacks are PPU 1..4 and the 2.5G jack's lane is PPU 5.
++	 * The tagger reads a transport VID, so the PPU is mapped onto the
++	 * transport VID range before it goes any further.
++	 */
++	if (port >= ZX279133_9132_UNI_PPU_FIRST &&
++	    port <= ZX279133_9132_OUTERPHY_PPU)
++		return ZX279133_LAN_TRANSPORT_VID_MIN +
++		       (port - ZX279133_9132_UNI_PPU_FIRST);
++
++	return 0;
+ }
+ 
+ /* Whether word 1 names the port of a frame the PPU parsed for this side. */
+@@ -1387,7 +1402,9 @@ bool zx279133_idm_tx_drain(struct zx279133_eth *eth)
+ 		spin_lock_bh(&eth->tx_lock);
+ 		zx279133_idm_tx_flush_locked(eth);
+ 		zx279133_idm_tx_reclaim_locked(eth);
+-		if (!zx279133_idm_tx_pending(eth)) {
++		/* The management queue shares the ring: reclaim it too. */
++		zx279133_omci_reclaim(eth);
++		if (!zx279133_idm_tx_pending(eth) && !eth->omci_pending) {
+ 			spin_unlock_bh(&eth->tx_lock);
+ 			return true;
+ 		}
+--- a/drivers/net/ethernet/zte/zx279133-np.c
++++ b/drivers/net/ethernet/zte/zx279133-np.c
+@@ -9,11 +9,16 @@
+ #include <linux/firmware.h>
+ #include <linux/io.h>
+ #include <linux/iopoll.h>
++#include <linux/mdio.h>
++#include <linux/mii.h>
+ #include <linux/module.h>
++#include <linux/of.h>
++#include <linux/of_mdio.h>
+ #include <linux/regmap.h>
+ #include <linux/seq_file.h>
+ #include <linux/unaligned.h>
+ 
++#include "zx279133-9132.h"
+ #include "zx279133.h"
+ #include "zx279133-native.h"
+ #include "zx279133-rx-hash.h"
+@@ -532,6 +537,174 @@ static int zx279133_smmu0_write(struct zx279133_eth *eth, u32 addr_ind,
+ #define ZX279133_MF_ERAM_BASE_BLOCK	17106
+ #define ZX279133_VLAN_ERAM_BASE_BLOCK	12288
+ 
++/*
++ * Where the ERAM tables this driver uses actually are.
++ *
++ * The SE SDT tables are created here, out of one ERAM pool, with a strictly
++ * sequential allocator that starts at block 12288: each ERAM table takes
++ * the blocks that are left and the next one starts where the last ended.
++ * The base of a table is therefore not a constant anybody can write down -
++ * it is the sum of the depths of the tables before it, and it moves the
++ * moment the list moves.
++ *
++ * The driver had three such constants written down, and none of them was
++ * the base the driver itself gave the hardware: 17106 for the MF extension
++ * table, 21266 for the protocol table and 23026 for the port type table.
++ * They came from a different SDT list - the one the generic np.ko has,
++ * which has a table this driver's list does not have - so every one of
++ * those writes landed in some other table's blocks, and the hardware read
++ * the table it was told about and found nothing in it.
++ *
++ * So the bases are taken from the allocation that told the hardware, and
++ * they are looked up by the table's id.
++ */
++#define ZX279133_SDT_ID_MAX	0x100
++
++/*
++ * What the driver told the hardware about one ERAM table: where it starts
++ * and how wide one of its entries is.  The width matters as much as the
++ * base - the vendor's se_eram_table_set_by_sdt_info() places an entry at
++ * (base << 7) + (width * index & ~0x7f) and merges the value into the
++ * 16-byte window bit by bit, so a table declared with the wrong width is
++ * read at the wrong place.
++ */
++struct zx279133_eram_table {
++	u32 base;
++	u32 bit_len;
++};
++
++static struct zx279133_eram_table zx279133_eram[ZX279133_SDT_ID_MAX];
++
++static u32 zx279133_eram_base_of(u32 sdt_id)
++{
++	if (sdt_id >= ZX279133_SDT_ID_MAX)
++		return 0;
++	return zx279133_eram[sdt_id].base;
++}
++
++static u32 zx279133_eram_bit_len_of(u32 sdt_id)
++{
++	if (sdt_id >= ZX279133_SDT_ID_MAX)
++		return 0;
++	return zx279133_eram[sdt_id].bit_len;
++}
++
++static int zx279133_eram_table_set_bits(struct zx279133_eth *eth, u32 sdt_id,
++					u32 index, u32 width, u32 value)
++{
++	u32 base = zx279133_eram_base_of(sdt_id);
++	u32 bit_len = zx279133_eram_bit_len_of(sdt_id);
++	u32 bit_off, addr, word_idx, bit_pos, mask;
++	u32 window[ZX279133_SMMU0_WORDS];
++	int ret;
++
++	if (!base || !bit_len)
++		return -EINVAL;
++	if (width > bit_len || width > 32)
++		return -EINVAL;
++	bit_off = bit_len * index;
++	addr = (base << 7) + (bit_off & ~0x7fu);
++	word_idx = (bit_off >> 5) & (ZX279133_SMMU0_WORDS - 1);
++	bit_pos = bit_off & 0x1f;
++
++	ret = zx279133_smmu0_read(eth, addr, window, ZX279133_SMMU0_WORDS,
++				  ZX279133_SMMU0_CMD_READ);
++	if (ret)
++		return ret;
++
++	mask = (width >= 32) ? 0xffffffffu : ((1u << width) - 1);
++	window[word_idx] = (window[word_idx] & ~(mask << bit_pos)) |
++			   ((value & mask) << bit_pos);
++
++	return zx279133_smmu0_write(eth, addr, window, ZX279133_SMMU0_WORDS,
++				     ZX279133_SMMU0_CMD_WRITE);
++}
++
++/*
++ * Patch one field of one word of the 128-bit window an entry lives in.
++ *
++ * The vendor's own helpers work exactly this way: they read the entry as
++ * four words, change one field of it, and write the four words back.
++ * se_eram_table_get(0x7d, mem_id) reads the block at
++ * (base << 7) + (128 * mem_id) and port_attr_def_brd_flood_en_set() patches
++ * byte 3 of it; glb_cfg_table_cpu_base_qid_set() reads entry 0 of table
++ * 0x22 and patches bits 1..9 of the halfword at byte 14; and
++ * tm_reason_map_cpu_qid_set() reads entry 0 of table 0x19 and patches bits
++ * 0..4 of byte 3.
++ *
++ * The word to patch is named, not derived, because it depends on the
++ * table: a table whose entries are 32 bits wide keeps four entries in one
++ * window, so entry 0 is word 0 of it, while a table whose entries are 128
++ * bits wide keeps one entry in a window and the field can be in any word.
++ */
++static int zx279133_eram_window_patch(struct zx279133_eth *eth, u32 sdt_id,
++				       u32 index, u32 word, u32 mask,
++				       u32 value)
++{
++	u32 base = zx279133_eram_base_of(sdt_id);
++	u32 bit_len = zx279133_eram_bit_len_of(sdt_id);
++	u32 addr, window[ZX279133_SMMU0_WORDS];
++	int ret;
++
++	if (!base || !bit_len)
++		return -EINVAL;
++	if (word >= ZX279133_SMMU0_WORDS)
++		return -EINVAL;
++
++	addr = (base << 7) + ((bit_len * index) & ~0x7fu);
++
++	ret = zx279133_smmu0_read(eth, addr, window, ZX279133_SMMU0_WORDS,
++				  ZX279133_SMMU0_CMD_READ);
++	if (ret)
++		return ret;
++
++	window[word] = (window[word] & ~mask) | (value & mask);
++
++	return zx279133_smmu0_write(eth, addr, window, ZX279133_SMMU0_WORDS,
++				     ZX279133_SMMU0_CMD_WRITE);
++}
++
++/*
++ * SPA port-attribute updates recovered from np.ko, entry 71 (memory
++ * address 19), byte 2: mf_port_iswanport_set(0, 1) sets bit 1 on mem_id
++ * 0 (companion 14) at np_nppu_init, and mf_port_ppuinit_set() sets bit 2
++ * on the mem ids the vendor configures at np_init_done, including CPU
++ * injection memory 15 (companion 10 for mem_id 5). Every update is
++ * mirrored into the MF extension table, SE ERAM table 0x7d: 64 entries of
++ * 128 bits keyed by SPA memory id, the first word
++ * carrying the port-attribute word the SPA multi-forward engine consults
++ * to accept CPU-originated frames for a port.
++ */
++#define ZX279133_MF_ERAM_SDT_ID	0x7d
++#define ZX279133_VLAN_ERAM_SDT_ID	0x00
++#define ZX279133_PRO_ERAM_SDT_ID	0x04
++#define ZX279133_PORT_TYPE_ERAM_SDT_ID	0x06
++#define ZX279133_SWITCH_PROTO_SDT_ID	0x18
++
++/*
++ * The three tables the CPU path runs on.  They are named here rather than
++ * next to the code that fills them in, because the debugfs console below
++ * reaches them as well.
++ *
++ *	0x19  the reason map: the CPU queue a frame with a given reason is
++ *	      delivered on.  32 bits an entry.
++ *	0x22  the global config table: the CPU base queue id lives in bits
++ *	      17..25 of word 3 of entry 0.  128 bits an entry.
++ *	0x27  the outport map: the CPU's own outport 15 goes to the real
++ *	      port 15 and to a queue id.  16 bits an entry.
++ */
++#define ZX279133_QID_ERAM_SDT_ID	0x19
++#define ZX279133_GLBCFG_ERAM_SDT_ID	0x22
++#define ZX279133_OUTPORT_ERAM_SDT_ID	0x27
++
++/*
++ * The flood group table: one entry per group, one destination port id per
++ * entry.  The vendor's group_id_table_port_id_set() writes it with
++ * se_eram_table_set(0x1f, group_id, 1, &port_id), so the index IS the group
++ * id and the entry is a single 32-bit word.
++ */
++#define ZX279133_FLOOD_ERAM_SDT_ID	0x1f
++
+ static const u32 zx279133_vlan0_entry[ZX279133_SMMU0_WORDS] = {
+ 	0xffc00000, 0x0000ffff, 0xffffffff, 0x00003003,
+ };
+@@ -1848,6 +2021,19 @@ static int zx279133_se_sdt_create(struct zx279133_eth *eth)
+ 			depth = (bit_len * b + 127) >> 7;
+ 			base = eram_base;
+ 			eram_base += depth;
++			/*
++			 * Remember where this table starts and how wide one of
++			 * its entries is.  The switch tables are looked up by
++			 * the same ids, and the hardware reads an entry at
++			 * (base << 7) + (width * index & ~0x7f) - so a table
++			 * written with the wrong width is read in the wrong
++			 * place, and a table written at the wrong base is not
++			 * found at all.
++			 */
++			if (sdt_no < ZX279133_SDT_ID_MAX) {
++				zx279133_eram[sdt_no].base = base;
++				zx279133_eram[sdt_no].bit_len = bit_len;
++			}
+ 			ret = zx279133_se_sdt_eram_write(eth, sdt_no, depth,
+ 							 base, a);
+ 			if (ret)
+@@ -2930,90 +3116,1507 @@ static void zx279133_sipc_final_restore(struct zx279133_eth *eth)
+ 	eth->sipc_final_prepared = false;
+ }
+ 
+-int zx279133_np_prepare(struct zx279133_eth *eth)
++/*
++ * The 9132 switch, programmed.
++ *
++ * The 9132 is the LAN switch on this board.  The tree's DSA front end
++ * (zx279133-switch.c) says which ports exist and how they are wired; the
++ * chip itself still needs its own per-port words, its flood groups, its
++ * CPU path and its isolation matrix before a frame can cross it.
++ *
++ * None of that was in the 7.3 tree: the 9132 registered its DSA ports and
++ * was never configured, so the four jacks and the 2.5G port were not on
++ * a path to the IDM at all.  The code below is the 6.18 generation's,
++ * moved word for word - it was measured on this board.
++ */
++
++/*
++ * The 9132's four internal PHYs, and the bus they are on.
++ *
++ * The addresses are not a guess.  The running vendor system's device tree
++ * carries a `uni-phy` property on both of the SoC's MDIO controllers and it
++ * is a u32 array:
++ *
++ *	{ 0x0a, 0x0b, 0x0c, 0x0d, 0x05, 0x1c, 0x02 }
++ *
++ * 0x0a..0x0d are the four internal UNI PHYs; 0x05 is the RTL8226 on jack 4,
++ * which mainline's board DTS already declares at mdio1 address 5.
++ */
++#define ZX279133_9132_UNI_PHY_FIRST	0x0a
++#define ZX279133_9132_UNI_PHY_LAST	0x0d
++
++#define ZX279133_PPU_ATTR_REG		19
++
++/*
++ * The whole attribute word of a port that carries traffic, as the vendor's
++ * own working system has it: 0x96040000 for the named bits plus bit 0 for
++ * the one bit nobody can name.
++ */
++#define ZX279133_9132_VENDOR_ATTR_WORD	0x96040001
++
++/*
++ * The 9132's per-port words, read out and nothing else.
++ *
++ * Why this exists: everything below *writes* the per-port words, and after
++ * that the chip no longer remembers what the bootloader left there.  The one
++ * number nobody can guess is the configuration the vendor's own 4.19 working
++ * system uses on each UNI port - if it is not the transport VID scheme, then
++ * the scheme this driver implements cannot be what the switch actually does,
++ * and no amount of further writing of a guess will help.
++ * will make it work.  So the baseline is dumped first, before any of this
++ * driver's own 9132 writes.
++ *
++ * The addresses, and what they are.  The layout is not a guess: it is
++ * np_133.ko's own descriptor table, spa_port_attr_table, 74 entries of
++ * {id, mask, bit offset, word address}, decoded on 2026-10-21 (see
++ * docs/24).  The same numbering is what the bootloader's own
++ * "spa_port_attr_op help" prints, so the bootloader and the vendor module
++ * agree on it.
++ *
++ *   0x000  TLB_VLD(0), PC(1..14), FLOWNUM(15..20), COS(21..23),
++ *          OUTPUT_PORT(24..29), NPPU_DIR_EN(30), CRC_ADD_EN(31).
++ *          The entry program counter is READ here and never written, because
++ *          writing bit 0 of it is what zx279133_lan_port_bringup() does to
++ *          the SoC's own entry program and a port that runs the wrong program
++ *          is a dead port.
++ *   0x001  ICU_COS_GET_EN(0..2), ICU_PRI_CFG(3..11), VLAN_FILTER_MOD(12..13),
++ *          QUEUE_ID(14..22), BPDU_TRAP_EN(23), PAE_TRAP_EN(24),
++ *          DFT_PRI(25..27), LLC_EN(28).  DFT_PRI is the default VLAN priority.
++ *   0x002  PORT_PVID_UNTAG(18..29) - the untagged SVID, i.e. the PVID -
++ *          and PORT_DMAC_OFFSET(30..31).
++ *   0x009  the IP rate-limit fields and TAG_FILTER(24..29).
++ *   0x011  USER_DEF_AREA1 - where the vendor's flood tables live.
++ *   0x012  USER_DEF_AREA2 - where the vendor's flood group ids live.
++ *   0x013  USER_DEF_AREA3 - the per-port attribute word (isolate, SA learn,
++ *          DA lookup, flooding, route mode, input VLAN check).  It is a
++ *          user area, so its bit meanings come from the vendor's switch API
++ *          rather than from the table above.
++ *
++ * The SPA memory ids are: 0 = PON0, 1..4 = the four UNI jacks, 5 = XMAC0
++ * (the DSA conduit, and the external RTL8226's port on the vendor's
++ * board), 6 = XMAC1, 7 = RGMII1, 15 = the CPU trap port.
++ */
++#define ZX279133_PPU_WORD_ENTRY_PC	0
++#define ZX279133_PPU_WORD_PVID_PRI	1
++#define ZX279133_PPU_WORD_PVID_VID	2
++#define ZX279133_PPU_WORD_VLAN_FILT	9
++#define ZX279133_PPU_WORD_ATTR		19
++
++static void zx279133_9132_port_words_read(struct zx279133_eth *eth)
++{
++	static const struct {
++		u32 addr;
++		const char *name;
++	} words[] = {
++		{ ZX279133_PPU_WORD_ENTRY_PC,	"entry-pc" },
++		{ ZX279133_PPU_WORD_PVID_PRI,	"pvid-pri" },
++		{ ZX279133_PPU_WORD_PVID_VID,	"pvid-vid" },
++		{ ZX279133_PPU_WORD_VLAN_FILT,	"vlan-filter" },
++		{ ZX279133_PPU_WORD_ATTR,	"attr" },
++	};
++	u32 ppu;
++	size_t i;
++
++	for (ppu = 0; ppu <= ZX279133_9132_OUTERPHY_PPU; ppu++) {
++		for (i = 0; i < ARRAY_SIZE(words); i++) {
++			u32 val;
++
++			if (zx279133_spa_indirect_read(eth, ppu, words[i].addr,
++						       &val)) {
++				dev_info(eth->dev,
++					 "9132 PPU %u word %u (%s): read failed\n",
++					 ppu, words[i].addr, words[i].name);
++				continue;
++			}
++
++			dev_info(eth->dev,
++				 "9132 PPU %u word %u (%s) = %08x\n",
++				 ppu, words[i].addr, words[i].name, val);
++		}
++	}
++}
++
++/*
++ * The vendor's own working state for one LAN-side 9132 port, word for word.
++ *
++ * Every value here was read out of the running 4.19 system with the vendor's
++ * read-only tm_debug interface (spa_port_attr_smac_0 .. smac_3 and
++ * spa_port_attr_xmac_0, 2026-10-21) and is kept in staging/ctl/
++ * vlive9132-cpu-20261021.txt.  Nothing here is guessed:
++ *
++ *	word0  = 0x0000a6a5  the port's entry program
++ *	word1  = 0x0000088f  (the same on every port; left alone)
++ *	word2  = 0x00000000  the untag SVID - the vendor's 9132 has none
++ *	word9  = 0x00000000  the VLAN filter
++ *	word10 = 0x0fa0000e
++ *	word13 = 0x00008008
++ *	word17 = the port's broadcast flood word
++ *	word18 = the port's unknown-unicast / multicast flood word
++ *	word19 = 0x96040001  the port attribute word
++ *
++ * Why the transport VID is not in there: the 9132 is a transparent
++ * MAC-learning bridge, not a VLAN switch.  Three independent pieces of the
++ * vendor's own working system say so (docs/16 §2.2): the vendor's FDB holds
++ * one entry and its vid field is 0, every port's VLAN filter mask reads 0,
++ * and every port's ingress frame mode reads 0.  The transport VID belongs to
++ * the tree's external RTL8372N, whose switch does speak 802.1Q; writing one
++ * into this chip gives it a VLAN filter to fail, and the DSA tagger's tag
++ * has to be taken off again on the way to the wire instead
++ * (zx279133_lan_strip_transport_vlan() in zx279133-netdev.c).
++ */
++static const u32 zx279133_9132_vendor_words[][2] = {
++	{ 0,  0x0000a6a5 },	/* the port's entry program */
++	{ 1,  0x0000088f },
++	{ 2,  0x00000000 },	/* the untag SVID: none */
++	{ 9,  0x00000000 },	/* the VLAN filter: none */
++	{ 10, 0x0fa0000e },
++	{ 13, 0x00008008 },
++	{ 19, ZX279133_9132_VENDOR_ATTR_WORD },	/* the port attribute word */
++};
++
++/*
++ * The CPU trap's own words.
++ *
++ * The vendor's board reads these out of the trap port's SPA memory, and they
++ * are *not* the ones the four jacks carry: the trap port runs a different
++ * entry program, and its port attribute word is zero, because a trap port is
++ * a sink - it has no traffic of its own to learn or forward.
++ *
++ *	word0  entry program   0x0000a767   (the jacks have 0x0000a6a5)
++ *	word1                 0x0000088f
++ *	word2  untag SVID     0
++ *	word9  VLAN filter    0
++ *	word10                0x0fa0000e
++ *	word13                0x00008008
++ *	word17                0x07c00000
++ *	word18                0x03c00bc0
++ *	word19 attribute word 0x00000000   (the jacks have 0x96040001)
++ *
++ * Words 17 and 18 are the port group and the queue base.  Every other port
++ * carries `(group << 24) | (queue base << 16) | (4 TX queues) | (16 RX
++ * queues)` in word 17, where the group is `4 + floor(ram id / 4)` and the
++ * queue base is `0x40 * (ram id % 4)`; the CPU port is the exception, and
++ * its word 17 has no queue-count field at all: it is the group (7) and the
++ * queue base (0xc0) only.  Word 18 is the same base with the group's index
++ * in it.  Read off the vendor's own live board on 2026-10-23 with
++ * `spa_port_attr_trap(cpu)`; the four UNI jacks had been right all along
++ * and these two words were the whole of the difference (docs/69).
++ *
++ * Evidence: docs/18's table of the vendor board's live SPA memory, and
++ * np_133.ko's own per-port init (spa_init, 0x27834) plus the entry-program
++ * descriptor it decodes out of the microcode blob (np_downlaod_mcode,
++ * 0xf1550, and the setter at 0xf141c).
++ */
++static const u32 zx279133_9132_cpu_words[][2] = {
++	{ 0,  0x0000a767 },	/* the trap port's own entry program */
++	{ 1,  0x0000088f },
++	{ 2,  0x00000000 },	/* the untag SVID: none */
++	{ 9,  0x00000000 },	/* the VLAN filter: none */
++	{ 10, 0x0fa0000e },
++	{ 13, 0x00008008 },
++	{ 17, 0x07c00000 },	/* the port group and the queue base */
++	{ 18, 0x03c00bc0 },
++	{ 19, 0x00000000 },	/* the port attribute word: a trap carries none */
++};
++
++/*
++ * The flood words, per port: the first is the broadcast flood word and the
++ * second the unknown-unicast / multicast one.  PPU 1..4 are the four UNI
++ * jacks and PPU 5 is XMAC0; both carry the vendor's own values.  The CPU is
++ * the trap port 15 and has no flood groups of its own - it is a sink - so
++ * there is no entry for it here.
++ */
++static const u32 zx279133_9132_vendor_flood[6][2] = {
++	{ 0x04400410, 0x00400840 },
++	{ 0x04800410, 0x00800880 },
++	{ 0x04c00410, 0x00c008c0 },
++	{ 0x05000410, 0x01000900 },
++	{ 0x05400410, 0x01400940 },
++	{ 0x00000000, 0x00000000 },
++};
++
++static int zx279133_9132_port_words_vendor(struct zx279133_eth *eth, u32 ppu)
+ {
++	u32 flood = ppu - 1;
++	u32 i;
+ 	int ret;
+ 
+-	dev_info(eth->dev, "NP init: SE PLCR setup begin\n");
+-	ret = zx279133_se_plcr_init(eth);
+-	if (ret) {
+-		dev_err(eth->dev, "NP init: SE PLCR setup failed: %d\n", ret);
+-		return ret;
++	/* The CPU trap has its own words, and no flood groups: it is a sink. */
++	if (ppu == ZX279133_9132_CONDUIT_PPU) {
++		for (i = 0; i < ARRAY_SIZE(zx279133_9132_cpu_words); i++) {
++			ret = zx279133_spa_indirect_write(eth, ppu,
++						zx279133_9132_cpu_words[i][0],
++						zx279133_9132_cpu_words[i][1]);
++			if (ret)
++				return ret;
++		}
++
++		return 0;
+ 	}
+-	dev_info(eth->dev, "NP init: SE PLCR setup done\n");
+ 
+-	dev_info(eth->dev, "NP init: SE table descriptors begin\n");
+-	ret = zx279133_se_sdt_create(eth);
+-	if (ret) {
+-		dev_err(eth->dev, "NP init: SE table descriptors failed: %d\n",
+-			ret);
+-		return ret;
++	if (flood >= ARRAY_SIZE(zx279133_9132_vendor_flood))
++		return 0;
++
++	for (i = 0; i < ARRAY_SIZE(zx279133_9132_vendor_words); i++) {
++		ret = zx279133_spa_indirect_write(eth, ppu,
++						  zx279133_9132_vendor_words[i][0],
++						  zx279133_9132_vendor_words[i][1]);
++		if (ret)
++			return ret;
+ 	}
+-	dev_info(eth->dev, "NP init: SE table descriptors done\n");
++	ret = zx279133_spa_indirect_write(eth, ppu, 17,
++					  zx279133_9132_vendor_flood[flood][0]);
++	if (ret)
++		return ret;
+ 
+-	dev_info(eth->dev, "NP init: statistics tables begin\n");
+-	zx279133_se_stat_runtime_prepare(eth);
+-	dev_info(eth->dev, "NP init: statistics tables done\n");
++	return zx279133_spa_indirect_write(eth, ppu, 18,
++					   zx279133_9132_vendor_flood[flood][1]);
++}
+ 
+-	dev_info(eth->dev, "NP init: PPU microcode begin\n");
+-	ret = zx279133_ppu_mcode_prepare(eth);
+-	if (ret) {
+-		dev_err(eth->dev, "NP init: PPU microcode failed: %d\n", ret);
++/*
++ * The switch engine does not read the port's attribute word out of the SPA
++ * memory.  It reads the copy that lives in the MF extension table, and the
++ * vendor's port_attr_def_*_set() helpers mirror every bit of the attribute
++ * word into that table when they set it - which is why np_133.ko's ERAM
++ * table 0x7d is described as the learning flag table with one entry per SPA
++ * memory id.
++ *
++ * So the word above has to be mirrored, and it has to be mirrored after the
++ * SPA memory has been given it: the CPU port's copy was last written with
++ * the RTL8372N path's value 0x00042000, which carries neither the learning
++ * enable, nor the DA lookup, nor the flood bits.  In the table the chip
++ * actually reads, the CPU port was therefore a dead end - and not one frame
++ * moved in either direction, which is exactly what the board did.
++ */
++static int zx279133_9132_mf_mirror(struct zx279133_eth *eth, u32 ppu)
++{
++	u32 flood = ppu - 1;
++	u32 attr = ZX279133_9132_VENDOR_ATTR_WORD;
++	int ret;
++
++	/*
++	 * The CPU trap is a sink, and the vendor's own board reads **zero** in
++	 * its copy of the attribute word - the trap does not learn, does not
++	 * look the destination address up, and takes no part in the flood
++	 * groups (staging/ctl/re-cpu-trap-attr.md, and the vendor's own
++	 * port_attr_def_init(), which clears SPA register 19 on all 64 ports
++	 * and never gives the trap anything else).
++	 *
++	 * The jacks' value here is worse than different: with learning on, a
++	 * frame the trap receives because its destination was unknown is
++	 * learned *onto the trap*, and the frame the board then sends back to
++	 * that client is looked up and found on the trap - so it leaves by
++	 * the trap again and never reaches the jack.
++	 */
++	if (ppu == ZX279133_9132_CONDUIT_PPU)
++		attr = 0x00000000;
++
++	ret = zx279133_mf_eram_attr_set(eth, ppu, attr);
++	if (ret)
+ 		return ret;
+-	}
+-	dev_info(eth->dev, "NP init: PPU microcode done\n");
+ 
+-	dev_info(eth->dev, "NP init: PPU tables begin\n");
+-	ret = zx279133_np_ppu_init_tail(eth);
+-	if (ret) {
+-		dev_err(eth->dev, "NP init: PPU tables failed: %d\n", ret);
++	if (flood >= ARRAY_SIZE(zx279133_9132_vendor_flood))
++		return 0;
++
++	/*
++	 * The same entry carries the port's flood words: word 1 is the
++	 * unknown-DA / multicast flood word (SPA register 18) and word 2 is the
++	 * broadcast one (SPA register 17), bit for bit.  The switch engine
++	 * reads the flood group ids from here - the group id of a port p is
++	 * p<<6, (p+0x10)<<6 and (p+0x20)<<6, and it is an index into ERAM
++	 * table 0x1f - so without these two words every port's group is
++	 * group 0 and every group is whatever the driver never wrote.
++	 *
++	 * The two words are not bit for bit copies, though, and the difference
++	 * is the whole broadcast path.  The vendor's own layout of one entry is
++	 * (staging/ctl/re-eram-7d.md section 2.4):
++	 *
++	 *	word1 bytes 4..5   the multicast flood group id
++	 *	word1 bytes 6..7   the unknown-DA flood group id
++	 *	word2 bytes 10..11 the broadcast flood group id
++	 *
++	 * and SPA register 18 holds the two group ids in that same order - the
++	 * multicast one in its low half, the unknown-DA one in its high half -
++	 * so word 1 is register 18 as it stands.  SPA register 17 holds the
++	 * broadcast group id in its *high* half, and the entry wants it in
++	 * word 2's *high* half as well: the entry is little endian, word 2 is
++	 * bytes 8..11, and byte 10..11 is word 2's most significant halfword.
++	 *
++	 * The vendor's own setters say exactly where they put it, and they are
++	 * the only evidence there is.  The entry buffer is at x29+0x48 in
++	 * np_133.ko, and the three setters store their halfword with
++	 *
++	 *	strh w22, [x29, #0x4c]	multicast, bytes 4..5
++	 *	strh w22, [x29, #0x4e]	unknown-DA, bytes 6..7
++	 *	strh w22, [x29, #0x52]	broadcast, bytes 10..11
++	 *
++	 * (port_attr_def_mul_flood_group_id_set at .text 0xbc794,
++	 * port_attr_def_unk_da_flood_group_id_set at .text 0xbc5b8 and
++	 * port_attr_def_brd_flood_group_id_set at .text 0xbc970).
++	 *
++	 * So word 2 is register 17 as it stands, unchanged: its low halfword
++	 * carries the 0x0410 the vendor's flood count lives in, and its high
++	 * halfword carries the broadcast group id.  Swapping the halves here
++	 * puts the group id on bytes 8..9, where no setter ever put it, and
++	 * runs the broadcast flood of a port on 0x0410 - a number that is not a
++	 * group id at all - instead of on (p+0x10)<<6.
++	 */
++	ret = zx279133_eram_window_patch(eth, ZX279133_MF_ERAM_SDT_ID, ppu, 1,
++					  0xffffffff,
++					  zx279133_9132_vendor_flood[flood][1]);
++	if (ret)
+ 		return ret;
++
++	{
++		u32 brd = zx279133_9132_vendor_flood[flood][0];
++
++		return zx279133_eram_window_patch(eth, ZX279133_MF_ERAM_SDT_ID,
++						  ppu, 2, 0xffffffff,
++						  brd);
+ 	}
+-	dev_info(eth->dev, "NP init: PPU tables done\n");
++}
+ 
+-	dev_info(eth->dev, "NP init: SPA attributes begin\n");
+-	zx279133_spa_prepare(eth);
+-	dev_info(eth->dev, "NP init: SPA attributes done\n");
++/*
++ * The five jacks' flood groups (PPU 1..4 and the 2.5G jack's lane, PPU 5),
++ * with the CPU port in them.
++ *
++ * A group holds one destination port id, in bits 0..5, and the vendor's own
++ * groups hold exactly one member: the WAN port (PPU 0, which on this board is
++ * the PON).  That is right for a router, where a frame the switch does not
++ * know is to go out of the WAN - and wrong for this board, whose CPU port is
++ * a bridge port: a unicast frame addressed to the board itself, arriving
++ * before the 9132 has learned the board's address, is dropped at the 9132 and
++ * never reaches the CPU at all.  The vendor's own system has the same hole
++ * and does not care, because the vendor's CPU port is fed by the protocol
++ * trap (ERAM table 0x18) rather than by the flood path.
++ *
++ * So the CPU port goes into the five jacks' groups.  The entry holds one
++ * destination port, so the group becomes the CPU port instead of the WAN
++ * port: the frame is delivered instead of being dropped, and the board's
++ * answer teaches the 9132 the entry by ordinary source-address learning.
++ *
++ * This is the one place where this driver deliberately differs from the
++ * vendor, and it can only make the 9132 send more frames to the port the
++ * CPU is listening on.
++ */
++static int zx279133_9132_flood_cpu_port(struct zx279133_eth *eth)
++{
++	u32 p;
++	int ret;
+ 
+-	dev_info(eth->dev, "NP init: NPPU early setup begin\n");
+-	ret = zx279133_nppu_early_prepare(eth);
+-	if (ret) {
+-		dev_err(eth->dev, "NP init: NPPU early setup failed: %d\n", ret);
+-		goto err_nppu_early_restore;
++	for (p = ZX279133_9132_UNI_PPU_FIRST;
++	     p <= ZX279133_9132_OUTERPHY_PPU; p++) {
++		ret = zx279133_eram_table_set_bits(eth,
++						   ZX279133_FLOOD_ERAM_SDT_ID,
++						   p << 6, 32,
++						   ZX279133_9132_CONDUIT_PPU);
++		if (ret)
++			return ret;
++		ret = zx279133_eram_table_set_bits(eth,
++						   ZX279133_FLOOD_ERAM_SDT_ID,
++						   (p + 0x10) << 6, 32,
++						   ZX279133_9132_CONDUIT_PPU);
++		if (ret)
++			return ret;
++		ret = zx279133_eram_table_set_bits(eth,
++						   ZX279133_FLOOD_ERAM_SDT_ID,
++						   (p + 0x20) << 6, 32,
++						   ZX279133_9132_CONDUIT_PPU);
++		if (ret)
++			return ret;
+ 	}
+-	dev_info(eth->dev, "NP init: NPPU early setup done\n");
+ 
+-	dev_info(eth->dev, "NP init: SMCT setup begin\n");
+-	zx279133_smct_prepare(eth);
+-	dev_info(eth->dev, "NP init: SMCT setup done\n");
++	dev_info(eth->dev,
++		 "9132 flood groups of PPU %u..%u point at the CPU port %u\n",
++		 ZX279133_9132_UNI_PPU_FIRST, ZX279133_9132_UNI_PPU_LAST,
++		 ZX279133_9132_CONDUIT_PPU);
+ 
+-	dev_info(eth->dev, "NP init: NPPU late setup begin\n");
+-	zx279133_nppu_late_prepare(eth);
+-	dev_info(eth->dev, "NP init: NPPU late setup done\n");
++	return 0;
++}
+ 
+-	dev_info(eth->dev, "NP init: SDET setup begin\n");
+-	zx279133_sdet_prepare(eth);
+-	dev_info(eth->dev, "NP init: SDET setup done\n");
++/*
++ * Bring up the 9132's UNI ports and its CPU port.
++ *
++ * The CPU port is PPU 15, the trap the SoC reaches the 9132 through.  Every
++ * frame between the CPU and the jacks crosses it.
++ */
++static int zx279133_9132_port_init(struct zx279133_eth *eth)
++{
++	u32 ppu, attr;
++	int ret;
+ 
+-	dev_info(eth->dev, "NP init: SIPC scheduler setup begin\n");
+-	zx279133_sipc_final_prepare(eth);
+-	dev_info(eth->dev, "NP init: SIPC scheduler setup done\n");
++	for (ppu = ZX279133_9132_UNI_PPU_FIRST; ppu <= ZX279133_9132_UNI_PPU_LAST;
++	     ppu++) {
++		ret = zx279133_9132_port_words_vendor(eth, ppu);
++		if (ret)
++			return ret;
+ 
+-	dev_info(eth->dev, "NP init: MF port PPU setup begin\n");
+-	ret = zx279133_mf_port_ppuinit(eth);
+-	if (ret) {
+-		dev_err(eth->dev, "NP init: MF port PPU setup failed: %d\n", ret);
+-		goto err_route_off;
+-	}
+-	dev_info(eth->dev, "NP init: MF port PPU setup done\n");
++		/*
++		 * Read the attribute word back.  The SPA indirect path is the
++		 * only way this driver talks to the 9132, so a word that does
++		 * not read back as written means the write never reached the
++		 * chip, and no amount of further port setup can work until
++		 * that is understood.
++		 */
++		ret = zx279133_spa_indirect_read(eth, ppu,
++						 ZX279133_PPU_ATTR_REG, &attr);
++		if (ret)
++			return ret;
++		dev_info(eth->dev,
++			 "9132 PPU %u attribute word %08x (vendor configuration)\n",
++			 ppu, attr);
+ 
+-	dev_info(eth->dev, "NP init: LAN port bring-up begin\n");
+-	ret = zx279133_lan_port_bringup(eth);
+-	if (ret) {
+-		dev_err(eth->dev, "NP init: LAN port bring-up failed: %d\n", ret);
+-		goto err_route_off;
++		/* And the copy of it in the table the switch engine reads. */
++		ret = zx279133_9132_mf_mirror(eth, ppu);
++		if (ret)
++			return ret;
+ 	}
+-	dev_info(eth->dev, "NP init: LAN port bring-up done\n");
++
++	/*
++	 * The CPU port: PPU 15, the trap the SoC reaches the 9132 through.
++	 * Every frame between the CPU and the jacks crosses it, and the
++	 * vendor's own working value for a port's words is the same as for the
++	 * four jacks - entry program 0xa6a5, no SVID, the same attribute word.
++	 */
++	ret = zx279133_9132_port_words_vendor(eth, ZX279133_9132_CONDUIT_PPU);
++	if (ret)
++		return ret;
++	ret = zx279133_spa_indirect_read(eth, ZX279133_9132_CONDUIT_PPU,
++					 ZX279133_PPU_ATTR_REG, &attr);
++	if (ret)
++		return ret;
++	dev_info(eth->dev,
++		 "9132 PPU %u (the CPU trap) attribute word %08x\n",
++		 ZX279133_9132_CONDUIT_PPU, attr);
++
++	/* And the copy of it in the table the switch engine reads. */
++	ret = zx279133_9132_mf_mirror(eth, ZX279133_9132_CONDUIT_PPU);
++	if (ret)
++		return ret;
++
++	/*
++	 * And the flood groups: the vendor's hold the WAN port, which drops a
++	 * unicast frame addressed to the board itself on the floor before the
++	 * CPU ever sees it.
++	 */
++	ret = zx279133_9132_flood_cpu_port(eth);
++	if (ret)
++		return ret;
++
++	dev_info(eth->dev,
++		 "9132 UNI ports %u..%u and the CPU port %u up (the vendor's configuration)\n",
++		 ZX279133_9132_UNI_PPU_FIRST, ZX279133_9132_UNI_PPU_LAST,
++		 ZX279133_9132_CONDUIT_PPU);
++
++	return 0;
++}
++
++/*
++ * PPU 5 is the 2.5G jack's lane.
++ *
++ * The vendor's own port for that jack is the SPA memory id 5, whose attribute
++ * table is named spa_port_attr_xmac_0 (docs/92 §70.3), and the vendor gives it
++ * exactly the same word set as the four UNI jacks: the same entry program
++ * 0x0000a6a5, the same a1/a2/a9/a10/a13/a19.  Only its two flood words
++ * differ, because they are the fifth flood group - 0x05400410 and 0x01400940
++ * against 0x04400410 / 0x00400840 and up - and zx279133_9132_vendor_flood[]
++ * already carries them (its comment says so: "PPU 1..4 are the four UNI
++ * jacks and PPU 5 is XMAC0").
++ *
++ * On this board PPU 5 comes out of the earlier steps with another board's
++ * values all over it, not just with the wrong entry program.  Measured
++ * 2026-10-28 04:49 on the running board:
++ *
++ *	PPU 5   a0 0x00008015  a10 0x01f4000c  a13 0x00650650
++ *	        a17 0x00000000  a18 0x00000000  a19 0x00042000
++ *	PPU 1   a0 0x0000a6a5  a10 0x0fa0000e  a13 0x00008008
++ *	        a17 0x04400410  a18 0x00400840  a19 0x96040001
++ *
++ * 0x00008015 is the factory's own entry program for this board's memory 5
++ * (start PC 10, flow 1), 0x01f4000c is the PON port's
++ * (PPU 0) a10, and a17/a18 are zero, so the port is in no flood group at all.
++ * The vendor's port has a flood group of its own; this one has none.
++ *
++ * The consequence is not subtle: with the wrong words on this port the 9132
++ * never hands its frames to the IDM.  The IDM's "receive cpu pkt cnt from DMA"
++ * (nppt+0x280180) stays at 0 and all sixteen receive queue heads stay empty,
++ * no matter how much traffic the LAN sends.
++ *
++ * So the whole set is written here, after every other step that touches a
++ * port's words (zx279133_spa_prepare() writes a1/a2/a9/a10/a13,
++ * zx279133_mf_port_ppuinit() writes a19), and the entry program is read back:
++ * the board has to show the word it was given.
++ */
++static int zx279133_9132_ppu5_words(struct zx279133_eth *eth)
++{
++	const u32 ppu = ZX279133_9132_OUTERPHY_PPU;
++	const u32 want = 0x0000a6a5;
++	u32 value;
++	int ret;
++
++	/* The vendor's words for this port: the set the four UNI jacks get,
++	 * plus this port's own two flood words. */
++	ret = zx279133_9132_port_words_vendor(eth, ppu);
++	if (ret)
++		return ret;
++
++	/* And the copy of the attribute word in the table the switch engine
++	 * reads. */
++	ret = zx279133_9132_mf_mirror(eth, ppu);
++	if (ret)
++		return ret;
++
++	ret = zx279133_spa_indirect_read(eth, ppu, 0, &value);
++	if (ret)
++		return ret;
++
++	if (value != want)
++		dev_warn(eth->dev,
++			 "9132 PPU %u (the 2.5G jack's lane) entry program is %08x, not %08x\n",
++			 ppu, value, want);
++	else
++		dev_info(eth->dev,
++			 "9132 PPU %u (the 2.5G jack's lane) entry program %08x\n",
++			 ppu, value);
++
++	return 0;
++}
++
++/*
++ * The bus the 9132's four internal PHYs are on: the SoC's MDIO controller #0,
++ * named by the "zx279133,uni-phy-bus" phandle on the NPPT node.
++ */
++static struct mii_bus *zx279133_9132_uni_mdio_bus(struct zx279133_eth *eth)
++{
++	struct device_node *np;
++	struct mii_bus *bus;
++
++	np = of_parse_phandle(eth->dev->of_node, "zx279133,uni-phy-bus", 0);
++	if (!np)
++		return NULL;
++	bus = of_mdio_find_bus(np);
++	of_node_put(np);
++
++	return bus;
++}
++
++/*
++ * BMSR's link bit is latched: it has to be read twice, and the first read
++ * clears the latch.  Returns 1 for link, 0 for no link, -1 for "the PHY did
++ * not answer".
++ */
++static int zx279133_9132_phy_link(struct mii_bus *bus, int addr)
++{
++	int bmsr;
++
++	mdiobus_read(bus, addr, MII_BMSR);
++	bmsr = mdiobus_read(bus, addr, MII_BMSR);
++
++	return (bmsr < 0) ? -1 : !!(bmsr & BMSR_LSTATUS);
++}
++
++/*
++ * The whole register file of one PHY, in one line.
++ *
++ * Why this is here and not a guess: a PHY driver for this chip has to know
++ * what the chip answers before it can be written - which registers exist,
++ * which are the capability registers, whether the link status is in the
++ * standard place.  The chip answers 0x84b9:0x5032 over Clause 22, and no
++ * driver in this tree claims that id, so the driver has to be ours, and ours
++ * has to be written against the chip's own answers rather than against an
++ * assumption about them.  Reading 0x00..0x1f once, at the moment the driver
++ * finds the PHYs, is how those answers get into the log.
++ */
++static void zx279133_9132_phy_dump(struct zx279133_eth *eth, struct mii_bus *bus,
++				   int addr)
++{
++	char buf[256];
++	int reg, len;
++
++	len = scnprintf(buf, sizeof(buf),
++			"9132 UNI PHY %02x regs 00-1f:", addr);
++	for (reg = 0; reg < 32; reg++) {
++		int val = mdiobus_read(bus, addr, reg);
++
++		len += scnprintf(buf + len, sizeof(buf) - len, " %04x",
++				 val < 0 ? 0xffff : (unsigned int)val);
++	}
++	dev_info(eth->dev, "%s", buf);
++}
++
++static void zx279133_9132_phy_enable(struct zx279133_eth *eth)
++{
++	struct mii_bus *bus;
++	u16 found_addr[ZX279133_9132_UNI_PHY_LAST -
++			ZX279133_9132_UNI_PHY_FIRST + 1];
++	int addr, found = 0;
++	u32 i;
++
++	bus = zx279133_9132_uni_mdio_bus(eth);
++	if (!bus) {
++		dev_err(eth->dev,
++			"9132 PHY bus is not registered; UNI PHYs left as they are\n");
++		return;
++	}
++
++	for (addr = ZX279133_9132_UNI_PHY_FIRST;
++	     addr <= ZX279133_9132_UNI_PHY_LAST; addr++) {
++		int id1, id2, bmcr, bmcr_rb, link;
++
++		id1 = mdiobus_read(bus, addr, MII_PHYSID1);
++		id2 = mdiobus_read(bus, addr, MII_PHYSID2);
++		if (id1 < 0 || id2 < 0)
++			continue;
++		if ((id1 == 0xffff && id2 == 0xffff) || (id1 == 0 && id2 == 0))
++			continue;
++
++		bmcr = mdiobus_read(bus, addr, MII_BMCR);
++		if (bmcr < 0)
++			continue;
++		/*
++		 * Linux spells the powerdown bit BMCR_PDOWN (bit 11) - there is
++		 * no BMCR_POWERDOWN - and BMCR has no "enable" bit at all, so
++		 * there is no BMCR_ENABLE either.  Powering a PHY up is
++		 * clearing PDOWN and enabling auto-negotiation, which is what
++		 * the vendor's zte_set_gephy_enable() does.
++		 */
++		bmcr &= ~BMCR_PDOWN;
++		bmcr |= BMCR_ANENABLE;
++		mdiobus_write(bus, addr, MII_BMCR, (u16)bmcr);
++
++		/*
++		 * Read the control register back.  A write that does not land
++		 * and a PHY that stays powered down look the same from the
++		 * outside, and only the read-back tells them apart - and this
++		 * word is the only place the write can be seen at all.
++		 */
++		bmcr_rb = mdiobus_read(bus, addr, MII_BMCR);
++		if (bmcr_rb < 0)
++			bmcr_rb = -1;
++
++		link = zx279133_9132_phy_link(bus, addr);
++
++		/*
++		 * The full register file, once, right after the PHY has been
++		 * powered up: it is the only place the chip's own answers are
++		 * written down, and they are what a PHY driver for it has to
++		 * be written against.
++		 */
++		zx279133_9132_phy_dump(eth, bus, addr);
++
++		found_addr[found++] = addr;
++		if (bmcr_rb < 0)
++			dev_info(eth->dev,
++				 "9132 UNI PHY %02x: id %04x:%04x, BMCR %04x, read-back failed (%d), link %d\n",
++				 addr, id1, id2, bmcr & 0xffff, bmcr_rb, link);
++		else
++			dev_info(eth->dev,
++				 "9132 UNI PHY %02x: id %04x:%04x, BMCR %04x->%04x, link %d\n",
++				 addr, id1, id2, bmcr & 0xffff, (u16)bmcr_rb, link);
++	}
++
++	if (!found) {
++		dev_err(eth->dev,
++			"no 9132 UNI PHY answered on %02x..%02x\n",
++			ZX279133_9132_UNI_PHY_FIRST,
++			ZX279133_9132_UNI_PHY_LAST);
++		return;
++	}
++
++	/*
++	 * The copper side needs a moment to negotiate, and a PHY that was
++	 * just powered up reports "no link" for a while even with the cable
++	 * in.  One early read would call a slow port a dead one, so read the
++	 * link again after the settle - this is the reading that says which
++	 * of the four jacks the test PC is actually plugged into.
++	 */
++	msleep(1000);
++	for (i = 0; i < (u32)found; i++)
++		dev_info(eth->dev, "9132 UNI PHY %02x: link after settle %d\n",
++			 found_addr[i], zx279133_9132_phy_link(bus, found_addr[i]));
++}
++
++/*
++ * The 9132's per-port enable word: SPA indirect address 0 of a PPU port's
++ * memory.  docs/15 lists it as the first difference between the vendor's
++ * switch.ko and mainline - "port enable, written when the netdev is opened" -
++ * and mainline has never written it.
++ *
++ * This round only reads it.  A read has no side effects and says what the
++ * bootloader left behind, and a word that reads back as something else than
++ * what was written is the one thing that distinguishes "the write never
++ * reached the chip" from "the chip was never told anything" - the two look
++ * identical from the outside.
++ */
++static void zx279133_9132_port_enable_read(struct zx279133_eth *eth)
++{
++	u32 ppu, val;
++	int ret;
++
++	for (ppu = 0; ppu <= 5; ppu++) {
++		ret = zx279133_spa_indirect_read(eth, ppu, 0, &val);
++		if (ret) {
++			dev_info(eth->dev,
++				 "9132 PPU %u enable word: read failed (%d)\n",
++				 ppu, ret);
++			continue;
++		}
++		dev_info(eth->dev, "9132 PPU %u enable word %08x\n", ppu, val);
++	}
++}
++
++/*
++ * The 9132's own protocol action table.
++ *
++ * The switch decides what to do with a frame of a given protocol on a given
++ * port by looking in that port's reason-action table, and whether the frame
++ * is forwarded or trapped to the CPU is what that table says.  The vendor's
++ * switch.ko installs this table on every switch port: 77 (protocol, action)
++ * pairs copied out of its own .rodata, and the action lands in the low two
++ * bits of the entry.
++ *
++ * It is the only way a frame from a LAN jack reaches the CPU at all.  The
++ * vendor's flood group holds the WAN port and nothing else
++ * (sw_init_flood_ctrl), so a frame whose destination is not in the MAC
++ * table is never flooded towards the CPU - it has to be trapped.  The
++ * vendor's own counters show the trap firing exactly as many times as the
++ * test PC sent frames, and the counter for the frames that arrived on the
++ * PC's own jack and were output again towards the jacks - the same seven.
++ *
++ * This table is the switch's own, and it is not the NPPT's protocol table
++ * above: the switch looks up the frame's protocol in the table of the port
++ * it came in on, in SE ERAM table 0x18, and the entry is one word per
++ * (port, protocol), at the entry (port << 7) | protocol.
++ *
++ * The vendor's own code writes it that way: tm_port_protocol_pktdeal_set()
++ * puts the action into the low two bits of a byte and hands it to
++ * port_reason_action_table_set(), which computes the index
++ * reason | (port << 7) and writes one word.  The action is stored as it
++ * is - 2 means "give this frame to the CPU" - and the pairs themselves are
++ * the 77 (protocol, action) pairs in switch.ko's own .rodata.
++ *
++ * 0xff means the vendor's table has no entry for that protocol, so nothing
++ * is written for it and the chip keeps what it had.
++ */
++static const u8 zx279133_9132_proto_action[128] = {
++	2, 2, 255, 255, 255, 255, 255, 255,
++	2, 2, 2, 2, 2, 2, 255, 255,
++	2, 2, 2, 2, 2, 2, 255, 2,
++	2, 2, 2, 2, 2, 2, 2, 2,
++	2, 2, 2, 2, 2, 2, 2, 2,
++	2, 2, 2, 2, 255, 2, 255, 255,
++	2, 255, 2, 2, 2, 0, 0, 0,
++	0, 0, 0, 0, 0, 0, 0, 0,
++	0, 0, 0, 0, 0, 0, 0, 0,
++	2, 0, 2, 2, 0, 255, 255, 255,
++	2, 2, 2, 0, 2, 2, 2, 2,
++	2, 255, 255, 255, 255, 255, 255, 255,
++	2, 2, 2, 255, 255, 255, 255, 255,
++	255, 255, 255, 255, 255, 255, 255, 255,
++	255, 255, 255, 255, 255, 255, 255, 255,
++	255, 255, 255, 255, 255, 255, 255, 255,
++};
++
++/*
++ * One protocol action, in every port group the port has.
++ *
++ * The 9132 numbers its ports in three banks: a port p is also p + 0x10 and
++ * p + 0x20.  The vendor's own flood words say so - a port p carries the
++ * flood group ids p<<6, (p+0x10)<<6 and (p+0x20)<<6, and those ids are the
++ * port numbers multiplied by 64 - and the protocol action table is indexed
++ * by (port << 7) | protocol, so a frame that arrives on a jack looks its
++ * action up in one of three groups.
++ *
++ * The vendor's load path writes all of them: the groups 0..7 and the groups
++ * 0x10..0x30.  This driver wrote the groups 0..7 only, so the groups a frame
++ * really looks up were empty - and a frame that finds no action is neither
++ * forwarded nor trapped, it is dropped inside the chip.  That is what the
++ * bench saw: the frame arrived at the SMAC, the SDET, the SIPC, the SPA and
++ * the SMCT, and the SMCT never handed it on, because it had no action for
++ * it.
++ */
++static int zx279133_9132_proto_action_set(struct zx279133_eth *eth, u32 port,
++					  u32 proto, u32 action)
++{
++	static const u32 bank[] = { 0x00, 0x10, 0x20 };
++	u32 b;
++	int ret;
++
++	for (b = 0; b < ARRAY_SIZE(bank); b++) {
++		ret = zx279133_eram_table_set_bits(eth,
++					ZX279133_SWITCH_PROTO_SDT_ID,
++					proto | ((port + bank[b]) << 7), 2,
++					action);
++		if (ret)
++			return ret;
++	}
++
++	return 0;
++}
++
++static int zx279133_9132_proto_init(struct zx279133_eth *eth)
++{
++	u32 base = zx279133_eram_base_of(ZX279133_SWITCH_PROTO_SDT_ID);
++	u32 port, proto;
++	int ret;
++
++	if (!base) {
++		dev_err(eth->dev, "the switch's protocol table has no base\n");
++		return -EINVAL;
++	}
++
++	for (port = 0; port <= 7; port++) {
++		for (proto = 0; proto < 128; proto++) {
++			u32 action = zx279133_9132_proto_action[proto];
++
++			if (action == 0xff)
++				continue;
++			ret = zx279133_9132_proto_action_set(eth, port, proto,
++							     action);
++			if (ret)
++				return ret;
++		}
++	}
++
++	dev_info(eth->dev,
++		 "9132 switch ports 0..7 have the protocol action table at ERAM block %u (ARP trapped to the CPU)\n",
++		 base);
++
++	return 0;
++}
++
++#define ZX279133_VENDOR_CPU_BASE_QID	0x193
++#define ZX279133_VENDOR_OMCI_QID	7
++
++/*
++ * The vendor's ERAM 0x19 - the reason map - in full.
++ *
++ * The index of an entry is cpu_qid + (reason << 7), so the table holds 128
++ * cpu_qids per reason, and the value is the five-bit CPU queue id in bits
++ * 24..28 of a 32-bit entry.
++ *
++ * The vendor's init path programs reason 0 and reason 1 only, 127 cpu_qids
++ * each - cpu_qid 50 is the one it never writes - and the queue id for reason 1
++ * is always the reason 0 one plus eight.  tm_reason_map_cpu_qid_set() at
++ * np_133.ko 0x1153b4 is the only writer; the table and the values are in
++ * staging/ctl/re-idm-queue-map.md.
++ *
++ * 0xff marks the entry the vendor leaves alone.  The ERAM comes up empty after
++ * a power cut, so that entry reads back as zero, and zero is not a queue id
++ * the vendor ever uses for a trapped LAN frame.
++ */
++static const u8 zx279133_9132_reason_qid[128] = {
++	7, 7, 6, 4, 4, 4, 4, 4, 6, 6, 6, 6, 6, 4, 4, 4,
++	6, 6, 6, 6, 6, 6, 6, 4, 4, 4, 4, 6, 6, 6, 6, 6,
++	6, 6, 6, 6, 6, 6, 6, 6, 2, 2, 6, 6, 6, 6, 5, 6,
++	6, 6, 6, 3, 0xff, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
++	5, 5, 5, 4, 4, 4, 4, 3, 6, 6, 6, 2, 1, 4, 4, 4,
++	3, 3, 3, 5, 4, 4, 3, 3, 4, 4, 4, 4, 4, 4, 4, 4,
++	1, 1, 2, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
++	4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
++};
++
++/*
++ * The vendor's ERAM 0x27 - the outport map - in full.
++ *
++ * The index is the outport, 0 to 63, and the entry is 16 bits: the real port
++ * in bits 0..5 and the queue id in bits 6..14.
++ *
++ * The vendor's outport_and_real_port_map_table_init() (np_133.ko 0xc06c8)
++ * writes all 64 entries, and it does *not* put the real port 15 everywhere:
++ *
++ *   outport  0..14  ->  real port = outport,  queue id = 0
++ *   outport 15      ->  real port = 15,        queue id = 0x193 (403)
++ *   outport 16..23  ->  real port = 15,        queue id = 0x1a3 (419) + delta
++ *   outport 24..48  ->  real port = outport,  queue id = 0
++ *   outport 49      ->  real port = 49,        queue id = 0x1b1 (433)
++ *   outport 50      ->  real port = 50,        queue id = 0x1b3 (435)
++ *   outport 51      ->  real port = 51,        queue id = 0x1b5 (437)
++ *   outport 52..63  ->  real port = outport,  queue id = 0
++ *
++ * This driver used to write the real port 15 everywhere and the queue id
++ * 0x1a3 everywhere, which is what the vendor's *print* says - but the print
++ * only covers outports 16..23 (the ones that are the IDM's own), so the
++ * other 61 entries were read off the wrong line of the log.
++ *
++ * Both columns matter.  The queue id 0x1a3 is 419, which is outside the
++ * RED's 401 queues (0..400), so a frame the switch egresses on any outport
++ * other than 15..23 was given a queue the RED cannot deliver on - which is
++ * what the RED's `req_que_disc` and `drop_pkt` flags report.  And the real
++ * port is the physical port the frame leaves by: a frame the 9132 forwards
++ * to a UNI jack was aimed at the CPU trap instead.
++ */
++#define ZX279133_VENDOR_OUTPORT_CPU_REAL_PORT	0x0f
++#define ZX279133_VENDOR_OUTPORT_IDM_FIRST	0x10
++#define ZX279133_VENDOR_OUTPORT_IDM_LAST	0x17
++#define ZX279133_VENDOR_OUTPORT_IDM_QID		0x1a3
++#define ZX279133_VENDOR_OUTPORT_CPU_QID	0x193
++
++static u32 zx279133_9132_outport_real(u32 outport)
++{
++	/* The CPU trap and the IDM's own outports all leave by port 15. */
++	if (outport >= ZX279133_VENDOR_OUTPORT_CPU_REAL_PORT &&
++	    outport <= ZX279133_VENDOR_OUTPORT_IDM_LAST)
++		return ZX279133_VENDOR_OUTPORT_CPU_REAL_PORT;
++
++	return outport;
++}
++
++static u32 zx279133_9132_outport_qid(u32 outport)
++{
++	switch (outport) {
++	case 0x0f:
++		return ZX279133_VENDOR_OUTPORT_CPU_QID;
++	case 0x31:
++		return 0x1b1;
++	case 0x32:
++		return 0x1b3;
++	case 0x33:
++		return 0x1b5;
++	default:
++		/*
++		 * The IDM's own outports get the base queue plus a per-port
++		 * delta the vendor reads out of a table it fills at run time;
++		 * the delta is zero here, which is the base value.
++		 */
++		if (outport >= ZX279133_VENDOR_OUTPORT_IDM_FIRST &&
++		    outport <= ZX279133_VENDOR_OUTPORT_IDM_LAST)
++			return ZX279133_VENDOR_OUTPORT_IDM_QID;
++		return 0;
++	}
++}
++
++/*
++ * Write one 128-bit ERAM block.  The block number is the one the console's
++ * "er" and "ew" commands use, so a table written here can be read back with
++ * them.
++ */
++static int zx279133_9132_eram_block_write(struct zx279133_eth *eth, u32 block,
++					  const u32 words[ZX279133_SMMU0_WORDS])
++{
++	return zx279133_smmu0_write(eth, block << 7, words,
++				     ZX279133_SMMU0_WORDS,
++				     ZX279133_SMMU0_CMD_WRITE);
++}
++
++/*
++ * The reason map, the vendor's way.
++ *
++ * A frame the switch hands to the CPU carries a reason, and this table says
++ * which of the SoC's CPU queues it is delivered on.  The vendor writes 254
++ * entries; this driver used to write one - reason 0, cpu_qid 0 - and left the
++ * other 253 at zero, which is not a queue id the switch can deliver on.  The
++ * whole table has to be there, because the cpu_qid of a trapped LAN frame is
++ * not the one this driver happened to guess.
++ */
++static int zx279133_9132_reason_map_init(struct zx279133_eth *eth)
++{
++	u32 base = zx279133_eram_base_of(ZX279133_QID_ERAM_SDT_ID);
++	u32 reason, block, cpu, i;
++	u32 words[ZX279133_SMMU0_WORDS];
++	int ret;
++
++	if (!base)
++		return dev_err_probe(eth->dev, -EINVAL,
++				     "the reason map has no base\n");
++
++	for (reason = 0; reason < 2; reason++) {
++		for (block = 0; block < 32; block++) {
++			for (i = 0; i < ZX279133_SMMU0_WORDS; i++)
++				words[i] = 0;
++			for (i = 0; i < ZX279133_SMMU0_WORDS; i++) {
++				cpu = block * ZX279133_SMMU0_WORDS + i;
++
++				if (zx279133_9132_reason_qid[cpu] == 0xff)
++					continue;
++				words[i] = (zx279133_9132_reason_qid[cpu] +
++					    (reason ? 8 : 0)) << 24;
++			}
++			ret = zx279133_9132_eram_block_write(eth,
++					base + reason * 32 + block, words);
++			if (ret)
++				return dev_err_probe(eth->dev, ret,
++						     "the reason map did not go into ERAM table 0x19\n");
++		}
++	}
++
++	dev_info(eth->dev,
++		 "9132 reason map: ERAM table 0x19 at block %u holds the vendor's 254 entries (reasons 0 and 1)\n",
++		 base);
++
++	return 0;
++}
++
++/*
++ * The outport map, the vendor's way.
++ *
++ * The switch says "this frame goes out of outport N"; this table says which
++ * real port that is and which queue it lands on.  The vendor writes all 64
++ * entries; this driver used to write one - outport 15 - and left the other
++ * 63 at zero, so a frame that came out of any other outport had no real port
++ * and no queue.
++ */
++static int zx279133_9132_outport_map_init(struct zx279133_eth *eth)
++{
++	u32 base = zx279133_eram_base_of(ZX279133_OUTPORT_ERAM_SDT_ID);
++	u32 block, outport, i;
++	u32 words[ZX279133_SMMU0_WORDS];
++	int ret;
++
++	if (!base)
++		return dev_err_probe(eth->dev, -EINVAL,
++				     "the outport map has no base\n");
++
++	for (block = 0; block < 8; block++) {
++		for (i = 0; i < ZX279133_SMMU0_WORDS; i++)
++			words[i] = 0;
++		for (i = 0; i < 8; i++) {
++			u32 value;
++
++			outport = block * 8 + i;
++			value = zx279133_9132_outport_real(outport) |
++				(zx279133_9132_outport_qid(outport) << 6);
++			if (i & 1)
++				words[i / 2] |= value << 16;
++			else
++				words[i / 2] |= value;
++		}
++		ret = zx279133_9132_eram_block_write(eth, base + block, words);
++		if (ret)
++			return dev_err_probe(eth->dev, ret,
++					     "the outport map did not go into ERAM table 0x27\n");
++	}
++
++	dev_info(eth->dev,
++		 "9132 outport map: ERAM table 0x27 at block %u holds the vendor's 64 entries\n",
++		 base);
++
++	return 0;
++}
++
++static int zx279133_9132_cpu_path_init(struct zx279133_eth *eth)
++{
++	int ret;
++
++	/*
++	 * The global config table.  np_user_table_init() calls
++	 * glb_cfg_table_cpu_base_qid_set(0x193), and nothing else writes
++	 * it; the setter puts the value in bits 1..9 of the halfword at
++	 * byte 14 of entry 0.  The table's entries are 128 bits wide, so
++	 * that halfword is word 3 of the entry, bits 17..25.
++	 *
++	 * Two more fields of the same word come from the same load path:
++	 * glb_cfg_table_mul_ip_mode_set(1) puts bit 5 of byte 13 - bit 13
++	 * of word 3 - and glb_cfg_table_ipv6_crc32_mode_set(1) puts bit 0
++	 * of byte 14 - bit 16 of word 3.
++	 */
++	ret = zx279133_eram_window_patch(eth, ZX279133_GLBCFG_ERAM_SDT_ID, 0, 3,
++					  (0x1ffu << 17) | (1u << 16) | (1u << 13),
++					  (ZX279133_VENDOR_CPU_BASE_QID << 17) |
++					  (1u << 16) | (1u << 13));
++	if (ret)
++		return dev_err_probe(eth->dev, ret,
++				     "the CPU base queue id did not go into ERAM table 0x22\n");
++
++	ret = zx279133_9132_outport_map_init(eth);
++	if (ret)
++		return ret;
++
++	ret = zx279133_9132_reason_map_init(eth);
++	if (ret)
++		return ret;
++
++	dev_info(eth->dev,
++		 "9132 CPU path: base queue %u, outport 15 -> real port 15 queue %u, reason 0 -> queue %u\n",
++		 ZX279133_VENDOR_CPU_BASE_QID, ZX279133_VENDOR_CPU_BASE_QID,
++		 ZX279133_VENDOR_OMCI_QID);
++
++	return 0;
++}
++
++/*
++ * The tables that decide whether a port may talk to another port and
++ * whether a frame is checked for a VLAN on the way out.
++ *
++ * The ERAM is DRAM: it comes up empty after a power cut, and the vendor
++ * fills these tables in its own load path, so a driver that leaves them
++ * alone leaves them empty.  An empty isolation matrix says that no port
++ * may talk to any other, and an empty output-VLAN-check table says that
++ * nothing is checked - the two are opposites, and only one of them lets
++ * a frame through.
++ *
++ * Every value here is the vendor's:
++ *
++ *   0x1b  the isolation matrix, 64 by 64 ports, one bit each, indexed
++ *         src | (dst << 6).  sw_init_port_isolate() writes the whole of
++ *         it: the diagonal is 1 and everything else is 0.
++ *
++ *   0x23  the output VLAN check, one bit per port.
++ *         sw_set_default_vlan_check_ctrl() turns it on for ports 0..7
++ *         and 0x10..0x30, and only turns it off again for ports 5 and 6
++ *         when the XMACs are extended - and on this board they are not:
++ *         the live system's own port attribute word for those two ports
++ *         has bit 19 clear, and that bit is the extend flag.
++ *
++ *   0x24  the port bind, one bit per port.  sw_init_port_route_mode()
++ *         writes 0 into all of them.
++ *
++ *   0x25  the port PVID, 16 bits per port.  The live system reads 0 for
++ *         every one of its ports, and so does the vendor's own VLAN
++ *         setup: zxic_api_sw_vlan_set_port_vlancfg(port, 0, 0, 0xfff).
++ */
++#define ZX279133_ISOLATE_ERAM_SDT_ID	0x1b
++#define ZX279133_OUTVLAN_ERAM_SDT_ID	0x23
++#define ZX279133_PORTBIND_ERAM_SDT_ID	0x24
++#define ZX279133_PVID_ERAM_SDT_ID	0x25
++
++static int zx279133_9132_isolate_init(struct zx279133_eth *eth)
++{
++	u32 base = zx279133_eram_base_of(ZX279133_ISOLATE_ERAM_SDT_ID);
++	u32 w;
++	int ret;
++
++	if (!base)
++		return -EINVAL;
++
++	/*
++	 * The index is src | (dst << 6), so the 64 sources of one
++	 * destination are 64 consecutive bits and two destinations share a
++	 * 128-bit window.  One read and one write per window is enough.
++	 *
++	 * Destination 2w owns the first half of the window: its source s is
++	 * bit s of it, so its diagonal (src == dst) is bit 2w.
++	 *
++	 * Destination 2w+1 owns the second half: its source s is bit 64+s of
++	 * the window, so its diagonal is bit 64 + 2w + 1 = 2w + 65.  It was
++	 * written as w + 65, which is the diagonal of destination 2w+1 only
++	 * for w == 0; for every other w it left the diagonal of the odd
++	 * destinations clear and set a bit that belongs to some other pair -
++	 * (8, 15) among them, which is a port and the CPU's own.
++	 */
++	for (w = 0; w < 32; w++) {
++		u32 window[ZX279133_SMMU0_WORDS];
++		u32 addr = (base << 7) + (w << 7);
++		u32 b0 = 2 * w;
++		u32 b1 = 2 * w + 65;
++
++		ret = zx279133_smmu0_read(eth, addr, window, ARRAY_SIZE(window),
++					  ZX279133_SMMU0_CMD_READ);
++		if (ret)
++			return ret;
++
++		window[0] = 0;
++		window[1] = 0;
++		window[2] = 0;
++		window[3] = 0;
++		window[b0 / 32] |= 1u << (b0 % 32);
++		window[b1 / 32] |= 1u << (b1 % 32);
++
++		ret = zx279133_smmu0_write(eth, addr, window, ARRAY_SIZE(window),
++					   ZX279133_SMMU0_CMD_WRITE);
++		if (ret)
++			return ret;
++	}
++
++	dev_info(eth->dev,
++		 "9132 isolation matrix written: the diagonal only, %u ports\n",
++		 64);
++
++	return 0;
++}
++
++static int zx279133_9132_switch_tables_init(struct zx279133_eth *eth)
++{
++	u32 p;
++	int ret;
++
++	/* The output VLAN check: on for every port the vendor turns it on. */
++	for (p = 0; p < 8; p++) {
++		ret = zx279133_eram_table_set_bits(eth,
++						    ZX279133_OUTVLAN_ERAM_SDT_ID,
++						    p, 1, 1);
++		if (ret)
++			return ret;
++	}
++	for (p = 0x10; p < 0x31; p++) {
++		ret = zx279133_eram_table_set_bits(eth,
++						    ZX279133_OUTVLAN_ERAM_SDT_ID,
++						    p, 1, 1);
++		if (ret)
++			return ret;
++	}
++
++	/* The port bind: no port is bound to another. */
++	for (p = 0; p < 64; p++) {
++		ret = zx279133_eram_table_set_bits(eth,
++						    ZX279133_PORTBIND_ERAM_SDT_ID,
++						    p, 1, 0);
++		if (ret)
++			return ret;
++	}
++
++	/* The PVID: none, because this is a transparent bridge. */
++	for (p = 0; p < 8; p++) {
++		ret = zx279133_eram_table_set_bits(eth,
++						    ZX279133_PVID_ERAM_SDT_ID,
++						    p, 16, 0);
++		if (ret)
++			return ret;
++	}
++	for (p = 0x10; p < 0x31; p++) {
++		ret = zx279133_eram_table_set_bits(eth,
++						    ZX279133_PVID_ERAM_SDT_ID,
++						    p, 16, 0);
++		if (ret)
++			return ret;
++	}
++
++	return 0;
++}
++
++/*
++ * The board's own port-flow table: the entry program every SPA port runs.
++ *
++ * The PPU microcode carries a port-flow table of its own, and the loader
++ * applies it to the SPA port attributes as it installs the code.  That table
++ * is *board* configuration - it says which of the SoC's internal ports is
++ * the WAN, which four are the UNI jacks, which one the CPU talks to.
++ *
++ * The blob in the tree (target/linux/zte/zx279133/firmware/zte/zx279133/
++ * mcode_intel.bin) is this board's own, not another board's: it is byte for
++ * byte the vendor's etc/mcode/mcode_133.bin read out of this board's flash,
++ * and the table it carries decodes to exactly the words below.  All 48 ports
++ * the blob names agree with this array and none differ
++ * (staging/ctl/portflow-cmp.py).  So this array is a copy of the blob's own
++ * table, kept here so that the port setup does not depend on the blob's tag
++ * parser - and the blob's tags are skipped anyway
++ * (case ZX279133_MCODE_TAG_PORT_FLOW: break), so writing this array is what
++ * puts the same words in the hardware.
++ *
++ * It is not the last word on any port, though.  Three places write word 0
++ * again after this table is applied - the WAN bringup puts start PC 561 on
++ * the CPU port and copies it to the WAN port, the LAN bringup puts start PC
++ * 10 on the LAN port, and the per-port attribute init sets attribute 4 on
++ * the PON-side ports 49..54 - so the word a port ends up with is not always
++ * the one in this table.  The "pf" command reads what the ports hold.
++ *
++ * A port the blob's table does not name keeps whatever the chip reset left
++ * in it, which is what the vendor's board has too - the vendor's own table
++ * does not touch ports 9, 11, 13 or 51..63 either.
++ */
++static const u32 zx279133_9132_port_flow[64] = {
++	/* 0: PON0, the WAN.  1..4: the four UNI jacks. */
++	0x0000a6a5, 0x0000a6a5, 0x0000a6a5, 0x0000a6a5,
++	/* 5: XMAC0, the CPU's conduit.  6: XMAC1.  7: RGMII1. */
++	0x0000a6a5, 0x0000a6a5, 0x0000a6a5, 0x0000a6a5,
++	0x00039b11,		/* 8 */
++	0x00000000,		/* 9: none */
++	0x0000a6a5,		/* 10 */
++	0x00000000,		/* 11: none */
++	0x00009f99,		/* 12 */
++	0x00000000,		/* 13: none */
++	0x0000a6a5,		/* 14 */
++	0x0000a767,		/* 15: the CPU trap port */
++	/* 16..48: the WOE's queue ports. */
++	0x0000a6a5, 0x0000a6a5, 0x0000a6a5, 0x0000a6a5, 0x0000a6a5,
++	0x0000a6a5, 0x0000a6a5, 0x0000a6a5, 0x0000a6a5, 0x0000a6a5,
++	0x0000a6a5, 0x0000a6a5, 0x0000a6a5, 0x0000a6a5, 0x0000a6a5,
++	0x0000a6a5, 0x0000a6a5, 0x0000a6a5, 0x0000a6a5, 0x0000a6a5,
++	0x0000a6a5, 0x0000a6a5, 0x0000a6a5, 0x0000a6a5, 0x0000a6a5,
++	0x0000a6a5, 0x0000a6a5, 0x0000a6a5, 0x0000a6a5, 0x0000a6a5,
++	0x0000a6a5, 0x0000a6a5, 0x0000a6a5,
++	0x00052825,		/* 49 */
++	0x00052827,		/* 50 */
++	/* 51..63: the vendor's board configures none of them. */
++	0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
++	0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
++	0x00000000, 0x00000000, 0x00000000,
++};
++
++static int zx279133_9132_port_flow_apply(struct zx279133_eth *eth)
++{
++	unsigned int i;
++	int ret;
++
++	for (i = 0; i < ARRAY_SIZE(zx279133_9132_port_flow); i++) {
++		if (!zx279133_9132_port_flow[i])
++			continue;
++		ret = zx279133_spa_indirect_write(eth, i, 0,
++						  zx279133_9132_port_flow[i]);
++		if (ret)
++			return ret;
++	}
++	return 0;
++}
++
++int zx279133_np_prepare(struct zx279133_eth *eth)
++{
++	int ret;
++
++	dev_info(eth->dev, "NP init: SE PLCR setup begin\n");
++	ret = zx279133_se_plcr_init(eth);
++	if (ret) {
++		dev_err(eth->dev, "NP init: SE PLCR setup failed: %d\n", ret);
++		return ret;
++	}
++	dev_info(eth->dev, "NP init: SE PLCR setup done\n");
++
++	dev_info(eth->dev, "NP init: SE table descriptors begin\n");
++	ret = zx279133_se_sdt_create(eth);
++	if (ret) {
++		dev_err(eth->dev, "NP init: SE table descriptors failed: %d\n",
++			ret);
++		return ret;
++	}
++	dev_info(eth->dev, "NP init: SE table descriptors done\n");
++
++	dev_info(eth->dev, "NP init: statistics tables begin\n");
++	zx279133_se_stat_runtime_prepare(eth);
++	dev_info(eth->dev, "NP init: statistics tables done\n");
++
++	dev_info(eth->dev, "NP init: PPU microcode begin\n");
++	ret = zx279133_ppu_mcode_prepare(eth);
++	if (ret) {
++		dev_err(eth->dev, "NP init: PPU microcode failed: %d\n", ret);
++		return ret;
++	}
++	dev_info(eth->dev, "NP init: PPU microcode done\n");
++
++	dev_info(eth->dev, "NP init: PPU tables begin\n");
++	ret = zx279133_np_ppu_init_tail(eth);
++	if (ret) {
++		dev_err(eth->dev, "NP init: PPU tables failed: %d\n", ret);
++		return ret;
++	}
++	dev_info(eth->dev, "NP init: PPU tables done\n");
++
++	dev_info(eth->dev, "NP init: SPA attributes begin\n");
++	zx279133_spa_prepare(eth);
++	dev_info(eth->dev, "NP init: SPA attributes done\n");
++
++	dev_info(eth->dev, "NP init: NPPU early setup begin\n");
++	ret = zx279133_nppu_early_prepare(eth);
++	if (ret) {
++		dev_err(eth->dev, "NP init: NPPU early setup failed: %d\n", ret);
++		goto err_nppu_early_restore;
++	}
++	dev_info(eth->dev, "NP init: NPPU early setup done\n");
++
++	dev_info(eth->dev, "NP init: SMCT setup begin\n");
++	zx279133_smct_prepare(eth);
++	dev_info(eth->dev, "NP init: SMCT setup done\n");
++
++	dev_info(eth->dev, "NP init: NPPU late setup begin\n");
++	zx279133_nppu_late_prepare(eth);
++	dev_info(eth->dev, "NP init: NPPU late setup done\n");
++
++	dev_info(eth->dev, "NP init: SDET setup begin\n");
++	zx279133_sdet_prepare(eth);
++	dev_info(eth->dev, "NP init: SDET setup done\n");
++
++	dev_info(eth->dev, "NP init: SIPC scheduler setup begin\n");
++	zx279133_sipc_final_prepare(eth);
++	dev_info(eth->dev, "NP init: SIPC scheduler setup done\n");
++
++	dev_info(eth->dev, "NP init: MF port PPU setup begin\n");
++	ret = zx279133_mf_port_ppuinit(eth);
++	if (ret) {
++		dev_err(eth->dev, "NP init: MF port PPU setup failed: %d\n", ret);
++		goto err_route_off;
++	}
++	dev_info(eth->dev, "NP init: MF port PPU setup done\n");
++
++	dev_info(eth->dev, "NP init: LAN port bring-up begin\n");
++	ret = zx279133_lan_port_bringup(eth);
++	if (ret) {
++		dev_err(eth->dev, "NP init: LAN port bring-up failed: %d\n", ret);
++		goto err_route_off;
++	}
++	dev_info(eth->dev, "NP init: LAN port bring-up done\n");
++
++	/*
++	 * The 9132's own per-port words, read before anything writes them:
++	 * what the bootloader left is worth knowing and worth keeping.
++	 */
++	zx279133_9132_port_words_read(eth);
++
++	dev_info(eth->dev, "NP init: 9132 ports begin\n");
++	ret = zx279133_9132_port_init(eth);
++	if (ret) {
++		dev_err(eth->dev, "NP init: 9132 port setup failed: %d\n", ret);
++		goto err_route_off;
++	}
++	dev_info(eth->dev, "NP init: 9132 ports done\n");
++
++	/*
++	 * The 2.5G jack's lane has a word set of its own, and it is written
++	 * last: those words decide whether the 9132 hands that lane's frames
++	 * to the IDM at all, so everything else that writes a port's words
++	 * has to come first.
++	 */
++	ret = zx279133_9132_ppu5_words(eth);
++	if (ret) {
++		dev_err(eth->dev, "NP init: 9132 2.5G lane setup failed: %d\n",
++			ret);
++		goto err_route_off;
++	}
++
++	/*
++	 * The protocol action table: what tells the switch to trap a frame
++	 * for the CPU instead of forwarding it to the WAN.
++	 */
++	ret = zx279133_9132_proto_init(eth);
++	if (ret) {
++		dev_err(eth->dev, "NP init: 9132 protocol table failed: %d\n",
++			ret);
++		goto err_route_off;
++	}
++
++	/*
++	 * The three tables that say where a frame the switch hands to the CPU
++	 * goes.  The vendor writes them in np_user_table_init() and
++	 * sw_init_omci_trap_qid_init(); without them the frame arrives at a
++	 * queue nobody is listening on.
++	 */
++	ret = zx279133_9132_cpu_path_init(eth);
++	if (ret) {
++		dev_err(eth->dev, "NP init: 9132 CPU path failed: %d\n", ret);
++		goto err_route_off;
++	}
++
++	/*
++	 * The tables that decide whether two ports may talk to each other and
++	 * whether a frame is VLAN-checked on the way out.  The ERAM comes up
++	 * empty after a power cut, so a table nobody fills is a table that
++	 * says nothing sensible.
++	 */
++	ret = zx279133_9132_isolate_init(eth);
++	if (ret) {
++		dev_err(eth->dev, "NP init: 9132 isolation table failed: %d\n",
++			ret);
++		goto err_route_off;
++	}
++	ret = zx279133_9132_switch_tables_init(eth);
++	if (ret) {
++		dev_err(eth->dev, "NP init: 9132 switch tables failed: %d\n",
++			ret);
++		goto err_route_off;
++	}
++	dev_info(eth->dev, "NP init: 9132 tables done\n");
++
++	/*
++	 * The port attributes are the switch side; the PHY is the line side.
++	 * A UNI port whose PHY is still powered down never links, so it is
++	 * enabled after the chip itself has been programmed.
++	 */
++	zx279133_9132_phy_enable(eth);
++
++	/*
++	 * And what the chip says about its own ports, read back.  This is a
++	 * read, not a write: the point is to see the enable word the
++	 * bootloader left before anything here changes it.
++	 */
++	zx279133_9132_port_enable_read(eth);
+ 
+ 	return 0;
+ 

@@ -46,6 +46,7 @@ on:
       - tools/check-sk-board-api.py
       - tools/check-sk-switch-api.py
       - tools/check-sk-pon-api.py
+      - tools/check-sk-9132-api.py
       - kernel-overlays-73/**
       - tools/prepush.py
       - overlays-73/**
@@ -199,6 +200,19 @@ jobs:
           python3 tools/check-sk-pon-api.py \
             --tree "$KERNEL_TREE" --repo "$GITHUB_WORKSPACE" \
             --openwrt openwrt
+
+      # The 9132's own programming is this repository's own code in the 7.3
+      # tree as well, and it cannot be compiled here either.  What is checked
+      # instead: the programming is in the tree's np.c, the ERAM table
+      # bookkeeping is there and the SE allocator records the descriptors it
+      # hands out, every name the block uses is defined, every kernel
+      # function it calls exists, nothing is defined twice in np.c or idm.c,
+      # the prepare function runs the programming in the right order, and the
+      # board device tree names the MDIO bus the PHY enable looks for.
+      - name: Check the 9132 switch programming against the 7.3 tree
+        run: |
+          python3 tools/check-sk-9132-api.py \
+            --tree "$KERNEL_TREE" --repo "$GITHUB_WORKSPACE"
 
       - name: Apply the OpenWrt-side overlays
         run: |

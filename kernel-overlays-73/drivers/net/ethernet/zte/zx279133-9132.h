@@ -101,6 +101,24 @@
 #define ZX279133_XMAC0_SOPC_SEND_ENABLE	0x342c0
 
 /*
+ * The 9132's per-port attribute memories - the SPA memory ids, which are the
+ * chip's own port numbers: 1..4 are the four UNI jacks, 5 is the 2.5G jack's
+ * port and 15 is the CPU.
+ *
+ * The CPU is the trap port, not a MAC.  The vendor prints the namespace
+ * itself - print_p_port(), np_133.ko 0xf6c80: "SPA_CPU_MEMID = 0xf" - and
+ * its IDM transmit descriptors carry inport = 0x0f, while the outport map
+ * sends dest_port 15 to the CPU's queue 0x193.
+ *
+ * The 6.18 generation keeps these three in its own zx279133.h.  They are
+ * moved here for the same reason the rest of this header is: they belong to
+ * the 9132 and to nothing else in the tree.
+ */
+#define ZX279133_9132_UNI_PPU_FIRST	1
+#define ZX279133_9132_UNI_PPU_LAST	4
+#define ZX279133_9132_CONDUIT_PPU	15
+
+/*
  * The 9132's outer port.  The port has a DSA user port of its own now: it is
  * DSA port 8, it carries the transport VID 63, and the tagger dispatches on
  * that VID (docs/92 §90).
