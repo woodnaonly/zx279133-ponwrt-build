@@ -209,6 +209,28 @@ def shell_list(text, name):
     return match.group(1).split()
 
 
+def drivers_we_touch():
+    """The .c files this repository puts into the 7.3 tree.
+
+    Two sources: the patch series, which changes files that are already in
+    the tree, and the board layer, which adds new ones.  Both are read
+    from the repository rather than written down, so a new driver cannot
+    appear without the list following it.
+    """
+    touched = set()
+    patches = ROOT / "kernel-patches" / "7.3-local"
+    for patch in sorted(patches.glob("*.patch")):
+        for line in patch.read_text(encoding="utf-8", errors="replace").splitlines():
+            match = re.match(r"^\+\+\+ b/(\S+\.c)$", line)
+            if match:
+                touched.add(match.group(1))
+    overlay = ROOT / "kernel-overlays-73"
+    for path in sorted(overlay.rglob("*.c")):
+        relative = path.relative_to(overlay).as_posix()
+        touched.add(relative)
+    return touched
+
+
 def main():
     failures = Failures()
 
@@ -518,15 +540,43 @@ def main():
         failures.check(member in export_text,
                        f"the export step writes {member}")
 
-    # The migration note keeps the count of the functions that have to be
-    # carried over from the 6.18 generation.  The previous version of that
-    # table was wrong: eight rows that added up to 161, while the tool
-    # measured 171.  The table is the list of what has to be ported, so a
-    # table that does not add up hides ten functions nobody wrote down -
-    # and it did, exactly: six in the switch table driver and four in the
-    # header that owns one lamp.  The check below parses the table and
-    # adds the numbers up; it does not look for the number 171 in the
-    # text, because that is what the table used to say.
+    # The host compiler checks the drivers before the build spends an hour
+    # on them.  The list of files it checks has to be the list of the
+    # files this repository touches - the .c files the patch series
+    # changes and the .c files the board layer adds - so a new driver
+    # cannot slip past the check without anybody noticing.
+    print("\nthe host compiler checks every driver this repository touches")
+    failures.check((ROOT / "tools" / "kcheck.py").is_file(),
+                   "the compiler check is in the repository")
+    failures.check((ROOT / "tools" / "kshadow.py").is_file(),
+                   "the shadow headers the check needs are in the repository")
+    kcheck_steps = [step for step in steps_of(bringup, "build")
+                    if "tools/kcheck.py" in str(step.get("run") or "")]
+    failures.check(bool(kcheck_steps),
+                   "the 7.3 line runs the compiler check")
+    if kcheck_steps:
+        names = step_names(bringup, "build")
+        failures.check(names.index(str(kcheck_steps[0].get("name") or "")) <
+                       names.index("Compile"),
+                       "the compiler check runs before the Compile step")
+        body = str(kcheck_steps[0].get("run") or "")
+        listed = set(re.findall(r"--file\s+(\S+)", body))
+        failures.check(bool(listed),
+                       "the check names the files it checks")
+        failures.check(listed == drivers_we_touch(),
+                       "the check names exactly the drivers this repository touches")
+        failures.check('--tree "$KERNEL_TREE"' in body,
+                       "the check runs on the tree the build uses")
+        for fragment in ("openwrt/target/linux/generic/config-7.3",
+                         "openwrt/target/linux/zte/config-7.3",
+                         "openwrt/target/linux/zte/zx279133/config-7.3"):
+            failures.check(fragment in body,
+                           f"the check reads the configuration {fragment}")
+
+    # The migration note's increment table is the measured one, and the
+    # workflow contract test parses that table and adds the numbers up.
+    # It does not look for the number 171 in the text, because that is
+    # what the table used to say.
     print("\nthe migration note's increment table adds up")
     note = ROOT / "docs" / "101-the-7-3-4-baseline-and-the-migration-surface-20261122.md"
     failures.check(note.exists(), "the 7.3 migration note is in the repository")

@@ -31,8 +31,9 @@
 5. **驱动增量已按片重打五片，第 6 片是实机对拍。** 顺序是
    IDM（1~2 片）→ 9132 交换表驱动（3）→ PON/OMCI 栈（4）→ **9132 芯片本身的编程（5）**。
    每片一个补丁、每片一扇编译前的门禁、每片一次 CI。
-   **这五片的代码在本机已全部通过 clang 的语法与符号检查**（`scratch/kcheck.py`，
-   见 7.11），但**还没有被真正编译过**（本机无 arm64 交叉工具链），所以下一步是
+   **这五片的代码在本机已全部通过 clang 的语法与符号检查**
+   （现在是仓库的工具 `tools/kcheck.py`，见 7.17），但**还没有被真正编译过**
+   （本机无 arm64 交叉工具链），所以下一步是
    CI 结论与实机对拍。
    剩下的两项（RGMII 调试、TX 故障隔离/恢复）已各自判明，见八之五.9。
 6. **7.3 线 run #1~#13 的 Compile 失败与内核无关**：失败的是我们自己的 Rust 包
@@ -279,6 +280,8 @@ CONFIG_EXTERNAL_KERNEL_TREE=<树>   OpenWrt 把这棵树当自己的内核目录
 | `overlays-73/target/linux/zte/zx279133/target.mk` | 7.3 线的 subtarget 默认包：**清空 OpenWrt 的 `DEFAULT_PACKAGES.tweak`**，否则其中的 `luci` 元包会拉进 `luci-theme-bootstrap`（见 7.8） |
 | `tools/func-surface-diff.py` | 两代驱动的函数面对照，输出「只在我们这边」与「只在 7.3 那边」两张工作清单 |
 | `tools/func-port-coverage.py` | **按能力对账**：171 个函数逐条必须有归属（同名 / 账本写明搬到哪 / 有处置记录），未记账即非零退出；账本指着的目标函数必须真在 7.3 树里（见八之七） |
+| `tools/kcheck.py` + `tools/kshadow.py` | **编译预言机**：用宿主 clang 对 7.3 树做 `-fsyntax-only`，生成树自己的头文件与影子头文件；7.3 线在 Compile 之前先跑它（见 7.17） |
+| `tests/test_sk_kcheck.py` | 上面那道检查的**判决规则**的单元测试：哪些错误算我们的、哪些算编译器读不动树 |
 | `tools/idm-register-diff.py` | 以 `writel(...)` 语句为单位逐条对比两代的寄存器写入 |
 | `pon/npu-reverse/` | 逆向产物留档：99 个 API、rodata、函数表、initrd 清单、目标 DTS |
 
@@ -1321,6 +1324,72 @@ Compile 步现在按这个顺序取证：
   契约测试查的是 `logs/$(basename`，而变异只改掉了两处出现中的一处
   （另一处没有 `PKGLOG=` 前缀）⇒ **又一次是「门禁比的是字符串而不是断言」**。
 
+### 7.17 把编译预言机收进仓库，并接进 CI
+
+**判决**：本机那套「用宿主 clang 检查 7.3 树」的检查器
+（原来只活在 `scratch/kcheck.py` 里）现在**是仓库的工具**，
+而且 **7.3 线在真正编译之前会先跑它**。
+
+**为什么要收进仓库**：`scratch/` 是跨会话累积的工装区，
+**换一台机器它就不在**，下一个会话也不会知道它存在过。
+收进 `tools/` 之后它有版本、有门禁、有复跑命令。
+
+**现在长什么样**：
+
+| 文件 | 是什么 |
+|---|---|
+| `tools/kcheck.py` | 检查器本体：用宿主 clang 对 7.3 树做 `-fsyntax-only`，并按 modpost 的规则查符号闭合（`--objdir`） |
+| `tools/kshadow.py` | 它依赖的「影子头文件」生成器：clang 不接受内核头里那种匿名成员，得给它一个等价形状，否则布局断言全挂 |
+| `tests/test_sk_kcheck.py` | 判决规则的单元测试（不需要内核树、不需要编译器、不需要板子） |
+
+**CI 里怎么用**：7.3 线的 build 作业里，在四个符号钉成 `=y` 之后、
+**Compile 之前**多了一步「Check the drivers with the host compiler」。
+
+**为什么这一步放在 build 作业、而不是 check-gates 作业**：
+check-gates 作业**只有本仓库**，手里没有内核树；
+要让它检查驱动，就得在那里重新下载 7.3.4 的 tarball、克隆 OpenWrt、
+再打那 39 个补丁——而这**正是 build 作业开头已经做过的事**，
+check-gates 的超时却只有 10 分钟。
+⇒ 放在**树已经备好、Compile 还没开始**的时刻：
+既不重复准备，又把「语法错误」从「五十分钟后」提前到「一分钟后」。
+契约测试保证这一步**不会消失**，也保证它**排在 Compile 之前**。
+
+**检查的是哪些文件**：不是手写的清单，而是
+**本仓库的补丁系列碰过的每一个 `.c`，加上板级层新增的每一个 `.c`**。
+契约测试从 `kernel-patches/7.3-local/*.patch` 与 `kernel-overlays-73/`
+**算出来**这个集合，再和工作流里的清单比对
+⇒ 新补丁碰了别的驱动，契约测试立刻转红，工作流里的清单不会漏。
+
+**判决规则（关键）**：只看**我们自己的文件**里的错误。
+编译器报在**内核自己的头文件**里的错误，说明**编译器读不动这棵树**
+（CI runner 的 clang 比它读的 7.3.4 老），
+这时我们文件里的错误可能是它的**后果**而不是我们的错 ⇒
+工具把这类文件标成 `WARN` 并**不据此判红**。
+这条规则是必须的，否则这道门禁会在一个**与我们的代码无关**的地方变红。
+
+**本机验证**：
+
+- **正向**：9 个文件（补丁碰过的 5 个 + 板级层新增的 4 个）全部 `OK`，
+  退出码 0；
+- **反向**：在树里复制一份驱动目录并注入一处语法错误 ⇒
+  工具报 `FAIL`、退出码 1；
+- **契约测试反向验证两处**：
+  少列一个文件 ⇒ 转红在
+  「the check names exactly the drivers this repository touches」；
+  把这一步挪到 Compile 之后 ⇒ 转红在
+  「the compiler check runs before the Compile step」。
+  两条都是**只红在指定的那一条**。
+
+**未做**：
+
+- CI 里这一道的编译器是 runner 自带的（Ubuntu 22.04 的 `clang` 包），
+  **比本机的 clang 23 老**。真出现「编译器读不动树」时，
+  这一步会标 `WARN` 而不是判红 ⇒ **它可能放过一类错误**，
+  但**绝不会因为编译器太老而误伤构建**。
+- 本机那一版还带 `--objdir`（编出目标码、按 modpost 的规则查符号闭合），
+  **CI 里没有开**：那 11 条疑似缺符号全是宏生成导出造成的误报，
+  在逐条核实之前不适合当门禁。
+
 ---
 
 ## 八、BP 池：逐槽位对照（第 1 片剩余部分的结论）
@@ -2242,14 +2311,19 @@ python3 ci-build-repo/tools/check-sk-9132-api.py \
 python3 ci-build-repo/tests/test_sk_workflows.py
 
 # 11) 本机的编译预言机：clang 对 7.3 树做语法检查（秒级，代替 50 分钟的 CI）
-python3 scratch/mkcfg73.py                       # 合并 7.3 的配置片段
-python3 scratch/kcheck.py --tree scratch/test73c \
-        --config scratch/cfg73/config-7.3.merged \
+#     仓库自己的工具，7.3 线在 Compile 之前跑的是同一个（见 7.17）。
+#     配置片段直接给三个（工具自己合并，缺的那个会跳过）——
+#     CI 里读的是 OpenWrt 克隆里的同一批文件。
+python3 ci-build-repo/tools/kcheck.py --tree scratch/test73c \
+        --config scratch/cnjn-iw/target/linux/generic/config-7.3 \
+        --config scratch/cnjn-iw/target/linux/zte/config-7.3 \
+        --config scratch/cnjn-iw/target/linux/zte/zx279133/config-7.3 \
         --file drivers/net/ethernet/zte/zx279133-np.c \
         --file drivers/net/ethernet/zte/zx279133-idm.c \
         --gen scratch/kgen73
 # 加 --objdir scratch/kobj 会编出目标码并按 modpost 的规则查符号闭合；
 # --raw 打印编译器的原话。
+python3 ci-build-repo/tests/test_sk_kcheck.py   # 判决规则的单元测试
 
 # 12) 哪些 .c 真会被编进内核（Kbuild 的 obj-$(CONFIG_X) 解析）
 python3 scratch/kobjmap73.py --tree scratch/test73c \

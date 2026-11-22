@@ -83,6 +83,7 @@ jobs:
       - name: Exercise the repository's own gates
         run: |
           python3 tests/test_sk_kernel.py
+          python3 tests/test_sk_kcheck.py
           python3 tests/test_sk_led_dts_gate.py
           python3 tests/test_sk_layout.py
           python3 tests/test_sk_uboot.py
@@ -390,6 +391,52 @@ jobs:
               echo "::error::could not pin CONFIG_${sym}=y in $DRVCFG"; exit 1; }
           done
           grep -E '^CONFIG_ZTE_ZX279133' "$DRVCFG" || true
+
+      # The host's compiler, on the tree that is about to be built.
+      #
+      # The Compile step is seventy minutes long, and it builds the packages
+      # before it builds the kernel, so a syntax error in the drivers this
+      # repository owns is found very late - in runs #14 to #18 it was found
+      # in a package log, and the kernel was never reached at all.  This step
+      # asks the host's clang to parse the same files, on the same tree,
+      # with the same configuration fragments, in about a minute.
+      #
+      # What it reads is what the build will read: the generated headers the
+      # tree's own tools produce (not an approximation of them), the arch's
+      # own generated headers, and the shadow headers for the anonymous
+      # members clang does not accept.  The configuration is the OpenWrt
+      # tree's own fragments, after the /dev/mem edit and after the =y pins
+      # above, so the driver is parsed the way it will be compiled.
+      #
+      # The file list is not written by hand: it is the set of .c files
+      # this repository's own patch series touches, plus the .c files the
+      # board layer adds.  The contract test compares the list in this step
+      # with that set, so a new patch that touches another driver cannot
+      # slip past the check.
+      #
+      # The verdict is about our files.  An error the compiler reports in
+      # one of the tree's own headers means the compiler could not read the
+      # tree - the runner's clang is older than the kernel it is reading -
+      # and then the errors in our files may be a consequence of that rather
+      # than a mistake of ours.  The tool says so and does not fail on them.
+      - name: Check the drivers with the host compiler
+        run: |
+          set -e
+          python3 tools/kcheck.py \
+            --tree "$KERNEL_TREE" \
+            --config openwrt/target/linux/generic/config-7.3 \
+            --config openwrt/target/linux/zte/config-7.3 \
+            --config openwrt/target/linux/zte/zx279133/config-7.3 \
+            --file drivers/net/ethernet/zte/zx279133-idm.c \
+            --file drivers/net/ethernet/zte/zx279133-mac.c \
+            --file drivers/net/ethernet/zte/zx279133-main.c \
+            --file drivers/net/ethernet/zte/zx279133-netdev.c \
+            --file drivers/net/ethernet/zte/zx279133-np.c \
+            --file drivers/net/ethernet/zte/zx279133-omci.c \
+            --file drivers/net/ethernet/zte/zx279133-pon.c \
+            --file drivers/net/ethernet/zte/zx279133-switch.c \
+            --file drivers/net/ethernet/zte/zxpon.c \
+            --gen "$RUNNER_TEMP/kcheck-73"
 
       - name: Check the overlay for what a compiler would have caught
         run: |
