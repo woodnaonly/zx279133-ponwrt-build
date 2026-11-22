@@ -1890,20 +1890,102 @@ OMCI 把帧写进 `eth->tx_descs + eth->omci_producer`，`omci_producer`
 |---|---|---|
 | conduit 的 RX 计数在涨？ | `/sys/class/net/lan-cpu0/statistics/rx_{packets,bytes}` | `zx279133-lan-conduit.c:176` 把网设备名写成 `"lan-cpu%d"` |
 | 四个 DSA 用户口 link 状态正确？ | `/sys/class/net/lan{0,1,2,3,4}/{operstate,carrier,speed}` | 板级 DTS 的 `switch` 节点声明 `port@4..port@8`，label 是 `lan0`/`lan2`/`lan3`/`lan4`/`lan1` |
-| LOS 灯随 `opsd` 翻转？ | `/sys/class/leds/*/{brightness,trigger}` + `/sys/kernel/debug/gpio` 里的 `opsd` | `zx279133-main.c:297-299` 用 `gpiod_get_value_cansleep()` 读 opsd，再用 `led_trigger_event()` 点灯 |
+| LOS 灯随 `opsd` 翻转？ | `/sys/class/leds/*/{brightness,trigger}` + `/sys/kernel/debug/gpio` 里 **gpio 65** 的电平 | `zx279133-main.c:297-299` 用 `gpiod_get_value_cansleep()` 读 opsd，再用 `led_trigger_event()` 点灯；opsd 在 DTS 里是 `gpio2 pin 1`（`GPIO_ACTIVE_HIGH`），平铺编号 65 |
 | `pon_state` 从 O1 往 O5 走？ | `/sys/class/net/<wan>/device/pon_state` | `zx279133-pon.c:351` 在 `ndev->dev` 上建这个属性 |
 | `omci_transport` 的 submitted/completed 在涨？ | `/sys/class/net/<wan>/device/omci_transport` | 同上，`zx279133-pon.c:353` |
 
-脚本还做两件对拍必须的事：**取两次样本**（默认隔 10 秒），
-这样「没动」是一个结论而不是一次读数；以及把 **opsd 的电平与灯的亮度并排打出来**，
-因为「灯随光信号翻」这句话只有在两者同时可见时才成立。
+脚本还做三件对拍必须的事：
+
+1. **取两次样本**（默认隔 10 秒），这样「没动」是一个结论而不是一次读数。
+2. **把 opsd 的电平与灯的亮度并排打出来，而且打两次**——
+   「灯随光信号翻」这句话只有在两者同时可见、且前后两次都可见时才成立；
+   只读一次，分不清「灯在工作」和「板上根本没有光信号」。
+3. **PON 属性带上它属于哪个 netdev**（`eth0/pon_state: O5` 而不是 `device: O5`），
+   因为 WAN 口和 conduit 口都在同一个 sysfs 根下。
 
 **本机已演练**（`scratch/trialsurvey_check.py`）：合成一棵 `/sys/class/net` 树，
-脚本要在完整树上把五个问题都答出来，且在两种坏树上**不能死**——
+脚本要在完整树上把五个问题都答出来，且在四种坏树上**不能死**——
 ① 没有 PON 属性的树（驱动没挂上时的样子）；
-② 某个网设备没有 `statistics` 目录。
-三关都过。脚本的路径是变量（`SK_CLASS_NET`/`SK_DEBUGFS`/`SK_LEDS`），
+② 某个网设备没有 `statistics` 目录；
+③ 灯的 trigger 被用户换成了别的（脚本要如实说「驱动没在管这盏灯」）；
+④ gpio dump 里没有 opsd 那一行（脚本要说的是「不在 dump 里」，不是「低」）。
+并且演练**反过来也要成立**：把脚本改坏四处
+（去掉 opsd 读数、去掉第二次采样、去掉 trigger 判据、去掉 netdev 名），
+检查必须转红。
+脚本的路径是变量（`SK_CLASS_NET`/`SK_DEBUGFS`/`SK_LEDS`/`SK_LOS_LED`/`SK_OPSD_GPIO`），
 就是为了能在本机用合成目录跑。
+
+#### 八之六.1 写这个仪器时抓到的三个坑（都是「测的是自己的假设」）
+
+**坑一：opsd 的读数位置写错了，而旧的演练把它掩盖了。**
+第一版的脚本是这样找 opsd 的：
+
+```sh
+sed -n 's/^\([0-9]*\).*opsd.*/    gpio \1: opsd/p' "$DEBUG/gpio"
+grep -o 'opsd[^|]*' "$DEBUG/gpio"
+```
+
+**内核的 debugfs gpio dump 里没有 "opsd" 这个字样**——
+它写的是 gpio chip 和 pin：
+
+```
+GPIOs 64-95 (gpiochip2):
+ [65] 65-66 (gpio 65)  1c280000.digital  in  high  IRQ ACTIVE HIGH
+```
+
+consumer 的名字（`opsd-gpios`）只存在于设备树里，dump 里不会有。
+⇒ 这两行**永远匹配不到**，是死代码。
+
+为什么没被发现？因为**旧的演练喂给脚本的 gpio 文件里写着 "opsd"**：
+
+```
+gpio-0  (opsd) in hi ACTIVE HIGH
+```
+
+演练和脚本互相印证了一个谁也没去核实的假设。
+现在演练改成喂内核真正的形状，断言改成「opsd (gpio 65): high」，
+并加了一条反向验证：把脚本里的 opsd 读数删掉，检查必须转红。
+
+**坑二：灯只采了一次，「翻转」这个动作根本没被观测到。**
+原来第 3 节打印灯和电平，第 6 节（第二次采样）只打印计数器。
+⇒ 「灯随 opsd 翻转」这个命题一次都没被验证过。
+现在第二次采样也打印灯与电平，演练断言 `opsd` 至少出现两次。
+
+**坑三：PON 属性打的是 `device: O5`，看不出是哪个口。**
+`$CLASS/*/device/pon_state` 的 `dirname` 是 `.../eth0/device`，
+`basename` 出来是 `device`。现在取两级，打成 `eth0/pon_state: O5`。
+
+#### 八之六.2 对拍时必须一起看的一对读数：LOS 与 `pon_state`
+
+`zx279133_pon_note_rxsd()`（`zx279133-pon.c:321-329`）把**同一个** opsd 读数
+写进 PON 状态机：
+
+```c
+void zx279133_pon_note_rxsd(int light)
+{
+	...
+	zxpon_set_los(&zx_state, light ? 0 : 1);
+	...
+	zxpon_apply_carrier();
+}
+```
+
+而 `zx279133-main.c:299` 用它点灯：`rxsd ? LED_OFF : LED_FULL`
+⇒ **有光时 LOS 灯灭，无光时 LOS 灯亮**（LOS = Loss of Signal，红灯亮就是没光）。
+
+⇒ 所以：**板上没有光信号时，`pon_state` 本来就不会往 O5 走。**
+判读必须是成对的：
+
+| opsd | LOS 灯 | `pon_state` 不动 | 结论 |
+|---|---|---|---|
+| low（无光） | 亮 | 是 | **正常**：无光时状态机不会前进，不是驱动故障 |
+| high（有光） | 灭 | 是 | 驱动/PON 栈的问题 |
+| high（有光） | 灭 | 否，O1→O5 在走 | 通过 |
+
+只看 `pon_state` 不动就判「移植失败」，会把「这根光纤没插」误判成故障。
+
+**未做**：没有在真机上跑过这个脚本（本机没有板子，也没有 7.3 镜像）；
+演练用的是合成树，**不能替代实机读数**。
 
 ---
 
