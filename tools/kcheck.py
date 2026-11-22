@@ -127,6 +127,31 @@ def error_is_in(line, target):
     return name == wanted or name.endswith("/" + wanted)
 
 
+# How many of each kind of generated header a complete environment has.
+NEEDED = {"arch": 3, "syscall": 5, "shadow": 1, "bounds": 1}
+
+
+def incomplete_environment(made):
+    """What the generated headers are missing, if anything.
+
+    A file is only judged when the environment it was parsed in is the
+    environment the build uses.  If a header could not be produced - the
+    tree's own awk script failed, or the compiler could not compile
+    kernel/bounds.c - then the parser is reading a different kernel than
+    the build would, and its errors are not a verdict about the file.
+    """
+    missing = []
+    if made.get("arch", 0) < NEEDED["arch"]:
+        missing.append("the arch's own generated headers")
+    if made.get("syscall", 0) < NEEDED["syscall"]:
+        missing.append("the syscall headers")
+    if made.get("shadow", 0) < NEEDED["shadow"]:
+        missing.append("the shadow headers")
+    if made.get("bounds", 0) < NEEDED["bounds"]:
+        missing.append("kernel/bounds.c")
+    return missing
+
+
 def read(path):
     with open(path, "r", encoding="utf-8", errors="replace") as handle:
         return handle.read()
@@ -704,6 +729,14 @@ def main():
              syscall_made))
     for problem in problems:
         print("  (could not generate: %s)" % problem)
+    incomplete = incomplete_environment(
+        {"arch": arch_made, "syscall": syscall_made,
+         "shadow": shadow_made, "bounds": bounds_made})
+    if incomplete:
+        print("the generated headers are incomplete (%s):"
+              % ", ".join(incomplete))
+        print("  the compiler is not reading the kernel the build would read,")
+        print("  so its errors are not a verdict about our files")
 
     common = ["-fsyntax-only"] + base_args + [
         "-Wall", "-Wno-unused-variable", "-Wno-unused-but-set-variable",
@@ -744,7 +777,16 @@ def main():
         out = subprocess.run([clang] + common + [str(target)],
                              capture_output=True, text=True, errors="replace")
         if out.returncode == 0:
-            print("OK    %s" % rel)
+            if not incomplete:
+                print("OK    %s" % rel)
+                continue
+            # It parsed, but the parser was not reading the kernel the
+            # build reads, so a clean parse is not the evidence it looks
+            # like: a missing header can also take code out of the file.
+            print("WARN  %s" % rel)
+            unjudgeable += 1
+            print("      (it parsed, but the generated headers are incomplete:")
+            print("       the parser was not reading the kernel the build reads)")
             continue
         raw = out.stderr.splitlines()
         errors = [line for line in raw if "error:" in line]
@@ -756,13 +798,17 @@ def main():
         # file is not failed on them.
         ours = [line for line in errors if error_is_in(line, target)]
         elsewhere = [line for line in errors if not error_is_in(line, target)]
-        if elsewhere:
+        if elsewhere or incomplete:
             print("WARN  %s" % rel)
-            unjudgeable += 1
+            if incomplete:
+                unjudgeable += 1
+                print("      (the generated headers are incomplete, so the")
+                print("       compiler's errors are not a verdict)")
             for line in elsewhere[:10]:
                 print("      " + line)
-            print("      (the compiler could not read the tree's own headers,")
-            print("       so the errors in this file are not a verdict)")
+            if elsewhere:
+                print("      (the compiler could not read the tree's own headers,")
+                print("       so the errors in this file are not a verdict)")
             continue
         failures += 1
         print("FAIL  %s" % rel)

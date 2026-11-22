@@ -102,6 +102,16 @@ def main():
           "the other symbols of the group are cleared")
 
     print("\nthe compiler that is used is one that is there")
+    complete = {"arch": 3, "syscall": 5, "shadow": 1, "bounds": 1}
+    check(kcheck.incomplete_environment(complete) == [],
+          "a complete environment judges")
+    for missing in ("arch", "syscall", "shadow", "bounds"):
+        broken = dict(complete)
+        broken[missing] = 0
+        problems = kcheck.incomplete_environment(broken)
+        check(bool(problems),
+              f"a missing {missing} means the environment cannot judge")
+
     compiler = kcheck.newest_clang()
     if compiler is None:
         print("  (no clang on this machine: the tool would say so and stop)")
