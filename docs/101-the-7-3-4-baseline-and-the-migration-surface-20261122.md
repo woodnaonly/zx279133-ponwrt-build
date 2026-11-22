@@ -1573,6 +1573,29 @@ OMCI 把帧写进 `eth->tx_descs + eth->omci_producer`，`omci_producer`
    ⇒ 它的价值只是「可复现地看到这块是死的」。这是一个**取舍**，不是缺口。
 5. **9132 的 debugfs 控制台不搬**（见 8之五.2），7.3 树有自己的 `native_*_io` 端点。
 
+### 八之六、对拍的仪器：`tools/trialsurvey.sh`
+
+对拍要回答的是五个问题，**每一个都有确定的读数位置**，这个脚本就是去读它们：
+
+| 问题 | 读数位置 | 出处 |
+|---|---|---|
+| conduit 的 RX 计数在涨？ | `/sys/class/net/lan-cpu0/statistics/rx_{packets,bytes}` | `zx279133-lan-conduit.c:176` 把网设备名写成 `"lan-cpu%d"` |
+| 四个 DSA 用户口 link 状态正确？ | `/sys/class/net/lan{0,1,2,3,4}/{operstate,carrier,speed}` | 板级 DTS 的 `switch` 节点声明 `port@4..port@8`，label 是 `lan0`/`lan2`/`lan3`/`lan4`/`lan1` |
+| LOS 灯随 `opsd` 翻转？ | `/sys/class/leds/*/{brightness,trigger}` + `/sys/kernel/debug/gpio` 里的 `opsd` | `zx279133-main.c:297-299` 用 `gpiod_get_value_cansleep()` 读 opsd，再用 `led_trigger_event()` 点灯 |
+| `pon_state` 从 O1 往 O5 走？ | `/sys/class/net/<wan>/device/pon_state` | `zx279133-pon.c:351` 在 `ndev->dev` 上建这个属性 |
+| `omci_transport` 的 submitted/completed 在涨？ | `/sys/class/net/<wan>/device/omci_transport` | 同上，`zx279133-pon.c:353` |
+
+脚本还做两件对拍必须的事：**取两次样本**（默认隔 10 秒），
+这样「没动」是一个结论而不是一次读数；以及把 **opsd 的电平与灯的亮度并排打出来**，
+因为「灯随光信号翻」这句话只有在两者同时可见时才成立。
+
+**本机已演练**（`scratch/trialsurvey_check.py`）：合成一棵 `/sys/class/net` 树，
+脚本要在完整树上把五个问题都答出来，且在两种坏树上**不能死**——
+① 没有 PON 属性的树（驱动没挂上时的样子）；
+② 某个网设备没有 `statistics` 目录。
+三关都过。脚本的路径是变量（`SK_CLASS_NET`/`SK_DEBUGFS`/`SK_LEDS`），
+就是为了能在本机用合成目录跑。
+
 ---
 
 ## 九、下一步（按片重打，每片一次 CI）
