@@ -1,0 +1,422 @@
+0x000068	zte,zx279132-nppt
+0x000130	zte,zx279133-nppt
+0x0005d0	<|<|<|00000p0p0p0p0p0p0p0p0p0p0p0p0p0p0p0p0p0p0p0p0p0p0p0p0p4t0p0p4t0p0p0p0p0p0p0p0p0p0p000p00000p000p0p0p0p0p0p0p0p0p0p8x8x0p0p0p0p0p0p0p0p0p000p,,"`,,,,0p,l,l0p0p0p0p0`0p0p0p0p0p0p0p0p0p0p0p,l,l0p0p0p0p0p0p0p0p0p0p0p0p0p0p0p0p0p0p0p0p0p0p0p0p0p0p0p0p0p0p
+0x0007d5	V#/8
+0x0012d8	lan_up_port_zero_based
+0x0012f0	pon_sdt_wan_port
+0x001308	rx_hash_ipv6
+0x001318	rx_hash
+0x001320	experimental_vid_key
+0x001338	vlan_offload
+0x004af8	xdp_update_frame_from_buff
+0x004d48	cpu_rx_packets
+0x004d68	cpu_tx_packets
+0x004d88	cpu_rx_bytes
+0x004da8	cpu_tx_bytes
+0x004dc8	rx_errors
+0x004de8	tx_errors
+0x004e08	rx_dropped
+0x004e28	tx_dropped
+0x004e48	rx_length_errors
+0x004e68	xmac_tx_frames
+0x004e88	xmac_tx_good_frames
+0x004ea8	sopc_ready
+0x004ec8	sopc_send
+0x004ee8	nppt_xmac_err
+0x004f08	smct_done
+0x004f28	ssch5
+0x004f48	sopc_rr5
+0x004f68	sopc_to_smac5
+0x004f88	sopc_req_smac5
+0x004fa8	idm_tx_done
+0x004fc8	tx_pending
+0x004fe8	tx_doorbell_writes
+0x005008	tx_doorbell_descs
+0x005028	tx_reclaim_polls
+0x005048	tx_reclaim_work_runs
+0x005068	tx_reclaim_work_packets
+0x005088	tx_timeouts
+0x0050a8	tx_timeout_recoveries
+0x0050c8	tx_timeout_stalls
+0x0050e8	tx_queue_0_submitted
+0x005108	tx_queue_0_completed
+0x005128	tx_queue_1_submitted
+0x005148	tx_queue_1_completed
+0x005168	tx_hw_csum_packets
+0x005188	tx_sw_csum_packets
+0x0051a8	rx_irq_count
+0x0051c8	idm_local_irq_count
+0x0051e8	rx_napi_polls
+0x005208	rx_napi_work
+0x005228	rx_napi_budget_exhaustions
+0x005248	rx_desc_not_ready
+0x005268	rx_invalid_dma
+0x005288	rx_page_lookup_misses
+0x0052a8	rx_jumbo_drops
+0x0052c8	rx_descriptor_flag_drops
+0x0052e8	rx_page_alloc_failures
+0x005308	rx_copy_fallbacks
+0x005328	rx_skb_alloc_failures
+0x005348	rx_hw_csum_packets
+0x005368	rx_hw_hash_packets
+0x005388	rx_refill_post_failures
+0x0053a8	rx_refill_shortfalls
+0x0053c8	rx_refill_published
+0x0053e8	rx_release_published
+0x005408	rx_page_map_count
+0x005428	rx_page_map_high_water
+0x005448	rx_refill_deficit
+0x005468	rx_refill_deficit_high_water
+0x005488	rx_refill_recovery_attempts
+0x0054a8	rx_refill_recovery_pages
+0x0054c8	rx_refill_recovery_failures
+0x0054e8	rx_refill_retry_work_runs
+0x005508	xdp_pass
+0x005528	xdp_drop
+0x005548	xdp_tx
+0x005568	xdp_redirect
+0x005588	xdp_aborted
+0x0055b8	npu: Only the keyless XOR default context is supported
+0x0055f0	npu: The calibrated RX hash must be active
+0x005620	npu: Detach the shared AF_XDP UMEM before changing RSS
+0x005658	npu: Remove hardware-offloaded flows before changing RSS
+0x005698	npu: RSS setup failed; restored native RX without hashing
+0x005d10	tx_pon_control
+0x005d78	zx279133-tod
+0x005d98	zx279133_hosts_sync_work
+0x005e20	experimental_sqm
+0x005e60	MLET
+0x005e70	EKAF
+0x005e80	4VPI
+0x005e90	6VPI
+0x005ea0	MQSN
+0x005eb0	LNUT
+0x005ec0	DVSR
+0x0065b8	label
+0x0065c0	zte,zx279132-nppt
+0x0065e0	ge-ports
+0x0065f0	zte,primary-xmac
+0x006608	sg351-ge-ports
+0x006618	zte,direct-multi-port
+0x006630	zte,primary-hw-port
+0x006648	NPU probe: begin
+0x006660	idm-aclk
+0x006670	tm-aclk
+0x006678	pclk
+0x006680	smac-wclk
+0x006690	woe1-wclk
+0x0066a0	mac-wclk
+0x0066b0	failed to get clocks
+0x0066d0	memory-region
+0x0066e0	missing BMU reserved memory
+0x006700	invalid BMU reserved memory
+0x006720	BMU reserved memory is too small
+0x006748	BMU reserved memory exceeds 32-bit DMA range
+0x006778	failed to map BMU reserved memory
+0x0067a0	BMU normal buffers: %u (reserved %pa bytes)
+0x0067d0	missing SE hash reserved memory
+0x0067f8	invalid SE hash reserved memory
+0x006820	SE hash reserved memory is too small
+0x006848	SE hash reserved memory is not representable
+0x006878	failed to map SE hash reserved memory
+0x0068a0	missing IDM reserved memory
+0x0068c0	invalid IDM reserved memory
+0x0068e0	IDM reserved memory is too small
+0x006908	IDM reserved memory exceeds 32-bit DMA range
+0x006938	failed to map IDM reserved memory
+0x006960	NPU probe: MMIO and reserved-memory resources mapped
+0x006998	se-ddr
+0x0069a0	memory-region-names
+0x0069b8	ignoring invalid se-ddr region; using 0-extra-RAM SRAM SQM
+0x0069f8	se-ddr ioremap_wc failed; using 0-extra-RAM SRAM SQM
+0x006a30	SE-DDR 32 MiB accelerator mapped at %pa
+0x006a60	no se-ddr memory-region in DTB; running in 0-extra-RAM SRAM SQM mode
+0x006aa8	zte,pon-route
+0x006ab8	failed to get PON route syscon
+0x006ad8	zte,idm-cci
+0x006ae8	failed to get IDM CCI syscon
+0x006b08	RX coherent descriptor rings are above 4GiB
+0x006b38	RX coherent free ring is above 4GiB
+0x006b60	TX coherent descriptor ring is above 4GiB
+0x006b90	OMCI coherent TX buffer is above 4GiB
+0x006bb8	failed to get %s IRQ
+0x006bd0	serdes
+0x006bd8	failed to get SerDes PHY
+0x006bf8	pcs-handle
+0x006c08	PCS phandle is missing
+0x006c20	XPCS MDIO device is unavailable
+0x006c48	zx279133_mdio_device_put
+0x006c68	failed to create XPCS handle
+0x006c88	zx279133_xpcs_destroy
+0x006ca0	failed to get initial PHY interface mode
+0x006cd0	failed to create phylink
+0x006cf0	zx279133_phylink_destroy
+0x006d10	zx279133_sqm_primary_clear
+0x006d30	NPU probe: shared NP resource manager ready
+0x006d60	failed to register PHC
+0x006d78	failed to read factory MAC address
+0x006da0	nvmem-cells
+0x006db0	zx279133_napi_del
+0x006dc8	failed to create RX page pool
+0x006de8	failed to create LAN RX pool
+0x006e08	zx279133_rx_page_pool_destroy
+0x006e28	failed to register XDP RX queue
+0x006e50	failed to register AF_XDP RX queue
+0x006e78	failed to register AF_XDP buffer pool
+0x006ea0	zx279133_xdp_rxq_unreg
+0x006eb8	failed to request RX IRQ
+0x006ed8	zx279133-idm-local
+0x006ef0	failed to request IDM local-test IRQ
+0x006f18	zx279133_rx_affinity_clear
+0x006f38	zx279133_rx_mode_work_cancel
+0x006f58	zx279133_xmac_stats_work_cancel
+0x006f78	zx279133_idm_works_cancel
+0x006f98	failed to register netdev
+0x006fb8	NPU probe: WAN netdev registered
+0x006fe0	failed to populate LAN child devices
+0x007008	WAN netdev and LAN child devices registered
+0x007038	32-bit DMA is unavailable
+0x007058	failed to enable probe clocks
+0x007078	zx279133_probe_clocks_disable
+0x007098	uncleared flow resources require hardware recovery
+0x0070d0	unverified SSCH restoration requires recovery
+0x007100	failed to power off SerDes: %d
+0x007120	zx279133-eth
+0x007130	nppt
+0x007148	buffer-release
+0x007158	local-test
+0x007168	UOPC tcont command timed out: %#x
+0x007190	UOPC tcont command remained busy: %#x
+0x0071b8	NPPT global initialization timed out: %#x
+0x0071e8	SSCH indirect RAM init timed out
+0x007210	USCH indirect RAM init timed out
+0x007238	SE SMMU0 RAM initialization timed out: %#x
+0x007268	SE parser RAM initialization timed out: %#x
+0x007298	QMG RAM initialization timed out: %#x
+0x0072c0	SPA ONU MAC slots full
+0x0072e0	%u unicast addresses, SPA ONU MAC slots full
+0x007310	SPA indirect access not done: %#x
+0x007338	SPA indirect read not done: %#x
+0x007360	PPU instruction block timeout: %#x
+0x007388	PPU cluster not ready: %#x
+0x0073a8	hardware not prepared
+0x0073c0	%2u %08x %08x %08x %08x mtu %lu sid %lu sip %pI4 mac %pM pppoe %lu 4in6 %lu users %u snat %u snat6 %u dnat6 %u tun4in6 %u
+0x007440	 s6 %08x:%08x/%08x:%08x d6 %08x:%08x/%08x:%08x
+0x007470	 sip6 %pI6c dip6 %pI6c hl %lu tc %#lx label %#lx
+0x0074a8	MF ERAM readback failed: %d
+0x0074c8	bmu normal_count=%u reg_20030=%u jumbo_20034=%u enable=%#x cfg=%08x idx_max=%u rls=%08x bppe_cnt=%u bppi_cnt=%u bppi_ptr=%08x fifo_cnt=%u
+0x007558	smct sel0=%04x sel1=%04x ctrl=%#x mc=%04x np1=%04x idm_ssch=%08x c108=%08x(eth_eop=%u,eth_sop=%u,np1_eop=%u,np1_sop=%u) c150=%08x(omci_bud=%u,omci_drop=%u)
+0x0075f8	red cfg=%#x in_share=%#x up_in_share=%#x c0=%08x(dn=%u,up=%u) bc=%08x(omci_drop=%u)
+0x007650	np1_q%u th=%u desc_wm=%#x left_th=%u isu_th=%#x wsch_fill=%#x wsch_max=%#x
+0x0076a0	wsch cfg=%08x spend_byte=%04x fill_time=%#x
+0x0076d0	PPU query capture restore failed at PC %u: %d
+0x007700	%u unicast addresses, only %u forwarded in hardware
+0x007738	failed to restore WANID %u SDT 0x14
+0x007760	failed to restore WANID %u SDT 0x15
+0x007788	failed to restore WANID %u
+0x0077a8	failed to restore WANID %u SDT 0x19
+0x0077d0	zx279133-wanid
+0x0077e0	zx279133_wanid_debugfs_remove
+0x007800	zx279133-tm
+0x007810	IPv4/IPv6
+0x007820	IPv4
+0x007828	NP init: SE PLCR setup begin
+0x007848	SE PLCR init done status %#x
+0x007868	NP init: SE PLCR setup failed: %d
+0x007890	NP init: SE PLCR setup done
+0x0078b0	NP init: SE table descriptors begin
+0x0078d8	SE ERAM SDT %#x write failed
+0x0078f8	SE parser SDT %#x write failed
+0x007918	SE hash SDT %#x create failed
+0x007938	SE stat SDT %#x write failed
+0x007958	SE fast multi-hash setup failed
+0x007980	NP init: SE table descriptors failed: %d
+0x0079b0	NP init: SE-DDR setup failed: %d
+0x0079d8	NP init: SE table descriptors done
+0x007a00	NP init: statistics tables begin
+0x007a28	NP init: statistics tables done
+0x007a50	NP init: PPU microcode begin
+0x007a70	zte/zx279133/mcode_intel.bin
+0x007a90	failed to load PPU microcode
+0x007ab0	uncalibrated PPU firmware; retaining native RX queues
+0x007ae8	PPU microcode version %#x.%#x
+0x007b08	guarded %s RX hash installed, generation=%u
+0x007b38	invalid PPU microcode file
+0x007b58	NP init: PPU microcode failed: %d
+0x007b80	NP init: PPU microcode done
+0x007ba0	NP init: PPU tables begin
+0x007bc0	NP init: PPU tables done
+0x007be0	NP init: SPA attributes begin
+0x007c00	NP init: SPA attributes done
+0x007c20	NP init: NPPU early setup begin
+0x007c48	ISU init request timed out: %#x
+0x007c70	NP init: NPPU early setup failed: %d
+0x007c98	NP init: NPPU early setup done
+0x007cb8	NP init: SMCT setup begin
+0x007cd8	NP init: SMCT setup done
+0x007cf8	NP init: NPPU late setup begin
+0x007d18	NP init: NPPU late setup done
+0x007d38	NP init: SDET setup begin
+0x007d58	NP init: SDET setup done
+0x007d78	NP init: SIPC scheduler setup begin
+0x007da0	NP init: SIPC scheduler setup done
+0x007dc8	NP init: MF port PPU setup begin
+0x007df0	NP init: SG351 ports bring-up begin
+0x007e18	NP init: LAN port bring-up begin
+0x007e40	NP init: LAN port bring-up failed: %d
+0x007e68	NP init: LAN port bring-up done
+0x007e90	NP init: MF port PPU setup done
+0x007eb8	NP init: MF port PPU setup failed: %d
+0x007ee0	NP init: PPU tables failed: %d
+0x007f00	ISU init request remained busy: %#x
+0x007f28	PPU block not ready: %#x
+0x007f48	RX queue %u descriptor %u has unknown DMA %pad (word1 %#x, tracked %u)
+0x007f90	Driver BUG: missing reserved tailroom
+0x007fb8	TX queue %u: invalid completion delta %u (pending %u)
+0x007ff0	NPPT handoff is not ready: %#x
+0x008010	unknown
+0x008018	failed to power off SerDes for %s: %d
+0x008040	failed to restore %s SerDes mode: %d
+0x008068	unsupported SGMII link speed %d, XMAC not enabled
+0x0080a0	SGMII XMAC initialization failed: %d
+0x0080c8	unsupported 2500BASE-X link speed %d, XMAC not enabled
+0x008100	2.5GBASE-X XMAC initialization failed: %d
+0x008130	WAN port bring-up failed
+0x008158	internal
+0x008170	gmii
+0x008178	sgmii
+0x008188	rev-mii
+0x008190	rmii
+0x008198	rev-rmii
+0x0081a8	rgmii
+0x0081b0	rgmii-id
+0x0081c0	rgmii-rxid
+0x0081d0	rgmii-txid
+0x0081e0	rtbi
+0x0081e8	smii
+0x0081f0	xgmii
+0x0081f8	xlgmii
+0x008200	moca
+0x008208	psgmii
+0x008210	qsgmii
+0x008218	trgmii
+0x008220	100base-x
+0x008230	1000base-x
+0x008240	2500base-x
+0x008250	5gbase-r
+0x008260	rxaui
+0x008268	xaui
+0x008270	10gbase-r
+0x008280	25gbase-r
+0x008290	usxgmii
+0x008298	10gbase-kr
+0x0082a8	qusgmii
+0x0082b0	1000base-kx
+0x0082c0	10g-qxgmii
+0x0082d0	50gbase-r
+0x0082e0	laui
+0x0082e8	100gbase-p
+0x0082f8	mii-lite
+0x008308	TX did not quiesce; shutting down hardware before release
+0x008348	rx_hw_queue_%u_descs
+0x008360	rx_napi_%u_polls
+0x008378	rx_napi_%u_cpu0
+0x008388	rx_napi_%u_cpu1
+0x008398	rx_napi_%u_overlaps
+0x0083b0	rx_napi_%u_foreign_pages
+0x0083d0	rx_napi_%u_lan_descs
+0x0083e8	rx_napi_%u_wan_descs
+0x008400	rx_hash_active
+0x008410	rx_hash_loads
+0x008420	%s %s: rejecting DMA map of vmalloc memory
+0x008450	TX timeout while datapath unavailable (prepared=%u stopping=%u)
+0x008498	TX timeout recovered: reclaimed=%u pending=%u->%u done=%#x->%#x prod=%u cons=%u notify=%u mask=%#x
+0x008500	TX timeout stalled: pending=%u done=%#x prod=%u cons=%u notify=%u mask=%#x
+0x008550	failed to restore datapath after RSS setup: %d
+0x008580	failed to restore datapath after XSK pool setup: %d
+0x0085b8	shared TX did not quiesce before LAN teardown
+0x0085e8	shared TX did not quiesce while LAN remains active
+0x008620	shared TX did not quiesce while WAN remains active
+0x008658	shared TX did not quiesce at LAN stop
+0x008680	api=%u ready=%u generation=%llu capabilities=%#llx ikey_depth=%u stat_depth=%u age_depth=%u ddr_bytes=%u ppu_version_valid=%u ppu_version=%#x.%#x hardware_revision_valid=%u write_completion_verified=%u
+0x008750	%15s %u
+0x008758	optional flow client attach failed: %d
+0x0087a0	flow invalidation incomplete before hardware shutdown
+0x0087d8	&np->driver_lock
+0x0087f0	NP requires hardware recovery after failed invalidation
+0x008830	zx279133_nppt_endpoint_cleanup
+0x008850	wan_ports
+0x008860	offload_info
+0x008870	zx279133_ptp_unregister
+0x008888	Host topology invalidation failed: %d
+0x0088b0	host_sync pending %d error %d zcam_used %u
+0x0088e0	host %pM port %u zcam %u/%u/%u flows %u
+0x008910	ssch
+0x008918	usch
+0x008920	detached
+0x008930	version=2 enabled=%u seddr_mb=%u plcr_buckets=%u rate_unit=kbps cap_unit=raw full_sqm=1
+0x008990	if=%s hw_domain=%s ssch_port=%u queue=%u owner=%llu rate_kbps=%u nominal_kbps=%u clock_hz=%llu fill_time=%u fill=%u cap_raw=%u bdp_red=%u applied=%u uncertain=%u
+0x008a38	if=%s hw_domain=%s ssch_port=%u scheduler=1 strict_queue=%u owner=%llu applied=%u uncertain=%u weights=
+0x008aa8	%s%u
+0x008ac0	woe1-wclk
+0x008ad8	schedule
+0x008af0	clear
+0x008af8	clear-scheduler
+0x008b08	none
+0x008b10	port
+0x008b18	QoS slot %u scheduler detached with unverified restoration
+0x008b58	QoS %u/%u detached with unverified restoration
+0x008b88	QoS %u scheduler restore unverified
+0x008bb0	QoS %u/%u restore unverified
+0x008bd0	npu_qos
+0x008bd8	failed to register /dev/zx279133-seddr
+0x008c00	zx279133_seddr_cleanup_action
+0x008c20	zx279133-seddr
+0x008c30	rc=0 native_api=%u request_required=1
+0x008c78	info
+0x008c80	rc=0 native_api=%u ready=%u generation=%llu flow_api=%u capabilities=%#llx ppu_version_valid=%u ppu_major=%#x ppu_minor=%#x write_completion_verified=%u semantics=native readback_proves_effect=0 ppu_context_read=1 ppu_query_capture=1 capture_wait_ms=100 ppu_query_key_read=1 capture_mask_restore=1 ppu_vid_key_probe=1 vid_key_active=%u vlan_rows=%u vlan_users=%u vlan_uncertain=%u ppu_me_stats_read=1 me_stats_interval_ms=3000 me_utilization_available=0 ppu_me_state_raw=1 red_buffer_api=1 red_usage_api=1 sqm_offload=0 managed_shaper_api=1 red_usage_self=1
+0x008eb8	rc=0 target=frame-limits generation=%llu atomic=0 restore_supported=0 capture_armed=0 table_data_written=0 indirect_read_gate_restore=1
+0x008f48	global_rc=%d global_raw=%08x,%08x,%08x,%08x
+0x008f78	 global_l2_max=%u
+0x008f98	xmac=%u rx_ctrl_raw=%#x frame_cfg_raw=%#x
+0x008fc8	sdet_up_raw=%#x up_min=%u up_max=%u sdet_down_raw=%#x down_min=%u down_max=%u
+0x009018	spa_mem=%u rc=%d raw=%#x
+0x009038	 min=%u max=%u
+0x009048	rc=0 target=ppu-me-stats generation=%llu sampled_ns=%llu age_ms=%llu interval_ms=3000 me_count=%u not_idle_bitmap=%#x counter_mode=oem_raw split_read=low_high atomic=0 read_clear_verified=0 busy_cycles_available=0 idle_cycles_available=0 utilization_available=0 me_state_raw=1 state_units_verified=0
+0x009178	active_cnt_en_raw=%#x active_cnt_en=%u grant_cnt_en_raw=%#x grant_cnt_en=%u bank_miss_cnt_en_raw=%#x bank_miss_cnt_en=%u
+0x0091f8	stat_clock_raw=%#x core_stat_gclk_en=%u sys_stat_gclk_en=%u se_stat_gclk_en=%u reorder_stat_gclk_en=%u
+0x009260	cluster_thread_active_raw=0x%016llx cluster_grant_raw=0x%016llx
+0x0092a8	me=%u not_idle=%u mf_in_valid=%llu mf_in_sop=%llu mf_in_eop=%llu mf_out_valid=%llu mf_out_sop=%llu mf_out_eop=%llu ready_raw=0x%016llx grant_raw=0x%016llx
+0x009348	rc=%d target=%s me=%u firmware_crc=%#x pc_before=%u pc_after=%u stopped_before=%#x stopped_after=%#x trapped=%u restore_verified=%u resume_verified=%u stage=%u int_mask=%#x stopped_final=%#x key_rc=%d key_bank=%u mask_restored=%u pc_valid_stopped=%u atomic=0 restore_supported=0
+0x009468	w%u=%08x%s
+0x009478	k%u=%08x%s
+0x009488	rc=0 op=%s target=%s keys=
+0x0094a8	%s%u
+0x0094b0	 values=
+0x0094c0	 restore_supported=%u
+0x0094d8	units=raw queue_mapping_verified=0 atomic_snapshot=0
+0x009510	table=fast-ikey index_range=0-4095 words=4 access=read-only
+0x009550	rc=%d write_requested=%u write_rc=%d state_may_have_changed=%u
+0x009590	zte-npu-%s
+0x0095a0	native
+0x0095a8	profile
+0x0095b0	binding
+0x0095b8	timing
+0x0095c0	global
+0x0095c8	qos-gates
+0x0095d8	mode
+0x0095e0	weight
+0x0095e8	queue
+0x0095f0	port
+0x0095f8	vlan
+0x009600	vlan-mode
+0x009610	pvid
+0x009618	invlan
+0x009620	ppu-context
+0x009630	ppu-capture
+0x009640	ppu-vid-probe
+0x009650	ppu-me-stats
+0x009660	red-buffer
+0x009670	red-usage
+0x009680	frame-limits
+0x009690	ikey

@@ -1,0 +1,210 @@
+0x000000	c|w{
+0x00005b	9JLX
+0x00008a	~=d]
+0x000110	OMCIIntegrityKeyPLOAMIntegrtyKeyKeyEncryptionKeyUUUUUUUUUUUUUUUUOMCIIntegrityKeyPLOAMIntegrtyKeyKeyEncryptionKeyUUUUUUUUUUUUUUUU
+0x0001d8	zx279133_pon_handle_key_control
+0x000290	T   T   U( 
+0x00029c	T   T   T   T   
+0x000379	UUUUUU
+0x0003ff	 T  
+0x00040b	 T  
+0x000b50	zx279133_pon_ingest_omci_frame
+0x000b70	zx279133_pon_poll_xgmac
+0x000b88	zx279133_pon_drain_omci_rx
+0x000be8	zte,zx279132-pon
+0x000cb0	zte,zx279133-pon
+0x000d78	zte,zx279133-sg351-pon
+0x000f94	3333333333
+0x00105c	3333333333
+0x001124	3333333333
+0x0011ec	3333333333
+0x001265	")&)
+0x0012b4	3333333333
+0x00137c	3333333333
+0x001445	UUUUUUUUUU
+0x00150d	UUUUUUUUUU
+0x0015d4	UUUUUUUUUUU
+0x0016a1	UUUUUU
+0x001769	UUUUUU
+0x001790	pon_tx_pcp_queue
+0x0017a8	omci_ik_mode
+0x0017b8	omci_rx_mode
+0x0017c8	omci_tx_mode
+0x0017d8	lp_gem_shift
+0x0017e8	npu_pon
+0x0017f0	SG351 PON: interface DOWN
+0x001810	xgpon
+0x001818	10gpon
+0x001820	xgspon
+0x001828	gpon
+0x001830	10gepon
+0x001838	xepon
+0x001840	10gepon_sym
+0x001850	epon
+0x001858	none
+0x001860	disabled
+0x001870	idle
+0x001878	irq=%d
+0x00187f	irq_cnt=%llu
+0x00188c	sn_burst_tx_cnt=%u
+0x00189f	xgmac_sn_reg=0x%08x%08x
+0x0018b7	last_ploam_id=0x%02x
+0x0018cc	key_ctrl_rx=%u
+0x0018db	key_report_tx=%u
+0x0018ec	serdes_sequence=%s
+0x0018ff	init_stage=%s
+0x00190d	regid_set=%u
+0x001920	driver=npu-pon
+0x001930	abi_version=%u
+0x001940	initialized=%u
+0x001950	mode=%s
+0x001960	init_stage=%s
+0x001970	init_errno=%d
+0x001980	init_attempts=%u
+0x001998	serdes_sequence=%s
+0x0019b0	irq=%d
+0x0019b8	irq_cnt=%llu
+0x0019c8	tx_enabled=%u
+0x0019d8	sn=%s
+0x0019e0	loid=%s
+0x0019f0	pll_locked=%u
+0x001a00	rx_los=%u
+0x001a10	cdr_locked=%u
+0x001a20	ds_synced=%u
+0x001a30	serdes_pll_reg=0x%08x
+0x001a48	serdes_rx_reg=0x%08x
+0x001a60	onu_state=O%u
+0x001a70	onu_id=%u
+0x001a80	eqd=%u
+0x001a88	state_seq=%u
+0x001a98	ploam_rx_cnt=%u
+0x001ab0	ploam_tx_cnt=%u
+0x001ac8	omci_rx_cnt=%u
+0x001ad8	omci_tx_cnt=%u
+0x001ae8	ugem_omcc_tx_pkts=%u
+0x001b00	fifo_recoveries=%u
+0x001b18	rx_ring_drops=%u
+0x001b30	deactivate_cnt=%u
+0x001b48	disable_sn_cnt=%u
+0x001b60	o5_stall_recoveries=%u
+0x001b78	loid_auth_status=0x%02x
+0x001b98	keys_derived=%u
+0x001bb0	omci_mic_verified=%u
+0x001bc8	active_tx_path=%u
+0x001be0	omci_tx_mode=%u
+0x001bf8	omci_ik_mode=%u
+0x001c10	service_ready=%u
+0x001c28	flow_count=%u
+0x001c38	vlan_rewrite=%u
+0x001c50	bosa_opsd=%u
+0x001c60	pon_tag=%08x%08x
+0x001c78	SG351 PON: PLOAM Key_Control flag=%u key_idx=%u seq=%u
+0x001cb0	3141592653589793
+0x001cc8	SG351 PON: latched PON_LP OEM OMCI TX fallback
+0x001cf8	SG351 PON: latched PON_LP flag OMCI TX fallback
+0x001d30	SG351 PON: latched native mcode_intel IDM OMCI TX path
+0x001d68	zx279132-retained
+0x001d80	zx279132-an1
+0x001d90	ZX279132 PON SerDes PLL lock pending (an1=%#x, pll=%#x, rx=%#x), continuing XGMAC init
+0x001de8	ZX279132 PON AN1 PLL lock pending (0x16010020=%#x)
+0x001e20	SG351 PON: Applied %u flow(s), primary GEM=%#x (tx_ctrl=%#x, vlan_rewrite=%u)
+0x001e70	pon_lp_legacy
+0x001e80	idm_native
+0x001e90	SG351 PON: OMCI RX/TX ready (rx=%s, onu_id=%u, 0x280000=%#x, 0x280054=%#x, 0x280058=%#x)
+0x001ef0	idm48
+0x001ef8	immediate
+0x001f08	after_next_tx
+0x001f18	after_two_tx
+0x001f28	state=O%u onu_id=%u (0x%x) mode=%u irq=%d irq_cnt=%llu rx_mode=%u(%s) idm_omci_rx=%u tx_mode=%u(%s) latched_tx=%u ik_mode=%u(%s) o5_recoveries=%u deact=%u loid_auth=0x%02x
+0x001fd8	nppt_2438_010_19c_8000=%08x/%08x/%08x/%08x
+0x002008	bmu_cnt=%u(reg=%u,cfg=%08x,idx_max=%u,bppe=%u,bppi=%u,fifo=%u) wsch_400_440_444=%08x/%08x/%08x
+0x002068	uopc_30240=%08x idm_q0_sub_done=%u/%u pkts=%llu drops=%llu
+0x0020a8	usch_28000=%08x uopc_30000_004_040_044_064_06c=%08x/%08x/%08x/%08x/%08x/%08x
+0x0020f8	uopc_fifo_200_204_208_20c_210=%08x/%08x/%08x/%08x/%08x base_218_228=%08x/%08x/%08x/%08x/%08x
+0x002158	idm_omci_cb/rx=%u/%u (last w1=%08x len=%u hdr=%8phN)
+0x002190	sdet_pon_2440_2444_244c_2450=%08x(in=%u,ok=%u)/%08x(eop=%u,out=%u)/%08x/%u sdet_2040_2044=%08x/%08x
+0x0021f8	sipc_4000_4010_4040_4058=%08x/%08x/%08x/%08x
+0x002228	spa_8c00_8c04_8de8=%08x/%08x/%08x(omci_rx=%u,drop=%u) spa_err_8ce0_8ce4_8ce8_8d24=%08x/%08x/%08x/%08x
+0x002290	smct_c000_c004_c05c_c060=%08x/%08x/%08x/%08x
+0x0022c0	smct_c008_c108_c150=%08x/%08x(np1_eop=%u,np1_sop=%u)/%08x(omci_bud=%u,drop=%u)
+0x002310	red_200c0_200bc_200b8_200c8_20340=%08x(dn=%u,up=%u)/%08x(omci_drop=%u)/%08x/%08x/%08x
+0x002368	red_np1_desc_wm=%04x/%04x/%04x/%04x/%04x/%04x left_isu0_5=%08x/%08x
+0x0023b0	idm_rx_run=%u int_040_044_050_5c0=%08x/%08x/%08x/%08x
+0x0023e8	nppt=hardware_not_prepared
+0x002408	pon_top_040_044_080=%08x/%08x/%08x
+0x002430	xgmac_58400_58414_58800_59200=%08x/%08x/%08x/%08x
+0x002468	xgmac_59400_59408_59410_59800=%08x/%08x/%08x/%08x
+0x0024a0	ubwt_9484_9488_949c_94a8=%u/%u/%u/%08x
+0x0024c8	pon_sta_tx_108_140_144_148_14c=%u/%u/%u/%u/%u
+0x0024f8	dgemt_8880_8890_8904_8914_891c=%08x/%u/%u/%u/%08x
+0x002530	drsmt_9014_9020_9024_9028_902c_9264=%u/%08x/%u/%08x(eth=%u,omci=%u)/%u/%u
+0x002580	pon_sta_rx_308_340_344_348_34c=%u/%u/%u/%u/%u
+0x0025b0	ugem_omcc_tx_raw=0x%08x/0x%08x (onu_id=%u)
+0x0025e0	ugem_tcont_mon[%u]=tc:%u cnt:%u/%u/%u/%u
+0x002610	omcc_gem_mon=gem:%u ugem_slot:%d(%u/%u/%u/%u) drsmt_slot:%d(%u/%u)
+0x002658	tcont_reg[%02x]=%08x
+0x002670	lp_000_050_054_058_060_07c_098_0fc=%08x/%08x/%08x/%08x/%08x/%08x/%08x/%08x
+0x0026c0	lp_cnt_02c_0e8_0f4_0f8_130_134_138=%u/%u/%u/%u/%u/%u/%u (recov=%u)
+0x002708	flow[%u]=alloc:%u gem:%u uni:%u ani:%u act:%u tcont:%u mc:%u aes:%u ugem_tx[%d]:%u/%u/%u/%u drsmt_rx[%d]:%u/%u
+0x002780	retained
+0x002790	uboot-preserve
+0x0027a0	cputype8-retry
+0x0027b0	primary
+0x0027b8	uboot-fallback
+0x0027c8	PON SerDes PLL lock bit pending (%s, pll=%#x, rx=%#x), continuing XGMAC init
+0x002818	ready
+0x002820	SG351 PON initialized (mode=%u, mac_mode=%u, irq=%d, pll_stat=%#x, rx_stat=%#x)
+0x002878	parent
+0x002880	datapath
+0x002890	SG351 PON: interface UP (mode=%u)
+0x0028b8	text:
+0x0028c0	hex:
+0x0028c8	0123456789abcdefABCDEF
+0x0028e8	stop
+0x0028f0	stop
+0x0028f8	init
+0x002900	mode
+0x002908	loid
+0x002910	loid_passwd
+0x002920	loid_password
+0x002930	regid
+0x002938	ploam
+0x002940	register
+0x002950	reinit
+0x002968	cannot request TX power GPIO
+0x002988	opsd
+0x002990	cannot request signal detect GPIO
+0x0029b8	zte,zx279132-pon
+0x0029d0	zte,zx279132-nppt
+0x0029e8	zx279133-pon
+0x0029f8	label
+0x002a00	failed to request PON IRQ %d (%d), using timer poll
+0x002a38	zte-pon
+0x002a40	failed to register /dev/zte-pon (%d)
+0x002a68	zx279133_pon
+0x002a78	status
+0x002a80	hw_regs
+0x002a88	control
+0x002a90	native /dev/zte-pon registered (ABI v%u, irq=%d)
+0x002ad0	pon_lp
+0x002ad8	SG351 PON: auto-locked alternate RegID/LOID MSK on first O5 OMCI frame
+0x002b20	SG351 PON: Downstream OMCI-MIC verified OK (path=%s, TID=%#x, len=%zu)
+0x002b68	SG351 PON: Downstream OMCI-MIC mismatch (path=%s, TID=%#x rx=%08x calc=%08x)
+0x002bb8	SG351 PON: Serial_Number_ONU burst transmitted (cnt=%u, irq=%#x)
+0x002c00	SG351 PON: Assigned ONU-ID %u, state -> O4
+0x002c30	SG351 PON: Ranging EqD=%u complete, state -> O5
+0x002c68	SG351 PON: PLOAM Assign_Alloc-ID alloc=%u slot=%u flag=%#x
+0x002ca8	SG351 PON: PLOAM Assign_Alloc-ID %u exceeds %u UOPC T-CONT slots
+0x002cf0	SG351 PON: PLOAM Deassign_Alloc-ID alloc=%u slot=%u
+0x002d28	SG351 PON: OLT Deactivate_ONU-ID (onu_id=%u, cnt=%u, omci_rx=%u, omci_tx=%u, loid_auth=0x%02x)
+0x002d88	SG351 PON: OLT Disable_Serial_Number emergency stop (ctrl=0x%02x, cnt=%u)
+0x002dd8	SG351 PON: OLT re-enabled Serial_Number (ctrl=0x%02x)
+0x002e10	SG351 PON: OMCI RX missing SOP on chunk 0 (pkt_cnt=%u, st=%#x), resynced
+0x002e60	SG351 PON: OMCI RX missing EOP after 128 chunks, resynced
+0x002ea0	SG351 PON: OMCI RX desc/chunk mismatch (desc=%#x, pos=%zu), resynced
+0x002ee8	idm64
+0x002ef0	lp_flag
+0x002ef8	lp_oem
+0x002f00	lp_shift17
+0x002f10	dual_auto
+0x002f20	pon_status

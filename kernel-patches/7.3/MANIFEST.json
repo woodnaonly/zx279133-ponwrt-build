@@ -1,0 +1,205 @@
+{
+  "series": "target/linux/zte/patches-7.3",
+  "upstream_repo": "https://github.com/cnjn/immortalwrt",
+  "upstream_branch": "master",
+  "upstream_commit": "31e2ac4ded9c8896c7aefd3dcb9a46ef77440fbd",
+  "upstream_date": "2026-11-10",
+  "kernel_patchver": "7.3",
+  "patches": [
+    {
+      "file": "100-clk-zx279133.patch",
+      "sha256": "359937c46420d5eec33b97ae9492523477553dbedf04c3e14faa5bb74988f3ac",
+      "bytes": 53545
+    },
+    {
+      "file": "110-pinctrl-zx279133.patch",
+      "sha256": "3016d84a9d484b8c9327dc565f7e5eae6354905204acd00fdd74b57321a03c19",
+      "bytes": 15540
+    },
+    {
+      "file": "120-gpio-zx279133.patch",
+      "sha256": "645cfc1d2453a12fe93922115dec7205bd941237d60175514f02cdf85748b972",
+      "bytes": 12814
+    },
+    {
+      "file": "130-pwm-zx279133.patch",
+      "sha256": "8b7274dbe1416fcb735ba496be6b57738329427a0967d2ec3396d1fe615c1f3b",
+      "bytes": 8817
+    },
+    {
+      "file": "140-watchdog-zx279133.patch",
+      "sha256": "c3aa164c05cd321fd0d34d4d7ffa1e533f29be57e6634cb39adfacd39cb8949a",
+      "bytes": 12917
+    },
+    {
+      "file": "150-hwmon-zx279133-pvt.patch",
+      "sha256": "5f77c974145a6ab73e2dc59bbc91f1762dd44d1c0c33eb6cfc651448e2215b6f",
+      "bytes": 11272
+    },
+    {
+      "file": "160-nvmem-zx279133-efuse.patch",
+      "sha256": "28b4ec0ac4e3efb3b678db101d281d3bd038c9906f39fdc2cdfe3d22cddae140",
+      "bytes": 6385
+    },
+    {
+      "file": "170-nvmem-sr1010-tags.patch",
+      "sha256": "f1b007492e367ffd8830e1d122a32f63556039c05580545734ce52583d12d605",
+      "bytes": 6701
+    },
+    {
+      "file": "180-spi-zx279133-sfc.patch",
+      "sha256": "1b274489e6ecc0f647ec3e83b75c04dc33e3620a88c45a9bef0ee1f464fa5e56",
+      "bytes": 16959
+    },
+    {
+      "file": "190-mtd-sr1010-spinand.patch",
+      "sha256": "52fe2af56cb033d01c431e9df081ffc4a4d99ceb39daa3e7dc1fdcaadd5fc81c",
+      "bytes": 23740
+    },
+    {
+      "file": "195-jffs2-shared-plugin.patch",
+      "sha256": "b32e3787d037afecdbc9789137c06a75f99bbd42efcf197ec93e11b3c5978041",
+      "bytes": 4959
+    },
+    {
+      "file": "200-kobject-firmware-uevent.patch",
+      "sha256": "e3c19dd5535e44c21b9dd2c8887c58ae803df6728ed7497198f34f0e9ff4d292",
+      "bytes": 1957
+    },
+    {
+      "file": "210-soc-zx279133-boot-slots.patch",
+      "sha256": "dfd2d2beffa027238691ae3664119d488c359c3a408c7f80a4967dfd8b0f2904",
+      "bytes": 17396
+    },
+    {
+      "file": "220-serial-pl011-zx279133.patch",
+      "sha256": "9b66a2e0c4b92dfe4acc20fc43da1c7d4c7802b5bc4df9dcf662f982b8404370",
+      "bytes": 3581
+    },
+    {
+      "file": "230-usb-xhci-zx279133.patch",
+      "sha256": "3904e290acff22aa224c7bfc2537410ffbcba554268d4c0a19e59241a079dde6",
+      "bytes": 5591
+    },
+    {
+      "file": "240-phy-zx279133-serdes.patch",
+      "sha256": "b29aace6ae3a3e2450cb8664dcb2c062f8c517d49a68827a4558fab08529670a",
+      "bytes": 28359
+    },
+    {
+      "file": "250-mdio-zx279133.patch",
+      "sha256": "b0b94ec85e996daa1d85e08519cb975489e021cfae1b7a21a995ef012f775793",
+      "bytes": 11065
+    },
+    {
+      "file": "260-net-phy-zx279051.patch",
+      "sha256": "f8c163143ffdd420339474bdc2fd77968d676589714b23c0a4612338109cae81",
+      "bytes": 34011
+    },
+    {
+      "file": "270-net-pcs-xpcs-zx279133.patch",
+      "sha256": "36b5710be5fb4afc117822f83ee7b5bc564b82295156dd8e0c6de09d3477281b",
+      "bytes": 3317
+    },
+    {
+      "file": "280-net-macvlan-offload-path.patch",
+      "sha256": "6ced48bfe8d3190ddc54d5d62a1f2ec1a9da139d1a148f21208d50b0c7aea7f5",
+      "bytes": 1293
+    },
+    {
+      "file": "290-net-dsa-zx279133-tagging.patch",
+      "sha256": "dc14cefece6fa0b0b8839cc06f3d77201f0a842e7ef6d07fa0a2d72db1aa3605",
+      "bytes": 5208
+    },
+    {
+      "file": "300-netfilter-flowtable-lifecycle.patch",
+      "sha256": "254f9b04d928bc84be1f5c94380979b6549217139b621b713f7fad4c81ce7ce0",
+      "bytes": 47872
+    },
+    {
+      "file": "310-netfilter-flowtable-client-stats.patch",
+      "sha256": "55ad594bac3bc711b690303ada866222e8060e5dc87b1dc696d61315761b2ab8",
+      "bytes": 21391
+    },
+    {
+      "file": "320-net-zx279133-npu-interfaces.patch",
+      "sha256": "e98ccaf078e8986202d1ceac6f4f82a1e0185a1c2e9accc69b904b8337929c5e",
+      "bytes": 85567
+    },
+    {
+      "file": "330-net-zx279133-npu-datapath.patch",
+      "sha256": "2f35e750ac6605f140ba50f92155f285628dbe7e0e6d1150669eb95590dcd849",
+      "bytes": 194187
+    },
+    {
+      "file": "340-net-zx279133-npu-tables.patch",
+      "sha256": "4c0752e71a930c8177ac2f48189b3829fade8748143374dcbe12bdf9b3e11275",
+      "bytes": 132749
+    },
+    {
+      "file": "350-net-zx279133-npu-host.patch",
+      "sha256": "d547d2ac5be0c9be16a75612235b2848aab216e3251bf3b79e039f38274dbca1",
+      "bytes": 17539
+    },
+    {
+      "file": "360-net-zx279133-npu-qos.patch",
+      "sha256": "3f20064c9813a29861f00814e0281d88bb0827e817a1968302f7db10ec6b758b",
+      "bytes": 15112
+    },
+    {
+      "file": "370-net-zx279133-npu-rule-api.patch",
+      "sha256": "19c86681423747225cd24c4e80cc438c078740bed5ed31d6e3ff05bbb064be35",
+      "bytes": 52531
+    },
+    {
+      "file": "380-net-zx279133-fnoffload.patch",
+      "sha256": "3641cb0cc3cd7025b0914caffeb51fb921bd2736b3b55dcf6d2c2f6fc03ef4ec",
+      "bytes": 132949
+    },
+    {
+      "file": "390-net-zx279133-lan-conduit.patch",
+      "sha256": "c804818b24dd121e459c5be8d1eabc670de4a6b88698f7070d4796c25619d5e8",
+      "bytes": 15423
+    },
+    {
+      "file": "400-net-zx279133-rtl8372n.patch",
+      "sha256": "7cbd0a7c28e81713b43e8ce69f34a89c8b6976cbd2a226f2fc58b8f13ecb04da",
+      "bytes": 256796
+    },
+    {
+      "file": "410-net-zx279133-build-bindings.patch",
+      "sha256": "69cd1d082a4e659f5e256016268728958283a46a6b1a3a4fa68b0b05c962e66e",
+      "bytes": 11633
+    },
+    {
+      "file": "415-net-zx279133-native-debug.patch",
+      "sha256": "5dd9502bbb4edb6c3bab2c9e9d3ad41c5b123b2d6e52f2f0064654fe84ed31bc",
+      "bytes": 20894
+    },
+    {
+      "file": "420-leds-netdev-hardware-offload.patch",
+      "sha256": "fc16121fe29db272743289e97e79015732ed855f6828e9b46ff37e2f95c123d8",
+      "bytes": 842
+    },
+    {
+      "file": "430-arm64-dts-zx279133-sr1010.patch",
+      "sha256": "766b1753744fb0b7ba4e539b905841674b33b300f954c417148116ec7de25b41",
+      "bytes": 23901
+    },
+    {
+      "file": "440-zte-optional-board-audits.patch",
+      "sha256": "e31e89bf61f3cd40ca8f3c525150d542d201a8d37c31c023326feb9e63dec51b",
+      "bytes": 29751
+    },
+    {
+      "file": "450-netfilter-skip-unused-upper-device-accounting.patch",
+      "sha256": "0c18753adbc60515c75876e9612a126eaf823ff31ce86bb894bebc6f99119018",
+      "bytes": 609
+    },
+    {
+      "file": "460-netfilter-client-conntrack-quota.patch",
+      "sha256": "9031a08595c6460656304fdc903ef35c9269db6d98a54fb571a00263f729b697",
+      "bytes": 32515
+    }
+  ]
+}

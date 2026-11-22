@@ -1,0 +1,18 @@
+0x000000	zx279133_ge
+0x000010	Full
+0x000018	Half
+0x000020	Link is Up - %dMbps/%s
+0x000038	Link is Down
+0x000048	phy-handle
+0x000058	port
+0x000068	lan1
+0x000070	lan2
+0x000078	lan3
+0x000080	lan4
+0x000088	label
+0x000090	sg351_ge_release_port
+0x0000a8	%s: failed to bind PHY
+0x0000c0	%s: physical port registered (SMAC%u, HW port %u)
+0x0000f8	zx279133-sg351-ge
+0x000680	zte,zx279133-direct-ge-ports
+0x000748	zte,zx279133-sg351-ge-ports
