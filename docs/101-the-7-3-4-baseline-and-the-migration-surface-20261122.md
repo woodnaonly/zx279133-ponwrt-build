@@ -6445,6 +6445,119 @@ run **#57**（整轮 Success，1 h 20 m 46 s）的 flash job 里
 
 ---
 
+## 八之十八、PPU 微码：两份同名同尺寸、字节不同的 blob，和 7.3 镜像里那一份
+
+### 8之十八.1 判决
+
+**7.3 线此前装的是驱动会拒收的那一份微码** —— 实测出来的，不是推的：
+
+- 7.3 内核镜像里内嵌的 PPU 微码，crc32 是 **`0xc839b946`**；
+- 7.3 驱动（cnjn 的 `zx279133-np.c`）只认 **`0xef1d7647`**；
+- 而我们 overlay 的 `/etc/modules.d/30-zte-npu` 写的是 **`npu vlan_offload=1`** ⇒
+  驱动里那条 `release_firmware(); return -ESTALE` **会被走到** ⇒ **微码根本不装载** ⇒
+  `ppu_mcode_prepared` 永远是假 ⇒ 驱动的开网路径（`!eth->ppu_mcode_prepared`）直接拒绝。
+
+⇒ **实机那一轮会当场死在数据面上**，而症状看起来像「驱动坏了」，
+不像「镜像里少了一个文件」。
+⇒ 已修：7.3 线改带驱动要的那一份，并加一道**从驱动自己嘴里读出期望值**的门禁。
+
+### 8之十八.2 两份 blob（字节级）
+
+| blob | md5 | crc32 | 大小 |
+|---|---|---|---|
+| 我们 overlay 的那份 = 厂商 `etc/mcode/mcode_133.bin` | `8b2b3726862b4b063d765bc4ab3f8bd3` | `0xc839b946` | 103,456 B |
+| cnjn `package/firmware/zte/flies/zx279133-npu.bin` = 现场 `staging/ctl/mcode_intel.bin` | `fdfcf5bb87c98510cc00c3cad60ab24a` | `0xef1d7647` | 103,456 B |
+
+**同名、同尺寸、不同字节**：103,456 B 里 **33,999 B 不同**（5,674 段连续差异），
+**从第 15 个字节起就分叉** ⇒ 这不是版本微调，是**两个不同的镜像**。
+
+⇒ 「同名同尺寸」这种核对**过不了关**：doc 100 当时就是这么写的（见 8之十八.7）。
+
+### 8之十八.3 机制：为什么 7.3 装的是我们那一份
+
+三件事凑在一起：
+
+1. **微码是 built-in firmware**。`config-7.3` 里
+   `CONFIG_EXTRA_FIRMWARE="zte/zx279133/mcode_intel.bin"` +
+   `CONFIG_EXTRA_FIRMWARE_DIR="firmware"` ⇒ 内核按**自己的源码树**解析这份文件。
+2. **谁放进去的**：`tools/apply-sk-overlay-73.sh` 从
+   `overlays/target/linux/zte/zx279133/firmware/…`（6.18 世代那份）拷进树。
+   上游 cnjn 是在他自己的 `target/linux/zte/Makefile` 的 `Kernel/Prepare` 里拷
+   `package/firmware/zte/flies/zx279133-npu.bin` 的 ——
+   **但我们用 `overlays-73/target/linux/zte/Makefile` 覆盖了那个 Makefile**
+   ⇒ 上游那一段**根本不存在**。
+3. **rootfs 里没有微码**：7.3 与 6.18 两份 jffs2 里都搜不到 `mcode_intel.bin`
+   （jffs2 的文件名是明文，搜得到；两份都是 `-1`）⇒
+   `request_firmware()` **只能拿到内核内嵌的那一份** ⇒ 树里那份**就是**板上那份。
+
+**产物级实测**（#57 的 `flash-uImage`）：inflate 后 14,051,336 B，
+在 offset **9,073,808** 找到**我们那份 blob 的整体**；上游那份的头尾都找不到。
+⇒ 树里装错 ⇒ 板上就是错的。
+
+### 8之十八.4 驱动那一侧在挑什么
+
+cnjn 的 7.3 `zx279133-np.c`（补丁 340、380）：
+
+```c
+fw_crc = crc32_le(~0U, fw->data, fw->size) ^ ~0U;
+hash = rx_hash && fw->size == 103456 && fw_crc == 0xef1d7647;
+if (rx_hash && !hash)
+        dev_warn(eth->dev, "uncalibrated PPU firmware; retaining native RX queues\n");
+
+if (vlan_offload &&
+    (fw_crc != 0xef1d7647 || fw->size != 103456 ||
+     get_unaligned_be64(fw->data + 16 + 139 * 8) != 0x0010c0000000001fULL ||
+     get_unaligned_be64(fw->data + 16 + 650 * 8) != 0x0010c0000000001fULL ||
+     get_unaligned_be64(fw->data + 16 + 582 * 8) != 0x0704c00018680523ULL)) {
+        release_firmware(fw);
+        return -ESTALE;
+}
+```
+
+⇒ `vlan_offload=1` 时，**crc32 对不上就整段拒绝**。
+⇒ 6.18 世代的驱动（我们自己的 `np.c`）认**两个**常量
+（`ZX279133_MCODE_BOARD_CRC 0xc839b946` 与 `ZX279133_MCODE_RX_HASH_CRC 0xef1d7647`），
+所以它用我们那份也能转发 —— **这是两代驱动口味不同，不是谁抄错了**。
+
+### 8之十八.5 修了什么
+
+| # | 改了什么 | 在哪 |
+|---|---|---|
+| 1 | 7.3 线自带那一份（`0xef1d7647`，与现场 `staging/ctl/mcode_intel.bin` 逐位相同） | `overlays-73/target/linux/zte/zx279133/firmware/zte/zx279133/mcode_intel.bin` |
+| 2 | 板级层脚本优先用它，**拷完自检** | `tools/apply-sk-overlay-73.sh` |
+| 3 | 新门禁：期望值**从树里驱动自己的代码读出来**（`fw_crc == 0x…` 字面量与 `ZX279133_MCODE_*_CRC` 常量），查 blob 的 crc32、尺寸、magic、指令数 | `tools/check-sk-mcode.py` |
+| 4 | 负控 8 项：错一个字节 ⇒ 红在 crc32 那条；尺寸不对 ⇒ 红在尺寸那条；**6.18 线那份 ⇒ 红在 crc32 那条** | `tests/test_sk_mcode.py` |
+| 5 | 接线：新步骤「Gate: the NPU microcode is the one this driver will take」+ 两条 `paths:` | `.github/workflows/build-sk-d840n-73.yml` |
+
+**自检这一步当场抓到了本轮自己的一个错**：脚本里写成
+`[ -f "$fw73" ] || fw="$fw"`（写反了：7.3 那份存在时仍然用 6.18 那份），
+门禁立刻红在 crc32 那条上 ⇒ 改成显式 `if`（`&&` 写法在 `set -e` 下还会误退出）。
+
+### 8之十八.6 没做到的
+
+- **板子那一头一次都没验过**：两份 blob 在真板子上的行为差异没有实测。
+  间接证据只有一条且是早前的记录：现场 `staging/ctl/re-cpu-trap-ppu.md` 写着
+  `sk-d840n-openwrt/rootfs/lib/firmware/` 里那份的 crc32 是 `0xef1d7647`
+  —— 也就是**这块板子跑过的 CI 6.18 根文件系统里带的是 cnjn 那一份**。
+- **6.18 线一行没动**：6.18 镜像里嵌的仍是我们那份（实测），
+  6.18 驱动认它 ⇒ 不动。但这也意味着 6.18 线上 `rx_hash` 那条路是关着的
+  （驱动认 `RX_HASH_CRC` 那一支）—— **这一条本轮没有查证，也没有改**。
+- **厂商那份的原件现在不在盘上**（`staging/vendor-full/` 已不在），
+  所以「我们的 = 厂商读出来的那份」这句话本轮只由**驱动源码里的注释**支撑：
+  两代 `np.c` 里同一段 —— “The blob in the tree … is this board's own, not another
+  board's: it is byte for byte the vendor's `etc/mcode/mcode_133.bin` read out of
+  this board's flash”。
+
+### 8之十八.7 顺带订正 doc 100 的一句话
+
+doc 100 第 281 行原写：「`overlays/…/mcode_intel.bin` **保留** —— 与对方固件引用的
+是**同一份厂商微码**」。**这句在字节级是错的**：对方固件（`别的人固件`）的内核里嵌的是
+`0xef1d7647` 那份，我们 overlay 里的是 `0xc839b946` 那份 ——
+**同名同尺寸，字节不同**（doc 100 当时只核了「同名同尺寸」）。
+已改成「同名同尺寸但字节不同；7.3 线因此自带一份驱动认的那份」。
+
+---
+
 ## 九、下一步（按片重打，每片一次 CI）
 
 **没搬的，按片来：**

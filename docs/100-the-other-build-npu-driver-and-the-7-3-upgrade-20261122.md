@@ -278,7 +278,7 @@ obj-$(CONFIG_ZTE_ZX279133_FNOFFLOAD) += fnoffload.o
 | SK-D840N DTS、LED/PHY 板级、rootfs/网络脚本 | **保留**（要改绑到 7.3 的 dtsi/绑定） | 这是我们自己的板级资产 |
 | `kernel-overlays/drivers/net/ethernet/zte/*`（6.18 世代的驱动副本） | **不再直接覆盖**，改为「7.3 上游 + 我方实测修正重打」 | 上游 7.3 已重写，直接盖会把新驱动打回旧版（6.18 时就是这么炸过一轮：21 个错全在 `zx279133-offload.c`） |
 | 我方实测修正（IDM 表见 §5.1、9132 表、PON、RGMII、ME 观测面） | **逐项重打** | 这是我们相对上游的唯一增量 |
-| `overlays/target/linux/zte/zx279133/firmware/…/mcode_intel.bin` | 保留 | 与对方固件引用的是同一份厂商微码 |
+| `overlays/target/linux/zte/zx279133/firmware/…/mcode_intel.bin` | 6.18 线保留；**7.3 线不保留** | **同名同尺寸、字节不同**：对方固件的内核里嵌的是 crc32 `0xef1d7647` 那份，我们这份是 `0xc839b946`（实测，见 101 的八之十八）。7.3 的驱动只认前者 ⇒ 7.3 线自带一份 |
 
 ### 步骤 4｜门禁
 
