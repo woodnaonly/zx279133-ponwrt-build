@@ -6426,7 +6426,7 @@ mailbox 报告」的自检开关；报告里写下的 `kver=$(uname -r)` 才是�
 | 3 | `staging/trial/flash-rootfs.jffs2` | 7.3 的 rootfs（5,767,172 B） | 同上 |
 | 4 | `staging/ctl/gate-Image` / `gate-dtb` / `gate.src` | 按 7.3 那对重建 | `sh tools/mkgate.sh` |
 | 5 | `staging/ctl/ctl-initramfs.cpio.gz` | announce 载荷，骑 **7.3.4\*** | `tools/mkctlram.py --mode announce` |
-| 6 | `staging/ctl/ctl-flash.cpio.gz` | 刷机载荷，按 md5 钉死 7.3 那对 | `tools/flash-round.sh` 自己重建 |
+| 6 | `staging/ctl/ctl-flash.cpio.gz` | 刷机载荷，按 md5 钉死 7.3 那对 | `tools/flash-round.sh` 自己重建（**预置那份是干跑变体 `TAG=K73F`，换件后要重建**，八之十九.5） |
 | 7 | `staging/ctl/flash.permit` | 多一行 `proven=gate-K73` | `sh tools/gatewatch.sh`（板上判决后） |
 | 8 | `staging/ctl/reports.log` | 判决报告的落点 | `python tools/ncsrv.py` |
 | 9 | `staging/ctl/serial.log` | 板子说过的话 | 继电器开着时自己长 |
@@ -6813,6 +6813,20 @@ doc 100 第 281 行原写：「`overlays/…/mcode_intel.bin` **保留** —— 
 ⇒ 这几项在注释里写得很清楚：**早期轮次的 `model`/`leds`/`netdevs` 全是空的，
 而 `/proc` 那几项是好的** —— 那**不是三个发现，是一个挂载失败**。
 ⇒ 而这些诊断**只在仓库那份 `mkctlram.py` 里**。
+
+**本轮补测的一句**：两支 `mkctlram.py` 产出的刷机载荷，
+**膨胀内容逐字节相同**（cpio 1,297,004 B，sha256 `066ee196…`），
+但**压缩后的字节差 4 B**（595,404 vs 595,400 —— zlib 版本差异，gzip 头里的 mtime 字段两边都是 0）
+⇒ **载荷的 md5 不可复现**，只能**现算**
+（`flash-round.sh` 就是现算的，`MD5=$(md5sum staging/ctl/ctl-flash.cpio.gz …)` 打印出来跟板子上那份比）。
+⇒ **要比两轮载荷，比膨胀后的内容，别比那个 .gz 的 md5。**
+
+**顺带认出一件本轮之前没人说清的事**：预置那份
+`staging/trial73d/ctl/ctl-flash.cpio.gz` 是**干跑变体**
+（`/init` 里 `TAG=K73F`、`DO_WRITE=0`、`DO_ROOT=0`，8,615 B），
+不是 `flash-round.sh` 那三个变体里的任何一个（`dry`→`FD1`、`write`→`FW1`、`write-root`→`FW2`）。
+⇒ **换三件之后它必须重建**（它把三个 md5 钉在 `/init` 里），否则它钉的还是旧那对字节 ——
+板子会自己拒（`STAGE_FAIL`），方向是安全的，但白跑一轮。
 
 ⇒ **八之十七 第 3 步因此改了**：announce 载荷**不要**用现场那份脚本重建；
 用预置的那份（它已经骑 `7.3.4*`），或者用**仓库那份**重建。
