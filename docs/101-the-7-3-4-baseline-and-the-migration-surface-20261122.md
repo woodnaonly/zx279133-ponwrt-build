@@ -7048,6 +7048,7 @@ python3 ci-build-repo/tools/dtbparts.py staging/trial73d/flash/flash-dtb.bin \
 
 # 103~105 这三个在**工作区根**的 scratch/ 里（不在仓库里）：它们测的是现场/仓库
 #      里现成的脚本，跑在一次性的沙箱树上，不碰板子、不擦任何东西。
+#      107 与 108 这两个同样在工作区根的 scratch/ 里（107 是本轮新写的）。
 
 # 103) 刷机授权链的断链：四种 permit 行喂给**真的** flasher（用的是现场那份
 #      tools/ubflash.sh）。A=证据行原样（缺 stages=，被拒），B=豁免行（过），
