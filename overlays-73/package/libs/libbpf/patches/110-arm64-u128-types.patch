@@ -1,0 +1,54 @@
+arm64: give libbpf the 128-bit types and the attribute macro it lacks
+
+The 7.3 line builds libbpf 1.6.2 against the kernel's exported uapi
+headers, and that fails:
+
+    staging_dir/toolchain-aarch64_cortex-a53_gcc-14.3.0_musl/include/asm/ptrace.h:96:9:
+        error: unknown type name '__u128'; did you mean '__u32'?
+
+Why it fails, and why 6.18 does not:
+
+  * libbpf's src/Makefile puts -I../include and -I../include/uapi in front
+    of every system directory, and libbpf ships its own include/linux/types.h.
+  * the exported uapi linux/ptrace.h and the exported uapi asm/ptrace.h both
+    include <linux/types.h>, which therefore resolves to libbpf's copy - and
+    that copy has no __u128.
+  * the 7.3.4 arm64 asm/ptrace.h uses __u128 (struct user_fpsimd_state, the
+    PAC key structures), and the only place the exported uapi headers define
+    __u128 is linux/types.h - the copy that is shadowed.
+  * 6.18's arm64 asm/ptrace.h spells the same fields __uint128_t, and that
+    name is visible to user space, so the 6.18 line builds libbpf fine.
+    (Its published initramfs carries usr/lib/libbpf.so.1 and libbpf.so.1.6.2,
+    so the 6.18 line really does build it.)
+
+The same shadowing hides one more thing: the exported uapi linux/swab.h uses
+__attribute_const__, which the kernel defines in its own compiler attributes
+header - a header it does not export.  libbpf's include/uapi/linux/perf_event.h
+pulls in <asm/byteorder.h>, and that pulls in linux/byteorder/little_endian.h,
+and that pulls in linux/swab.h, so the macro is needed too.
+
+So the two definitions go into the copy of linux/types.h that libbpf actually
+compiles against: __u128 and __s128 are copied verbatim from the kernel's uapi
+linux/types.h, and __attribute_const__ is the kernel's own spelling.
+
+This patch lives in overlays-73/ only: the 6.18 release line does not get
+it, and does not need it.
+
+--- a/include/linux/types.h
++++ b/include/linux/types.h
+@@ -11,6 +11,15 @@
+ 
+ #include <asm/types.h>
+ #include <asm/posix_types.h>
++
++#ifdef __SIZEOF_INT128__
++typedef __signed__ __int128 __s128 __attribute__((aligned(16)));
++typedef unsigned __int128 __u128 __attribute__((aligned(16)));
++#endif
++
++#ifndef __attribute_const__
++#define __attribute_const__ __attribute__((__const__))
++#endif
+ 
+ #define __bitwise__
+ #define __bitwise __bitwise__

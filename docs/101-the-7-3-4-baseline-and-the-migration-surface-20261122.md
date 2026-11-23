@@ -53,6 +53,13 @@
    所以重写成了 `tools/check-sk-dtb-compat.py`，而且问的是更强的问题：
    **compatible 字符串在不在已编译的内核镜像里**——所以它同时是
    「驱动有没有退回成模块」的探测器。见 7.15。
+10. **7.3 线卡在 libbpf 上的原因查到了，而且只在 7.3 线成立。**
+    7.3.4 的 arm64 `asm/ptrace.h` 用 `__u128`，而 `__u128` 只定义在
+    **被 libbpf 自带那份 `include/linux/types.h` 遮蔽掉**的 uapi `linux/types.h` 里；
+    6.18.56 的同一批行（96、261-264、268）写的是 `__uint128_t`（编译器内建名），
+    **行号一样，只有拼写不同**。修法是一个只落 `overlays-73/` 的补丁，
+    本机两道门禁（最小 + 整包 22 个 `.c`）全绿，9 处突变的反向验证全绿。
+    **但这一轮 CI 的结果还没出**，见 7.21。
 
 ---
 
@@ -283,6 +290,7 @@ CONFIG_EXTERNAL_KERNEL_TREE=<树>   OpenWrt 把这棵树当自己的内核目录
 | `tools/kcheck.py` + `tools/kshadow.py` | **编译预言机**：用宿主 clang 对 7.3 树做 `-fsyntax-only`，生成树自己的头文件与影子头文件；7.3 线在 Compile 之前先跑它（见 7.17） |
 | `tests/test_sk_kcheck.py` | 上面那道检查的**判决规则**的单元测试：哪些错误算我们的、哪些算编译器读不动树 |
 | `tools/idm-register-diff.py` | 以 `writel(...)` 语句为单位逐条对比两代的寄存器写入 |
+| `overlays-73/package/libs/libbpf/patches/110-arm64-u128-types.patch` | **7.3 线 libbpf 的唯一一处补丁**：给 libbpf 自己那份 `include/linux/types.h` 补 `__u128`/`__s128` 与 `__attribute_const__`（7.3.4 的 `asm/ptrace.h` 用 `__u128`，而 uapi 那份定义被 libbpf 自带的头遮蔽了）。**只落 7.3 线**，`overlays/` 一行未改（见 7.21） |
 | `pon/npu-reverse/` | 逆向产物留档：99 个 API、rodata、函数表、initrd 清单、目标 DTS |
 
 **没有动的东西**：`kernel-overlays/`（6.18 世代驱动，一行未改）、`overlays/`（OpenWrt 侧，
@@ -1674,6 +1682,316 @@ OpenWrt 在静默模式下**只留一句**：`make <target>: build failed. Pleas
 
 ---
 
+### 7.20 本机复现：**本节的结论已被 7.21 推翻**，留档说明它错在哪
+
+> **更正（7.21）**：本节说「libbpf 对 7.3.4 的 uapi 头是编得过���，内核头不是原因」。
+> **这句话是错的。** 7.3 线 libbpf 失败的真正原因就是内核导出的 uapi 头：
+> `asm/ptrace.h` 用 `__u128`，而这个类型只定义在被 libbpf 自带那份
+> `include/linux/types.h` 遮蔽掉的 uapi `linux/types.h` 里。
+>
+> 而且**本节的方法本身也不成立**，有两个独立的错误：
+>
+> 1. **include 顺序错了**：它把 libbpf 自带的 `include/` 放在了系统目录之前，
+>    这本身是对的（CI 里也是这个顺序），但它**没有把内核构建期生成的头**
+>    （`asm/unistd_64.h`）补进 include 集，于是编译器在缺头处就停了，
+>    根本走不到 `__u128` 那一行。
+> 2. **结论是误读日志**：重跑同一个脚本（`scratch/repro_libbpf_73_20261123.py`），
+>    现在的输出是 **20 个文件里 19 个失败**，第一个拦路的是
+>    `fatal error: 'asm/unistd_64.h' file not found`，不是「只有需要
+>    `libelf.h` 的那几个编不过」。
+>
+> 正确的复现（带上生成的头、带上 libbpf 自带的 include/、并且先复现再打补丁）
+> 见 7.21。
+
+**判决（原文，已作废）**
+
+1. ~~libbpf 1.6.2 的源码在「musl 1.2.5 的头 + 7.3.4 内核导出的 uapi 头」这套装配下
+   **编得过**：本机用 clang 23 把 22 个 `.c` 全部过了一遍，只有需要 elfutils
+   `libelf.h` 的那几个编不过（elfutils 0.192 本机拉不到）。
+   ⇒ ~~**内核头这一面排除**：7.3 线的 libbpf 失败**不是**因为缺 uapi 头。~~
+   —— **7.21 已推翻：内核头这一面正是原因。**
+2. 复现的过程纠正了**复现自己**的两个错误（都不是树的问题，但它们一度把人
+   指向「头缺失」这个错误方向）：
+   - musl 的 `include/bits` 是 **`arch/generic/bits` + `arch/aarch64/bits` 两半的
+     并集**（musl 的 Makefile 里 `ALL_INCLUDES` 同时收这两半）。只拷 aarch64
+     那一半，musl 自己的头就坏掉：`bits/errno.h` 找不到、`int8_t` 未知、
+     `locale_t` 未知。
+   - **`asm/types.h` 不在 arm64 的 uapi 目录里**。它来自内核**构建期**生成的
+     `arch/<arch>/include/generated/uapi/asm/`（顶层 Makefile 的
+     `uapi-asm-generic` 规则把 `include/uapi/asm-generic/` 生成过去），
+     而 `scripts/Makefile.headersinst` 明写「`arch/<arch>/include/generated/uapi`
+     里的头也要导出」。少了这一层，`<asm/types.h>` 就找不到 —— 而 libbpf 自带的
+     `include/linux/types.h` 无条件 include 它。
+
+**证据**
+
+- 复现脚本 `scratch/repro_libbpf_73_20261123.py`（本机，clang 23，
+  `-target aarch64-linux-musl -fsyntax-only`）：补齐上面两层之后，
+  22 个 `.c` 里**只有需要 `libelf.h` 的那几个编不过**，报错全部是
+  `fatal error: 'libelf.h' file not found`；其余输出只剩 musl `byteswap.h`
+  的一条 `-Wshift-op-parentheses` 警告。
+- libbpf 1.6.2 需要**系统**提供而自己不带的头，完整清单
+  （本机把 `src/` 下全部 `.c`/`.h` 的 include 逐条 grep 出来）：
+  `asm/unistd.h`、`asm/byteorder.h`、`linux/limits.h`、`linux/bpf_perf_event.h`、
+  `linux/genetlink.h`、`linux/ptrace.h`、`linux/if_ether.h`、`linux/rtnetlink.h`、
+  `linux/errno.h`、`linux/version.h`（构建期生成）。
+  `linux/bpf_verifier.h`、`linux/bsearch.h`、`linux/fdtable.h`、`linux/mm.h`、
+  `linux/mman.h`、`linux/slab.h`、`linux/sort.h`、`linux/string.h` 都在
+  `#ifdef __KERNEL__` 里，用户态用不到 —— 之前的清单把它们算成了依赖，是错的。
+- 这 10 个头在两棵内核树里**都在**，内容**逐字相同或只有新增**：
+  `linux/if_ether.h` 多 `ETH_P_*`、`linux/rtnetlink.h` 多 `RTA_DEL_REASON`；
+  `asm/ptrace.h` 只把 `__ASSEMBLY__` 改成 `__ASSEMBLER__`、
+  `__uint128_t` 改成 `__u128`。`asm/unistd.h`、`asm/byteorder.h`、
+  `linux/limits.h`、`linux/bpf_perf_event.h`、`linux/genetlink.h`、
+  `linux/ptrace.h`、`linux/errno.h`、`linux/netlink.h`、`linux/types.h`
+  **逐字节相同**。
+
+**未做**
+
+- 本机没有 GCC 14（CI 用的是它），也没有 arm64 交叉工具链，所以复现只能证明
+  「头这一面不是原因」，不能证明「编译一定过」。
+- elfutils 0.192 本机拿不到（sourceware 404、buildroot 极慢、Debian sources
+  返回 HTML 假页），`elf.c` / `usdt.c` 这几个需要 `libelf.h` 的没有复现。
+- **libbpf 真正的失败原因仍未拿到**：下一轮 CI 的诊断 pass 会说。
+  —— **7.21 已解决**：run #35 的诊断 pass 把编译器原话带回来了，
+  真因就是 `__u128`。
+
+---
+
+### 7.21 run #35：libbpf 失败的真正原因，和它为什么**只**在 7.3 线出现
+
+**判决**
+
+1. **真因拿到了**：7.3 线 libbpf 编译失败的原因是
+   **7.3.4 的 arm64 `asm/ptrace.h` 用了 `__u128`，而 `__u128` 只定义在被
+   libbpf 自带那份 `include/linux/types.h` 遮蔽掉的 uapi `linux/types.h` 里。**
+2. **为什么只在 7.3 线**：6.18.56 的同一批行（96、261-264、268）写的是
+   `__uint128_t` —— 那是**编译器内建名**，用户态看得见，所以 6.18 线编得过。
+   **行号一模一样，只有拼写不同。**
+3. **修法**：给 libbpf 自己那份 `include/linux/types.h` 补上 `__u128`/`__s128`
+   （逐字取自内核 uapi `linux/types.h`）和 `__attribute_const__`（内核自己的
+   拼法）。补丁**只**落 `overlays-73/`，6.18 发布线一行不碰。
+4. **第二处缺口必须一起补**：同一个遮蔽还让 `__attribute_const__` 没了。
+   不补它，报错只是从 `asm/ptrace.h:96` 挪到 `linux/swab.h:48` ——
+   **同一个文件、同一个原因**。只补 `__u128` 是把错误往后推一行。
+5. **6.18 侧为什么没有 `__attribute_const__` 这一类错，本机没查实**（见「未做」）。
+
+**证据**
+
+证据一：run #35 的公开注解（11 条，job `137472302996`，run id `45107547379`）
+
+诊断 pass 把编译器原话写进了 annotation，六处 `__u128` 报错一字不差：
+
+```
+[.github:164] diag: .../staging_dir/toolchain-aarch64_cortex-a53_gcc-14.3.0_musl/include/asm/ptrace.h:96:9:
+                error: unknown type name '__u128'; did you mean '__u32'?
+[.github:168] ...  asm/ptrace.h:261:9: error: unknown type name '__u128'; did you mean '__u32'?
+[.github:172] ...  asm/ptrace.h:262:9: ...
+[.github:176] ...  asm/ptrace.h:263:9: ...
+[.github:180] ...  asm/ptrace.h:264:9: ...
+[.github:184] ...  asm/ptrace.h:268:9: ...
+```
+
+失败链（也是 annotation）：
+
+```
+diag: 189:make[3]: *** [Makefile:137: staticobjs/libbpf.o] Error 1
+diag: 191:make[2]: *** [Makefile:75: .../libbpf-1.6.2/.built] Error 2
+diag: 195:make[1]: *** [package/Makefile:188: package/libs/libbpf/compile] Error 1
+diag: 197:make: *** [.../include/toplevel.mk:233: package/libs/libbpf/compile] Error 2
+```
+
+这 6 个行号与本机 `scratch/linux-7.3.4/arch/arm64/include/uapi/asm/ptrace.h`
+里 `__u128` 出现的行**逐行吻合**（96 `vregs[32]`；261-264 是 PAC 的四个 key；
+268 `apgakey`）—— 报错和树是对得上的，不是猜的。
+
+证据二：遮蔽发生在哪里
+
+`libbpf-1.6.2/src/Makefile:33`：
+
+```make
+INCLUDES := -I. -I$(TOPDIR)/include -I$(TOPDIR)/include/uapi
+```
+
+libbpf **自带**一份 `include/linux/types.h`（guard `__LINUX_TYPES_H`），而这个
+`-I$(TOPDIR)/include` 排在所有系统目录之前，那份头**没有 `__u128`**
+（本机 `scratch/libbpf162/full/libbpf-1.6.2/include/linux/types.h`，全文无
+`__u128`）。
+
+导出 uapi 头里的两个 `#include <linux/types.h>`（**尖括号**）因此都解析到
+libbpf 自己那份：
+
+| 头 | 行 | 内容 |
+|---|---|---|
+| `linux/ptrace.h` | 9 | `#include <linux/types.h>` |
+| `asm/ptrace.h` | 23 | `#include <linux/types.h>` |
+
+而 `__u128` 的**唯一定义处**在 uapi `linux/types.h:16-18`：
+
+```c
+#ifdef __SIZEOF_INT128__
+typedef __signed__ __int128 __s128 __attribute__((aligned(16)));
+typedef unsigned __int128 __u128 __attribute__((aligned(16)));
+#endif
+```
+
+—— 正好是**被遮蔽的那一份**。这就是全部机制。
+
+证据三：7.3.4 与 6.18.56 的 `asm/ptrace.h`：行号相同，拼写不同
+
+| 行 | 7.3.4 | 6.18.56 |
+|---|---|---|
+| 96 | `__u128 vregs[32];` | `__uint128_t vregs[32];` |
+| 261 | `__u128 apiakey;` | `__uint128_t apiakey;` |
+| 262 | `__u128 apibkey;` | `__uint128_t apibkey;` |
+| 263 | `__u128 apdakey;` | `__uint128_t apdakey;` |
+| 264 | `__u128 apdbkey;` | `__uint128_t apdbkey;` |
+| 268 | `__u128 apgakey;` | `__uint128_t apgakey;` |
+
+`__uint128_t` 是 clang/GCC 的**内建类型名**（本机实测：`typedef __uint128_t U;`
+用 `-target aarch64-linux-musl` 编译 rc=0），所以 6.18 那条路不需要任何
+uapi 定义就看得见它。
+
+两棵树的 uapi `linux/types.h`（2035 B）与 `linux/swab.h`（7010 B）
+**逐字相同**，arm64 的 `asm/byteorder.h`（887 B）也逐字相同 ——
+**差别只有 `asm/ptrace.h` 和 `asm/sigcontext.h` 这两处的拼写**。
+
+证据四：第二处缺口 `__attribute_const__`
+
+包含链（本机逐个打开确认）：
+
+```
+libbpf 自带 include/uapi/linux/perf_event.h:20   #include <asm/byteorder.h>
+  arm64 的 asm/byteorder.h:23                    #include <linux/byteorder/little_endian.h>
+    linux/byteorder/little_endian.h:14          #include <linux/swab.h>
+      linux/swab.h:48   static inline __attribute_const__ __u16 __fswab16(__u16 val)
+```
+
+内核把这个宏定义在 `include/linux/compiler_attributes.h:83`：
+
+```c
+#define __attribute_const__             __attribute__((__const__))
+```
+
+而 `scripts/Makefile.headersinst` 第 5-6 行写死了只导出
+`include/uapi`、`include/generated/uapi`、`arch/<arch>/include/uapi`、
+`arch/<arch>/include/generated/uapi` —— **`include/linux/` 里的头一个都不导出**。
+所以用户态看到的是「用了这个宏，但没人定义它」。
+
+证据五：两棵 OpenWrt 树**不是**原因（blob 级）
+
+7.3 线编 `master`（`31e2ac4`），6.18 发布线编 `sr1010-zx279133`（`1b50aaf4`）。
+逐 blob 比对本机 `scratch/cnjn-iw`：
+
+| 文件 | 结果 |
+|---|---|
+| `package/libs/libbpf/Makefile` | **逐字相同** |
+| `package/libs/elfutils/Makefile` | **逐字相同** |
+| `package/libs/zlib/Makefile` | **逐字相同** |
+| `package/network/utils/iproute2/Makefile` | **逐字相同** |
+| `tools/pkgconf/Makefile` | **逐字相同** |
+| `include/package.mk` | **逐字相同** |
+| `include/package-defaults.mk` | **逐字相同** |
+| `rules.mk` | **逐字相同** |
+| `package/kernel/linux/modules/lib.mk` | 只差 1 行：`K618:=$(filter 6.18.%,...)` vs `$(call kernel_patchver_ge,6.18)` |
+| `include/kernel.mk` | 只差 3 处：`LINUX_UNAME_VERSION`、7.3 不传 `cmd_syscalls=`、`KERNELRELEASE`/模块 release 钩子 |
+
+`Package/ip-full` 在**两棵树**里都依赖 libbpf（同一个文件、同一行）：
+`package/network/utils/iproute2/Makefile:52`
+`DEPENDS:=+libnl-tiny +libbpf +(PACKAGE_devlink||PACKAGE_rdma||PACKAGE_dcb):libmnl`。
+
+⇒ 两条线拉 libbpf 的方式一样、包定义一样、构建环境一样，**唯一不同的就是
+内核导出的那批 uapi 头**。
+
+证据六：6.18 线**确实**编 libbpf（所以不能拿「6.18 也编」当借口）
+
+6.18 发布镜像的 initramfs cpio 清单（本机 `scratch/image_cpio_list.py` 解
+`scratch/trial-Image.gz`，共 1062 条）里有：
+
+```
+usr/lib/libbpf.so.1
+usr/lib/libbpf.so.1.6.2
+usr/lib/libelf.so.1
+usr/lib/libelf-0.192.so
+```
+
+⇒ 6.18 线在 `__uint128_t` 那条路上走通了，**这条线不需要这个补丁**。
+
+**修法**
+
+新增一个补丁，只落 7.3 线：
+
+```
+overlays-73/package/libs/libbpf/patches/110-arm64-u128-types.patch
+```
+
+它改的是 **libbpf 自己那份** `include/linux/types.h`（`--- a/include/linux/types.h`
+/ `+++ b/include/linux/types.h`），在 `#include <asm/posix_types.h>` 之后加：
+
+```c
+#ifdef __SIZEOF_INT128__
+typedef __signed__ __int128 __s128 __attribute__((aligned(16)));
+typedef unsigned __int128 __u128 __attribute__((aligned(16)));
+#endif
+
+#ifndef __attribute_const__
+#define __attribute_const__ __attribute__((__const__))
+#endif
+```
+
+- `__u128`/`__s128` 两行**逐字取自**内核 uapi `linux/types.h:17-18`；
+- `__attribute_const__` 用**内核自己的拼法**（`include/linux/compiler_attributes.h:83`）；
+- **只加不删**（测试里有一条断言专门盯 `-` 行）；
+- 不改 `package/libs/libbpf/Makefile`：OpenWrt 自己会应用 `patches/*.patch`。
+
+`overlays/`（6.18 发布线）**保持零 libbpf 补丁** —— 测试里也有一条断言盯这个。
+
+**门禁**
+
+1. **本机最小门禁** `scratch/libbpf_u128_gate.py`：拿上游 libbpf 配 7.3.4 的头，
+   先复现 `error: unknown type name '__u128'`，再打**仓库里那个补丁**，确认编过。
+   ⇒ `GATE OK`。
+2. **本机整包门禁** `scratch/libbpf_pkg_gate.py`（22 个 `.c`）：门禁直接
+   `git apply` **仓库里那个补丁**（不在脚本里另抄一份修法文本，避免门禁与出货物漂移）。
+   修前：`linux/ptrace.h` 链报 `__u128`、`libbpf.c` 报 `__attribute_const__`；
+   修后：`linux/ptrace.h` 链**编过**，「因别的原因失败的文件」**为空**
+   （20 个文件只卡在缺 elfutils 头）。⇒ `GATE OK`。
+3. **仓库静态断言** `tests/test_sk_workflows.py` 新增一段（11 条）：补丁在
+   `overlays-73/`、目标文件精确为 `+++ b/include/linux/types.h`、含 `__u128`
+   typedef、含 `#ifdef __SIZEOF_INT128__`/`#endif` 守卫、含 `__attribute_const__`、
+   **只加不删**、`overlays/` 里**没有**任何 libbpf 补丁、工作流 overlay 步存在、
+   `LIBBPF_PATCH` 路径精确、`test -f` 存在、3 个 `grep -qx` 的 pattern 列表**精确相等**。
+4. **工作流断言**（`.github/workflows/build-sk-d840n-73.yml` 的
+   “Apply the OpenWrt-side overlays” 步）：4 条 `grep -qx` / `test -f`，
+   **读的是补丁本身**，不是关于补丁的一句话。
+5. **反向验证** `scratch/reverse_check_libbpf.py`：**9 处突变全部只转红在
+   指定的那条检查上**（删 typedef / 删 guard / 删 `__attribute_const__` /
+   改目标文件 / 加 `-` 行 / 把补丁放进 `overlays/` / 改工作流路径 /
+   把 `grep -qx` 换成短语 / 去掉 `test -f`）。
+   ⇒ `reverse check: OK (9 mutations, each red on its own check)`。
+
+**未做**
+
+- **6.18 侧为什么没有 `__attribute_const__` 这一类错，本机没查实。**
+  两棵树的 uapi `linux/types.h`（2035 B）、`asm/byteorder.h`（887 B）、
+  `linux/swab.h`（7010 B，含 `__attribute_const__`）**逐字相同**，两棵树的
+  导出 uapi 头里都**没有** `__attribute_const__` 的定义；musl 1.2.5 tarball 里
+  `__uint128_t`/`__attribute_const__` **只有使用、没有定义**。
+  ⇒ 6.18 的真实构建里一定还有本机没有的东西（或者链根本没走到 `swab.h`），
+  **机制未查实，不编机制**。本机同跑一次
+  （`python scratch/libbpf_pkg_gate.py 618`）的结果是：
+  `linux/ptrace.h` 链**编过**（无 `__u128`），但 `libbpf.c` **仍**报
+  `__attribute_const__` ⇒ 这条差异**本机复现不出来**。
+- elfutils 0.192 的 `libelf.h`/`gelf.h` 本机拿不到（sourceware 404、buildroot 极慢、
+  sources.debian.org 返回 HTML 假页）⇒ 整包门禁里 20/22 个文件**在本机判不了**，
+  只能由 CI 判。
+- 本机没有 GCC 14（CI 用的是它），复现门禁用的是 clang 23
+  （`-target aarch64-linux-musl -fsyntax-only`）⇒ 能证明「报不报错」，
+  不能证明「CI 里一定编得过」。
+- 这一轮 CI 的结果还没出：**补丁在真实 CI 里能不能一次编过，尚未验证。**
+
+---
+
 ## 八、BP 池：逐槽位对照（第 1 片剩余部分的结论）
 
 **判决**：**BP 池布局在 7.3 上不需要移植。** 我们 6.18 世代那套写法是
@@ -2757,6 +3075,19 @@ python3 scratch/iw_tree_diff.py          # 落盘 scratch/iw_tree_diff.txt
 
 # 28) libbpf 依赖的系统 uapi 头：两棵树逐字对比
 python3 scratch/libbpf_sys_hdr_73_20261123.py
+
+# 29) libbpf 的最小门禁：先复现 __u128 报错，再打仓库里那个补丁
+python3 scratch/libbpf_u128_gate.py
+
+# 30) libbpf 的整包门禁：22 个 .c，门禁自己 git apply 仓库里的补丁
+python3 scratch/libbpf_pkg_gate.py          # 7.3.4 的头
+python3 scratch/libbpf_pkg_gate.py 618      # 同一个门禁跑在 6.18.56 的头上
+
+# 31) 上面那道门禁的反向验证：9 处突变逐个转红，且只红在指定的那条检查上
+python3 scratch/reverse_check_libbpf.py
+
+# 32) 两棵 OpenWrt 树的 blob 级对比（7.3 线编 master，6.18 线编 sr1010）
+python3 scratch/libbpf_blob_cmp.py
 ```
 
 第十节的 18~24 号命令里，`cfg73_sim.py` 与 `kdeps73.py` 是**一对**：
@@ -2767,3 +3098,12 @@ python3 scratch/libbpf_sys_hdr_73_20261123.py
 
 25 与 26 号命令是**另一对**：25 号回答「171 个函数有没有落到地上」，
 26 号证明这个回答不是靠「没查所以没报」蒙混过去的。
+
+29~31 号命令是**第三对**，而且是本轮真正救命的一组：29 号回答
+「`__u128` 那个错能不能在本机复现、补丁能不能修好」，30 号回答
+「整包 22 个 `.c` 里有没有第二个同源缺口」，31 号证明
+「这个回答不是靠一条字符串比较蒙混过去的」。
+**30 与 31 号之间还夹着一个事实**：门禁 `git apply` 的是**仓库里那个补丁本身**，
+不在脚本里另抄一份修法文本 —— 否则门禁绿了而出货的补丁是坏的，两边会漂移。
+32 号是排除用的：证明两棵 OpenWrt 树在「libbpf 怎么被编」这件事上
+**逐字相同**，把嫌疑指回内核导出的那批 uapi 头。

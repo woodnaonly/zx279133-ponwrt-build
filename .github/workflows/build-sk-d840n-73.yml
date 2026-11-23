@@ -300,6 +300,28 @@ jobs:
           test -f openwrt/target/linux/zte/zx279133/target.mk
           grep -qx 'DEFAULT_PACKAGES.tweak:=' openwrt/target/linux/zte/zx279133/target.mk
           grep -q 'luci-theme-argon' openwrt/target/linux/zte/zx279133/target.mk
+          # The libbpf fix for the 7.3 kernel's arm64 uapi headers has to be
+          # in the tree.  Without it the build dies in package/libs/libbpf with
+          #
+          #   staging_dir/toolchain-.../include/asm/ptrace.h:96:9:
+          #       error: unknown type name '__u128'; did you mean '__u32'?
+          #
+          # which is run 45107547379, job 137472302996: the 7.3.4 arm64
+          # asm/ptrace.h uses __u128, and the copy of linux/types.h that
+          # libbpf actually compiles against - its own, because its
+          # -I../include comes first - does not define it.  The 6.18 line
+          # spells the same fields __uint128_t and needs no such fix.
+          #
+          # The three checks read the patch itself, not a phrase about it.
+          LIBBPF_PATCH=openwrt/package/libs/libbpf/patches/110-arm64-u128-types.patch
+          test -f "$LIBBPF_PATCH" || {
+            echo "::error::$LIBBPF_PATCH is missing - the libbpf fix did not land"; exit 1; }
+          grep -qx '+++ b/include/linux/types.h' "$LIBBPF_PATCH" || {
+            echo "::error::$LIBBPF_PATCH does not patch libbpf's include/linux/types.h"; exit 1; }
+          grep -qx '+typedef unsigned __int128 __u128 __attribute__((aligned(16)));' "$LIBBPF_PATCH" || {
+            echo "::error::$LIBBPF_PATCH does not define __u128"; exit 1; }
+          grep -qx '+#define __attribute_const__ __attribute__((__const__))' "$LIBBPF_PATCH" || {
+            echo "::error::$LIBBPF_PATCH does not define __attribute_const__"; exit 1; }
 
       # The 7.3 fragments are named config-7.3, not config-6.18.  This is the
       # same edit the 6.18 line makes, with the other file names: a fragment

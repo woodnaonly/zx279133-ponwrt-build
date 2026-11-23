@@ -686,6 +686,79 @@ def main():
                    (WORKFLOWS / BRINGUP).read_text(encoding="utf-8"),
                    "the 7.3 workflow does not claim the two lines share a commit")
 
+    # The libbpf fix for the 7.3 kernel's arm64 uapi headers.  Run 45107547379
+    # (job 137472302996) died in package/libs/libbpf with
+    #
+    #   staging_dir/toolchain-.../include/asm/ptrace.h:96:9:
+    #       error: unknown type name '__u128'; did you mean '__u32'?
+    #
+    # The 7.3.4 arm64 asm/ptrace.h uses __u128, and the copy of linux/types.h
+    # that libbpf compiles against - its own, because its -I../include comes
+    # first - does not define it.  The fix lives in overlays-73/ and nowhere
+    # else, so the 6.18 release line is not touched.
+    #
+    # The checks read the patch, not a phrase about it: the file it patches,
+    # and the line it adds.  A patch that carries the words __u128 in its
+    # description and changes nothing else would pass a substring check and
+    # still leave the build broken.
+    print("\nthe libbpf fix for the 7.3 line is a real patch")
+    libbpf_patch = (ROOT / "overlays-73" / "package" / "libs" / "libbpf" / "patches" /
+                    "110-arm64-u128-types.patch")
+    failures.check(libbpf_patch.is_file(),
+                   "the libbpf fix is in overlays-73/")
+    if libbpf_patch.is_file():
+        patch_lines = libbpf_patch.read_text(encoding="utf-8").splitlines()
+        targets = [ln for ln in patch_lines if ln.startswith("+++ b/")]
+        failures.check(targets == ["+++ b/include/linux/types.h"],
+                       "the libbpf fix patches libbpf's own include/linux/types.h")
+        added = [ln for ln in patch_lines
+                 if ln.startswith("+") and not ln.startswith("+++")]
+        removed = [ln for ln in patch_lines
+                   if ln.startswith("-") and not ln.startswith("---")]
+        failures.check(
+            "+typedef unsigned __int128 __u128 __attribute__((aligned(16)));" in added,
+            "the libbpf fix defines __u128 the way the uapi linux/types.h does")
+        failures.check(
+            "+#ifdef __SIZEOF_INT128__" in added and "+#endif" in added,
+            "the libbpf fix guards the 128-bit types the way the uapi header does")
+        # The same shadowing hides __attribute_const__, which the exported uapi
+        # linux/swab.h uses and the kernel defines in a header it does not
+        # export.  Without it the build moves one error further down the same
+        # file.
+        failures.check(
+            "+#define __attribute_const__ __attribute__((__const__))" in added,
+            "the libbpf fix defines __attribute_const__ the way the kernel does")
+        failures.check(not removed,
+                       "the libbpf fix only adds lines")
+    # The release line must not get the fix: it builds libbpf against the
+    # 6.18 headers, where the same fields are spelled __uint128_t.
+    release_patches = sorted((ROOT / "overlays" / "package" / "libs" / "libbpf").rglob("*.patch"))
+    failures.check(not release_patches,
+                   "the 6.18 release line carries no libbpf patch")
+    # The workflow has to check the patch the same way, or the two drift and
+    # the build dies in libbpf again while the gate says the tree is fine.
+    overlay_steps = [step for step in steps_of(bringup, "build")
+                     if str(step.get("name") or "") == "Apply the OpenWrt-side overlays"]
+    failures.check(bool(overlay_steps),
+                   "the 7.3 line still applies the OpenWrt-side overlays")
+    if overlay_steps:
+        flat = str(overlay_steps[0].get("run") or "").replace("\\\n", " ")
+        commands = "\n".join(ln for ln in flat.splitlines()
+                             if not ln.strip().startswith("#"))
+        assigned = re.findall(r"^\s*LIBBPF_PATCH=(\S+)", commands, re.M)
+        failures.check(
+            assigned == ["openwrt/package/libs/libbpf/patches/110-arm64-u128-types.patch"],
+            "the workflow checks the libbpf patch at the path the overlay puts it")
+        failures.check('test -f "$LIBBPF_PATCH"' in commands,
+                       "the workflow checks that the libbpf patch is in the tree")
+        patterns = re.findall(r"grep[ \t]+-qx[ \t]+'([^']*)'[ \t]+\"\$LIBBPF_PATCH\"",
+                               commands)
+        failures.check(
+            patterns == ["+++ b/include/linux/types.h",
+                         "+typedef unsigned __int128 __u128 __attribute__((aligned(16)));",
+                         "+#define __attribute_const__ __attribute__((__const__))"],
+            "the workflow checks the patched file and the added lines, not a phrase")
+
     # The migration note's increment table is the measured one, and the
     # workflow contract test parses that table and adds the numbers up.
     # It does not look for the number 171 in the text, because that is
