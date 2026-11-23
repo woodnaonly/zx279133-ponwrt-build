@@ -150,6 +150,9 @@ BRINGUP_TRIGGERS = [
     # notices when they are taken out.
     "tools/check-sk-tx-isolation-stats.py",
     "tests/test_sk_tx_isolation_stats.py",
+    # The gate on the gates: it decides which steps this line has and which
+    # paths start a build, so a change to it changes what the build checks.
+    "tests/test_sk_workflows.py",
     # The gate that says the receive path proves what it hands over, and the
     # controls that say whether it still notices when the proof is taken out.
     "tools/check-sk-rx-delivery.py",
@@ -1206,9 +1209,10 @@ def main():
         probes = json.loads(manifest_path.read_text(encoding="utf-8")).get("probes")
         failures.check(bool(probes), "the probe list is not empty")
         labels = [str(p.get("label", "")) for p in probes or []]
-        slices = set(re.findall(r"slice (\d)", " ".join(labels)))
-        failures.check(slices == {"3", "4", "5"},
-                       "the probe list covers the three slices")
+        slices = set(re.findall(r"slice (\d+)", " ".join(labels)))
+        failures.check(slices == {"3", "4", "5", "7", "10"},
+                       "the probe list covers the slices that moved code into "
+                       "the tree")
         failures.check(any("conduit" in label for label in labels),
                        "the probe list covers the LAN conduit")
         for probe in probes or []:

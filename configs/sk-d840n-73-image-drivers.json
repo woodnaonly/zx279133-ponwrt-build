@@ -69,6 +69,24 @@
         { "root": "tree", "path": "drivers/net/ethernet/zte/zx279133-lan-conduit.c" },
         { "root": "repo", "path": "kernel-patches/7.3/390-net-zx279133-lan-conduit.patch" }
       ]
+    },
+    {
+      "label": "slice 7: the TX fault isolation",
+      "needle": "shared TX recovery failed",
+      "why": "the message the TX isolation prints when a recovery could not bring the shared datapath back. The 160 patch adds it, and it is in the tree only if that patch was applied to the tree the image was built from - which is the question three red rounds ago went unanswered",
+      "sources": [
+        { "root": "tree", "path": "drivers/net/ethernet/zte/zx279133-netdev.c" },
+        { "root": "repo", "path": "kernel-patches/7.3-local/160-sk-tx-fault-isolation.patch" }
+      ]
+    },
+    {
+      "label": "slice 10: the TX isolation counters",
+      "needle": "tx_invalid_completions",
+      "why": "the name of the first of the four counters the TX isolation keeps. The 180 patch publishes them in the ethtool statistics table, and without it the board cannot say whether a ring was quarantined",
+      "sources": [
+        { "root": "tree", "path": "drivers/net/ethernet/zte/zx279133-netdev.c" },
+        { "root": "repo", "path": "kernel-patches/7.3-local/180-sk-tx-isolation-stats.patch" }
+      ]
     }
   ]
 }

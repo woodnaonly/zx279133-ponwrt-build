@@ -277,6 +277,10 @@
     **每一项都必须转红在指定的那条检查上**。
     端到端（`scratch/verify_180_in_checkout.py`，16 项）在**CI 的布局**里验过：
     48 个补丁全落地、四个驱动文件逐个同哈希、拿掉 180 门禁就红。
+    **产物级**门禁的探针清单也扩了：加两条问「**要刷进板子的那个像**里
+    有没有第 7 片与第 10 片的东西」（`shared TX recovery failed`、
+    `tx_invalid_completions`）—— 旧的 7.3 镜像**恰好红在这两条上**，
+    其余七条两边都有 ⇒ 这道门禁对新内容有分辨力（见 7.41）。
     见八之十。
 
 ---
@@ -510,7 +514,7 @@ CONFIG_EXTERNAL_KERNEL_TREE=<树>   OpenWrt 把这棵树当自己的内核目录
 | `tools/mkctlram.py` | 门禁轮 payload 的生成器：**新增 `--kver`**（默认从 `staging/trial/flash-uImage` 的 banner 推导），payload 只为「它被造出来要骑的那个内核」写 RAM mailbox —— 厂商 4.19 控制轮照旧一个字不写（见 7.30） |
 | `tests/test_ctl_payload.py` | 上面那条的**负控**：版本必须来自镜像、显式指定优先、模板里不能再有 `6.*`、厂商内核仍不匹配 |
 | `tools/check-sk-image-drivers.py` | **产物级门禁**：问**要刷进板子的那个 uImage** 里有没有我们自己的驱动。每个探针两半分开判 —— 串还在它声称的源文件里（不是过期探针）**且**串在 inflate 后的内核里（代码真被编进去了）。「在树里 / 能编 / 配成内建 / 在镜像里」是四句话，前三句有门禁管，第四句原来没有（见 7.31） |
-| `configs/sk-d840n-73-image-drivers.json` | 上面那道门禁的**探针清单**（7 条，覆盖第 3/4/5 片与 conduit）。清单**不在工具里**：发布线的内核里是另一批驱动，得有另一份；清单本身也进了 path filter，改了它就要重跑构建 |
+| `configs/sk-d840n-73-image-drivers.json` | 上面那道门禁的**探针清单**（**9 条**，覆盖第 3/4/5/**7/10** 片与 conduit）。清单**不在工具里**：发布线的内核里是另一批驱动，得有另一份；清单本身也进了 path filter，改了它就要重跑构建。**第 8 片没有产物级探针**——补丁 170 没引入任何字符串字面量，字节层面无从问起（见 7.41） |
 | `tests/test_sk_image_drivers.py` | 上面那道门禁的**负控**：针不在像里、针不在源里（=过期探针）、源文件不存在、不是 uImage、载荷不是 gzip、清单没有探针、**针在第二个 gzip 成员里** —— 每一种都必须转红（见 7.31） |
 | `tools/check-baked-version.py` | **lint**：找出**把内核版本写进判断**的地方。判据是**位置**（case 分支、比较的一边、grep 的模式参数、指名版本行的模式串），不是文本 —— 消息、docstring、IP、元数据版本都不算（见 7.32） |
 | `configs/baked-version-allow.json` | 上面那道 lint 的**允许清单**：每一条都写明「为什么这个版本可以留在这里」。现在只有**厂商内核 4.19** 那一类（板子上的固定事实），**失效的允许项会被报出来** —— 那是洞 |
@@ -3939,6 +3943,61 @@ Skipped patch 'drivers/net/ethernet/zte/zx279133.h'.
 **7.3 线此前产出过的每一个镜像，编的都是少了 TX 隔离与 RX 交付修复的驱动。**
 那些镜像不能拿来当「7.3 能跑」的证据。
 
+#### 7.41 产物级门禁扩到第 7 片与第 10 片：**像**里也得有那两片
+
+**判决**：7.31 那道产物门禁（问**要刷进板子的那个 uImage** 里有没有我们自己的驱动）
+原来只有 7 条探针，覆盖第 3/4/5 片与 conduit。
+第 7 片（TX 隔离）与第 10 片（TX 计数器）搬进的是 **cnjn 自己的文件**
+（`zx279133-netdev.c`），不是板级层的文件 ——
+「这个文件有没有被编进去」对它们**不构成风险**，
+真正要问的是「**补丁有没有落到编进镜像的那棵树里**」。
+而这恰恰是 #46~#49 那三轮的真实问题。
+
+⇒ 探针清单加两条，**都问那个补丁自己引入的字符串**：
+
+| 探针 | 串 | 来自 |
+|---|---|---|
+| `slice 7: the TX fault isolation` | `shared TX recovery failed` | 补丁 160 的 `netif_warn()` |
+| `slice 10: the TX isolation counters` | `tx_invalid_completions` | 补丁 180 加进 `gstrings_stats` 的名字 |
+
+**这两条是真有分辨力的**（本机实测，用**旧的**那个 7.3 镜像 ——
+它编的是 160/170/180 **之前**的驱动）：
+
+```
+$ python tools/check-sk-image-drivers.py --image staging/trial73/flash/flash-uImage \
+        --manifest configs/sk-d840n-73-image-drivers.json --board-layer kernel-overlays-73
+  slice 3: the 9132 switch driver: HIT 'ZX279133 9132 internal PHY' x1
+  ...（七条旧探针全部 HIT）
+  slice 7: the TX fault isolation: the image does not carry 'shared TX recovery failed'
+  slice 10: the TX isolation counters: the image does not carry 'tx_invalid_completions'
+FAIL: 2 of 9 probe(s) failed - the image is not this board's kernel
+```
+
+⇒ **恰好红在新加的两条上**，其余七条两边都有 ⇒ 这道门禁对新内容**有分辨力**，不是恒绿。
+
+**一条限制，写清楚**：**第 8 片（RX 交付修复）在产物层没有探针** ——
+补丁 170 **没有引入任何字符串字面量**（它改的是判断，不是消息），
+所以「像里有没有它」这件事**在字节层面无从问起**；
+函数名也指望不上：kallsyms 的名字表是压缩的，本机实测
+`zx279133_idm_rx_has_ethertype` 在 6.18 与 7.3 两个像里**都搜不到**。
+⇒ 第 8 片由**树级**的 39 条门禁与 prepare 的内容级校验管住，
+这是它**唯一**能被管住的地方，本节不假装它有产物级证据。
+
+**顺带修掉的一个真 bug**：`tests/test_sk_workflows.py` 里那条
+「探针清单覆盖了哪几片」用的正则是 `slice (\d)` ——
+它把 `slice 10` 只截成 `1` ⇒ 清单里加了第 10 片之后，那条检查**恒红**。
+改成 `slice (\d+)`。
+
+**反向验证**：`scratch/reverse_check_image_gate.py` 由 16 处突变增加到 **18 处**
+（新增「清单少了 TX 隔离那条探针」「清单少了 TX 计数器那条探针」），
+每一处仍然**转红在指定的那条检查上**；实测 18/18。
+
+**顺带补上的一处 path filter 漏洞**：`tests/test_sk_workflows.py`
+（**门禁中的门禁**：它决定这条线有哪些步骤、哪些路径会起构建）
+本来**不在** 7.3 线的 `paths:` 里 ⇒ 改它**不会**重跑构建，
+而它改的正是「构建检查什么」。清单里其它每一道门禁的负控都在，
+只有它自己漏了。现在在了。
+
 ---
 
 ## 八、BP 池：逐槽位对照（第 1 片剩余部分的结论）
@@ -5561,6 +5620,19 @@ python3 scratch/check_patch180_applies.py
 # 73) 端到端：48 个补丁在 CI 的布局（checkout 里的树）里全落地，四个驱动文件
 #     逐个同哈希；拿掉 180 门禁就红，且红在指定的那两条检查上
 python3 scratch/verify_180_in_checkout.py
+
+# 74) 产物级门禁：新加的两条探针在**旧的** 7.3 镜像上必须红，其余七条必须绿
+python3 ci-build-repo/tools/check-sk-image-drivers.py \
+        --image staging/trial73/flash/flash-uImage \
+        --manifest ci-build-repo/configs/sk-d840n-73-image-drivers.json \
+        --board-layer ci-build-repo/kernel-overlays-73
+
+# 75) 像里到底有没有某个串（函数名指望不上：kallsyms 的名字表是压缩的）
+python3 scratch/needle_probe.py staging/trial73/flash/flash-uImage \
+        "shared TX recovery failed" "tx_invalid_completions" "lan-cpu%d"
+
+# 76) 产物门禁自己的反向验证：18 处突变逐个转红在指定的那条检查上
+python3 scratch/reverse_check_image_gate.py
 ```
 
 第十节的 18~24 号命令里，`cfg73_sim.py` 与 `kdeps73.py` 是**一对**：

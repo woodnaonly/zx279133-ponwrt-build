@@ -79,6 +79,10 @@ on:
       # notices when they are taken out.
       - tools/check-sk-tx-isolation-stats.py
       - tests/test_sk_tx_isolation_stats.py
+      # The gate on the gates: it decides which steps this line has and
+      # which paths start a build, so a change to it changes what the build
+      # checks and has to start a build.
+      - tests/test_sk_workflows.py
       # The gate that says the receive path proves what it hands over, and the
       # controls that say whether it still notices when the proof is taken out.
       - tools/check-sk-rx-delivery.py
