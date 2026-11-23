@@ -641,12 +641,26 @@ jobs:
             # the file that broke and prints what the compiler said about
             # it.
             if [ -n "$FAILED" ]; then
-              timeout --kill-after=60s 20m bash -c "make -j1 V=s ${FAILED}/compile" 2>&1 | tee "$DIAG" || true
+              # The target is package/<path>/compile, and the "package/" is not
+              # optional.  The top level has no rule for <path>/compile: it
+              # falls into toplevel.mk's catch-all (%::), whose sub-make then
+              # says "No rule to make target '<path>/compile'.  Stop."  Run
+              # 33's diagnostic pass asked for the bare path, got exactly that
+              # message, and the compiler's own words never came out - the
+              # pass reported the absence of a rule instead of the reason.
+              timeout --kill-after=60s 20m bash -c "make -j1 V=s package/${FAILED}/compile" 2>&1 | tee "$DIAG" || true
             fi
             # A pass that named no error has not found one: the failure was
             # somewhere else, and the whole tree gets the same treatment,
             # with the ceiling it always had.
-            if ! grep -qaE "fatal error:|\berror:|Error [0-9]+|undefined symbol|implicit declaration|No such file|build failed" "$DIAG"; then
+            #
+            # "No rule to make target" counts as no error named: it means the
+            # pass never reached the package at all.  "Error 2" on its own is
+            # only make's way of saying the recipe failed, and it used to
+            # satisfy the pattern below, which is why run 33's pass never
+            # fell through to the whole tree.
+            if ! grep -qaE "fatal error:|\berror:|undefined symbol|implicit declaration|No such file|build failed" "$DIAG" \
+               || grep -qa "No rule to make target" "$DIAG"; then
               echo "::notice::the package pass named no error - looking at the whole tree"
               timeout --kill-after=60s 20m bash -c "make -j1 V=s" 2>&1 | tee -a "$DIAG" || true
             fi

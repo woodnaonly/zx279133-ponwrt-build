@@ -608,15 +608,49 @@ def main():
     failures.check(bool(compile_steps), "the 7.3 line still has a Compile step")
     if compile_steps:
         body = str(compile_steps[0].get("run") or "")
+        # The shell script is read twice: once whole, for the sentences it
+        # makes, and once without its comment lines, for the commands it
+        # runs.  A comment may say what a command says, but it is not the
+        # command.  The commands are also joined first, because the
+        # condition that decides whether the package pass found the reason
+        # is written across two lines with a shell continuation.
+        flat = body.replace("\\\n", " ")
+        commands = "\n".join(ln for ln in flat.splitlines()
+                             if not ln.strip().startswith("#"))
         failures.check("make -j1 V=s" in body,
                        "the Compile step runs a serial verbose pass")
-        failures.check("${FAILED}/compile" in body,
-                       "the verbose pass is aimed at the package that failed")
+        # The verbose pass is aimed at the package that failed, and the
+        # target is package/<path>/compile.  The "package/" is not
+        # optional: the top level has no rule for <path>/compile, it falls
+        # into toplevel.mk's catch-all (%::), and the pass says "No rule to
+        # make target" instead of the compiler's words.  Run 33's pass
+        # asked for the bare path, got exactly that message, and reported
+        # the absence of a rule instead of the reason.  The check reads
+        # the target out of the command and compares it, so the target
+        # written in a comment cannot pass for the target of the command.
+        targets = re.findall(r"make[ \t]+(?:[^\s\"]+[ \t]+)*?([^\s\"]+)/compile",
+                             commands)
+        failures.check(targets == ["package/${FAILED}"],
+                       "the verbose pass is aimed at package/${FAILED}/compile")
+        # The patterns that name an error are in two places and they are
+        # not the same list: the condition that decides whether the
+        # package pass found the reason, and the pattern that picks the
+        # lines to re-emit as annotations.  The condition is the one that
+        # decides whether the whole tree gets the same treatment, so it
+        # is read on its own.
+        conditions = re.findall(r"\bif[ \t]+(.*?);[ \t]*then", commands)
+        fallback = [c for c in conditions if "No rule to make target" in c]
+        failures.check(bool(fallback),
+                       "a pass that never reached the package counts as no error named")
+        named = " ".join(re.findall(r"grep[ \t]+-[a-zA-Z]*E[a-zA-Z]*[ \t]+\"([^\"]+)\"",
+                                    " ".join(fallback)))
+        failures.check("Error [0-9]+" not in named,
+                       "make's own 'Error 2' does not count as an error being named")
         # The compiler says "error:" and make says "Error 1", and OpenWrt
         # says "build failed"; a pattern that knows only the lower case
         # misses the other two.
-        patterns = " ".join(re.findall(r'grep\s+-[a-zA-Z]*E[a-zA-Z]*\s+"([^"]+)"',
-                                       body))
+        patterns = " ".join(re.findall(r'grep[ \t]+-[a-zA-Z]*E[a-zA-Z]*[ \t]+"([^"]+)"',
+                                       commands))
         failures.check("Error [0-9]+" in patterns,
                        "the error pattern knows make's own wording")
         failures.check("build failed" in patterns,

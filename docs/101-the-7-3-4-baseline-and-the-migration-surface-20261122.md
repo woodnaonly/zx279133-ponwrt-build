@@ -1585,6 +1585,95 @@ OpenWrt 在静默模式下**只留一句**：`make <target>: build failed. Pleas
 
 ---
 
+### 7.19 run #33 / #34：诊断步自己问错了目标，「看不见」变成了「看得见一句废话」
+
+**判决**
+
+1. run #33 与 #34 的诊断 pass **从来没有编到那个包**。它问的目标是
+   `libs/libbpf/compile`，顶层没有这条规则，于是落进 `include/toplevel.mk:233`
+   的兜底规则（`%::`），而兜底规则报出来的是「没有这条规则」，
+   不是编译器的话。**上一轮以为「已经能看见失败原因了」，其实只学会了
+   看见自己问错问题的回声。**
+2. 兜底条件还有第二个洞：make 每次失败都会打 `Error 2`，而 `Error 2`
+   命中了「已经找到错误」的条件，**于是全树重建那一条兜底从来没跑过**。
+3. libbpf 从开始到失败只用了 **4 秒**（`make[3] -C package/libs/libbpf compile`
+   @03:26:32 → `ERROR: package/libs/libbpf failed to build.` @03:26:36）。
+   22 个 C 文件编不出这种时间 ⇒ **不是编译错误**，更可能是
+   「第一个编译单元就缺头」或者挂在 Prepare 阶段。
+4. 7.3 线 **34 轮 0 成功**（API 读 `build-sk-d840n-73.yml` 的全部 run：
+   #1~#32 全 failure/cancelled，#33/#34 failure），而同一个 head 上 6.18 线
+   全部成功 ⇒ **不是回归，是这条线从第一天就没过 libbpf 这关**。
+   排查方向因此不是「找回归点」，而是「找这条线独有的失败面」。
+
+**证据**
+
+- 证据一（run #34 的 annotation 原文，#33 同一句）：
+
+  ```
+  diag: 8:make[1]: *** No rule to make target 'libs/libbpf/compile'.  Stop.
+  diag: 10:make: *** [.../include/toplevel.mk:233: libs/libbpf/compile] Error 2
+  ```
+
+  #33 的 flash 作业（job `137447283519`）的 job 日志里同一句也在，
+  时间戳是 `03:26:32 GMT` → `03:26:36 GMT`。
+
+- 证据二（顶层没有这条规则）：`include/toplevel.mk:233` 是 `%::` 兜底规则，
+  顶层**没有** `libs/libbpf/compile`；正确目标是 **`package/libs/libbpf/compile`**。
+- 证据三（两棵 OpenWrt 树的差异面，`scratch/iw_tree_diff.py`）：
+  master（7.3 线）10696 blobs vs sr1010（6.18 线）10580 blobs，
+  **只有 32 个文件内容不同**；`toolchain/` **零差异**；
+  `include/` 只有 4 个 `.mk` 不同（`bpf.mk` / `image.mk` / `kernel-defaults.mk` /
+  `kernel.mk`）且都与 libbpf 无关；
+  **`package/libs/libbpf/Makefile` 与 `patches/100-bpf_tc_classid.patch`
+  两树逐字节相同**；feeds 只差 luci，packages feed 两树同为 `e93a938c…`。
+- 证据四（头依赖面排除，`scratch/libbpf_sys_hdr_73_20261123.py`）：
+  libbpf 1.6.2 真正需要的系统 uapi 头（`linux/limits.h`、`bpf_perf_event.h`、
+  `rtnetlink.h`、`if_ether.h`、`genetlink.h`、`ptrace.h`、`version.h`、
+  `asm/unistd.h`、`asm/byteorder.h`）在两树**实质相同**；
+  `rtnetlink.h` 与 `if_ether.h` 的差异**只有新增**。
+  两棵内核树的 `headers_install` / `headers:` 目标与 `no-export-headers`
+  列表**逐行相同** ⇒ 7.16 里「两棵树导出头的机制不同」这个判断**已被推翻**。
+- 证据五（`-Werror` 不是原因）：libbpf 的 `src/Makefile` 写的是
+  `CFLAGS ?= -g -O2 -Werror -Wall -std=gnu89`，而
+  `include/package-defaults.mk:130` 在 `MAKE_ENV` 里已经传了 `CFLAGS=…`
+  ⇒ `?=` 不生效 ⇒ **`-Werror` 与 `-std=gnu89` 都没有生效**。
+- 证据六（补丁不是原因）：`git apply --check` 对
+  `100-bpf_tc_classid.patch` 退出码 0 ⇒ 排除「补丁打不上」。
+- 证据七（`-Werror` 之外也没有版本差）：两树 `toolchain/gcc/Config.version`
+  逐字节相同（默认回落 **14.3.0**），两树 musl 均 1.2.5；
+  7.3 的 `config-7.3` 里 `CONFIG_CC_VERSION_TEXT=… 14.3.0`。
+
+**⇒ 修复：修的是诊断步自己（三处）**
+
+1. 目标改成 `package/${FAILED}/compile`。**`package/` 不是可选的**。
+2. 兜底条件加一条 `"No rule to make target"`：pass 根本没编到包，
+   也就是「没有找到原因」，应当去看全树。
+3. 兜底条件里的 `"Error [0-9]+"` 删掉：make 每次失败都会打 `Error 2`，
+   它命中「已经找到错误」，于是全树重建从来没跑过。
+
+**⇒ 门禁：诊断步也要被门禁盯着，而且门禁要比断言本身**
+
+- 断言从命令里**解析出目标**再比较（`targets == ["package/${FAILED}"]`），
+  并且**先剔除注释行** —— 注释里写一遍目标不算数，
+  上一轮的错误正是「以为改了、其实问的是另一个目标」。
+- 兜底条件里的 pattern 单独读出来，断言它**不含** `Error [0-9]+`；
+  「整条 body 的 pattern」与「兜底条件里的 pattern」**不是同一个列表**，
+  混在一起判就会出现「改了 A、通过 B」的假绿。
+- 反向验证新增三处突变（去掉 `package/`、把 `Error [0-9]+` 放回兜底条件、
+  删掉 `|| grep "No rule to make target"`），每一处必须转红在
+  **指定的那条检查上**；「整步删掉」类突变天然会红多条，那一类不做此要求。
+
+**未做**
+
+- **libbpf 的真因仍未拿到**。这一轮修的是「我们看不见」这件事本身，
+  下一轮才会拿到编译器的那句话。**在那之前不动 libbpf**：
+  改包定义、换版本、砍掉 `ip-full` 都是猜。
+- 没有在本机复现：本机只有 clang 23，CI 用的是 GCC 14.3.0，
+  头文件工具链也不同（elfutils 0.192 拉不到），复现出来的结论不能当证据。
+- 没有动 6.18 发布线（它编得过 libbpf，本轮的改动也不需要它）。
+
+---
+
 ## 八、BP 池：逐槽位对照（第 1 片剩余部分的结论）
 
 **判决**：**BP 池布局在 7.3 上不需要移植。** 我们 6.18 世代那套写法是
@@ -2622,7 +2711,7 @@ python3 scratch/cpio_pick.py scratch/re_other_fw/fit/initrd-1.bin \
 # 15) 在本机跑工作流里那一步的 shell（从 YAML 原样取出，不复制）
 python3 scratch/pin_step_check.py
 
-# 16) 门禁的反向验证：九处变异逐个转红
+# 16) 门禁的反向验证：四十五处变异逐个转红
 python3 scratch/reverse_check_workflow.py
 
 # 17) 四个驱动并进同一个内核会不会撞名（用本机编出的目标码）
@@ -2662,6 +2751,12 @@ python3 ci-build-repo/tools/func-port-coverage.py \
 
 # 26) 这道对账的反向验证：改坏四处必须转红
 python3 scratch/reverse_check_port_coverage.py
+
+# 27) 两棵 OpenWrt 树的 blob 级差异：只有一个文件变了才能叫「差异面」
+python3 scratch/iw_tree_diff.py          # 落盘 scratch/iw_tree_diff.txt
+
+# 28) libbpf 依赖的系统 uapi 头：两棵树逐字对比
+python3 scratch/libbpf_sys_hdr_73_20261123.py
 ```
 
 第十节的 18~24 号命令里，`cfg73_sim.py` 与 `kdeps73.py` 是**一对**：
