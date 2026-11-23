@@ -44,6 +44,8 @@ OTHER_BLOB = (ROOT / 'overlays/target/linux/zte/zx279133/firmware/zte/'
 
 CARRIES = 'the image carries the microcode'
 ACCEPTS = 'the microcode is one the driver accepts'
+NAMES = 'the image names the firmware'
+FIRMWARE_NAME = 'zte/zx279133/mcode_intel.bin'
 
 results = []
 
@@ -116,11 +118,22 @@ def main():
 
         # 1. an image carrying the right blob passes
         image_ok = tmp / 'ok.uImage'
-        image_ok.write_bytes(uimage(b'kernel text ' + good))
+        image_ok.write_bytes(uimage(b'kernel text ' + good + b'\0' +
+                                    FIRMWARE_NAME.encode()))
         code, failed, text = red_on(gate, ['--image', str(image_ok),
                                             '--tree', str(tree)])
         check('an image carrying the right microcode passes',
               code == 0 and not failed, '; '.join(failed) or text.strip()[-200:])
+
+        # 1b. the bytes are there but the firmware is not named: the loader
+        #     would not find it, so the image does not do what it looks like
+        #     it does.
+        image_unnamed = tmp / 'unnamed.uImage'
+        image_unnamed.write_bytes(uimage(b'kernel text ' + good))
+        code, failed, text = red_on(gate, ['--image', str(image_unnamed),
+                                            '--tree', str(tree)])
+        check('an image whose firmware is not named is refused on the name check',
+              code != 0 and failed == [NAMES], '; '.join(failed) or 'no failure')
 
         # 2. the tree points at the other blob and the image carries it:
         #    the image does carry what the tree has, and the driver still
@@ -128,7 +141,8 @@ def main():
         tree_blob = tree / 'firmware/zte/zx279133/mcode_intel.bin'
         tree_blob.write_bytes(other)
         image_other = tmp / 'other.uImage'
-        image_other.write_bytes(uimage(b'kernel text ' + other))
+        image_other.write_bytes(uimage(b'kernel text ' + other + b'\0' +
+                                    FIRMWARE_NAME.encode()))
         code, failed, text = red_on(gate, ['--image', str(image_other),
                                             '--tree', str(tree)])
         check('an image carrying the other blob is refused on the driver check',
@@ -137,7 +151,8 @@ def main():
 
         # 3. an image carrying a blob that is one byte off: the carry check turns red
         image_broken = tmp / 'broken.uImage'
-        image_broken.write_bytes(uimage(b'kernel text ' + broken))
+        image_broken.write_bytes(uimage(b'kernel text ' + broken + b'\0' +
+                                    FIRMWARE_NAME.encode()))
         code, failed, text = red_on(gate, ['--image', str(image_broken),
                                             '--tree', str(tree)])
         check('an image carrying a blob one byte off is refused on the carry check',
@@ -145,7 +160,8 @@ def main():
 
         # 4. an image with no blob at all: the carry check turns red
         image_none = tmp / 'none.uImage'
-        image_none.write_bytes(uimage(b'kernel text without any firmware'))
+        image_none.write_bytes(uimage(b'kernel text without any firmware' + b'\0' +
+                                    FIRMWARE_NAME.encode()))
         code, failed, text = red_on(gate, ['--image', str(image_none),
                                             '--tree', str(tree)])
         check('an image with no microcode is refused on the carry check',

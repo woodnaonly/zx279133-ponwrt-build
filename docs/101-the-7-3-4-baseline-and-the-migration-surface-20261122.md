@@ -6606,6 +6606,7 @@ doc 100 第 281 行原写：「`overlays/…/mcode_intel.bin` **保留** —— 
 | 步 | 谁做的 | 结果 |
 |---|---|---|
 | 1 | cnjn 的 `config-7.3` | `CONFIG_EXTRA_FIRMWARE="zte/zx279133/mcode_intel.bin"`、`CONFIG_EXTRA_FIRMWARE_DIR="firmware"` |
+| 1b | **内核自己**的 `drivers/base/firmware_loader/builtin/Makefile:6-7` | `fwdir` **相对 `$(srctree)` 解析**、**绝对路径原样用** ⇒ "firmware" 指的是内核树，被改写成的绝对路径指的是检出目录。同文件 `:27` 用 `.incbin` **原样**嵌进 `.rodata`，`:32` 用 `.string` 写下固件的**名字** ⇒ 这两条是**权威依据**，前面的都是从它推出来的 |
 | 2 | `scripts/configure-sk-d840n.sh:24` | `cd "$IW_DIR"` ⇒ 脚本的工作目录是 **OpenWrt 检出目录** |
 | 3 | `scripts/configure-sk-d840n.sh:354` | `FWDIR=$(pwd)/target/linux/zte/zx279133/firmware` ⇒ **`EXTRA_FIRMWARE_DIR` 被改写成检出目录里的路径** |
 | 4 | `scripts/configure-sk-d840n.sh:355-357` | 断言那份文件在，**不在就 `exit 1`**（编译直接停） |
@@ -6623,11 +6624,16 @@ doc 100 第 281 行原写：「`overlays/…/mcode_intel.bin` **保留** —— 
 6.18 那份 ⇒ 镜像嵌的是 `0xc839b946` ⇒ 驱动拒收（八之十八.1）。
 ⇒ **修之后**：第 6 步覆盖 ⇒ 镜像嵌的是 `0xef1d7647` ⇒ 驱动收。
 
-⇒ **内核树里那份（`apply-sk-overlay-73.sh` 拷的）从头到尾没被读过**：
+⇒ **内核树里那份（`apply-sk-overlay-73.sh` 拷的）这一轮没被读过**：
 `EXTRA_FIRMWARE_DIR` 已经被钉到检出目录了。
-留着它是因为 cnjn 原始的 `config-7.3` 写的是 `firmware`（相对内核树），
+留着它是因为 cnjn 原始的 `config-7.3` 写的是 `firmware`（相对内核树 ⇒ 相对 `$(srctree)`），
 而改写那段是**条件执行**的（`configure-sk-d840n.sh:353` 看 `CONFIG_EXTRA_FIRMWARE` 在不在）；
-它同时是板级脚本拷完的自检对象。**但它不是证据**。
+改写一旦去掉，内核就会去读树里那份 ⇒ 它是**兜底**，不是证据。
+它同时是板级脚本拷完的自检对象。
+
+⇒ **名字也在镜像里**（实测 offset 11,184,533 处就是 `zte/zx279133/mcode_intel.bin` 这个串）
+⇒ 所以产物级门禁查两样：**字节**（`.incbin` 进去的那份）与**名字**（`.string` 写下的那个）
+—— 只有字节没有名字，等于这份微码**没有作为固件登记**，`request_firmware()` 照样拿不到。
 
 ### 8之十九.3 两道门禁，和真实产物上的双向证据
 
@@ -6652,8 +6658,9 @@ doc 100 第 281 行原写：「`overlays/…/mcode_intel.bin` **保留** —— 
 
 | # | 造出来的情形 | 必须红的那一条 |
 |---|---|---|
-| 1 | 镜像带的是驱动要的那份 | 不红 |
+| 1 | 镜像带的是驱动要的那份，**且名字也在** | 不红 |
 | 2 | 树里放 6.18 那份、镜像里也是它 | 「驱动不收这一份」 |
+| 2b | 镜像里有那份字节，但**没有固件的名字** | 「镜像里没有固件的名字」 |
 | 3 | 镜像里那份差一个字节 | 「镜像里没有微码」 |
 | 4 | 镜像里根本没有微码 | 「镜像里没有微码」 |
 | 5 | 把驱动的常量改掉 | 「驱动不收这一份」（证明期望值是**读出来的**，不是写死的） |

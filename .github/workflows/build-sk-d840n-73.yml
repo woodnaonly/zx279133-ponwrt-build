@@ -1463,6 +1463,7 @@ jobs:
           python3 tools/check-sk-mcode-image.py \
             --image flash-uImage \
             --tree "$KERNEL_TREE" \
+            --config openwrt/.config \
             --blob openwrt/target/linux/zte/zx279133/firmware/zte/zx279133/mcode_intel.bin
           python3 tests/test_sk_mcode_image.py
 

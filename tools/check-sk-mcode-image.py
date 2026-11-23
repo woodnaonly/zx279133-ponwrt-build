@@ -20,18 +20,41 @@ The microcode is stored uncompressed (the kernel's own Kconfig says so:
 "NOTE: Compressed files are not supported in EXTRA_FIRMWARE"), which is why
 the blob can be found as plain bytes in the inflated image.
 
+The bytes alone are not enough, though: the kernel's builtin firmware
+Makefile emits the file's *name* next to the blob, and that string is what
+makes the blob a firmware the loader can find by name.  An image that
+carried the bytes some other way would have them in it and still leave
+request_firmware() with nothing to hand over.  So the name has to be there
+as well, and it is read out of the configuration the build used rather than
+written down here.
+
 Usage:
   python3 tools/check-sk-mcode-image.py --image IMAGE --tree TREE [--blob FILE]
+                                        [--config CONFIG] [--name NAME]
 """
 import argparse
 import gzip
 import importlib.util
+import re
 import struct
 import sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 UIMAGE_MAGIC = 0x27051956
+DEFAULT_NAME = "zte/zx279133/mcode_intel.bin"
+
+
+def firmware_name(config):
+    """The firmware name the configuration asks for, if it says one."""
+    if config is None:
+        return None
+    try:
+        text = Path(config).read_text(encoding='utf-8', errors='replace')
+    except OSError:
+        return None
+    match = re.search(r'^CONFIG_EXTRA_FIRMWARE="([^"]*)"', text, re.M)
+    return match.group(1) if match else None
 
 
 def load_tree_gate():
@@ -69,6 +92,12 @@ def main(argv=None):
     parser.add_argument('--blob', type=Path, default=None,
                         help='the microcode that should be in the image '
                              '(default: the one in the tree)')
+    parser.add_argument('--config', type=Path, default=None,
+                        help='the kernel configuration the build used; the '
+                             'firmware name is read out of it')
+    parser.add_argument('--name', default=None,
+                        help='the firmware name to look for (default: the '
+                             'one in --config, or the board\'s own)')
     args = parser.parse_args(argv)
 
     gate = load_tree_gate()
@@ -115,6 +144,18 @@ def main(argv=None):
           'the %d bytes are not in the image' % len(data))
     if at >= 0:
         print('     found at offset %d (0x%x)' % (at, at))
+
+    # The name is what makes the blob a firmware the loader can find, so the
+    # bytes alone do not answer the question.
+    name = args.name or firmware_name(args.config) or DEFAULT_NAME
+    where = 'the configuration' if args.name is None and args.config else 'the default'
+    print('the firmware name: %s (%s)' % (name, where))
+    named = image.find(name.encode())
+    check(named >= 0, 'the image names the firmware',
+          '%s is not in the image, so request_firmware() would not find it'
+          % name)
+    if named >= 0:
+        print('     found at offset %d (0x%x)' % (named, named))
 
     if failures:
         print('%d check(s) failed' % len(failures))
