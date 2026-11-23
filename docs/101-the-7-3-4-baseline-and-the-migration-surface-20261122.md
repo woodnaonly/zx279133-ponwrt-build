@@ -6362,8 +6362,31 @@ run **#57**（整轮 Success，1 h 20 m 46 s）的 flash job 里
 
 且该轮的 `sha256sum -c` **五个文件全 OK**（含 `flash-sysupgrade.bin` 与
 `sysupgrade-report.json`）⇒ manifest 自洽。
-⇒ **大小三重一致 + 同一内核源 ⇒ 这就是那一轮的字节**；
-md5 级的那一锤要取回 artifact 才能补（见 8之十七.4）。
+⇒ **大小三重一致 + 同一内核源 ⇒ 这就是那一轮的字节**。
+
+**md5 那一锤后来补上了**（把 #57 的 artifact `sk-d840n-73-images-flash` 取回来之后）：
+
+| 文件 | #57 的 artifact | 本机 `staging/trial73d/flash/` | 结论 |
+|---|---|---|---|
+| `flash-uImage` | md5 `4b5189792c4f1c3dcaef7e28b5dec258` | 同左 | **逐位相同** |
+| `flash-dtb.bin` | md5 `ff6914d007b9b21895e1a6b3f67d5ea5` | 同左 | **逐位相同** |
+| `flash-rootfs.jffs2` | md5 `e86158636c4ae0bbcc344fa4b0c49ed5` | `1dc238cc75ac97a56251a79cb97e5c45` | **不同** |
+
+⇒ **uImage 与 dtb 跨轮次逐位可复现；jffs2 的 rootfs 不可复现**（封装带时间戳）。
+⇒ 所以**三件必须取自同一轮**，而且**载荷钉的 md5 必须跟着换**。
+
+**本机备好的那三件与预置的两个载荷是自洽的**（实测，把载荷解开扫出来的）：
+`staging/trial73d/ctl/ctl-flash.cpio.gz` 里钉着的三个 md5 是
+`4b5189792c4f1c3dcaef7e28b5dec258`（uImage）、
+`ff6914d007b9b21895e1a6b3f67d5ea5`（dtb）、
+`1dc238cc75ac97a56251a79cb97e5c45`（rootfs）——
+与 `staging/trial73d/flash/` 里那三件的 md5 **逐个相同**；
+`staging/trial73d/ctl/ctl-initramfs.cpio.gz` 骑的是 `7.3.4*`。
+
+⇒ 第 1 步只要把 `staging/trial73d/flash/` 那三件拷进 `staging/trial/`，
+**第 2、3、6 步重建出来的夹具与载荷就会自动钉住同一对字节**
+（`mkgate.sh`、`mkctlram.py`、`flash-round.sh` 都是从 `staging/trial/` 现读现算），
+**不需要手改任何 md5**。
 
 ### 8之十七.2 顺序
 
@@ -6403,8 +6426,9 @@ md5 级的那一锤要取回 artifact 才能补（见 8之十七.4）。
 - **没有一步在真板子上走过**。这一节是把八之十五与八之十六的结论
   按**工具自己写的顺序**排成一条线，每一步的判据都引自脚本自身的输出，
   但**排练只到沙箱为止**（第十节 101、102、106 号命令）。
-- **第 1 步那三个 md5 是 #53 那轮的**。若 CI 之后又出了新镜像，
-  以那一轮的产物为准 —— 门禁认的是**字节**，不是轮次。
+- **第 1 步那三个 md5 是 #53 那轮的**（本机现在备的就是这一轮；
+  它的 uImage 与 dtb 与 #57 逐位相同、rootfs 不同，见 8之十七.1 的那张对照表）。
+  若 CI 之后又出了新镜像，以那一轮的产物为准 —— 门禁认的是**字节**，不是轮次。
 - **第 6 步只刷 dtb+kernel 还是连 root 一起刷，是板子的选择**：
   `write` 只写前两段，板上还留着 6.18 的 rootfs；
   `write-root` 才三段都写，而 root 是单向门（刷错就没有回退，
