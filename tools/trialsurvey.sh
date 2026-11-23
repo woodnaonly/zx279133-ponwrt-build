@@ -113,9 +113,20 @@ print_ethtool_stats() {
 # The dump's exact shape has changed between kernel versions, so the
 # line is matched loosely and the level is taken from the word that
 # follows the "in".  It prints nothing when the line is not there.
+#
+# The pattern used to be "\[ *${1}\]|\(gpio ${1}\)".  In an extended
+# regular expression a backslash before a bracket makes the bracket
+# LITERAL, so that pattern asked for the literal text "[ *65]" and for
+# "(gpio 65)" - and the kernel's dump writes "gpio-65 (gpio65)", with
+# no space and with the number inside the parentheses.  Neither branch
+# matched anything, so this function printed nothing on every board:
+# the optical RX signal detect was never read, and the two criteria
+# that depend on it (the lamp, and the PON state) could not be judged
+# at all.  The bracket now carries the spaces inside it and the
+# parentheses accept the space the dump does not have.
 read_gpio_level() {
 	[ -r "$DEBUG/gpio" ] || return 0
-	line=$(grep -E "\[ *${1}\]|\(gpio ${1}\)" "$DEBUG/gpio" 2>/dev/null | head -n 1)
+	line=$(grep -E "\[ *${1} *\]|\(gpio ?${1}\)" "$DEBUG/gpio" 2>/dev/null | head -n 1)
 	[ -n "$line" ] || return 0
 	level=$(printf '%s\n' "$line" | awk '{for (i = 1; i < NF; i++) if ($i == "in") { print $(i + 1); exit }}')
 	case "$level" in

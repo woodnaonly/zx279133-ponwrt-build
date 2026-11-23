@@ -184,6 +184,11 @@ on:
       - tools/trialsurvey-verdict.py
       - tests/test_trialsurvey_verdict.py
       - tools/trialsurvey.sh
+      # The synthetic board the instrument is rehearsed against, and the
+      # end-to-end check that runs the instrument and the judge against each
+      # other.  Editing the fixture alone has to rebuild the line too.
+      - tests/sk_trial_survey_board.py
+      - tests/test_trialsurvey_endtoend.py
       # The compressor the image profile runs, and the OpenWrt-side overlays
       # this line copies into the tree.  Both are inputs of the image and
       # neither was listed: editing the compressor would have left the 7.3
@@ -760,6 +765,14 @@ jobs:
         run: |
           set -e
           python3 tests/test_trialsurvey_verdict.py
+          # The instrument and the judge, end to end, on a synthetic board.
+          # This is the only place where the two are actually run against
+          # each other, and it is where the instrument's own defects show
+          # up - it found one: the pattern that reads the optical RX signal
+          # detect asked for a literal "[ *65]" and never matched the
+          # kernel's gpio dump, so the lamp and the PON state could not be
+          # judged on any board at all.
+          python3 tests/test_trialsurvey_endtoend.py
 
       # A datapath that could not be brought up is marked failed, and the
       # board has to have a way back from that.  The 6.18 generation had
