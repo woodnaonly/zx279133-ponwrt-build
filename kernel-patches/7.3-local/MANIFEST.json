@@ -61,6 +61,12 @@
       "sha256": "f09f0503fc0fb8db9659bec72e9e4171e5b34b7e46a2390b2eb9b8eee38d1e19",
       "bytes": 2995,
       "what": "The TX fault isolation's four counters - how often a completion counter could not be trusted, how often a recovery was asked for, how often the shared datapath was restarted and how often the recovery failed - are published through the driver's ethtool statistics table, so 'ethtool -S' prints them. The 160 patch counts them and the tree reads them nowhere: a board whose ring was quarantined looks exactly like a board that never had a problem. The four are added at the end of the enum and at the end of the name table, in the same order, so the indices of the existing statistics do not move, and they are read under the lock that increments them."
+    },
+    {
+      "file": "190-sk-datapath-restore-on-conduit-open.patch",
+      "sha256": "153573ddeab3e573ac9202c8b15aacc75670028022a98e452ee7981efe6ddc72",
+      "bytes": 3038,
+      "what": "The way back from a datapath that could not be brought up. The 6.18 generation had one - the conduit's open restored a failed datapath - and the tree here had none that an operator could reach: the WAN and the LAN service each restore it only when a second user is already there, and a datapath that failed leaves the hardware unprepared, so the tree's hardware check refused the open before any restore could run. The restore therefore comes first and the hardware check after it. DSA opens the conduit when a user port comes up, so 'ip link set lan1 down && up' is what brings the board back. On a healthy datapath the restore returns at once and nothing changes."
     }
   ]
 }

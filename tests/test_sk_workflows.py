@@ -150,6 +150,11 @@ BRINGUP_TRIGGERS = [
     # notices when they are taken out.
     "tools/check-sk-tx-isolation-stats.py",
     "tests/test_sk_tx_isolation_stats.py",
+    # The gate that says the tree has a way back from a datapath that
+    # could not be brought up, and the controls that say whether it still
+    # notices when that way back is taken away.
+    "tools/check-sk-datapath-restore.py",
+    "tests/test_sk_datapath_restore.py",
     # The gate on the gates: it decides which steps this line has and which
     # paths start a build, so a change to it changes what the build checks.
     "tests/test_sk_workflows.py",

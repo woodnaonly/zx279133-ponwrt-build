@@ -282,6 +282,26 @@
     `tx_invalid_completions`）—— 旧的 7.3 镜像**恰好红在这两条上**，
     其余七条两边都有 ⇒ 这道门禁对新内容有分辨力（见 7.41）。
     见八之十。
+27. **第 11 片：失败的数据面**怎么回来** —— 我们自己的 6.18 世代早就有回路，
+    7.3 公版没有。**两代都有三个恢复入口，7.3 只剩两个**：
+    WAN 的 open 与 LAN 服务的 get 都要求「**已经有第二个使用者**」，
+    而**第三个 —— conduit 的 open —— ours 是无条件的，7.3 树里没有**。
+    后果是具体的：`datapath_failed` 一旦置上，
+    **恢复工作遇到它是直接放弃的**（`:963`），
+    `zx279133_xsk_pool_cycle()` 的恢复失败也把它留在那里，
+    于是**只开了一个口的板子回不来**。
+    补丁 190 把 ours 那一段搬进 7.3 树（3038 B，+25 -2）。
+    **顺序是关键，不是照抄**：`datapath_failed` ⇒ 硬件没准备好，
+    所以树里那道 `hardware_prepared` 检查排在恢复**前面**的话，
+    open 会在任何恢复还没跑到之前就被拒掉 ——
+    ⇒ **恢复放前面，硬件检查放后面**。
+    而恢复在健康的数据面上是**空操作**（第一句就 `return 0`），
+    ⇒ **能跑的板子一点行为都不变**。
+    新门禁 `tools/check-sk-datapath-restore.py`（18 条）**按位置**判，
+    其中「DSA 在用户口 up 时打开 conduit」查的是 `dsa_user_open()` **函数体内**
+    —— 树里不止一处打开 conduit，查整个文件会放过错误的那一处。
+    负控 `tests/test_sk_datapath_restore.py`（9 项）。
+    **⇒ 软件侧到此为止**：剩下的全是**实机对拍**。见八之十一。
 
 ---
 
@@ -535,6 +555,9 @@ CONFIG_EXTERNAL_KERNEL_TREE=<树>   OpenWrt 把这棵树当自己的内核目录
 | `kernel-patches/7.3-local/180-sk-tx-isolation-stats.patch` | **第 10 片**：把 TX 故障隔离的四个计数器接到驱动**本来就有**的 `ethtool` 统计表上（+19 -0，只改 `zx279133-netdev.c`）。**加在枚举与名字表的末尾**，已有统计项的索引一个都不动；四个计数器**同序**、**在同一把锁里读**（见八之十） |
 | `tools/check-sk-tx-isolation-stats.py` | **第 10 片的门禁**（33 条）：按**位置**判 —— 两张表同长、四个计数器在两张表里是**同一个索引**、赋值在 TX 锁内、读的是它自己那个计数器、那个计数器真的在被累加。**编译器抓不到「名字在错位」**，所以门禁必须自己抓 |
 | `tests/test_sk_tx_isolation_stats.py` | 上面那道门禁的**负控**（11 项）：每一项改坏树的一个地方，门禁必须**转红在指定的那条检查上**，而不只是在某处变红 |
+| `kernel-patches/7.3-local/190-sk-datapath-restore-on-conduit-open.patch` | **第 11 片**：把 ours 6.18 世代「conduit 打开时恢复失败的数据面」那一段搬进 7.3 树（+25 -2，只改 `zx279133-netdev.c`）。**顺序是关键**：恢复排在硬件检查**前面**，因为数据面失败时硬件是 unprepare 的，检查排在前面的话 open 会在恢复跑到之前就被拒掉。健康的数据面上恢复是空操作（见八之十一） |
+| `tools/check-sk-datapath-restore.py` | **第 11 片的门禁**（18 条）：按**位置**判 —— 恢复被调用、在 `datapath_lock` 里、**排在硬件检查之前**、失败不让 open 继续、健康时立刻返回；以及「DSA 在用户口 up 时打开 conduit」查的是 `dsa_user_open()` **函数体内**（树里不止一处打开 conduit） |
+| `tests/test_sk_datapath_restore.py` | 上面那道门禁的**负控**（9 项）：恢复没了、顺序反了、错误被吞、锁没了、助手不再早退、服务的对调了、conduit 不走服务了、DSA 不开 conduit —— 每一项都转红在指定的那条检查上 |
 | `tools/func-surface-diff.py` | 两代驱动的函数面对照，输出「只在我们这边」与「只在 7.3 那边」两张工作清单 |
 | `tools/func-port-coverage.py` | **按能力对账**：171 个函数逐条必须有归属（同名 / 账本写明搬到哪 / 有处置记录），未记账即非零退出；账本指着的目标函数必须真在 7.3 树里（见八之七） |
 | `tools/kcheck.py` + `tools/kshadow.py` | **编译预言机**：用宿主 clang 对 7.3 树做 `-fsyntax-only`，生成树自己的头文件与影子头文件；7.3 线在 Compile 之前先跑它（见 7.17） |
@@ -5192,6 +5215,135 @@ ours 那两个计数器回答的是两个问题：
 
 ---
 
+## 八之十一、第 11 片：失败的数据面**怎么回来**
+
+**判决**：八之十.7 的第 3 条那个缺口查清了，是一个**真缺口**，
+而且是**我们自己的 6.18 世代早已修好、7.3 公版没有**的。
+补丁 190 把 6.18 的那一段搬进 7.3 树。
+**这是软件侧的最后一片。**
+
+### 8之十一.1 两代的差别就在一个函数里
+
+ours（6.18 世代，`kernel-overlays/.../zx279133-netdev.c`）的
+`zx279133_lan_netdev_open()`（`:2161`）：
+
+```c
+	mutex_lock(&eth->datapath_lock);
+	if (!(eth->datapath_users & ZX279133_DATAPATH_USER_LAN) ||
+	    !eth->lan_datapath_ready) {
+		ret = -ENETDOWN;
+		goto out_unlock;
+	}
+
+	ret = zx279133_datapath_restore_failed_locked(eth);   /* ← 就是这一段 */
+	if (ret)
+		goto out_unlock;
+```
+
+7.3 树（打补丁前）的同一个函数（`:2132`）：
+
+```c
+	mutex_lock(&eth->datapath_lock);
+	if (!(eth->datapath_users & ZX279133_DATAPATH_USER_LAN) ||
+	    !eth->lan_datapath_ready ||
+	    !READ_ONCE(eth->hardware_prepared)) {            /* ← 多出来的一道 */
+		ret = -ENETDOWN;
+		goto out_unlock;
+	}
+
+	netif_carrier_on(ndev);
+```
+
+**两代都有三个恢复入口，7.3 只剩两个**：
+
+| 恢复入口 | ours（6.18） | 7.3 树 |
+|---|---|---|
+| WAN 的 open（`zx279133_open()`） | `:352`，**只在已有第二个使用者时** | `:303`，同上 |
+| LAN 服务的 get（`zx279133_lan_datapath_get()`） | `:2364`，同上 | `:2258`，同上 |
+| **conduit 的 open**（`zx279133_lan_netdev_open()`） | **`:2173`，无条件** | **没有** |
+
+**⇒ 差的就是第三行，而且差在「无条件」三个字上。**
+
+### 8之十一.2 为什么这一段要紧：数据面失败之后没有回路
+
+7.3 树里 `datapath_failed` 的两个来源：
+
+1. `zx279133_datapath_suspend()`（`:864`）—— 恢复工作重启数据面时先挂起；
+2. `zx279133_datapath_resume()` 失败（`:879`）。
+
+而**恢复工作自己遇到 `datapath_failed` 是直接放弃的**
+（`:963`：`... || eth->datapath_failed) { eth->tx_recovery_queues = 0; goto out_tx_unlock; }`）
+⇒ **失败的数据面不会被恢复工作再试一次。**
+
+另一条路：`zx279133_xsk_pool_cycle()`（`:1030`）挂起再恢复，
+恢复失败时它再试一次（`:1068`），还是不成就把 `datapath_failed` 留在那里。
+
+⇒ 7.3 的树里，**数据面一旦失败，板子就没有回路**：
+WAN 与 LAN 服务的恢复入口都要求「**已经有第二个使用者**」，
+所以**只开了一个口的板子**（只有 WAN，或只有 LAN）**回不来**。
+
+### 8之十一.3 为什么必须是 conduit 的 open
+
+* 在 7.3 里，`zx279133_lan_netdev_open()` 是 **conduit 的 ndo_open**：
+  `zx279133-lan-conduit.c:25` → `zx279133_lan_service_netdev_open()`。
+  6.18 的同一个函数**也是** conduit 的 ndo_open ——
+  **我们自己 6.18 的 `zx279133-switch.c:4164` 那条注释就是这么写的**。
+* DSA 在**用户口 up** 的时候打开 conduit：`net/dsa/user.c:406`
+  `err = dev_open(conduit, NULL);`（在 `dsa_user_open()` 里）。
+  ⇒ 操作者的 `ip link set lan1 down && up` 就是回路。
+* 6.18 的 `zx279133_datapath_attach()`（`:325`）与 7.3 的
+  **逐字同形**（都 attach `eth->ndev` 与 `eth->lan_ndev`），
+  所以「在 conduit 自己的 open 里把它 attach 回去」是**出货驱动里已验证的写法**。
+
+### 8之十一.4 补丁 190：顺序是关键，不是照抄
+
+`190-sk-datapath-restore-on-conduit-open.patch`（3038 B，+25 -2，
+只改 `drivers/net/ethernet/zte/zx279133-netdev.c`）
+
+**顺序**：`datapath_failed` ⇒ 硬件是**没准备好**的
+（挂起会 unprepare，恢复失败会再 unprepare 一次），
+所以 7.3 那道 `hardware_prepared` 检查**排在恢复前面**的话，
+open 会在**任何恢复还没跑到**之前就被拒掉。
+⇒ **恢复放在前面，硬件检查放在后面**（恢复成功会把硬件重新准备好）。
+
+**恢复在健康的数据面上是个空操作**：
+`zx279133_datapath_restore_failed_locked()` 第一句就是
+`if (!eth->datapath_failed || !eth->datapath_users) return 0;`
+⇒ **能跑的板子，一点行为都不变。**
+
+### 8之十一.5 门禁：18 条，**按位置**判
+
+`tools/check-sk-datapath-restore.py` —— 它问的是**顺序**，不是「有没有」：
+
+* 恢复被调用了；在 `datapath_lock` 里调用；**排在硬件检查之前**；
+* 恢复失败**不能让 open 继续**；
+* 恢复助手**在数据面健康时立刻返回**（否则健康的板子也要付代价）；
+* 这个函数**是** LAN 服务的 `.netdev_open`；
+* conduit 的 open **真的**走到服务；
+* DSA **真的**在用户口 up 的时候打开 conduit ——
+  这条查的是 `dsa_user_open()` **函数体内**，
+  因为树里**不止一处**打开 conduit（`user.c:2941` 也开），
+  查整个文件会放过错误的那一处
+  （这是负控逼出来的：那一项一开始就是红的，因为门禁查得太松）。
+
+负控 `tests/test_sk_datapath_restore.py`（**9 项**）：
+每一项改坏一处，门禁必须**转红在指定的那条检查上**。
+
+### 8之十一.6 未做
+
+1. **没有实机证据**：本节每一句都是**读树**读出来的。
+   板子回来之后，要真的把数据面弄失败一次（拔插网线、
+   让恢复工作重启失败）才知道这个回路管不管用。
+2. **第 11 片也没有产物级探针**：补丁 190 **没有引入任何字符串字面量**
+   （它加的是判断与注释），所以产物层问不了它 —— 与第 8 片同因（见 7.41）。
+3. **两代还有一处差别没有搬**：6.18 的 conduit open 还要看
+   `zx279133_tx_available_locked()`，为假就不给 carrier（`:2178-2183`）；
+   7.3 的没有这道判断。**本片没有搬它**：它管的是
+   「环被隔离时别把口点亮」，与「数据面失败后怎么回来」是两件事，
+   而 7.3 的 `zx279133_datapath_attach()`（`:895`）已经在 attach 时做了同样的判断。
+
+---
+
 ## 九、下一步（按片重打，每片一次 CI）
 
 **没搬的，按片来：**
@@ -5317,6 +5469,9 @@ ours 那两个计数器回答的是两个问题：
    * **第 10 片已落地**（见八之十）：`180-sk-tx-isolation-stats.patch`
      把 TX 隔离的四个计数器接到 `ethtool -S` 上（+19 -0）
      + 33 条门禁 + 11 项负控 + 16 项端到端。
+   * **第 11 片已落地**（见八之十一）：`190-sk-datapath-restore-on-conduit-open.patch`
+     把 ours 6.18 世代「conduit 打开时恢复失败的数据面」搬进 7.3 树（+25 -2）
+     + 18 条门禁 + 9 项负控。
    ⇒ **软件侧到此为止**：剩下的全是**实机对拍**。
 
 验收口径与 6.18 线一致：**CI 绿 + 门禁脚本全过 + 实机启动后
@@ -5633,6 +5788,19 @@ python3 scratch/needle_probe.py staging/trial73/flash/flash-uImage \
 
 # 76) 产物门禁自己的反向验证：18 处突变逐个转红在指定的那条检查上
 python3 scratch/reverse_check_image_gate.py
+
+# 77) 第 11 片：失败的数据面怎么回来 —— 门禁与负控
+python3 ci-build-repo/tools/check-sk-datapath-restore.py --tree scratch/linux-73-base
+python3 ci-build-repo/tests/test_sk_datapath_restore.py --tree scratch/linux-73-base
+
+# 78) 第 11 片：补丁 190 的生成与端到端（49 个补丁在 CI 的布局里全落地；
+#     拿掉 190 门禁就红）
+python3 scratch/make_patch190.py
+python3 scratch/verify_slice_in_checkout.py \
+        190-sk-datapath-restore-on-conduit-open.patch \
+        190-sk-datapath-restore-on-conduit-open.patch \
+        tools/check-sk-datapath-restore.py \
+        tests/test_sk_datapath_restore.py
 ```
 
 第十节的 18~24 号命令里，`cfg73_sim.py` 与 `kdeps73.py` 是**一对**：

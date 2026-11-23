@@ -79,6 +79,11 @@ on:
       # notices when they are taken out.
       - tools/check-sk-tx-isolation-stats.py
       - tests/test_sk_tx_isolation_stats.py
+      # The gate that says the tree has a way back from a datapath that
+      # could not be brought up, and the controls that say whether it still
+      # notices when that way back is taken away.
+      - tools/check-sk-datapath-restore.py
+      - tests/test_sk_datapath_restore.py
       # The gate on the gates: it decides which steps this line has and
       # which paths start a build, so a change to it changes what the build
       # checks and has to start a build.
@@ -605,6 +610,26 @@ jobs:
           set -e
           python3 tools/check-sk-tx-isolation-stats.py --tree "$KERNEL_TREE"
           python3 tests/test_sk_tx_isolation_stats.py --tree "$KERNEL_TREE"
+
+      # A datapath that could not be brought up is marked failed, and the
+      # board has to have a way back from that.  The 6.18 generation had
+      # one: the conduit's open restored a failed datapath.  The tree
+      # without it has only two paths, and both need a second user to
+      # already be there - so a board with one interface up had no way
+      # back at all.  The 190 patch puts the 6.18 generation's restore
+      # back, and this gate says it is really there - and, more than
+      # that, that it comes *before* the check for the hardware, because
+      # a datapath that failed leaves the hardware unprepared and a check
+      # in front of the restore would refuse the open before any restore
+      # could run.
+      #
+      # The controls run on the same tree, and each of them has to turn
+      # the gate red on the check that names what it broke.
+      - name: 'Gate: a failed datapath has a way back'
+        run: |
+          set -e
+          python3 tools/check-sk-datapath-restore.py --tree "$KERNEL_TREE"
+          python3 tests/test_sk_datapath_restore.py --tree "$KERNEL_TREE"
 
       # The 7.3 tree's receive path handed frames to the stack on the
       # strength of what the descriptor said.  The L2 rewrite ran on frames

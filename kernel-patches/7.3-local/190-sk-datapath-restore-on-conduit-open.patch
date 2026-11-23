@@ -1,0 +1,69 @@
+From: the SK-D840N 7.3 line
+Subject: [PATCH] net: zx279133: bring a failed datapath back on the conduit's open
+
+A datapath that cannot be brought back up is marked failed, and the
+board has to have a way back from that.  The 6.18 generation had one:
+the conduit's open brought the datapath back.  The tree here does not,
+and the two paths it does have are both worse than that - the WAN and
+the LAN service restore a failed datapath only when a second user is
+already there, so a board with one interface up has no way back at all.
+
+The consequence is concrete.  The recovery worker restarts the shared
+datapath when a ring is quarantined; if that restart fails, the
+datapath is failed and the TX is stopped with it.  The recovery worker
+gives up on a failed datapath rather than retrying it, and the XSK
+pool's own cycle leaves it failed too.  From there the tree had no
+path back.
+
+This patch moves the 6.18 generation's restore into the conduit's open.
+DSA opens the conduit when a user port comes up, so "ip link set lan1
+down && up" is what brings the board back.
+
+The restore has to come before the hardware check, and that is the
+part that is not just a copy.  A datapath that failed leaves the
+hardware unprepared - the suspend unprepares it and the resume failure
+unprepares it again - so the tree's check would refuse the open before
+any restore could run.  A successful restore prepares the hardware
+again, so the check stays where it belongs, after the restore.
+
+The restore is a no-op when the datapath is healthy: it returns at
+once unless the datapath has failed.  Nothing about a working board
+changes.
+diff --git a/drivers/net/ethernet/zte/zx279133-netdev.c b/drivers/net/ethernet/zte/zx279133-netdev.c
+index 3e9f861..037cef6 100644
+--- a/drivers/net/ethernet/zte/zx279133-netdev.c
++++ b/drivers/net/ethernet/zte/zx279133-netdev.c
+@@ -2138,8 +2138,31 @@ zx279133_lan_netdev_open(struct zx279133_lan_service *service,
+ 
+ 	mutex_lock(&eth->datapath_lock);
+ 	if (!(eth->datapath_users & ZX279133_DATAPATH_USER_LAN) ||
+-	    !eth->lan_datapath_ready ||
+-	    !READ_ONCE(eth->hardware_prepared)) {
++	    !eth->lan_datapath_ready) {
++		ret = -ENETDOWN;
++		goto out_unlock;
++	}
++
++	/*
++	 * The 6.18 generation brought a failed datapath back here, and
++	 * this is the only path left that can.  The WAN and the LAN
++	 * service each restore it only when a second user is already
++	 * there, and a datapath that failed leaves the hardware
++	 * unprepared - so the check below would refuse the open before
++	 * any restore could run.
++	 *
++	 * DSA opens the conduit when a user port comes up, so this is
++	 * where an operator's "ip link set lan1 down && up" brings the
++	 * board back from a datapath that could not be restarted.
++	 *
++	 * The restore is a no-op when the datapath is healthy: it
++	 * returns at once unless the datapath has failed.
++	 */
++	ret = zx279133_datapath_restore_failed_locked(eth);
++	if (ret)
++		goto out_unlock;
++
++	if (!READ_ONCE(eth->hardware_prepared)) {
+ 		ret = -ENETDOWN;
+ 		goto out_unlock;
+ 	}
