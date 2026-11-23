@@ -4905,7 +4905,7 @@ sh tools/trialsurvey.sh 10
 > 📌 **这张表现在是机器判的，不是人判的** ⇒ 用 `tools/trialsurvey-verdict.py`
 > 吃仪器的输出，它把上面的关系变成七条带编号的判决
 > （C1..C7，判据、证据行、FAIL / INCONCLUSIVE / N/A 分开），
-> 控制在 `tests/test_trialsurvey_verdict.py`（14 项）。
+> 控制在 `tests/test_trialsurvey_verdict.py`（17 项）。
 > 见 8之二十三。**特别是**：无光时 `pon_state` 不动**不是**故障
 > （判 N/A），OMCI 通道没 ready 时计数不动**不是**故障（判 N/A），
 > 一整轮没有流量时 conduit 不动**不是**故障（判 INCONCLUSIVE）。
@@ -6601,7 +6601,7 @@ run **#57**（整轮 Success，1 h 20 m 46 s）的 flash job 里
 | **7** | 判决器 `C4` 红 | **有光**而 `pon_state` 不动 | PON 状态机没走（补丁 140）；**无光时它判 N/A，那不是故障** |
 | **7** | 判决器 `C5` 红 | 两次都 `ready=1` 而计数不动 | OMCI 队列（补丁 140）；**通道没 ready 时它判 N/A** |
 | **7** | 判决器 `C6` 红 | 四个 `tx_*` 名字没发布 | 镜像里的驱动不是带补丁 180 那份；**读树别读镜像** |
-| **7** | 判决器 `C7` 红 | 某个 `CONFIG_ZTE_ZX279133_*` 不是 `=y` | 镜像不是这条线编出来的 |
+| **7** | 判决器 `C7` 红 | 某个驱动**不在内核符号表**里（回落时才是 `CONFIG_ZTE_ZX279133_*` 不是 `=y`） | 镜像不是这条线编出来的 |
 | **7** | 判决器报 `INCONCLUSIVE` | **这一轮测不了**（没有流量 / 灯读不到 / `opsd` 在变） | **不要当它通过**：补条件（插网线到 2.5G 口、稳住信号）再跑一遍 |
 
 ### 8之十七.4 这一节没做到的
@@ -7477,7 +7477,7 @@ announce 载荷用**仓库那份**的 `mkctlram.py` 重建，或者直接用**�
    | C4 | `pon_state` 从 O1 往 O5 走 | **有光时**才要求走 |
    | C5 | `omci_transport` 的 `submitted`/`completed` 在涨 | 涨 |
    | C6 | `ethtool -S` 的四个 `tx_*` 名字都在 | 都在 |
-   | C7 | 四个 `CONFIG_ZTE_ZX279133_*` 都是 `=y` | 都是 |
+   | C7 | 四个驱动**在内核里**：先查**符号表**（`/proc/kallsyms`），读不到才回落到 `CONFIG_...=y` | 都在 |
 
 3. **判决有四种，不是两种**：
    `PASS` / `FAIL` / `INCONCLUSIVE`（**测不了**）/ `N/A`（**这一轮不适用**）。
@@ -7518,8 +7518,9 @@ C5 在任一次 `ready != 1` 时判 **N/A**。
 | `the-pon-state-does-not-walk-with-light` | 有光而 `pon_state` 两次都是 O1 | **C4** |
 | `the-omci-counters-do-not-move-while-ready` | 两次都 `ready=1` 而计数不动 | **C5** |
 | `a-tx-counter-is-not-published` | `tx_recovery_restarts` 变成 `NOT PUBLISHED` | **C6** |
-| `a-driver-is-not-built-into-the-kernel` | `CONFIG_ZTE_ZX279133_SWITCH=m` | **C7** |
-| `a-driver-is-missing-from-the-kernel-config` | 删掉 `CONFIG_ZTE_ZX279133_FNOFFLOAD` | **C7** |
+| `a-driver-is-not-built-into-the-kernel` | `CONFIG_ZTE_ZX279133_SWITCH=m`（**先去掉第 9 节**，逼它走回落那条路） | **C7** |
+| `a-driver-is-missing-from-the-kernel-config` | 删掉 `CONFIG_ZTE_ZX279133_FNOFFLOAD`（同样去掉第 9 节） | **C7** |
+| `a-driver-is-not-in-the-kernel-symbol-table` | 某个符号变成 `NOT IN THE SYMBOL TABLE`（**配置那四行仍然是 `=y`**） | **C7** |
 
 **「只红在那一条」是断言的一部分**：每个控制都检查
 「红的判据集合 == {指定的那一条}」，不是「有一条红了」。
@@ -7591,9 +7592,12 @@ SUMMARY 7 PASS
   判决器现在**在真仪器的输出上**跑过了（合成板，端到端），
   见八之二十四。**但仍然没有在真板子上跑过** ——
   合成板有真仪器的**格式**，没有真板子的**行为**。
-- **C7 只判了 `=y`**：产物级已验过四个符号在 `modules.builtin` 里，
+- ~~**C7 只判了 `=y`**：产物级已验过四个符号在 `modules.builtin` 里，
   但**板子上 `/proc/config.gz` 是否可读**没验过
-  （读不到时它判 INCONCLUSIVE，不判失败）。
+  （读不到时它判 INCONCLUSIVE，不判失败）。~~
+  ⇒ **已订正**：C7 现在**先读内核的符号表**，读不到才回落到那四行；
+  两个来源都读不到时仍判 INCONCLUSIVE，不判失败。
+  依据与控件见八之二十五。
 - **没有接进第 7 步的流程**：`trialsurvey.sh` 目前是**人工**跑的，
   判决器**还没有**被写进八之十七.2 的第 7 步 ——
   要接，需要把「跑仪器 + 喂判决器」合成一条命令，并在八之十七.3 里加上
@@ -7629,14 +7633,17 @@ SUMMARY 7 PASS
    ⇒ 这是**只靠人读文档发现不了的缺陷**：仪器跑完了、输出打印了、
    读数「看起来正常」，只有**让机器按判据去读它**才暴露。
 
-4. **端到端的 15 项检查**（`tests/test_trialsurvey_endtoend.py`）：
-   - **六条判据 PASS**：C1/C2/C3/C4/C5/C6 全部从**真仪器的输出**里拿到了读数；
-   - **C7 INCONCLUSIVE**：`/proc/config.gz` 是仪器用**绝对路径**读的，
-     板外读不到 ⇒ 判决器说「测不了」，**不**说「失败」；
-   - **退出码 2**（不是 0）：「没有失败，但有测不了的」；
+4. **端到端的 18 项检查**（`tests/test_trialsurvey_endtoend.py`）：
+   - **七条判据 PASS**：C1/C2/C3/C4/C5/C6/C7 全部从**真仪器的输出**里拿到了读数
+     （C7 是八之二十五加的第 9 节；那一节的数字是后来改的，
+     最初这里写的是 15 项、六条 PASS、C7 INCONCLUSIVE、退出码 2）；
+   - **退出码 0**：这一轮每一条都判了，且没有一条失败；
    - **无光那一轮**：C3 PASS（无光⇒灯亮）、C4 N/A（无光时状态机本就不走）；
-   - **反向控制**：把 gpio 模式**改回旧写法** ⇒ 那条检查必须红
-     （证明这条检查有分辨力，不是恒绿）。
+   - **反向控制一**：把 gpio 模式**改回旧写法** ⇒ 那条检查必须红
+     （证明这条检查有分辨力，不是恒绿）；
+   - **反向控制二**：把内核符号表里的**一个驱动符号拿掉** ⇒
+     **只有 C7 转红**、退出码 1（证明 C7 真的在读那张表，
+     而不是一路 PASS）。
 
 ### 8之二十四.2 仪器的那个缺陷：`\[ *65\]` 在 ERE 里是**字面方括号**
 
@@ -7715,9 +7722,13 @@ line=$(grep -E "\[ *${1} *\]|\(gpio ?${1}\)" "$DEBUG/gpio" 2>/dev/null | head -n
 - **合成板不是真板子**：它有真仪器的**格式**，没有真板子的**行为**
   （没有真驱动、没有真流量、没有真 PON 栈）。
   ⇒ 它验的是**接缝**（仪器输出 → 判决），**不是**硬件。
-- **C7 在板外永远测不了**：仪器用绝对路径读 `/proc/config.gz`，
+- ~~**C7 在板外永远测不了**：仪器用绝对路径读 `/proc/config.gz`，
   合成板给不了 ⇒ 端到端里 C7 的期望值就是 `INCONCLUSIVE`。
-  ⇒ **真机上 C7 能不能 PASS，本轮没有验过。**
+  ⇒ **真机上 C7 能不能 PASS，本轮没有验过。**~~
+  ⇒ **已订正**：仪器新增的**第 9 节**读的是 `SK_KALLSYMS`
+  （默认 `/proc/kallsyms`），而这个变量**可以指到别处** ⇒
+  合成板给得出一张符号表 ⇒ 端到端里 C7 现在是 **PASS**。
+  ⇒ **但真机上 C7 能不能 PASS，仍然没有验过**（板子还没接上）。
 - **仪器的第 8 节在本机与 CI 上都只打印空的 dmesg 段** ⇒
   判决器附在判决里的那行「kernel log lines mention them」在板外不会出现。
 - **没有测仪器的输出在换了内核版本之后会不会变形**：
@@ -7727,6 +7738,126 @@ line=$(grep -E "\[ *${1} *\]|\(gpio ?${1}\)" "$DEBUG/gpio" 2>/dev/null | head -n
   但 6.18 线的 `paths:` 里**没有**这两个新文件 ⇒
   那条线**不会**因为它们变化而重建（这是有意的：
   7.3 的对拍仪器是 7.3 线的东西）。
+
+
+## 八之二十五、C7 改用**内核符号表**：先把「这个符号会不会在」查实，再写判据
+
+### 8之二十五.1 判决
+
+1. **C7 的依据换了**：原来它只读 `/proc/config.gz` 里的四行
+   `CONFIG_ZTE_ZX279133_*=y`；现在**先读内核的符号表**
+   （`/proc/kallsyms`），**读不到才回落到那四行**。
+
+2. **换的理由不是「config.gz 读不到」——那是我一开始写错的前提。**
+   查实了三件事：
+   - 板级配置 `target/linux/zte/zx279133/config-7.3` 里
+     `CONFIG_KALLSYMS=y`、`CONFIG_IKCONFIG=y`、`CONFIG_IKCONFIG_PROC=y`
+     ⇒ **两个文件在真机上都在**；
+   - 7.3 镜像里有 `/bin/zcat`（busybox 的 applet）
+     ⇒ `config.gz` **压得住**；
+   - 镜像的 `/etc/modules.d` 里**没有** zte 模块
+     ⇒ 驱动**真的是编进内核的**。
+   ⇒ 所以**原来那条路本来就能走**。
+   ⇒ 换掉它的理由是**更强的证据**加**更少的依赖**：
+   符号表说的是**代码在不在**，config 说的是**配置有没有开**；
+   而且符号表是**纯文本**，`config.gz` 得先解压。
+
+3. **一个必须先查清、差点写错的事实**：
+   内核**会不会把 `static` 函数放进 kallsyms**？
+   ⇒ 查了 7.3.4 树里的源码：
+   - `scripts/link-vmlinux.sh` 的 `mksysmap()` 用的是 `${NM} -n`，
+     **列全部符号**（含 local），再过 `scripts/mksysmap`；
+   - `scripts/mksysmap` 只删四类：`a`（local absolute）、`N`、`U`、`w`
+     ⇒ **`t`（local text）保留**；
+     它自己的注释写着「readprofile starts reading symbols when _stext is
+     found, and continue until it finds a symbol which is not either of
+     'T', 't', 'W' or 'w'」；
+   - `scripts/kallsyms.c` 的 `symbol_valid()` 只丢掉**不在 text 段里**的符号，
+     `is_ignored_symbol()` 只丢 `u`/`n` 与几个绝对符号。
+   ⇒ **`static` 函数在 kallsyms 里**（类型字母是小写 `t`）。
+   ⇒ **仪器注释里第一版写的「a static symbol is not in kallsyms at all」是错的**，
+   已改。
+
+4. **那真正的风险是什么？** 是**被内联掉**：
+   一个 `static` 函数如果只有一个调用点，编译器可以把它**内联**进去，
+   那它**根本没有符号** ⇒ 判决器去找它就找不到 ⇒
+   **把一个健康的驱动报成「不在内核里」**。
+   ⇒ **判据不能找这种符号。**
+   ⇒ **能被内联掉的是「只被直接调用」的函数**；
+   **取过地址的函数不会被内联掉** ——
+   装着那个地址的表需要这个函数真的存在。
+   ⇒ 四个符号**全部取过地址**（下面那张表）。
+
+### 8之二十五.2 四个符号，和它们为什么不会消失
+
+| CONFIG 符号 | 内核符号 | 定义在 | 取地址在 | 归属 object |
+|---|---|---|---|---|
+| `CONFIG_ZTE_ZX279133_ETH` | `zx279133_lan_netdev_open` | `zx279133-netdev.c:2133` | `:2534`（`.netdev_open =`） | `npu.o`（`npu-y` 的成员） |
+| `CONFIG_ZTE_ZX279133_LAN_CONDUIT` | `zx279133_lan_conduit_get_stats64` | `zx279133-lan-conduit.c:52` | `:84`（`.ndo_get_stats64 =`） | `zx279133-lan-conduit.o` |
+| `CONFIG_ZTE_ZX279133_SWITCH` | `zx279133_switch_get_tag_protocol` | `zx279133-switch.c:3150` | `:3636`（`.get_tag_protocol =`） | `zx279133-switch.o` |
+| `CONFIG_ZTE_ZX279133_FNOFFLOAD` | `zx279133_offload_attach` | `zx279133-offload.c:2098` | `:2210`（`.attach =`） | `fnoffload.o`（`fnoffload-y` 的成员） |
+
+（行号是 7.3 树 `drivers/net/ethernet/zte/` 里的；
+object 归属是从那个目录的 `Makefile` 解析出来的。）
+
+⇒ **第一版挑的第四个符号是错的**：`zx279133_fast_age_alloc`
+在整棵树里**只出现两次**（定义 + 一次直接调用）⇒
+**它可能被内联掉** ⇒ 换成同属 `fnoffload.o`、且被赋进 ops 表的
+`zx279133_offload_attach`。
+
+### 8之二十五.3 这道判据本身也要被查：新增门禁
+
+新增 `tools/check-sk-kallsyms-symbols.py`，对每个符号查两件事：
+
+- **它定义在那个 driver 真正会编的源文件里**
+  （从 `zte/Makefile` 解析 `obj-$(CONFIG_*)` 与 `name-y` 复合关系得出）；
+- **它的地址被取过** ⇒ 编译器不能内联掉它 ⇒ 它**在表里就等于驱动在**。
+
+⇒ 对 7.3 真树实测：四条全过（行号见上表）。
+
+⇒ 控制 `tests/test_sk_kallsyms_symbols.py`（12 项）：
+
+| 控制 | 坏在哪 | 该红在哪 |
+|---|---|---|
+| 正控 | 合成树 | 四条全 PASS、退出码 0 |
+| 负控一 | 把某个符号从源文件里改掉 | **只有那一条**转红、退出码 1 |
+| 负控二 | 把某个符号的取地址去掉（表项改成 `NULL`） | **只有那一条**转红、退出码 1 |
+| 漂移检查 | 仪器、判决器、门禁三处各有一份符号清单 | 三份**必须逐字相同** |
+
+⇒ **漂移检查是这一节最要紧的一条**：仪器按符号去表里找，
+判决器按同一批名字去**仪器打印的东西**里找，门禁查这批名字**在树里在不在**。
+三处只要有一处动了，判决器就**找不到**仪器打印的东西 ——
+而它**不会报错**，只会在真机的试验里**默默少判一条**。
+
+### 8之二十五.4 仪器与判决器改了什么
+
+| 东西 | 改前 | 改后 |
+|---|---|---|
+| 仪器 | 无第 9 节 | **第 9 节**：读 `SK_KALLSYMS`（默认 `/proc/kallsyms`），逐个符号打 `FOUND` / `NOT IN THE SYMBOL TABLE`；读不到就打「no kallsyms at …」 |
+| 判决器 | C7 只读 `config.gz` | **C7 先读第 9 节**：有符号表就用它（缺一个 ⇒ FAIL；四个都在 ⇒ PASS）；**读不到才回落**到 `config.gz` 那四行；两边都读不到 ⇒ INCONCLUSIVE |
+| 判决器 | — | 第 9 节**只列了部分符号** ⇒ 判 **INCONCLUSIVE**（那是 transcript 被截断了，不是板子的毛病） |
+
+⇒ **C7 的控制多了两条**（判决器控制从 14 项到 **17 项**）：
+一条是「符号表里少一个 ⇒ FAIL，且配置那四行仍然是 `=y`」
+（证明符号表比配置强），
+一条是「两个来源都读不到 ⇒ INCONCLUSIVE」（证明它不会把「测不了」说成「坏了」）。
+
+### 8之二十五.5 这一节没做到的
+
+- **真板上仍然一次都没跑过**：C7 在真板上会读到哪张表、
+  那四个符号在真板子的 kallsyms 里是不是**同名**（内核不导出 `static`
+  的**名字**以外的东西，但名字本身是原样的），
+  **都没有验过**。
+- **符号表读的是「名字」，不是「这个 object 在不在」**：
+  假如某个驱动被编成了**模块**且**已经加载**，它的符号**也会**出现在表里
+  ⇒ C7 判 PASS **不等于**「它是编进内核的」。
+  ⇒ 这一点由**产物级**的 `modules.builtin` 与 `CONFIG_...=y` 兜着，
+  C7 只回答「**这个驱动在这个内核里**」。
+- **没有量过 kallsyms 在真机上的大小与读取代价**：
+  一张符号表在 arm64 上是几 MB，仪器每次跑都要 grep 四次。
+  ⇒ 没有在真机上量过。
+- **门禁只在 7.3 线上跑**：6.18 线的那份树是另一棵树，
+  这四个符号在那边的名字与取地址情况**没有查过**。
 
 ---
 

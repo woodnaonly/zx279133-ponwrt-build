@@ -109,7 +109,34 @@ CONFIG_ZTE_ZX279133_FNOFFLOAD=y
   dmesg:
 zx279133-lan-conduit: conduit netdev lan-cpu0 registered
 zx279133-switch: 9132 switch driver probed
+
+=== 9. the drivers in the kernel's symbol table ===
+  kallsyms (/proc/kallsyms):
+    zx279133_lan_netdev_open              FOUND
+    zx279133_lan_conduit_get_stats64       FOUND
+    zx279133_switch_get_tag_protocol       FOUND
+    zx279133_offload_attach                FOUND
 """
+
+
+def without_symbols(text):
+    """Drop section 9, so the judge has to fall back to the configuration.
+
+    The judge reads the kernel's symbol table first and the configuration
+    only when the table cannot be read.  A control that wants to exercise
+    the configuration has to take the table away first.
+    """
+    i = text.find("=== 9.")
+    if i < 0:
+        raise SystemExit("the control cannot find section 9")
+    return text[:i]
+
+
+def without_config(text):
+    """Drop the CONFIG_ZTE_ZX279133_* lines, so the configuration is gone."""
+    out = [line for line in text.splitlines()
+           if not line.startswith("CONFIG_ZTE_ZX279133_")]
+    return "\n".join(out) + "\n"
 
 
 def run(text):
@@ -173,11 +200,19 @@ FAILING = [
             "    tx_recovery_restarts     NOT PUBLISHED"),
      "C6"),
     ("a-driver-is-not-built-into-the-kernel",
-     mutate(healthy(), "CONFIG_ZTE_ZX279133_SWITCH=y",
+     # the symbol table is gone, so the configuration is what is left
+     mutate(without_symbols(healthy()), "CONFIG_ZTE_ZX279133_SWITCH=y",
             "CONFIG_ZTE_ZX279133_SWITCH=m"),
      "C7"),
     ("a-driver-is-missing-from-the-kernel-config",
-     mutate(healthy(), "CONFIG_ZTE_ZX279133_FNOFFLOAD=y\n", ""),
+     mutate(without_symbols(healthy()), "CONFIG_ZTE_ZX279133_FNOFFLOAD=y\n", ""),
+     "C7"),
+    ("a-driver-is-not-in-the-kernel-symbol-table",
+     # the configuration says all four are built in, and the symbol table
+     # says one of them is not there: the table is the stronger of the two,
+     # so it is the one that decides
+     mutate(healthy(), "    zx279133_offload_attach                FOUND",
+            "    zx279133_offload_attach                NOT IN THE SYMBOL TABLE"),
      "C7"),
 ]
 
@@ -201,6 +236,11 @@ NOT_FAILING = [
      re.sub(r"(rx_packets=)(\d+)", lambda m: m.group(1) + "0", healthy())
      .replace("rx_packets=1200", "rx_packets=1200"),
      "C1"),
+    ("neither-the-symbol-table-nor-the-configuration",
+     # Neither source can be read.  That is not a finding about the board -
+     # it is a round that could not be judged, and the judge has to say so.
+     without_symbols(without_config(healthy())),
+     "C7"),
 ]
 
 
@@ -221,6 +261,18 @@ def main(argv=None):
         failures.append("the healthy transcript exited %d, expected 0" % rc)
     if args.verbose:
         print("healthy: rc=%d %r" % (rc, st))
+
+    # ---- and the configuration is the fallback ------------------------
+    # With the symbol table gone, the judge has to fall back to the
+    # configuration.  If it did not, the judge would report "could not be
+    # judged" on a board whose kernel does carry the drivers.
+    checks += 1
+    rc, st = run(without_symbols(healthy()))
+    if st.get("C7") != "PASS":
+        failures.append("without the symbol table the configuration has to "
+                        "decide, and C7 is %r" % st.get("C7"))
+    if args.verbose:
+        print("fallback: rc=%d C7=%r" % (rc, st.get("C7")))
 
     # ---- each broken board turns red on its own criterion ------------
     for name, text, cid in FAILING:

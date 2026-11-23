@@ -24,6 +24,9 @@ The criteria are the ones the trial's read-out table lists (docs/101, section
   C6  the driver publishes the four TX isolation counters
   C7  the kernel's own idea of the drivers agrees
 
+C7 is read from the kernel's symbol table first - that is the code - and
+from the configuration only when the symbol table cannot be read.
+
 Two of them are only meaningful next to the lamp:
 
   - the lamp is off when there is light, so a lamp that is off while there is
@@ -84,6 +87,19 @@ TX_STATS = (
     "tx_recovery_requests",
     "tx_recovery_restarts",
     "tx_recovery_failures",
+)
+
+# One symbol per built-in driver, and one driver per object this line pins
+# to =y.  The symbol has to be one whose address is taken: a static function
+# the compiler inlines into its one caller has no symbol at all, so a judge
+# that looked for it would report a healthy driver as missing.  The four
+# below are assigned into function-pointer tables, so the compiler has to
+# keep them.
+DRIVER_SYMBOLS = (
+    "zx279133_lan_netdev_open",
+    "zx279133_lan_conduit_get_stats64",
+    "zx279133_switch_get_tag_protocol",
+    "zx279133_offload_attach",
 )
 
 # The PON states, in the order they are walked through.  The values are not
@@ -151,6 +167,9 @@ class Survey:
         # so it is in the second half of the transcript.
         self.config = self._kernel_config(self.second, self.second_at)
         self.dmesg = self._dmesg(self.second, self.second_at)
+        # Section 9 is the kernel's symbol table, and it is in the second
+        # half too.
+        self.symbols = self._symbols(self.second, self.second_at)
 
     # ---- the netdev table (section 1 and section 7) -------------------
 
@@ -276,6 +295,38 @@ class Survey:
             if m:
                 out["configs"][m.group(1)] = {"value": m.group(2), "line": at + lineno}
                 out["available"] = True
+        return out
+
+    # ---- the kernel's symbol table (section 9) -----------------------
+
+    def _symbols(self, lines, at):
+        """The symbols section 9 prints.
+
+        The instrument looks the four driver symbols up in the kernel's
+        symbol table and prints FOUND or NOT IN THE SYMBOL TABLE for each.
+        A symbol that is not in the table means the driver is not in this
+        kernel - but only if the symbol would have been in the table if the
+        driver were there.  That is why the instrument looks for symbols
+        whose address is taken: those cannot be inlined away, so they are
+        in the table exactly when their object is in the kernel.
+
+        The section is a fallback for the configuration, not a replacement
+        for it: when the symbol table cannot be read at all, the
+        configuration is still read (see _kernel_config).
+        """
+        out = {"available": False, "found": {}, "path": None, "line": None}
+        for lineno, line in enumerate(lines, 1):
+            s = line.strip()
+            m = re.match(r"^kallsyms \((.*)\):$", s)
+            if m:
+                out["available"] = True
+                out["path"] = m.group(1)
+                out["line"] = at + lineno
+                continue
+            m = re.match(r"^(\S+)\s+(FOUND|NOT IN THE SYMBOL TABLE)$", s)
+            if m:
+                out["found"][m.group(1)] = {"status": m.group(2),
+                                           "line": at + lineno}
         return out
 
     def _dmesg(self, lines, at):
@@ -587,11 +638,43 @@ def judge(survey):
     verdicts.append(v)
 
     # ---- C7: the kernel's own idea of the drivers ---------------------
+    # Two sources, in this order.  The symbol table says the code is in the
+    # kernel; the configuration says the driver was configured in.  The
+    # symbol table is the stronger of the two, so it is read first - and it
+    # is plain text, while the configuration has to be decompressed.
     v = Verdict("C7", "driver-registration", UNKNOWN, "")
-    if survey.config["not_found"] or not survey.config["available"]:
+    if survey.symbols["available"]:
+        entries = {s: survey.symbols["found"][s] for s in DRIVER_SYMBOLS
+                   if s in survey.symbols["found"]}
+        if len(entries) < len(DRIVER_SYMBOLS):
+            # The section is there but it does not carry all four.  That is
+            # a transcript that was cut short, not a finding about the
+            # board, so it is not a failure.
+            v.status = UNKNOWN
+            v.detail = ("the symbol table section carries %d of the %d "
+                        "symbols, so it cannot be read as a verdict"
+                        % (len(entries), len(DRIVER_SYMBOLS)))
+            v.evidence = (["L%d" % survey.symbols["line"]]
+                          if survey.symbols["line"] else [])
+        else:
+            missing = [s for s in DRIVER_SYMBOLS
+                       if entries[s]["status"] != "FOUND"]
+            if missing:
+                v.status = FAIL
+                v.detail = ("not in the kernel's symbol table: %s - those "
+                            "drivers are not in this kernel"
+                            % ", ".join(missing))
+                v.evidence = ["L%d" % entries[s]["line"] for s in missing]
+            else:
+                v.status = PASS
+                v.detail = ("all four drivers are in the kernel's symbol "
+                            "table")
+                v.evidence = ["L%d" % entries[s]["line"] for s in DRIVER_SYMBOLS]
+    elif survey.config["not_found"] or not survey.config["available"]:
         v.status = UNKNOWN
-        v.detail = ("/proc/config.gz carries no CONFIG_ZTE_ZX279133_* line, so "
-                    "the kernel's own view cannot be read")
+        v.detail = ("neither the kernel's symbol table nor "
+                    "/proc/config.gz could be read, so the kernel's own view "
+                    "cannot be answered")
     else:
         wanted = ("CONFIG_ZTE_ZX279133_ETH", "CONFIG_ZTE_ZX279133_LAN_CONDUIT",
                   "CONFIG_ZTE_ZX279133_SWITCH", "CONFIG_ZTE_ZX279133_FNOFFLOAD")
@@ -615,10 +698,11 @@ def judge(survey):
             v.detail = "all four drivers are built into the kernel"
             v.evidence = ["L%d" % survey.config["configs"][w]["line"]
                           for w in wanted if w in survey.config["configs"]]
-            hits = [n for n, s in survey.dmesg["lines"]
-                    if re.search(r"9132|zx279133|lan conduit|nppu", s, re.I)]
-            if hits:
-                v.detail += " (%d kernel log lines mention them)" % len(hits)
+    if v.status == PASS:
+        hits = [n for n, s in survey.dmesg["lines"]
+                if re.search(r"9132|zx279133|lan conduit|nppu", s, re.I)]
+        if hits:
+            v.detail += " (%d kernel log lines mention them)" % len(hits)
     verdicts.append(v)
 
     return verdicts

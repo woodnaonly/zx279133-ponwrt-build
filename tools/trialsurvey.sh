@@ -84,6 +84,30 @@ OPSD_GPIO=${SK_OPSD_GPIO:-65}
 STATDEV=${SK_STATDEV:-eth0}
 TXSTATS="tx_invalid_completions tx_recovery_requests tx_recovery_restarts tx_recovery_failures"
 
+# The kernel's symbol table, and one symbol per built-in driver.
+#
+# Section 8 asks the kernel for its CONFIG_ZTE_ZX279133_* lines.  That does
+# answer the question on this board: the board's config-7.3 sets
+# CONFIG_IKCONFIG_PROC=y and the image carries zcat, so /proc/config.gz is
+# readable.  But it answers it from the build configuration - it says the
+# driver was configured in.  The symbol table answers it from the code.
+#
+# It is plain text as well: /proc/config.gz has to be decompressed, so a
+# kernel whose image has no zcat in it would leave section 8 empty while the
+# symbol table is still there to be read.
+#
+# The symbols have to be ones that cannot be inlined away.  A static
+# function IS in the symbol table - the kernel's own scripts/mksysmap keeps
+# local text symbols, and scripts/kallsyms.c only drops the local absolute
+# ones - but a static function the compiler decides to inline into its one
+# caller has no symbol at all, and a judge that looks for it reports a
+# healthy driver as missing.  A function whose address is taken cannot be
+# inlined away: the table that holds the address needs the function to
+# exist.  All four below are assigned into a function-pointer table, one
+# per object this line pins to =y.
+KALLSYMS=${SK_KALLSYMS:-/proc/kallsyms}
+DRIVER_SYMBOLS="zx279133_lan_netdev_open zx279133_lan_conduit_get_stats64 zx279133_switch_get_tag_protocol zx279133_offload_attach"
+
 # The driver's own counters, read through ethtool.  Three different
 # failures are told apart, because they are three different findings: no
 # ethtool in the image at all, an interface that publishes no driver
@@ -278,3 +302,21 @@ fi
 echo "  dmesg:"
 dmesg 2>/dev/null | grep -iE 'zx279133|9132|lan conduit|nppu' | tail -25 || \
 	echo "  (no dmesg access)"
+
+echo
+echo "=== 9. the drivers in the kernel's symbol table ==="
+# Are these four drivers in this kernel at all.  Section 8 answers that
+# from the build configuration; this answers it from the kernel's own
+# symbol table, which is the code rather than the configuration.
+if [ -r "$KALLSYMS" ]; then
+	echo "  kallsyms ($KALLSYMS):"
+	for s in $DRIVER_SYMBOLS; do
+		if grep -qE "[[:space:]]${s}\$" "$KALLSYMS" 2>/dev/null; then
+			printf '    %-40s FOUND\n' "$s"
+		else
+			printf '    %-40s NOT IN THE SYMBOL TABLE\n' "$s"
+		fi
+	done
+else
+	echo "  (no kallsyms at $KALLSYMS - the kernel's symbol table cannot be read)"
+fi

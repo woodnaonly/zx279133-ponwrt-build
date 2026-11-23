@@ -189,6 +189,12 @@ on:
       # other.  Editing the fixture alone has to rebuild the line too.
       - tests/sk_trial_survey_board.py
       - tests/test_trialsurvey_endtoend.py
+      # The gate that says the four symbols the judge looks up in the
+      # kernel's symbol table are symbols that will be there, and the
+      # control that says the gate can still tell a symbol that is missing
+      # from one that could be inlined away.
+      - tools/check-sk-kallsyms-symbols.py
+      - tests/test_sk_kallsyms_symbols.py
       # The compressor the image profile runs, and the OpenWrt-side overlays
       # this line copies into the tree.  Both are inputs of the image and
       # neither was listed: editing the compressor would have left the 7.3
@@ -773,6 +779,25 @@ jobs:
           # kernel's gpio dump, so the lamp and the PON state could not be
           # judged on any board at all.
           python3 tests/test_trialsurvey_endtoend.py
+
+      # The judge answers "are these four drivers in this kernel" by looking
+      # four symbols up in the kernel's symbol table.  A symbol that is not
+      # in the table means the driver is not in the kernel - but only if the
+      # symbol would have been in the table if it were.  A static function
+      # the compiler inlines into its one caller has no symbol at all, and a
+      # judge that looked for that one would report a healthy driver as
+      # missing, on a board, in the middle of the trial.
+      #
+      # So the four symbols have to be ones whose address is taken: the
+      # table that holds the address needs the function to exist, so the
+      # compiler cannot inline it away.  This gate says that of the tree
+      # that is about to be built, and the control says the gate can still
+      # tell the two cases apart.
+      - name: 'Gate: the trial judge looks for symbols that exist'
+        run: |
+          set -e
+          python3 tools/check-sk-kallsyms-symbols.py --tree "$KERNEL_TREE"
+          python3 tests/test_sk_kallsyms_symbols.py
 
       # A datapath that could not be brought up is marked failed, and the
       # board has to have a way back from that.  The 6.18 generation had

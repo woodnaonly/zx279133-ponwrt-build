@@ -157,23 +157,21 @@ def main(argv=None):
                 failures.append("%s is %r, expected PASS (detail: %s)"
                                 % (cid, status, verdicts.get(cid, ("", ""))[1]))
 
-        # C7 reads /proc/config.gz, which the instrument asks for by an
-        # absolute path - so it cannot be answered off the board.  The judge
-        # has to say "could not be judged" rather than claim a failure.
+        # C7 reads the kernel's symbol table.  The synthetic board carries
+        # one, so the criterion has to be answered - and it is the only
+        # criterion that can see the drivers themselves.
         checks += 1
         status = verdicts.get("C7", (None, ""))[0]
-        if status != "INCONCLUSIVE":
-            failures.append("C7 is %r, expected INCONCLUSIVE off the board "
-                            "(the instrument reads /proc/config.gz by an "
-                            "absolute path)" % status)
+        if status != "PASS":
+            failures.append("C7 is %r, expected PASS (the synthetic board "
+                            "carries a symbol table with the four driver "
+                            "symbols in it)" % status)
 
-        # The exit code has to say what happened: C7 cannot be judged off
-        # the board, so the round is "nothing failed, something could not be
-        # judged" - which is 2, not 0.  A judge that said 0 here would be
-        # saying the round was complete, and it was not.
-        if jrc != 2:
-            failures.append("the judge exited %d, expected 2 (C7 cannot be "
-                            "judged off the board)" % jrc)
+        # The exit code has to say what happened: every criterion was
+        # answered and none of them failed, so the round is complete - 0.
+        if jrc != 0:
+            failures.append("the judge exited %d, expected 0 (every "
+                            "criterion was answered)" % jrc)
 
         # ---- and the same board with the light gone -------------------
         board2 = Board(tmp / "board2").build().start(interval=0.4)
@@ -249,6 +247,37 @@ def main(argv=None):
             if "opsd (gpio 65)" not in text3:
                 failures.append("the broken instrument did not even mention "
                                 "the signal detect:\n%s" % text3)
+
+        # ---- and a driver that is not in the kernel --------------------
+        # The same board with one of the four driver symbols taken out of
+        # the kernel's symbol table.  That is what a board whose driver
+        # was not built in looks like, and only C7 can see it - so only C7
+        # may turn red.  Without this control the check above would pass
+        # with a judge that never reads the symbol table at all.
+        board4 = Board(tmp / "board4",
+                       missing_symbol="zx279133_offload_attach").build()
+        board4.start(interval=0.4)
+        try:
+            text4, err4, rc4 = survey(board4, seconds=INTERVAL,
+                                      on_second_sample=board4.advance)
+        finally:
+            board4.shutdown()
+        verdicts4, jrc4 = judge(text4)
+        checks += 1
+        status = verdicts4.get("C7", (None, ""))[0]
+        if status != "FAIL":
+            failures.append("C7 is %r when a driver symbol is missing from "
+                            "the kernel's symbol table, expected FAIL"
+                            % status)
+        red = sorted(k for k, v in verdicts4.items() if v[0] == "FAIL")
+        checks += 1
+        if red != ["C7"]:
+            failures.append("a missing driver symbol turned red on %r, "
+                            "expected only C7" % red)
+        checks += 1
+        if jrc4 != 1:
+            failures.append("the judge exited %d with a missing driver "
+                            "symbol, expected 1" % jrc4)
 
     finally:
         shutil.rmtree(tmp, ignore_errors=True)

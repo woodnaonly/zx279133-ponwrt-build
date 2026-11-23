@@ -70,6 +70,25 @@ gpio-1  (gpio1)  : in  low IRQ ACTIVE LOW
 gpio-65 (gpio65) : in  high IRQ ACTIVE LOW
 """
 
+# The kernel's symbol table, in the shape /proc/kallsyms has: address, type,
+# name.  The judge looks the four driver symbols up in it, so the synthetic
+# board has to carry them - and one of them has to be missable, so the
+# end-to-end check can prove the judge turns red when a driver is not in
+# the kernel.
+KALLSYMS_SYMBOLS = (
+    "zx279133_lan_netdev_open",
+    "zx279133_lan_conduit_get_stats64",
+    "zx279133_switch_get_tag_protocol",
+    "zx279133_offload_attach",
+)
+
+# A symbol that is not one of ours, so the lookup cannot be a match on
+# "there is a line at all".
+KALLSYMS_NOISE = (
+    "zx279133_lan_conduit_xmit",
+    "zx279133_switch_setup",
+)
+
 
 def write(path, text):
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -79,12 +98,17 @@ def write(path, text):
 class Board:
     """A synthetic board, and the thread that moves its counters."""
 
-    def __init__(self, root):
+    def __init__(self, root, missing_symbol=None):
         self.root = Path(root)
         self.net = self.root / "class" / "net"
         self.leds = self.root / "class" / "leds"
         self.debug = self.root / "kernel" / "debug"
         self.bin = self.root / "bin"
+        # The kernel's symbol table.  "missing_symbol" takes one of the four
+        # driver symbols out of it, which is what a board whose driver is
+        # not in the kernel looks like.
+        self.kallsyms = self.root / "kallsyms"
+        self.missing_symbol = missing_symbol
         self.stop = threading.Event()
         self.thread = None
         self.ticks = 0
@@ -117,6 +141,18 @@ class Board:
             write(d / "trigger", spec["trigger"] + "\n")
 
         write(self.debug / "gpio", GPIO_DUMP)
+
+        # The kernel's symbol table.  The addresses do not matter; the shape
+        # does - address, type letter, name - because that is what the
+        # instrument's grep looks at.
+        lines = []
+        addr = 0xFFFFFFFFC0300000
+        for name in KALLSYMS_SYMBOLS + KALLSYMS_NOISE:
+            if name == self.missing_symbol:
+                continue
+            lines.append("%016x t %s" % (addr, name))
+            addr += 0x40
+        write(self.kallsyms, "\n".join(lines) + "\n")
 
         # The PON attributes live on the WAN netdev's device.
         dev = self.net / "eth0" / "device"
@@ -209,6 +245,7 @@ class Board:
         e["SK_DEBUGFS"] = str(self.debug)
         e["SK_OPSD_GPIO"] = "65"
         e["SK_STATDEV"] = "eth0"
+        e["SK_KALLSYMS"] = str(self.kallsyms)
         # the stub has to come first, or the host's ethtool wins
         e["PATH"] = str(self.bin) + os.pathsep + e.get("PATH", "")
         if extra:
