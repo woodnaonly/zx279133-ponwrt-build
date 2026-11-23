@@ -63,6 +63,17 @@ on:
       - tests/test_sk_layout.py
       - tests/test_sk_uboot.py
       - tests/test_conduit_netdev_name.py
+      # Two controls this line runs but did not list: the one that decides
+      # which steps this line has and which paths start a build, and the one
+      # that says a kernel version has a single source.  A change to either
+      # changes what the build checks, so it has to start a build - and
+      # neither did.
+      - tests/test_sk_workflows.py
+      - tests/test_kernel_version_single_source.py
+      - tests/test_release_kernel_version.py
+      # The control that says the gate on the paths still notices when one of
+      # them is dropped.
+      - tests/test_sk_workflow_paths.py
       # The flash gate and its controls: the gate decides which bytes may be
       # written to a board, so a change to either has to start a build.
       - tools/gatecheck.sh
@@ -141,6 +152,16 @@ jobs:
           python3 tests/test_conduit_netdev_name.py
           python3 tests/test_gatecheck.py
           python3 tests/test_ctl_payload.py
+          # The paths: list says which changes start this build, so a file
+          # the workflow runs but does not list is a file whose change is
+          # never checked: the gate that reads it stops being checked the
+          # moment it is edited.  This line was missing two such files - the
+          # control on the steps and the paths themselves, and the control on
+          # the kernel version's single source.
+          python3 tools/check-sk-workflow-paths.py \
+            --workflow .github/workflows/build-sk-d840n.yml \
+            --workflow .github/workflows/build-sk-d840n-73.yml
+          python3 tests/test_sk_workflow_paths.py
 
   build:
     name: ${{ matrix.mode }}

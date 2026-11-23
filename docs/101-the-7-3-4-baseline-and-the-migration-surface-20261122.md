@@ -302,6 +302,27 @@
     —— 树里不止一处打开 conduit，查整个文件会放过错误的那一处。
     负控 `tests/test_sk_datapath_restore.py`（9 项）。
     **⇒ 软件侧到此为止**：剩下的全是**实机对拍**。见八之十一。
+28. **两条线的 `paths:` 都有漏洞，而且不只漏了门禁。**
+    `paths:` 说的是「哪些改动会起一轮构建」。**工作流会跑、但没被列进去的文件**，
+    改了就**不会**起构建 ⇒ **读它的门禁从那一刻起就不再被验证**，
+    而仓库看上去一切正常。
+    这不是新问题：`tests/test_sk_workflows.py`（门禁中的门禁）此前就不在 7.3 线的
+    `paths:` 里，已经修过一次；本轮把它**查到底**，结果是
+    **7.3 线缺 10 个、6.18 发布线缺 2 个**，包括
+    **面板 LED 门禁**、**dtb 兼容门禁**、**分区表工具**、**四个仓库自带的控制**，
+    以及 6.18 线上的**门禁中的门禁自己**。
+    再往下一层还有**间接**的：`tools/mkgzip.py`（**镜像的压缩脚本**）、
+    `overlays/`（**被 `cp -a` 进 OpenWrt 树的那一份**）、
+    `configs/sk-d840n-offload.config`（共享配置脚本读的那份 offload 片段）——
+    7.3 线用着它们，却都不在 `paths:` 里
+    ⇒ **改了压缩脚本，7.3 线不会重建，镜像仍是旧脚本压的**。
+    还有一处是**反向**的：7.3 线的 `paths:` 只列了 `docs/101-*`，
+    而**文本卫生门禁读的是全仓 131 个 .md**，且**只有 7.3 线在跑它**
+    （6.18 线根本没有这道门禁）⇒ `docs/` 之外那份文档里长出一个替换字符，
+    **没有任何一轮构建会发现**。
+    已补齐，并加一道**机器查**的门禁 `tools/check-sk-workflow-paths.py`
+    （两条线加起来 206 条检查），负控 `tests/test_sk_workflow_paths.py`（14 项）。
+    见八之十二。
 
 ---
 
@@ -558,6 +579,8 @@ CONFIG_EXTERNAL_KERNEL_TREE=<树>   OpenWrt 把这棵树当自己的内核目录
 | `kernel-patches/7.3-local/190-sk-datapath-restore-on-conduit-open.patch` | **第 11 片**：把 ours 6.18 世代「conduit 打开时恢复失败的数据面」那一段搬进 7.3 树（+25 -2，只改 `zx279133-netdev.c`）。**顺序是关键**：恢复排在硬件检查**前面**，因为数据面失败时硬件是 unprepare 的，检查排在前面的话 open 会在恢复跑到之前就被拒掉。健康的数据面上恢复是空操作（见八之十一） |
 | `tools/check-sk-datapath-restore.py` | **第 11 片的门禁**（18 条）：按**位置**判 —— 恢复被调用、在 `datapath_lock` 里、**排在硬件检查之前**、失败不让 open 继续、健康时立刻返回；以及「DSA 在用户口 up 时打开 conduit」查的是 `dsa_user_open()` **函数体内**（树里不止一处打开 conduit） |
 | `tests/test_sk_datapath_restore.py` | 上面那道门禁的**负控**（9 项）：恢复没了、顺序反了、错误被吞、锁没了、助手不再早退、服务的对调了、conduit 不走服务了、DSA 不开 conduit —— 每一项都转红在指定的那条检查上 |
+| `tools/check-sk-workflow-paths.py` | **两条线共用的门禁**（加起来 206 条）：工作流**跑**的、**提到**的每个仓库文件都必须被 `paths:` 覆盖，`paths:` 里逐个点名的文件必须真的存在。改了一个门禁却忘了登记 ⇒ **不会重建 ⇒ 那道门禁从此不再被验证**（见八之十二） |
+| `tests/test_sk_workflow_paths.py` | 上面那道门禁的**负控**（14 项）：拿掉条目、改坏 glob、删掉整个 `paths:` 块、指向不存在的文件、拿掉只被提到的文件 —— 每一项都转红在指定的那条检查上；另有一项**反过来**：拿掉被运行的那些行，门禁必须**不再问**它 |
 | `tools/func-surface-diff.py` | 两代驱动的函数面对照，输出「只在我们这边」与「只在 7.3 那边」两张工作清单 |
 | `tools/func-port-coverage.py` | **按能力对账**：171 个函数逐条必须有归属（同名 / 账本写明搬到哪 / 有处置记录），未记账即非零退出；账本指着的目标函数必须真在 7.3 树里（见八之七） |
 | `tools/kcheck.py` + `tools/kshadow.py` | **编译预言机**：用宿主 clang 对 7.3 树做 `-fsyntax-only`，生成树自己的头文件与影子头文件；7.3 线在 Compile 之前先跑它（见 7.17） |
@@ -5344,6 +5367,111 @@ open 会在**任何恢复还没跑到**之前就被拒掉。
 
 ---
 
+## 八之十二、`paths:` 的漏洞：改了门禁，却不会重建
+
+### 8之十二.1 判决
+
+1. **7.3 线缺 10 个、6.18 发布线缺 2 个**「工作流会跑、`paths:` 没收」的文件。
+2. **另有三处是间接的**：`tools/mkgzip.py`、`overlays/`、
+   `configs/sk-d840n-offload.config` —— 7.3 线用着它们，`paths:` 里却没有。
+3. 缺口的形状是**静默**的：改了那个文件**不会**起一轮构建，
+   于是**读它的门禁从那一刻起就不再被验证**，而仓库看上去一切正常。
+4. 已补齐，并加一道**机器查**的门禁，让这件事不再靠人记得。
+5. **还有一处是反向的**：7.3 线的 `paths:` 只列了 `docs/101-*`，
+   而**文本卫生门禁读的是全仓所有 .md**，且**只有 7.3 线在跑它** ——
+   6.18 线根本没有这道门禁（grep 全文无 `text_hygiene`）。
+   ⇒ `docs/` 之外那份文档里长出一个替换字符或控制字符，
+   **没有任何一轮构建会发现**。已把 7.3 线的条目换成 `**.md`。
+
+### 8之十二.2 证据：缺的是哪些
+
+7.3 线（`build-sk-d840n-73.yml`）：
+
+| 文件 | 在哪一步被用 | 不在 `paths:` 的后果 |
+|---|---|---|
+| `tests/test_sk_kernel.py` | repository gates | 改了内核门禁不重建 |
+| `tests/test_sk_led_dts_gate.py` | repository gates | 同上 |
+| `tests/test_sk_layout.py` | repository gates | 同上 |
+| `tests/test_sk_uboot.py` | repository gates | 同上 |
+| `tools/check-sk-lan1-led.py` | 面板 LED 拓扑门禁 | **改了灯的门禁不重建 ⇒ 实机那盏 LOS 灯没人验** |
+| `tests/test_sk_lan1_led.py` | 面板 LED 拓扑门禁 | 同上 |
+| `tools/check-sk-dtb-compat.py` | 「每个 compatible 都有驱动」门禁 | **改了它不重建 ⇒ dtb 的 compatible 没人验** |
+| `tools/check_sysupgrade.py` | 分区导出 | 改了升级检查不重建 |
+| `tools/dtbparts.py` | 分区导出 + dtb 编译门禁 | **改了分区表检查不重建 ⇒ 刷错分区没人拦** |
+| `scripts/prepare-sk-d840n-ui.sh` | Configure | 改了 UI 的准备不重建 |
+
+6.18 线（`build-sk-d840n.yml`）：
+
+| 文件 | 在哪一步被用 | 后果 |
+|---|---|---|
+| `tests/test_sk_workflows.py` | LED CI regression | **门禁中的门禁自己改了不重建** |
+| `tests/test_kernel_version_single_source.py` | LED CI regression | 改了内核版本单源的控制不重建 |
+
+**再往下一层**（不是工作流直接引用的，是它调用的脚本引用的）：
+
+| 文件 | 谁用它 | 后果 |
+|---|---|---|
+| `tools/mkgzip.py` | `scripts/configure-sk-d840n.sh:26` 把它装成 OpenWrt 树里的 `scripts/skd840n-mkgzip.py`；`overlays/target/linux/zte/image/Makefile:16` 用它压内核 | **改了压缩脚本，7.3 线不重建 ⇒ 镜像仍是旧脚本压的** |
+| `overlays/` | 7.3 线 `cp -a overlays/. openwrt/` | 改了共享的 OpenWrt 侧覆盖层，7.3 线不重建 |
+| `configs/sk-d840n-offload.config` | `scripts/configure-sk-d840n.sh:12` 的 `OFFLOAD_PROFILE` | 改了 offload 片段，7.3 线不重建 |
+
+### 8之十二.3 门禁：206 条
+
+`tools/check-sk-workflow-paths.py` 读工作流，问两件事：
+
+* **它跑的、它提到的，每个仓库文件都得被 `paths:` 覆盖** ——
+  「提到」这一半不是多余的：7.3 线用 `"$PY" -c '... "tools/mkgzip.py" ...'`
+  加载压缩脚本、用 `cp -a overlays/.` 复制目录，
+  这两种**都不是「解释器 + 路径」的形状**，只查调用形态就看不见；
+* **`paths:` 里逐个点名的文件必须真的存在** —— 一个不存在的条目永远匹配不上，
+  看着像在管事，其实在骗人。
+
+检查项数是**两条线加起来 206 条**（每条线各自覆盖自己那份工作流）。
+它把「工作流用了什么」与「`paths:` 收了什么」摆在一起比，
+所以新增一个门禁而忘了登记，**立刻变红**。
+
+**写这道门禁时踩到的两个坑（写在这里，别人会踩）**：
+
+1. **YAML 里 `*` 是别名的开头。** `- **.md` 不是「一个 glob」，
+   它是**语法错误**（YAML 报 `found undefined alias`）⇒ 写成 `- '**.md'`。
+   门禁的解析器也得把引号**剥掉** —— 引号是 YAML 的语法，不是路径的一部分。
+2. **`paths:` 块本身不算「用到」。** 列在里面的文件如果也算「被提到」，
+   门禁就退化成**拿 `paths:` 跟自己比**，什么也证明不了。
+   ⇒ 扫「被提到的文件」时**必须把 `paths:` 块排除在外**。
+   （负控里那一条「拿掉被运行的行，门禁必须不再问它」就是靠这一条才成立的。）
+
+### 8之十二.4 负控：14 项
+
+`tests/test_sk_workflow_paths.py`：每一个突变都要**转红在指定的那条检查上**，
+而不是「在某处变红」：
+
+| 突变 | 必须转红的那条检查 |
+|---|---|
+| 拿掉一个「工作流用到的文件」条目 | `… : <文件> is covered by paths` |
+| 把一个覆盖了文件的 glob 改坏 | 同上（该文件那条） |
+| 整个 `paths:` 块删掉 | `… : the workflow has a paths: block` |
+| 把一个条目指向不存在的文件 | `… : <条目> exists` |
+| 拿掉一个**只被提到**的文件的条目 | `… : <文件> is covered by paths` |
+| **拿掉一个文件被运行的那些行** | **门禁必须不再问它**（反过来的一条：证明门禁真的在读调用行，而不是拿 `paths:` 跟自己比） |
+
+负控**直接 import 门禁本体**，不另抄一份解析逻辑 ——
+抄一份的话，规则改了负控还会照旧通过，等于什么都没验。
+
+### 8之十二.5 未做
+
+1. **门禁不追进脚本里**。`configs/sk-d840n-offload.config` 这类
+   「脚本读的文件」是**手工**补进 `paths:` 的；门禁只能看见工作流自己提到的东西。
+   ⇒ **再往下一层还得有人记着**，这一层没有机器查。
+2. **门禁不追进 OpenWrt 树里**。`overlays/` 里的文件被 `cp -a` 进树之后，
+   树里再引用它们的方式，本门禁看不见。
+3. **这道门禁在 CI 里第一次执行是在这次推送之后**：它是在本机验的
+   （两条线加起来 206 条检查 + 14 项负控），
+   CI 上第一次真的跑它的是**下一个** 7.3 轮与 6.18 轮。
+4. **6.18 发布线只加了三行**，没有改它的任何步骤、任何门禁的判据 ——
+   发布线的不动是硬约束。
+
+---
+
 ## 九、下一步（按片重打，每片一次 CI）
 
 **没搬的，按片来：**
@@ -5378,16 +5506,18 @@ open 会在**任何恢复还没跑到**之前就被拒掉。
    | 只在 6.18 世代 | 10 | 7.3 里没有，要作为新代码写进去 |
    | 只在 7.3 世代 | 4 | 7.3 新增，其中一个是我们改过名的 |
 
-   要重写的 6 个（我们行数 / 7.3 行数，相同行占比）：
+   要重写的那些（我们行数 / 7.3 行数，相同行占比）——**这张表写在第 8 片之前，
+   已经过时**：第 8 片（八之八）用 `tools/func-body-diff.py` 逐个函数体重跑过一遍，
+   判定以**那一节**的表为准：
 
-   | 函数 | 我们 | 7.3 | 占比 | 备注 |
+   | 函数 | 我们 | 7.3 | 占比 | 现在的处置 |
    |---|---|---|---|---|
-   | `zx279133_idm_tx_configure` | **129** | 58 | 25% | **第 1 片已解决**，见下 |
-   | `zx279133_idm_rx_flush_refill` | 27 | 13 | 41% | 真要重写 |
-   | `zx279133_idm_rx_lan_vport` | 12 | 6 | 33% | 真要重写 |
-   | `zx279133_idm_rx_preserve_dsa_vlan` | 21 | 21 | 48% | 真要重写 |
-   | `zx279133_idm_rx_sync_for_device` | 15 | 8 | 27% | 真要重写 |
-   | `zx279133_idm_tx_drain` | 25 | 16 | 52% | 真要重写 |
+   | `zx279133_idm_tx_configure` | **129** | 68 | 25% | **第 1 片已解决**，见下 |
+   | `zx279133_idm_rx_sync_for_device` | 15 | 9 | 27% | **第 8 片已解决**（设备侧同步整个硬件写窗口） |
+   | `zx279133_idm_rx_flush_refill` | 27 | 32 | similar | 第 8 片：similar，**不用动** |
+   | `zx279133_idm_rx_preserve_dsa_vlan` | 21 | 21 | similar | 第 8 片：similar，**不用动** |
+   | `zx279133_idm_rx_lan_vport` | 12 | 6 | similar | 第 8 片：similar，**不用动** |
+   | `zx279133_idm_tx_drain` | 25 | 16 | similar | 第 8 片：similar，**不用动** |
 
    **`tx_configure` 划掉的理由**：函数体差异大，是因为**注释和 BP 池那几行**，
    不是寄存器值。按语句逐条比（`tools/idm-register-diff.py`，把
@@ -5408,21 +5538,25 @@ open 会在**任何恢复还没跑到**之前就被拒掉。
    **⇒ 第 1 片之后的 IDM 寄存器初始化已经拉齐，只剩 BP 池，而 BP 池跟随公版。**
 
 
-   只在 6.18 世代、要作为新代码写进 7.3 的 10 个：
+   只在 6.18 世代的 10 个，**第 8 片逐个判过了**（八之八.1）：
 
-   * `zx279133_idm_bp_ring_cfg`（**就是第 1 片剩下的 BP 池布局**）
-   * `zx279133_idm_dump_frame` / `zx279133_idm_dump_nonzero`（寄存器转储）
-   * `zx279133_idm_find_broadcast` / `zx279133_idm_rx_find_header`
-   * `zx279133_idm_rx_has_ethertype` / `zx279133_idm_rx_is_jack`
-   * `zx279133_idm_xdp_pass_valid`
-   * `zx279133_idm_give_frame_back`
+   * **搬了 2 个**：`zx279133_idm_rx_has_ethertype`（L2 重写只对不带类型字段的帧做）、
+     `zx279133_idm_xdp_pass_valid`（XDP 程序可能把栈留在缓冲区之外）；
+   * **不搬 8 个**：RX 调试转储（`dump_frame` / `dump_nonzero` / `rx_find_header` /
+     `find_broadcast` / `rx_dump`）是诊断用，不在交付路径上；
+     `rx_is_jack` 与两个 jack 计数器、**`cpu_dp->rcv()` 直调 tagger** 划入**第 9 片**
+     （它们要 DSA 拓扑与实机才有意义）；`bp_ring_cfg` 是第 1 片剩下的 BP 池布局，
+     而 **BP 池跟随公版**；
    * `zx279133_idm_rx_sync_xsk_for_cpu` —— 7.3 里叫
      `zx279133_idm_rx_sync_xsk_for_device`，**是改名不是新增**。
 
    只在 7.3 侧的 4 个：`zx279133_idm_rx_count`、`zx279133_idm_rx_parsed`、
    `zx279133_idm_rx_prepare_dsa`、`zx279133_idm_rx_sync_xsk_for_device`。
 
-   所以这一片可以按「先 6 个 REWRITE、再 10 个新增」切，**不是整块重写**。
+   **⇒ 这一条已经做完**：第 8 片（八之八）把 6 项搬进 7.3 树（补丁 170），
+   判了 4 项不搬并写下理由；原先估的「先 6 个 REWRITE、再 10 个新增」
+   在逐个函数体重跑之后**不成立** —— REWRITE 里三个是 similar，
+   两个已在前面的片里解决。
 3. **9132 交换表 / switch.c**（76 个函数，4150 行）。这是 SK-D840N 四个 GE 口能不能活的问题。
    **第 3 片已落地**（见八之三）：`kernel-overlays-73/` 带驱动本体与两个私有头，
    `kernel-patches/7.3-local/130` 给 7.3 的 LAN 服务补上控制事务并接好
@@ -5801,6 +5935,18 @@ python3 scratch/verify_slice_in_checkout.py \
         190-sk-datapath-restore-on-conduit-open.patch \
         tools/check-sk-datapath-restore.py \
         tests/test_sk_datapath_restore.py
+
+# 79) `paths:` 的门禁：工作流跑的和提到的每个文件都得被覆盖
+python3 ci-build-repo/tools/check-sk-workflow-paths.py \
+        --workflow .github/workflows/build-sk-d840n-73.yml \
+        --workflow .github/workflows/build-sk-d840n.yml
+
+# 80) 上面那道门禁的负控（14 项，每一项都转红在指定的那条检查上；
+#     有一项反过来：拿掉被运行的行，门禁必须不再问它）
+python3 ci-build-repo/tests/test_sk_workflow_paths.py
+
+# 81) 本机跑 CI「repository gates」那一步的命令清单（含上面这两道）
+python3 scratch/run_ci_gates_local.py
 ```
 
 第十节的 18~24 号命令里，`cfg73_sim.py` 与 `kdeps73.py` 是**一对**：

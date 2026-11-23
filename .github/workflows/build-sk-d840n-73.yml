@@ -122,7 +122,42 @@ on:
       # changes what this line builds and has to start a build.
       - scripts/sk-d840n-offload.sh
       - scripts/sk-d840n-theme.sh
-      - docs/101-*
+      # The files this line runs but did not list: four of the repository's
+      # own controls, the LED gate and its control, the dtb-compat gate, the
+      # sysupgrade check, the partition tool and the UI script.  A change to
+      # a file the workflow runs changes what the build checks, so it has to
+      # start a build - and these ones did not, so a fix to the LED gate or
+      # to the partition export would have been pushed and never run.
+      - tests/test_sk_kernel.py
+      - tests/test_sk_led_dts_gate.py
+      - tests/test_sk_layout.py
+      - tests/test_sk_uboot.py
+      - scripts/prepare-sk-d840n-ui.sh
+      - tools/check-sk-dtb-compat.py
+      - tools/check_sysupgrade.py
+      - tools/dtbparts.py
+      - tools/check-sk-lan1-led.py
+      - tests/test_sk_lan1_led.py
+      # The gate that says every file this workflow runs is covered by these
+      # paths, and the control that says whether it still notices when one of
+      # them is dropped.
+      - tools/check-sk-workflow-paths.py
+      - tests/test_sk_workflow_paths.py
+      # The compressor the image profile runs, and the OpenWrt-side overlays
+      # this line copies into the tree.  Both are inputs of the image and
+      # neither was listed: editing the compressor would have left the 7.3
+      # image compressed by the old script.
+      - tools/mkgzip.py
+      - overlays/**
+      # The offload profile the shared configure script reads.  It is a
+      # dependency of a script, not of a step, so nothing named it.
+      - configs/sk-d840n-offload.config
+      # Every markdown file in the repository, not just this line's own
+      # document: the text hygiene control reads all of them, and this line
+      # is the only line that runs it - the release line does not - so a
+      # broken character in a document outside docs/101- would have reached
+      # the repository without a build ever checking it.
+      - '**.md'
 
 env:
   IW_URL: https://github.com/cnjn/ImmortalWrt
@@ -178,6 +213,15 @@ jobs:
           # cannot read, and it makes ripgrep treat the whole file as
           # binary - so every search against it comes back empty, silently.
           python3 tests/test_sk_text_hygiene.py
+          # The paths: list says which changes start this build, so a file
+          # the workflow runs but does not list is a file whose change is
+          # never checked: the gate that reads it stops being checked the
+          # moment it is edited.  This line had ten such files, and the
+          # release line had two.
+          python3 tools/check-sk-workflow-paths.py \
+            --workflow .github/workflows/build-sk-d840n-73.yml \
+            --workflow .github/workflows/build-sk-d840n.yml
+          python3 tests/test_sk_workflow_paths.py
 
   build:
     name: ${{ matrix.mode }}
