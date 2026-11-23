@@ -6164,7 +6164,7 @@ CI 那一轮构建出来的 **`vmlinux`**（带符号表），而 `vmlinux` 与
 | `staging/trial/flash-dtb.bin` | 7.3 的 dtb（14,958 B） | 同上 |
 | `staging/trial/flash-rootfs.jffs2` | 7.3 的 rootfs（5,767,172 B） | 同上 |
 | `staging/ctl/gate-Image` / `gate-dtb` / `gate.src` | 按 7.3 那对重建 | `tools/mkgate.sh` |
-| `staging/ctl/flash.permit` | 加一行 7.3 那对的凭证 | 板上跑完 RAM 门禁后，用现场独有的 `permit-from-verdict.sh` |
+| `staging/ctl/flash.permit` | 加一行 7.3 那对的凭证 | 板上跑完 RAM 门禁后，用 `tools/gatewatch.sh`（**不是**现场独有的 `permit-from-verdict.sh` —— 那是 U-Boot 通道那一支，见下面第 2 条） |
 | `staging/ctl/ctl-flash.cpio.gz` | 按 7.3 那对重建 | `tools/flash-round.sh` 自己会重建 |
 
 ⇒ 前四行是**机械替换**，第五行（凭证）要板上的一轮判决，第六行是工具自己写的。
