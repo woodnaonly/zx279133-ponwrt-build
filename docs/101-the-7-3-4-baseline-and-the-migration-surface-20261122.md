@@ -7077,9 +7077,107 @@ OK: the image carries the microcode this driver will take
 - **板子那一头依旧一次都没验过**：这一节全是**产物级**的结论。
 - **#60 那一轮 CI 里没有产物级门禁**（它 #62 才进工作流）⇒ #60 的「CI 内」判决
   只覆盖到树级那道；产物级那道是**本机**跑的（8之二十.3）。
-- **本机没有解 jffs2 的工具** ⇒ 根文件系统里的内容仍然只能靠板子自己挂上来才看得见。
+- ~~**本机没有解 jffs2 的工具**~~ ⇒ **这句是错的**：`jefferson` 本来就装在这台机上，
+  根文件系统现在**可以被读出来看**（八之二十一.2、8之二十一.3）。
 - **产物级门禁在 CI 里只验了「正例」** ⇒ 它在 CI 里的**反向控制**仍然是本机跑的
   （`tests/test_sk_mcode_image.py` 的 7 项负控 + 本机上那一次反向控制）。
+
+---
+
+## 八之二十一、7.3 产物里的 rootfs，和把整条刷机链在真件上预演一遍
+
+### 8之二十一.1 判决
+
+1. **本机能读 jffs2 了**（`jefferson` 本来就装在这台机上）⇒
+   **7.3 的 rootfs 可以被读出来看**，不必再等板子。
+2. **产物里的 rootfs 有四件事是查实的**：
+   - `/etc/board.d/02_network` 与我们 overlay 那份**逐位相同**
+     （10,738 B，md5 `aac909156c8a2f3724337e9df59b0d31`），
+     里面写着 `ipaddr "192.168.9.1"` ⇒ **刷完的板子会答在本项目等的那个地址上**；
+   - `/etc/config/network` **不存在** ⇒ 它由 `config_generate` 首次启动时现生成
+     ⇒ **地址确实由上面那份 `02_network` 决定**（不是由某个预设的 config 决定）；
+   - `/etc/config/dropbear` 是 `option Interface 'lan'`（310 B）
+     ⇒ dropbear 绑的是 lan 上的 IP，不是某个网口名；
+   - `lib/modules/7.3.4/` 里只有 `modules.builtin`、`modules.builtin.modinfo`
+     与 `mtd-rw.ko` ⇒ **驱动是编进内核的**，
+     而 `modules.builtin` 里**点名**了 `npu.ko`、`zx279133-lan-conduit.ko`、
+     `zx279133-switch.ko`。
+3. **`flash-round.sh` 的 PC 侧在 7.3 真件上跑通了**（沙箱）：
+   几何检查 `TABLE OK`、三件 sha256 现算、载荷按 `staging/trial/` 重建。
+4. **一条链上的脚本从没有在 7.3 真件上被整条走过**，走一遍就逮到一处文档缺陷
+   （打分那一步漏了 `CTLTAG`，八之十六.4）。
+
+### 8之二十一.2 rootfs 怎么读到的
+
+`jefferson` **本来就在这台机上**（`C:\Python313\Scripts\jefferson.exe`）——
+之前记的「本机没有解 jffs2 的工具」是错的，那句话漏了这个。
+
+它在本机要补两个垫子才能跑完：Windows 没有 `os.mknod` 与 `os.makedev`
+⇒ `scratch/extract_jffs2.py` 把这两个补上（设备节点留空文件即可，
+它们没有内容），然后调 jefferson 自己的 `extract_jffs2`。
+
+⇒ **7.3 的 rootfs 解出来 975 个文件**（1,099 个 raw inode）。
+（这台板子的 root 是一整块 jffs2，**没有 squashfs** ——
+`dtbparts.py` 的几何里 `root @0x00f00000 (241 MiB)` 就一格。）
+
+### 8之二十一.3 rootfs 里查实的四件事
+
+| # | 查什么 | 读到的 | 为什么这件事要紧 |
+|---|---|---|---|
+| 1 | `/etc/board.d/02_network` | **与我们 overlay 那份逐位相同**（10,738 B，md5 `aac909156c8a2f3724337e9df59b0d31`），第 178/185 行 `ipaddr "192.168.9.1"` | 本项目每一个工具都等在 `192.168.9.1`；若这份文件不是我们的，板子会起来但没人看得见它 |
+| 2 | `/etc/config/network` | **不存在** | 它由 `config_generate` 首次启动现生成 ⇒ **地址只能由 `02_network` 决定**（6.18 世代那份注释里的判断，在这张 7.3 产物上重新成立） |
+| 3 | `/etc/config/dropbear` | 310 B，`option Interface 'lan'` | dropbear 绑的是 **lan 上的 IP**（`network_get_ipaddrs_all`），不是网口名 ⇒ 桥上有 192.168.9.1 就有 ssh |
+| 4 | `lib/modules/7.3.4/` | 只有 `modules.builtin`（234 行）、`modules.builtin.modinfo`（85,187 B）、`mtd-rw.ko`（5,216 B） | ⇒ **没有可加载的驱动模块**，因为驱动**编进内核**了；`modules.builtin` 里点名 `npu.ko`、`zx279133-lan-conduit.ko`、`zx279133-switch.ko`（另有 `mdio-zx279133.ko`、`zx279133-pvt.ko`、`phy-zx279133-*-serdes.ko` 等 16 个 zte 相关条目） |
+
+第 4 条是这一轮最值钱的一句：**7.3 线「四个符号钉成 `=y`」这件事，
+在产物里验到了**，而且是在 rootfs 的 `modules.builtin` 上 ——
+不是从配置里推的。
+
+顺带：`/etc/init.d/` 里 `sk-bridge`（1,644 B）、`sk-nat`（4,004 B）、
+`zx279133-wan-ports`（263 B）、`zxpond`（464 B）都在 ——
+`sk-bridge` 是把 `lan-cpu0` 加进桥、并在 `config_generate` 之后补 `wan` 段的那个脚本。
+
+### 8之二十一.4 `flash-round.sh` 的 PC 侧（沙箱，7.3 真件）
+
+`flash-round.sh` 硬编码从 `staging/trial/` 读件 ⇒ 它**必须在换件之后**跑。
+沙箱里用 #62 那对真件跑 `sh tools/flash-round.sh dry`：
+
+```
+validated layout: native241
+  kernel  @0x00200000 len=0x00800000 (8 MiB)
+  root    @0x00f00000 len=0x0f100000 (241 MiB)   index order: 1:boot 2:kernel 3:dtb 4:parameter tags 5:root
+  root is /dev/mtdblock5 - U-Boot's bootargs hard-code 5, so OK
+  TABLE OK - all 2 expectations matched
+triple: flash-uImage 57744525adba874c
+triple: flash-dtb.bin 1c80886a5df7a0ae
+triple: flash-rootfs.jffs2 b7242410d3b30a3f
+the payload rides the kernel: 7.3.4*
+  serve p/flash-uImage on port 5561  md5 3664b8cb1bb091db
+  serve p/flash-dtb.bin on port 5562  md5 ff6914d007b9b218
+staging/ctl/ctl-flash.cpio.gz: cpio 1296532 B -> file 595317 B
+tag=FD1  /init is the 8142-byte script inside it
+```
+
+⇒ **几何对、版本对、三件现算、载荷按 `staging/trial/` 重建**；
+只有最后的 SSH 交棒按预期失败（没有板子）。
+
+**顺带认出一处容易混的两支干跑载荷**：
+
+| 载荷 | 谁产的 | `TAG` | `/init` | 钉几个 md5 |
+|---|---|---|---|---|
+| `staging/trial73d/ctl/ctl-flash.cpio.gz` | 手工 `mkctlram.py --mode flash --tag K73F --stage net` | `K73F` | 8,615 B | **3 个**（uImage + dtb + rootfs） |
+| `flash-round.sh dry` 自己建的那份 | `mkctlram.py --mode flash --tag FD1` | `FD1` | 8,142 B | **2 个**（uImage + dtb；rootfs 只有 `write-root` 才带） |
+
+两支都是干跑变体（`DO_WRITE=0`、`DO_ROOT=0`），**不是同一份文件**。
+实机那一轮第 6 步跑的是 `flash-round.sh` 自己建的那支；
+`staging/trial73d/ctl/` 里那支的作用是「钉住这一对字节、随时可查」。
+
+### 8之二十一.5 这一节没做到的
+
+- **还是静态的**：rootfs 的内容读出来了，但**没有挂到板子上看过它跑起来**。
+- **`/etc/config/network` 是「首次启动会生成成什么样」，不是「现在是什么」** ——
+  它在产物里**不存在**，这正是第 2 条的由来（地址由 `02_network` 决定）。
+- **本机解不了 squashfs**（这台板子也没有 squashfs 分区，所以这一次不影响）。
 
 ---
 
