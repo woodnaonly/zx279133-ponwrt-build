@@ -508,6 +508,11 @@ U-Boot 的 `bootcmd`（kernel/dtb/root 三个分区）从 flash 起来。
 才对应厂商的 eth0**，名字是 `lan-cpu0`（`zx279133-lan-conduit.c`:
 `strscpy(ndev->name, "lan-cpu%d", IFNAMSIZ)`）。
 
+这里的 `%d` **不是字面量**：驱动只把格式串播种进 `ndev->name`，
+内核在 `register_netdevice()` 时调用 `dev_get_valid_name()`，
+看到 `%` 就交给 `__dev_alloc_name()` 解析出第一个空闲编号，
+发布出来的名字因此是 `lan-cpu0`。机制与实证见 `docs/101` 第 7.27 节。
+
 也就是说：主线要接上 PC，靠的是 `lan-cpu0` 这条 XMAC0 lane；G3 的网络配置
 （lan 挂 `lan-cpu0`、wan 留在 eth0）要等这条 lane 通了才能定。
 

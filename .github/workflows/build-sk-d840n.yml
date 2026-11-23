@@ -62,6 +62,7 @@ on:
       - tests/test_mtd_rw.py
       - tests/test_sk_layout.py
       - tests/test_sk_uboot.py
+      - tests/test_conduit_netdev_name.py
       - tests/sk_layout_fixture.py
       - tests/sk_omci*
       - templates/**
@@ -128,6 +129,7 @@ jobs:
           python3 tests/test_sk_layout.py
           python3 tests/test_sk_uboot.py
           python3 tests/test_sk_workflows.py
+          python3 tests/test_conduit_netdev_name.py
 
   build:
     name: ${{ matrix.mode }}
@@ -322,6 +324,19 @@ jobs:
           cp -a overlays/. openwrt/
           python3 tools/check-sk-offload.py --kernel-tree "$KT"
           sh tools/check-sk-kconfig.sh "$KT"
+          # The conduit netdev is the DSA CPU port, and it is the interface
+          # every RX count of this board is read from.  The driver seeds the
+          # name with a format string - strscpy() is a copy, not a formatter
+          # - and the kernel resolves the unit id when the netdev is
+          # registered, so the published name is resolved here the kernel's
+          # way and not grepped for.  This tree carries the driver, not the
+          # overlay, so the file is the tree's own.
+          DRV="$KT/drivers/net/ethernet/zte/zx279133-lan-conduit.c"
+          if [ ! -f "$DRV" ]; then
+            echo "::error::$DRV is gone - the 6.18 tree no longer carries the conduit driver"
+            exit 1
+          fi
+          python3 tools/check-conduit-netdev-name.py --source "$DRV"
           # board dts must be reachable and the SoC dtsi unmodified
           test -f "$KT/arch/arm64/boot/dts/zte/zx279133-sk-d840n.dts"
           grep -q 'zx279133-sk-d840n.dtb' "$KT/arch/arm64/boot/dts/zte/Makefile"

@@ -100,6 +100,18 @@
     已补三样：门禁本体、门禁自己的负控、真合并配置里的 7 个 LED 符号。
     这不是配置问题（那些符号早就被 pin 成 =y），是**没人查编出来的 dtb**。
     见 7.26。
+16. **「conduit 网口叫 `lan-cpu%d`」这个结论是错的，已经推翻。**
+    上一轮的推断是：`strscpy` 是有界拷贝不是格式化器 ⇒ 网口在运行期就叫
+    字面量 `lan-cpu%d` ⇒ 实机对拍读 `lan-cpu0` 会读不到。
+    **错在只看了拷贝那一半，没看注册那一半**：`register_netdevice()` 会
+    调用 `dev_get_valid_name()`，它看到名字里有 `%` 就交给
+    `__dev_alloc_name()`，那里把 `%d` 解析成第一个空闲编号
+    ⇒ **发布名就是 `lan-cpu0`**。
+    实机已经证明：6.18 线跑着的固件用的是**同一行**代码，板子上就是
+    `lan-cpu0`。⇒ **不需要改内核**（`kernel-patches/7.3-local/` 一行不加），
+    但**需要一道门禁**：格式串一改，发布名就会变，或者驱动直接注册失败、
+    板子上根本没有 conduit，而对拍读的是**固定名字**，读不到会**静默地**读出空值。
+    见 7.27。
 
 ---
 
@@ -324,6 +336,8 @@ CONFIG_EXTERNAL_KERNEL_TREE=<树>   OpenWrt 把这棵树当自己的内核目录
 | `tools/check-sk-pon-api.py` | 第 4 片的编译前门禁：协议核心闭合、**内核名字在包含闭包里可见**、树侧契约、四个钩子、构建接线、LED 依赖（见八之四.5） |
 | `tools/check-sk-9132-api.py` | 第 5 片的编译前门禁：编程在树里、**ERAM 描述符在分配处被记录**、名字闭合、内核 API 在、**没有重定义**、调用顺序、板级 DTS 的 PHY 总线（见八之五.7） |
 | `tests/test_sk_workflows.py` | 工作流自身的门禁：每个工作流文件可解析、7.3 线依赖的步骤都在、门禁点名的测试文件都存在、7.3 线的路径过滤覆盖这条线的输入（见 7.9） |
+| `tools/check-conduit-netdev-name.py` | **conduit 网口发布名**的门禁：不 grep 格式串，而是按内核的规则（`dev_valid_name()` → `__dev_alloc_name()`）把发布名**算**出来再比对，必须是 `lan-cpu0`（见 7.27） |
+| `tests/test_conduit_netdev_name.py` | 上面那道门禁的**负控**：格式串改了、说明符不对、名字被占用、驱动不注册、驱动命名两次 —— 每一种都必须转红 |
 | `overlays-73/target/linux/zte/zx279133/target.mk` | 7.3 线的 subtarget 默认包：**清空 OpenWrt 的 `DEFAULT_PACKAGES.tweak`**，否则其中的 `luci` 元包会拉进 `luci-theme-bootstrap`（见 7.8） |
 | `tools/func-surface-diff.py` | 两代驱动的函数面对照，输出「只在我们这边」与「只在 7.3 那边」两张工作清单 |
 | `tools/func-port-coverage.py` | **按能力对账**：171 个函数逐条必须有归属（同名 / 账本写明搬到哪 / 有处置记录），未记账即非零退出；账本指着的目标函数必须真在 7.3 树里（见八之七） |
@@ -2601,6 +2615,120 @@ rc=1
 
 ---
 
+### 7.27 conduit 网口的名字：`"lan-cpu%d"` **不是**缺陷，是内核在注册时解析掉的
+
+**判决**
+
+1. **上一轮那条结论是错的，本节把它推翻。** 当时的推断是：
+   驱动写的是 `strscpy(ndev->name, "lan-cpu%d", IFNAMSIZ)`，
+   `strscpy` 是有界拷贝不是格式化器 ⇒ 网口在运行期就叫字面量 `lan-cpu%d`
+   ⇒ 实机对拍读 `lan-cpu0` 会读不到。
+   **错在只看了拷贝那一半，没看注册那一半。**
+2. **内核在 `register_netdevice()` 时把 `%d` 解析掉**，发布名就是 `lan-cpu0`：
+   - `net/core/dev.c:11441` `register_netdevice()`
+     → `:11468` `dev_get_valid_name(net, dev, dev->name)`；
+   - `:1475` `dev_get_valid_name()` → `:1438` `dev_prep_valid_name()`；
+   - `:1445-1446` `dev_prep_valid_name()`：
+     `if (strchr(want_name, '%')) return __dev_alloc_name(net, want_name, out_name);`
+   - `:1380` `__dev_alloc_name()`：先校验**恰好一个 `%d`**（`:1392-1394`，
+     否则 `-EINVAL`），再扫已注册的网口占用的编号，取**第一个空位**，
+     最后 `:1432-1433` `strscpy(buf, name, IFNAMSIZ); snprintf(res, IFNAMSIZ, buf, i);`
+     ⇒ **`lan-cpu0`**。
+   ⇒ `strscpy` 只是把格式串**播种**进 `ndev->name`；真正决定发布名的是注册路径。
+3. **两代树里是同一行**，所以这不是 cnjn 的 bug、也不是上游的 bug：
+   - 7.3：`kernel-patches/7.3/390-net-zx279133-lan-conduit.patch:181`
+     （这个补丁是**从 /dev/null 新建**这个文件的）；
+   - 6.18：cnjn 那棵 `linux-6.18.38` 的
+     `drivers/net/ethernet/zte/zx279133-lan-conduit.c:176`。
+4. **实机已经证明了这一点**：6.18 线跑着的固件用的就是**上面那同一行**，
+   而板子上是 `lan-cpu0` —— `ip -o link` 里的 `lan1@lan-cpu0:`、
+   `/proc/net/dev` 里的 `lan-cpu0:`（`tools/mcp/sk-d840n-bench/test_bench.py:112,125`）。
+5. **⇒ 不需要改内核**：`kernel-patches/7.3-local/` 一行都不加。
+   但**需要一道门禁**：这条线一旦把格式串改了，发布名就会变；
+   改成内核不认的说明符，驱动**直接注册失败**，板子上根本没有 conduit。
+   而对拍读的是一个**固定名字**（`/sys/class/net/lan-cpu0/...`），
+   读不到就会**静默地**读出空值 —— 看起来像「板子没流量」。
+
+**证据**
+
+本机实证：把内核自己的四个函数（`dev_valid_name()`、`__dev_alloc_name()`、
+`dev_prep_valid_name()`、`dev_get_valid_name()`）从 `net/core/dev.c`
+**原样抬出来**编成一个宿主程序，让它走驱动自己的调用序列
+（`strscpy` 播种 + `dev_get_valid_name()` 解析），只有网口链表、
+位图和 `strscpy` 是替身：
+
+```
+$ python scratch/netdev_name_resolve.py
+the kernel calls dev_get_valid_name() at:
+   err = dev_get_valid_name(net, dev, newname);
+   ret = dev_get_valid_name(net, dev, dev->name);
+
+case 1: the driver, nothing else holds the name
+  seeded name   : "lan-cpu%d"
+  register rc   : 0
+  published name: "lan-cpu0"
+  expected      : "lan-cpu0"  -> MATCH
+
+case 2: lan-cpu0 is already taken
+  published name: "lan-cpu1"
+
+case 3: a format string with no %d (control)
+  published name: "lan-cpu"
+
+case 4: two format specifiers (control)
+  register rc   : -22  (registration would fail)
+  published name: (none)
+
+== what the copy alone would have produced ==
+  strscpy(ndev->name, "lan-cpu%d", IFNAMSIZ) on its own gives "lan-cpu%d"
+  and that is NOT what register_netdevice() publishes.
+```
+
+⇒ **上一轮那个「重命名缺陷」脚本（`scratch/strscpy_name_check.py`）已删除**：
+它只抬了 `strscpy` 的拷贝尾段、没抬注册路径，结论是错的；
+留着它就是给下一个会话留一个陷阱。
+
+**⇒ 修法**：不加内核补丁，加一道门禁
+`tools/check-conduit-netdev-name.py`。它**不 grep 格式串**，而是按内核的规则
+**把发布名算出来**再比对：
+
+- `dev_valid_name()`：名字本身必须合法（否则内核直接拒）；
+- 必须**恰好一个 `%d`**（两个、或别的说明符 ⇒ 内核 `-EINVAL`，驱动注册失败）；
+- 取**第一个空闲编号** ⇒ `lan-cpu0`；
+- 名字已被占用 ⇒ 顺延到下一个（`lan-cpu1`）；
+- 源里必须有 `devm_register_netdev()` / `register_netdevice()`
+  （不注册就没有名字可言）；
+- 源里必须**只有一处**给网口命名。
+
+两条线都接上了：
+
+- **7.3 线**：新增一步 `Check the conduit netdev name against the 7.3 tree`，
+  跑的是**这一轮要编的那棵树里**的驱动文件
+  （`$KERNEL_TREE/drivers/net/ethernet/zte/zx279133-lan-conduit.c`）；
+  文件不在就**报错退出**，不跳过。
+- **6.18 发布线**：在 `Apply SK-D840N overlays` 步里，跑的是 cnjn 那棵树里的
+  同一个文件（`$KT/drivers/net/ethernet/zte/zx279133-lan-conduit.c`）。
+- 两条线的门禁作业都跑 `tests/test_conduit_netdev_name.py`，
+  也就是**门禁自己的负控**：格式串改了、说明符不对、名字被占用、
+  驱动不注册、驱动命名两次、空文件 —— 每一种都必须转红。
+
+**反向验证**：`scratch/reverse_check_workflow.py` 现在是 **69 处变异**
+（工作流 53 + 工具 2 + 本次新增 14：7.3 线 4 处、6.18 线 4 处、
+门禁本体 6 处），每一处都**只转红在指定的那条检查上**。
+
+**未做**
+
+1. **没有在实机上读 7.3 镜像的网口名** —— 镜像还没出来。
+2. 门禁是**静态**的：它读源码、按内核的规则算名字，**没有真的注册一个网口**。
+   本机的实证程序是把内核那四个函数**原样**抬出来编的，
+   `register_netdevice()` 本身（依赖太多）**没有**被抬出来跑；
+   它的调用点是从树里**引用**的（`:11468`）。
+3. 「`lan-cpu0` 一定拿到 0 号」的前提是**当时没有别的网口占用这个名字**。
+   门禁把这条当成前提（`--taken` 可以显式给出占用者），
+   但两棵树里都只有 `zx279133-lan-conduit.c` 一处用 `lan-cpu%d`。
+
+---
+
 ## 八、BP 池：逐槽位对照（第 1 片剩余部分的结论）
 
 **判决**：**BP 池布局在 7.3 上不需要移植。** 我们 6.18 世代那套写法是
@@ -3196,7 +3324,7 @@ OMCI 把帧写进 `eth->tx_descs + eth->omci_producer`，`omci_producer`
 
 | 问题 | 读数位置 | 出处 |
 |---|---|---|
-| conduit 的 RX 计数在涨？ | `/sys/class/net/lan-cpu0/statistics/rx_{packets,bytes}` | `zx279133-lan-conduit.c:176` 把网设备名写成 `"lan-cpu%d"` |
+| conduit 的 RX 计数在涨？ | `/sys/class/net/lan-cpu0/statistics/rx_{packets,bytes}` | `zx279133-lan-conduit.c:176` 把网设备名**播种**成 `"lan-cpu%d"`，内核在 `register_netdevice()` 时把它解析成 `lan-cpu0`（见 7.27） |
 | 四个 DSA 用户口 link 状态正确？ | `/sys/class/net/lan{0,1,2,3,4}/{operstate,carrier,speed}` | 板级 DTS 的 `switch` 节点声明 `port@4..port@8`，label 是 `lan0`/`lan2`/`lan3`/`lan4`/`lan1` |
 | LOS 灯随 `opsd` 翻转？ | `/sys/class/leds/*/{brightness,trigger}` + `/sys/kernel/debug/gpio` 里 **gpio 65** 的电平 | `zx279133-main.c:297-299` 用 `gpiod_get_value_cansleep()` 读 opsd，再用 `led_trigger_event()` 点灯；opsd 在 DTS 里是 `gpio2 pin 1`（`GPIO_ACTIVE_HIGH`），平铺编号 65 |
 | `pon_state` 从 O1 往 O5 走？ | `/sys/class/net/<wan>/device/pon_state` | `zx279133-pon.c:351` 在 `ndev->dev` 上建这个属性 |
@@ -3642,7 +3770,7 @@ python3 scratch/cpio_pick.py scratch/re_other_fw/fit/initrd-1.bin \
 # 15) 在本机跑工作流里那一步的 shell（从 YAML 原样取出，不复制）
 python3 scratch/pin_step_check.py
 
-# 16) 门禁的反向验证：五十五处变异逐个转红
+# 16) 门禁的反向验证：六十九处变异逐个转红
 python3 scratch/reverse_check_workflow.py
 
 # 17) 四个驱动并进同一个内核会不会撞名（用本机编出的目标码）
@@ -3720,6 +3848,13 @@ sh scratch/live_syntax_check.sh
 
 # 38) 板级 dts 满足 native241 门禁的每一个条件（不是假设，是逐条查源码）
 python3 scratch/check_board_dts_layout.py
+
+# 39) conduit 网口的发布名：把内核自己的名字解析代码抬出来编，跑驱动的调用序列
+python3 scratch/netdev_name_resolve.py
+
+# 40) conduit 名字门禁的负控（格式串改了 / 说明符不对 / 名字被占用 / 不注册 /
+#     命名两次 / 空文件，每一种都必须转红）
+python3 ci-build-repo/tests/test_conduit_netdev_name.py
 ```
 
 第十节的 18~24 号命令里，`cfg73_sim.py` 与 `kdeps73.py` 是**一对**：
@@ -3749,3 +3884,11 @@ uapi 头都过一遍 `scripts/headers_install.sh`，而它的 sed（第 34 行�
 ⇒ CI 报的 6 条 `__u128` 是真错，`__attribute_const__` 不是；
 补丁里那条 `__attribute_const__` 降级为**防御性定义**。
 34 号保证补丁是**生成**出来的、且能干净 apply —— 改说明文字不会把手改坏。
+
+39 与 40 号命令是**第四对**：39 号回答「`lan-cpu%d` 到底会被发布成什么名字」，
+40 号证明「这个回答不是靠一条字符串比较蒙混过去的」。
+39 号的做法是把内核 `net/core/dev.c` 里那四个决定名字的函数
+（`dev_valid_name()`、`__dev_alloc_name()`、`dev_prep_valid_name()`、
+`dev_get_valid_name()`）**原样**抬出来编成宿主程序，让它走驱动自己的调用序列 ——
+不是复述内核的行为，是**跑一遍内核的代码**。
+⇒ 上一轮「网口叫 `lan-cpu%d`」那个结论就是被这一步推翻的（见 7.27）。

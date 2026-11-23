@@ -60,6 +60,7 @@ BRINGUP_STEPS = [
     "Check the 9132 switch driver against the 7.3 tree",
     "Check the PON / OMCI stack against the 7.3 tree",
     "Check the 9132 switch programming against the 7.3 tree",
+    "Check the conduit netdev name against the 7.3 tree",
     "Apply the OpenWrt-side overlays",
     "Enable /dev/mem in the 7.3 fragments",
     "Build the zte drivers into the kernel",
@@ -89,6 +90,11 @@ BRINGUP_TRIGGERS = [
     "tools/check-sk-switch-api.py",
     "tools/check-sk-pon-api.py",
     "tools/check-sk-9132-api.py",
+    # The conduit netdev name gate: it reads the driver that is compiled, so
+    # a change to the gate or to its negative controls changes what the
+    # build checks and has to start a build.
+    "tools/check-conduit-netdev-name.py",
+    "tests/test_conduit_netdev_name.py",
     # The host compiler check and the shadow headers it needs: the build
     # runs them, so a change to either of them changes what the build
     # checks and has to start a build.
@@ -105,6 +111,7 @@ SHARED_GATES = [
     "tests/test_sk_led_dts_gate.py",
     "tests/test_sk_layout.py",
     "tests/test_sk_uboot.py",
+    "tests/test_conduit_netdev_name.py",
 ]
 
 # The zte drivers that have to end up inside the kernel image on the 7.3
@@ -195,6 +202,19 @@ def step_run_text(doc, job_name, step_name):
         if str(step.get("name") or "") == step_name:
             return str(step.get("run") or "")
     return ""
+
+
+def run_body(step):
+    """The commands of one step: continuations joined, comments dropped.
+
+    The checks below read the command a step runs, not the prose around it,
+    so the comment lines go and a line ending in a backslash is joined with
+    the one it continues.
+    """
+    body = str(step.get("run") or "")
+    flat = body.replace("\\\n", " ")
+    return "\n".join(line for line in flat.splitlines()
+                     if not line.strip().startswith("#"))
 
 
 def referenced_tests(text):
@@ -880,6 +900,64 @@ def main():
         failures.check(
             re.search(r"linux-\$KVER/\.config", commands) is not None,
             "the LED gate reads the merged config of the kernel this line builds")
+
+    # The conduit netdev is the DSA CPU port, and it is the interface every
+    # RX count of this board is read from: the bench scripts and the runbook
+    # look it up under one name.  The driver seeds the name with a format
+    # string - strscpy() is a copy, not a formatter - and the kernel resolves
+    # the unit id when the netdev is registered, so the published name has to
+    # be resolved the kernel's way.  A name the kernel would refuse leaves the
+    # board with no conduit at all, and a name it would publish differently
+    # makes the runbook read an interface that does not exist.
+    #
+    # The check asks both lines for the same thing: the gate runs on the
+    # driver that is compiled, not on a phrase about it, and a driver that
+    # has gone missing fails the build instead of skipping the gate.
+    print("\nthe conduit netdev name is gated on the driver that is compiled")
+    conduit_73 = [step for step in steps_of(bringup, "build")
+                  if str(step.get("name") or "") ==
+                  "Check the conduit netdev name against the 7.3 tree"]
+    failures.check(bool(conduit_73),
+                   "the 7.3 line has the conduit netdev name gate")
+    if conduit_73:
+        commands = run_body(conduit_73[0])
+        calls = re.findall(
+            r"tools/check-conduit-netdev-name\.py[ \t]+--source[ \t]+(\S+)",
+            commands)
+        failures.check(
+            calls == ['"$DRV"'],
+            "the 7.3 line resolves the name of the driver it compiles")
+        failures.check(
+            re.findall(r"^DRV=\"([^\"]+)\"$", commands, re.MULTILINE) ==
+            ["$KERNEL_TREE/drivers/net/ethernet/zte/zx279133-lan-conduit.c"],
+            "the 7.3 line points the gate at the driver in the tree it builds")
+        failures.check(
+            re.search(r"\[ ! -f \"\$DRV\" \]", commands) is not None
+            and "exit 1" in commands,
+            "a missing conduit driver fails the 7.3 line instead of skipping "
+            "the gate")
+
+    overlay_steps = [step for step in steps_of(release, "build")
+                     if str(step.get("name") or "") == "Apply SK-D840N overlays"]
+    failures.check(bool(overlay_steps),
+                   "the release line still applies the overlays")
+    if overlay_steps:
+        commands = run_body(overlay_steps[0])
+        calls = re.findall(
+            r"tools/check-conduit-netdev-name\.py[ \t]+--source[ \t]+(\S+)",
+            commands)
+        failures.check(
+            calls == ['"$DRV"'],
+            "the release line resolves the name of the conduit driver")
+        failures.check(
+            re.findall(r"^DRV=\"([^\"]+)\"$", commands, re.MULTILINE) ==
+            ["$KT/drivers/net/ethernet/zte/zx279133-lan-conduit.c"],
+            "the release line points the gate at the driver in its own tree")
+        failures.check(
+            re.search(r"\[ ! -f \"\$DRV\" \]", commands) is not None
+            and "exit 1" in commands,
+            "a missing conduit driver fails the release line instead of "
+            "skipping the gate")
 
     # The migration note's increment table is the measured one, and the
     # workflow contract test parses that table and adds the numbers up.

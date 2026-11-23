@@ -47,9 +47,11 @@ on:
       - tools/check-sk-switch-api.py
       - tools/check-sk-pon-api.py
       - tools/check-sk-9132-api.py
+      - tools/check-conduit-netdev-name.py
       - tools/kcheck.py
       - tools/kshadow.py
       - tests/test_sk_kcheck.py
+      - tests/test_conduit_netdev_name.py
       - kernel-overlays-73/**
       - tools/prepush.py
       - overlays-73/**
@@ -91,6 +93,7 @@ jobs:
           python3 tests/test_sk_layout.py
           python3 tests/test_sk_uboot.py
           python3 tests/test_sk_workflows.py
+          python3 tests/test_conduit_netdev_name.py
 
   build:
     name: ${{ matrix.mode }}
@@ -280,6 +283,24 @@ jobs:
         run: |
           python3 tools/check-sk-9132-api.py \
             --tree "$KERNEL_TREE" --repo "$GITHUB_WORKSPACE"
+
+      # The conduit netdev is the DSA CPU port: it is the interface every RX
+      # count of this board is read from, and the bench scripts and the
+      # runbook look it up under one name.  The driver seeds the name with a
+      # format string - strscpy() is a copy, not a formatter - and the kernel
+      # resolves the unit id when the netdev is registered, so the published
+      # name has to be resolved the kernel's way and not grepped for.  A name
+      # the kernel would refuse leaves the board with no conduit at all; a
+      # name it would publish differently makes the runbook read an interface
+      # that does not exist, and the counters come back empty.
+      - name: Check the conduit netdev name against the 7.3 tree
+        run: |
+          DRV="$KERNEL_TREE/drivers/net/ethernet/zte/zx279133-lan-conduit.c"
+          if [ ! -f "$DRV" ]; then
+            echo "::error::$DRV is gone - the 7.3 series no longer creates the conduit driver"
+            exit 1
+          fi
+          python3 tools/check-conduit-netdev-name.py --source "$DRV"
 
       - name: Apply the OpenWrt-side overlays
         run: |
