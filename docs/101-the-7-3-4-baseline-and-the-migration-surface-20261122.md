@@ -6013,7 +6013,12 @@ CI 那一轮构建出来的 **`vmlinux`**（带符号表），而 `vmlinux` 与
 —— 合成驱动只能证明「门禁读的是合成驱动」。
 
 本机用**合成内核**（自己编的 ELF64：真符号表 + 真加载段 + 真机器码）把这套跑通：
-门禁 9 项全过、6 个控制全咬住（第十节 96 号命令）。
+门禁 9 项全过、8 个控制全咬住 —— 但那两个数是**在 CI 里用真的 `vmlinux` 与真的镜像**
+读出来的。第十节 96 号命令是**合成内核**那一头：它**直接 import 门禁本体**
+（不抄一份规则），跑一遍门禁（须过）、再跑一遍控制那份（须过），
+自身输出 **3 checks, 0 failed**。
+两头互补：合成内核证明「门禁的逻辑在没有真树时也能被证伪」，
+真树证明「门禁在真产物上读出的顺序是真的」。
 
 ### 8之十五.5 实机那一环现在到底缺什么
 
@@ -6595,11 +6600,11 @@ run **#57**（整轮 Success，1 h 20 m 46 s）的 flash job 里
      它不能被挪到「可能改变被测值的 restore」前面
      （restore 路径跨文件调用 `zx279133_hardware_prepare`，对编译器不透明）。
    * **门禁**：`tools/check-sk-kernel-order.py`（9 项检查）+
-     `tests/test_sk_kernel_order.py`（6 项反向控制）+
-     `tests/test_sk_kernel_order_local.py`（本机用合成内核端到端）。
+     `tests/test_sk_kernel_order.py`（**8 项反向控制** = 6 个变异 + 2 个自证）+
+     `tests/test_sk_kernel_order_local.py`（本机用合成内核端到端，自身 3 项检查）。
    * **反向验证**：改坏机器码（顺序反了 / 去掉 restore / 去掉 hardware 检查 /
-     去掉行号信息 / 镜像里改一个字节）必须**转红在指定的那条检查上**，
-     而且控制跑在**同一个内核、同一个镜像**上。
+     去掉行号信息 / 镜像里改一个字节 / 反汇编那一列地址换成行号）必须
+     **转红在指定的那条检查上**，而且控制跑在**同一个内核、同一个镜像**上。
 
 10. **实机那一轮的许可链**（把 7.3 三件刷进板子的前置）—— **已查清，见八之十六**。
     * **7.3 走 RAM 通道**（`flash-round.sh` → `gatecheck.sh`），
@@ -7002,7 +7007,7 @@ python3 scratch/diff73_controlled.py staging/trial73b/flash staging/trial73c/fla
 python3 scratch/verify_73_artifact.py staging/trial73d/flash
 
 # 96) 产物级顺序门禁的本地端到端：合成一个带符号表和加载段的 ELF64 当内核，
-#     门禁 9 项全过、6 个控制各自转红在指定的那条检查上
+#     **直接 import 门禁本体**跑一遍（须过）、再跑控制那份（须过）⇒ 3 checks
 python3 ci-build-repo/tests/test_sk_kernel_order_local.py \
         --tree scratch/linux-73-base
 
@@ -7064,6 +7069,14 @@ python3 ci-build-repo/tests/test_sk_flash_permit.py \
 python3 ci-build-repo/tests/test_sk_flash_permit_control.py \
         --uimage staging/trial73d/flash/flash-uImage \
         --dtb staging/trial73d/flash/flash-dtb.bin
+
+# 107) 三件与载荷钉的字节是不是同一对（换件之后必须重跑）
+python3 scratch/trio_payload_pins.py
+
+# 108) 取回的那一轮 artifact 与本机备着的字节逐位比（md5 级的那一锤）：
+#      成员名按字节打印，别靠眼睛比对字母
+python3 scratch/zip_members.py scratch/artifact57-flash.zip
+python3 scratch/zip_compare.py scratch/artifact57-flash.zip staging/trial73d/flash
 ```
 
 第十节的 18~24 号命令里，`cfg73_sim.py` 与 `kdeps73.py` 是**一对**：
@@ -7136,8 +7149,10 @@ uapi 头都过一遍 `scripts/headers_install.sh`，而它的 sed（第 34 行�
 96~100 号命令是**第八组**，回答的是两个问题：
 「那道产物级顺序门禁**本身可不可信**」，以及「实机那一环**现在卡在哪**」。
 
-- 96 号是**合成内核**的端到端：门禁 9 项全过、6 个控制各自转红在指定的
-  那条检查上。合成内核只能证明「门禁读的是它自己造的那个内核」，
+- 96 号是**合成内核**的端到端：它自己造一个带符号表与加载段的 ELF64 当内核、
+  一段 objdump 形状的反汇编、一个 legacy uImage，**直接 import 门禁本体**
+  （不抄一份规则）跑一遍、再跑控制那份 ⇒ 自身 **3 checks, 0 failed**。
+  合成内核只能证明「门禁读的是它自己造的那个内核」，
   所以 96 号与 CI 里那道门禁是**互补的两头**，不是同一件事的两遍。
 - 97 号证明那道门禁**会被 CI 真的跑到**：`paths:` 少收一个文件，
   门禁从那一刻起就不再被验证，而仓库看上去一切正常（见八之十二）。
@@ -7153,3 +7168,11 @@ uapi 头都过一遍 `scripts/headers_install.sh`，而它的 sed（第 34 行�
 - 102 号是**换件前的先验**：现场那套分区表门禁（`dtbparts.py`）对 7.3 的 dtb
   必须过（实测 `TABLE OK`）—— 7.25 修的就是「旧参数拒绝正确的件」那个坑，
   换 7.3 的 dtb 之前要再验一遍。
+
+**107 与 108 号命令是第九组**，合起来回答一个问题：
+**「实机那一轮要刷的，是不是载荷钉的那一对」**。
+107 号把磁盘上那三件的 md5 与载荷里钉的 md5 摆在一起（实测逐个相同）；
+108 号把取回的那一轮 artifact 与本机备着的字节逐位比
+（实测 uImage 与 dtb 逐位相同、rootfs 不同 —— jffs2 不可复现 ⇒ **三件必须同轮**）。
+⇒ **换件之后这两条命令必须重跑**：载荷只允许写它被构建时的那对字节，
+而门禁认的是**字节**，不是轮次。
