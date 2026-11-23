@@ -189,6 +189,11 @@ on:
       # other.  Editing the fixture alone has to rebuild the line too.
       - tests/sk_trial_survey_board.py
       - tests/test_trialsurvey_endtoend.py
+      # The gate that says the four driver objects are in the kernel's
+      # modules.builtin, and the control that says the gate can still tell
+      # the kernel's own list from the copy in the image - they differ.
+      - tools/check-sk-modules-builtin.py
+      - tests/test_sk_modules_builtin.py
       # The gate that says the four symbols the judge looks up in the
       # kernel's symbol table are symbols that will be there, and the
       # control that says the gate can still tell a symbol that is missing
@@ -798,6 +803,11 @@ jobs:
           set -e
           python3 tools/check-sk-kallsyms-symbols.py --tree "$KERNEL_TREE"
           python3 tests/test_sk_kallsyms_symbols.py
+          # The control for the gate that reads the kernel's own list of
+          # what it built in.  The list exists in two shapes - with paths
+          # in the build directory and without them in the image - and the
+          # first version of that check read only one of them.
+          python3 tests/test_sk_modules_builtin.py
 
       # A datapath that could not be brought up is marked failed, and the
       # board has to have a way back from that.  The 6.18 generation had
@@ -1177,13 +1187,7 @@ jobs:
             exit 1
           fi
           echo "modules.builtin: $MB"
-          for o in npu zx279133-lan-conduit zx279133-switch fnoffload; do
-            grep -qx "$o.ko" "$MB" || {
-              echo "::error::$o.ko is not in the kernel's modules.builtin" >&2
-              grep -iE 'npu|zx279133|fnoffload' "$MB" >&2 || true
-              exit 1; }
-          done
-          echo "the kernel's modules.builtin names all four driver objects"
+          python3 tools/check-sk-modules-builtin.py --list "$MB"
 
       # The release line has a gate that reads the merged kernel .config of
       # the kernel it actually ships and asserts that the board's

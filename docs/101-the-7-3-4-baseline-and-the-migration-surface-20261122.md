@@ -7819,7 +7819,30 @@ fnoffload.ko              <- CONFIG_ZTE_ZX279133_FNOFFLOAD
 ⇒ `modules.builtin` **也在那儿**，**不在** `build_dir` 里。
 （第一版把路径写成了 `build_dir/target-*/linux-*/linux-7.3.4/`
 ⇒ 在这条线上根本不存在；已改成先找 `$KERNEL_TREE/modules.builtin`，
-再回落 `build_dir`。）
+再回落 `build_dir`。
+⇒ 7.3 那一轮（`707f9e22`）的日志里实测到：
+`modules.builtin: linux-7.3.4/modules.builtin` ⇒ **路径这一关过了**。）
+
+⇒ **但那份文件有两种形态，这正是第一版栽的地方**：
+
+| 那份文件 | 每行长什么样 |
+|---|---|
+| **内核自己写的那份**（在构建目录里） | **带路径**：`kernel/drivers/net/ethernet/zte/npu.ko` |
+| **OpenWrt 装进镜像的那份**（`lib/modules/7.3.4/modules.builtin`） | **裸名**：`npu.ko` |
+
+⇒ 第一版的门禁用 `grep -qx "npu.ko"`（**整行精确匹配**）
+⇒ 在**镜像**那份上过得去，在**内核自己**那份上**匹配不到**
+⇒ `707f9e22` 那一轮的红就红在这里：`npu.ko is not in the kernel's modules.builtin`
+—— 而**四个 object 其实都在**那份文件里，日志里逐行可见：
+`.../npu.ko`、`.../zx279133-lan-conduit.ko`、`.../zx279133-switch.ko`、`.../fnoffload.ko`。
+
+⇒ **教训**：本地演练用的是**镜像那份**（裸名）⇒ **演练绿、CI 红**
+⇒ **演练必须用真实形态**，否则它验的根本不是那件事。
+
+⇒ 这道门禁现在是**工具** `tools/check-sk-modules-builtin.py`：
+它比的是 **basename**（两种形态都吃），控制
+`tests/test_sk_modules_builtin.py`（8 项）**两种形态各一份夹具**，
+负控拿掉一个 object ⇒ 必须**点名**那一个。
 
 ### 8之二十五.2 四个符号，和它们为什么不会消失
 
