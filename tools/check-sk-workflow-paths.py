@@ -56,6 +56,14 @@ NAMED = re.compile(
 PATH_ENTRY = re.compile(r"^\s*-\s+(\S+)\s*$")
 GLOB_CHARS = ("*", "?", "[")
 
+# Files the build reads without the workflow naming them.  .gitattributes
+# decides the bytes of every checkout, so a change to it changes what the
+# build reads - and a change to it alone would not start a build if the
+# paths: block did not collect it.  The damage it does is quiet: the image
+# is built from a checkout with different rules than a fresh clone would
+# produce, and the gate that reads the tree cannot tell.
+ALWAYS = ('.gitattributes',)
+
 
 class Report:
     def __init__(self):
@@ -196,6 +204,24 @@ def parse_named(text):
     return found
 
 
+def required_files(text):
+    """Every file this workflow reads, by name.
+
+    The workflow's own run lines and command lines, plus the files that every
+    build reads whether it says so or not.  Both the gate and its negative
+    controls ask this question here, so a change to the rule cannot leave one
+    of them answering an older question.
+    """
+    required = list(parse_invocations(text))
+    for item in parse_named(text):
+        if item not in required:
+            required.append(item)
+    for item in ALWAYS:
+        if item not in required:
+            required.append(item)
+    return required
+
+
 def covered_by(name, entries):
     """Whether one of the entries covers this path."""
     for entry in entries:
@@ -228,15 +254,16 @@ def check_workflow(path, root, report):
                    "the gate found nothing to check, so it cannot say anything")
 
     named = parse_named(text)
-    required = list(invocations)
-    for item in named:
-        if item not in required:
-            required.append(item)
+    required = required_files(text)
 
     for item in required:
         entry = covered_by(item, entries)
-        how = ("the workflow runs it" if item in invocations
-               else "the workflow names it in a command line")
+        if item in invocations:
+            how = "the workflow runs it"
+        elif item in named:
+            how = "the workflow names it in a command line"
+        else:
+            how = "the checkout rules decide its bytes"
         report.require(entry is not None,
                        f"{name}: {item} is covered by paths",
                        f"{how}, but no path entry covers it; editing it would "

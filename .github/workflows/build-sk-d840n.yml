@@ -33,6 +33,11 @@ on:
   push:
     paths:
       - .github/workflows/build-sk-d840n.yml
+      # The checkout rules decide the bytes of every file below, so a change
+      # to them is a change to what the build reads - and it has to start a
+      # build, or the image is built from a checkout a fresh clone would not
+      # reproduce.  The microcode under overlays/ is one of those files.
+      - .gitattributes
       - bootweb/**
       - tests/test_bootweb_ci_workflow.py
       - kernel-overlays/**

@@ -115,10 +115,7 @@ def main():
         entries, _blocks = GATE_MODULE.parse_paths(text)
         invocations = GATE_MODULE.parse_invocations(text)
         named = GATE_MODULE.parse_named(text)
-        required = list(invocations)
-        for item in named:
-            if item not in required:
-                required.append(item)
+        required = GATE_MODULE.required_files(text)
 
         with tempfile.TemporaryDirectory(prefix="sk-wf-paths-") as tmp:
             work = Path(tmp)
@@ -278,7 +275,31 @@ def main():
                       % (name, named_only, expected),
                       ", ".join(sorted(names)[:3]))
 
-            # 7. A control must not publish a verdict.  The gate writes its
+            # 7. The file every build reads whether the workflow says so or
+            #    not: .gitattributes decides the bytes of the checkout, so a
+            #    change to it alone must still start a build.  The gate has to
+            #    ask about it, and the control has to be able to take the
+            #    entry away.
+            always = list(GATE_MODULE.ALWAYS)
+            if not always:
+                check(False, "%s: the gate names the files every build reads"
+                      % name)
+            else:
+                victim = always[0]
+                if victim not in entries:
+                    check(False, "%s: %s is listed in paths" % (name, victim))
+                else:
+                    broken = copy_as(
+                        text.replace("      - %s\n" % victim, "", 1),
+                        work, "dropalways", name)
+                    names, rc = failed_checks(broken, ROOT)
+                    expected = "%s: %s is covered by paths" % (name, victim)
+                    check(expected in names,
+                          "%s: dropping the entry for %s -> red on %r"
+                          % (name, victim, expected),
+                          ", ".join(sorted(names)[:3]))
+
+            # 8. A control must not publish a verdict.  The gate writes its
             #    report to GITHUB_STEP_SUMMARY, and a control runs the gate on
             #    a broken copy: if that run publishes, the broken copy's
             #    verdict is the one the run page shows, and a green job reads
