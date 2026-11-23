@@ -43,6 +43,8 @@ Usage:
   check-sk-tx-isolation.py --tree TREE
 """
 import argparse
+import hashlib
+import os
 import re
 import sys
 from pathlib import Path
@@ -69,9 +71,11 @@ class Report:
     def __init__(self):
         self.failures = []
         self.checks = 0
+        self.results = []
 
     def require(self, ok, message, detail=""):
         self.checks += 1
+        self.results.append((ok, message, detail))
         print(f"  [{'OK ' if ok else 'FAIL'}] {message}"
               + (f" - {detail}" if detail and not ok else ""))
         if not ok:
@@ -80,6 +84,60 @@ class Report:
 
     def note(self, message):
         print(f"  [note] {message}")
+
+
+def tree_fingerprint(tree, names):
+    """What the files this gate read amount to.
+
+    A gate that reports a symbol missing and a tree that does not have
+    it are two different stories, and the two are told apart by what is
+    in the files.  The hashes go on the run's own page, where the job
+    log cannot be downloaded from, so a red gate can be compared with
+    a green one without fetching anything.
+    """
+    out = []
+    for name in names:
+        path = Path(tree) / ZTE / name
+        if not path.is_file():
+            out.append((name, "missing", 0, 0))
+            continue
+        data = path.read_bytes()
+        out.append((name, hashlib.sha256(data).hexdigest(),
+                    len(data), data.count(b"\n")))
+    return out
+
+
+def write_summary(report, title, files=None):
+    """Put the verdict where the run page shows it.
+
+    A job's log is a download, and an anonymous client cannot download one;
+    the step summary is on the run's own page, where a red gate can be read
+    without anything but a browser.  A gate that fails where nobody can see
+    which check failed is a gate that costs a whole build cycle to diagnose.
+    """
+    path = os.environ.get("GITHUB_STEP_SUMMARY")
+    if not path:
+        return
+    lines = [f"### {title}", ""]
+    for ok, message, detail in report.results:
+        mark = "PASS" if ok else "FAIL"
+        lines.append(f"- **{mark}** {message}")
+        if detail and not ok:
+            lines.append(f"  - {detail}")
+    lines.append("")
+    lines.append(f"{report.checks} check(s), {len(report.failures)} failed.")
+    lines.append("")
+    if files:
+        lines.append("The files this gate read:")
+        lines.append("")
+        for name, digest, size, count in files:
+            lines.append(f"- `{name}` {digest} - {size} bytes, {count} lines")
+        lines.append("")
+    try:
+        with open(path, "a", encoding="utf-8") as handle:
+            handle.write("\n".join(lines) + "\n")
+    except OSError as error:
+        print(f"  [note] the step summary could not be written: {error}")
 
 
 def strip_comments(text):
@@ -124,25 +182,44 @@ def strip_comments(text):
     return "".join(out)
 
 
+TYPE_WORD = (r"(?:static|inline|void|bool|int|unsigned|signed|u\d+|s\d+|char|"
+              r"long|short|size_t|const\s+struct\s+\w+|struct\s+\w+|enum\s+\w+)")
+
+
+def is_definition(text, match):
+    """Whether the name at `match` is a definition and not a call.
+
+    A call can be followed by a brace - `if (check(x, y)) {` - so a brace
+    after the argument list does not make it a definition.  What makes it
+    one is the type in front of the name: the last statement before it
+    ends with a type word.
+    """
+    prefix = text[max(0, match.start() - 300):match.start()]
+    cut = max(prefix.rfind(";"), prefix.rfind("{"), prefix.rfind("}"))
+    head = prefix[cut + 1:][-80:]
+    return re.search(TYPE_WORD + r"\s*\*?\s*$", head) is not None
+
+
 def function_body(text, name):
     """The body of a function definition, braces balanced.
 
     A declaration is not a definition: the parameters of a declaration end
-    in a semicolon, and the search never crosses one.
+    in a semicolon, and the search never crosses one.  A call is not a
+    definition either - it carries no type in front of the name.
     """
-    pattern = re.compile(r"\b" + re.escape(name) + r"\s*\([^;]*?\)\s*\{", re.S)
-    match = pattern.search(text)
-    if not match:
-        return None
-    start = match.end() - 1
-    depth = 0
-    for index in range(start, len(text)):
-        if text[index] == "{":
-            depth += 1
-        elif text[index] == "}":
-            depth -= 1
-            if depth == 0:
-                return text[start + 1:index]
+    for match in re.finditer(r"\b" + re.escape(name) + r"\s*\([^;]*?\)\s*\{",
+                             text, re.S):
+        if not is_definition(text, match):
+            continue
+        start = match.end() - 1
+        depth = 0
+        for index in range(start, len(text)):
+            if text[index] == "{":
+                depth += 1
+            elif text[index] == "}":
+                depth -= 1
+                if depth == 0:
+                    return text[start + 1:index]
     return None
 
 
@@ -309,6 +386,11 @@ def main():
     args = parser.parse_args()
     report = Report()
     check(args.tree, report)
+    write_summary(report, "The TX quarantine",
+                  tree_fingerprint(args.tree, ("zx279133-idm.c",
+                                               "zx279133-netdev.c",
+                                               "zx279133-main.c",
+                                               "zx279133.h")))
     if report.failures:
         print(f"\nFAILED: {len(report.failures)} of {report.checks} check(s)")
         for item in report.failures:

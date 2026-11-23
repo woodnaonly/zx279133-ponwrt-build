@@ -209,6 +209,31 @@
     而门禁硬要去问那个不存在的镜像（同一个 run 的 flash job 是绿的）。
     已限定在 flash 模式，并给这个限定加了门禁。
     见 7.34。
+24. **第 8 片（IDM 的 RX 侧）落地了；同时把 #46 的失败查到了底。**
+    两代 IDM 的 RX 侧逐函数对照：ours 独有 10 个、theirs 独有 6 个、
+    REWRITE 4 个、similar 11 个。**只搬 6 项**（ethertype 守卫、三处越界读、
+    XDP PASS 合法性、`CHECKSUM_NONE`、归还前的整窗设备侧同步）；
+    **不搬 4 项**（RX 调试转储、jack 计数、`cpu_dp->rcv()` 直调 tagger、
+    `bp_ring_cfg`），其中 jack 计数与直调 tagger **留给第 9 片** ——
+    它们要 DSA 拓扑与实机对拍才有意义。
+    **一处布局差异不能搬**：两代的 page pool `.offset` 各不相同
+    （ours = `PAYLOAD_OFFSET`，theirs = `PAYLOAD_OFFSET + rx_frame_offset`），
+     两边 CPU 侧同步**各自自洽**，搬过去会双重偏移。
+    `170-sk-rx-delivery-safety.patch`（12173 B，106 插入 / 27 删除）
+    + 39 条门禁 + 24 项负控 + 17 处反向验证。
+    **顺带把 #46 的失败查到了底**：门禁在 CI 上红了 19 条、说树里没有 160 的符号，
+    而 prepare 同时报「160 已应用」—— **两条日志互相矛盾**。
+    本机逐条排除九个假设（补丁字节、MANIFEST 登记、两个脚本、板层覆盖、
+    日志里有没有 checkout、门禁是不是另一棵树、`git apply` 在仓库内外是否不同、
+    Python 版本、解析器版本），最后用**同一个 commit 版门禁**跑「160 之前」的树，
+    得到**恰好 25 条检查、19 条红**，与 CI **逐条一致**
+    ⇒ **CI 的树就是「160 之前」的状态**：`git apply` 报成功，
+    而补丁的内容**没有落到门禁读的那份文件里**。
+    **这类事在没有内容级校验时看不见** ⇒ prepare 从此在每个补丁 apply 之后，
+    查这个补丁**加进去的那些行**是否真的在它声称写的那个文件里；
+    provenance 带**树指纹**；两道门禁把它们读到的文件 sha256 写进
+    `GITHUB_STEP_SUMMARY`（job log 匿名下载不到，step summary 谁都能读）。
+    见八之八与 7.37。
 
 ---
 
@@ -453,6 +478,10 @@ CONFIG_EXTERNAL_KERNEL_TREE=<树>   OpenWrt 把这棵树当自己的内核目录
 | `kernel-patches/7.3-local/160-sk-tx-fault-isolation.patch` | **第 7 片**：把 6.18 世代的 TX 故障隔离与恢复模型搬进 7.3 树（四个文件、405 行新增）。不可信的完成计数器**不再被钳位后照单释放**：环被隔离、两个逻辑 TX 设备被停、恢复工作 flush + reclaim 并**至多一次**重启共享 datapath（见 7.34） |
 | `tools/check-sk-tx-isolation.py` | **第 7 片的门禁**：按**位置**判 36 条不变量 —— 故障分支里不能有任何释放语句、函数里所有释放都必须在该分支之后、隔离守卫在读计数器之前、两个逻辑设备都被停、恢复不等 RTNL、重启由真实完成增量重新武装（见 7.34） |
 | `tests/test_sk_tx_isolation.py` | 上面那道门禁的**负控**（14 项）：突变跑在**真树**的副本上，不在合成树上 —— 合成树只能证明门禁读得懂合成树（见 7.34） |
+| `kernel-patches/7.3-local/170-sk-rx-delivery-safety.patch` | **第 8 片**：把 6.18 世代 RX 交付路径上的 6 处纯软件正确性修复搬进 7.3 树（ethertype 守卫、三处越界读、XDP PASS 合法性、`CHECKSUM_NONE`、归还前的整窗设备侧同步）。**只搬有实机/文档证据的那些**；jack 计数与 `cpu_dp->rcv()` 直调 tagger 留给第 9 片（见八之八） |
+| `tools/check-sk-rx-delivery.py` | **第 8 片的门禁**：按**位置**判 39 条不变量 —— 参照点全是**执行点**（调用点、条件、使用点），不是声明点（见八之八.3） |
+| `tests/test_sk_rx_delivery.py` | 上面那道门禁的**负控**（24 项）：突变跑在**真树副本**上，不在合成树上 |
+| `tests/test_sk_prepare_content.py` | **prepare 步内容校验的负控**（16 项）：一个补丁加了行而树里没有，就必须被拒；空行不算缺失；自包含，不需要内核树 |
 | `tools/func-surface-diff.py` | 两代驱动的函数面对照，输出「只在我们这边」与「只在 7.3 那边」两张工作清单 |
 | `tools/func-port-coverage.py` | **按能力对账**：171 个函数逐条必须有归属（同名 / 账本写明搬到哪 / 有处置记录），未记账即非零退出；账本指着的目标函数必须真在 7.3 树里（见八之七） |
 | `tools/kcheck.py` + `tools/kshadow.py` | **编译预言机**：用宿主 clang 对 7.3 树做 `-fsyntax-only`，生成树自己的头文件与影子头文件；7.3 线在 Compile 之前先跑它（见 7.17） |
@@ -1852,7 +1881,7 @@ OpenWrt 在静默模式下**只留一句**：`make <target>: build failed. Pleas
 
 ### 7.20 本机复现：**本节的结论已被 7.21 推翻**，留档说明它错在哪
 
-> **更正（7.21）**：本节说「libbpf 对 7.3.4 的 uapi 头是编得过���，内核头不是原因」。
+> **更正（7.21）**：本节说「libbpf 对 7.3.4 的 uapi 头是编得过的，内核头不是原因」。
 > **这句话是错的。** 7.3 线 libbpf 失败的真正原因就是内核导出的 uapi 头：
 > `asm/ptrace.h` 用 `__u128`，而这个类型只定义在被 libbpf 自带那份
 > `include/linux/types.h` 遮蔽掉的 uapi `linux/types.h` 里。
@@ -3627,6 +3656,74 @@ no kernel image under openwrt/bin/targets/zte/zx279133 - the image profile did n
    它失败时也会置 `datapath_failed`，但**没有**对应的恢复入口 ——
    那一处是已知的缺口，本轮没补。
 
+#### 7.36 第 8 片：RX 交付路径（`170-sk-rx-delivery-safety.patch`）
+
+补丁、39 条门禁、24 项负控、17 处反向验证的判决与证据在**八之八**。
+本轮它在 7.3 工作流里的位置：
+
+* 门禁步 `Gate: the RX delivery path proves what it hands over`
+  跑在 `Gate: a TX ring with an untrusted counter is quarantined` 之后、
+  `Check the overlay for what a compiler would have caught` 之前，
+  两条都在 `--tree "$KERNEL_TREE"`（**要编译的那棵树**）上跑；
+* `paths:` 清单加了 `tools/check-sk-rx-delivery.py` 与
+  `tests/test_sk_rx_delivery.py` ⇒ 改门禁或改负控都会起一轮构建。
+
+#### 7.37 **#46 的失败：门禁红了 19 条，而树里没有那批符号**
+
+7.3 的 **#46**（head `1eb07e3b`）的 `initramfs` 与 `flash` **两个** job 都红在
+step 20「Gate: a TX ring with an untrusted counter is quarantined」：
+门禁只跑了 **25 条**检查、**19 条**红，红的内容**全部**是
+「160 引入的符号/字段不存在」。
+
+**本机逐条排除（每一条都有做法，不是推断）：**
+
+| 假设 | 怎么排除的 | 结果 |
+|---|---|---|
+| CI checkout 的是另一份 160 补丁 | raw.githubusercontent 逐字节比对（8 个补丁 + MANIFEST） | **一致**（24508 B，sha256 相同） |
+| MANIFEST 漏登记 160 | 比对 `1eb07e3b` 的 `MANIFEST.json` | 7 条，**含 160** |
+| prepare / 门禁脚本被改 | 逐字节比对 | **一致**（16006 B / 13347 B） |
+| 板层覆盖了那 4 个文件 | `kernel-overlays-73/` 只有 8 个文件，不含它们 | **排除** |
+| prepare 之后有 `git checkout/reset` | 逐行扫完整 job 日志 | **没有** |
+| 门禁的 C 解析器版本不同 | 用 **commit 版**门禁跑本机三棵树 | 全绿 36/36 |
+| Python 版本不同 | 用 **Python 3.12.14**（CI 的版本）跑 | 全绿 36/36 |
+| `git apply` 在仓库内外行为不同 | 小实验：仓库内/外各 apply 一次 | **一致** |
+| 门禁跑在另一棵树上 | 日志：同一 `--tree linux-7.3.4`，prepare 的 `source_directory` 也是它 | **排除** |
+
+**剩下的事实链（三条，都是日志里的原文）：**
+
+1. CI 的 prepare **确实应用了 160**：
+   `Applied local/160-sk-tx-fault-isolation.patch`、
+   `Prepared Linux 7.3.4 with 46 patches`。
+2. 门禁在**同一棵树**上、**36 毫秒之后**运行，报告
+   「the eth carries the recovery work」红 —— 而这条检查是**纯字符串查找**
+   （`"struct delayed_work tx_recovery_work;" in header`），
+   **不是**函数解析 ⇒ **CI 树里的 `zx279133.h` 确实没有 160 的内容。**
+3. 本机完整复刻（vanilla + 39 vendored + 100~150 → apply 160 → 门禁）
+   **36/36 全绿**；而把「160 之前」的树喂给同一个门禁，得到
+   **恰好 25 条检查、19 条红**，**与 CI 逐条一致**
+   ⇒ **CI 的树就是「160 之前」的状态。**
+
+⇒ 判决：**CI 上 `git apply` 报成功，但补丁的内容没有落到门禁读的那份文件里。**
+这个区别在没有内容级校验时**看不见**：门禁只能红给一个「符号不存在」，
+而 prepare 只能报一个「应用成功」—— 两句话都不指向真相。
+
+**本轮补的三件事：**
+
+1. `tools/prepare-sk-kernel-73.py` 在**每个补丁 apply 之后**，
+   查这个补丁**加进去的那些行**是否真的在它声称写的那个文件里；
+   不在就抛错，并**点名那个文件与那一行**。
+   ⇒ 「apply 成功但内容没落盘」从此不能静默发生。
+   负控 `tests/test_sk_prepare_content.py`（16 项）证明它有牙，
+   `scratch/reverse_check_prepare_content.py`（4 项）证明它被削弱时负控会指名。
+2. provenance（`kernel-provenance-73.json`）现在带**树指纹**：
+   5 个驱动文件的 sha256 / 字节数 / 行数。
+3. 两道门禁把**它们读到的那几个文件的 sha256** 写进 `GITHUB_STEP_SUMMARY`。
+   ⇒ run 页面直接可读，**不必**下载 job log。
+
+**最后这条是从 #46 的诊断里学到的**：那一轮门禁红了 19 条，
+但 job log **匿名下载不到**（403），GitHub 日志搜索框对被截断的部分返回 `0/0`
+⇒ 只能靠登录态浏览器一页页翻。**step summary 是 run 自己的页面，谁都能读。**
+
 ---
 
 ## 八、BP 池：逐槽位对照（第 1 片剩余部分的结论）
@@ -4147,7 +4244,7 @@ OMCI 把帧写进 `eth->tx_descs + eth->omci_producer`，`omci_producer`
 ### 8之五.5 ERAM 表描述符：为什么必须一起搬
 
 9132 的表在 ERAM 里，而 **ERAM 表的基址不是常数**：`zx279133_se_sdt_create()` 用一个
-顺序分配器把块发出去，从块 12288 开始，每张表拿走剩下的块、下���张接在后面。
+顺序分配器把块发出去，从块 12288 开始，每张表拿走剩下的块、下一张接在后面。
 硬件按 `(base << 7) + (width * index & ~0x7f)` 找表项——
 
 - 基址写错 ⇒ 硬件根本找不到那张表；
@@ -4479,6 +4576,99 @@ sh tools/trialsurvey.sh 10
 
 **未做**：这一节是**清单**，不是结论——它一行都还没有在 7.3 的镜像上跑过，
 因为镜像还没出来（见 7.16 与 7.17 的 CI 轮次）。
+
+---
+
+## 八之八、第 8 片：IDM 的 RX 侧（交付路径的安全修复）
+
+### 8之八.1 判决
+
+**搬 6 项**（每项都有实机或文档证据，不是「看起来更严谨」）：
+
+1. **`!rx_has_ethertype()` 守卫**：L2 重写只对「不带类型字段」的帧做。
+   依据：docs/42:164 与 docs/77 的实机验证 —— 帧自带 ethertype 时无条件重建 L2
+   会把 IP 头**右移 4 字节**、总长被读成 `0x0800`，IPv4 与 IPv6 全部丢失。
+2. **`rx_restore_lan_l2()` 的 ARP 分支加 `skb->len >= 2*ETH_ALEN+4`**：越界读。
+3. **交付段加 `pskb_may_pull(skb, ETH_HLEN)`**：越界读。
+4. **`zx279133_idm_xdp_pass_valid()` + 两个 XDP_PASS 分支的校验**：
+   XDP 程序可能把栈留在缓冲区之外。
+5. **`skb->ip_summed = CHECKSUM_NONE`**：7.3 世代用 PPU 的「parsed」标志设
+   `CHECKSUM_UNNECESSARY` —— 那把「头被解析过」当成了「校验和正确」。
+6. **`__zx279133_idm_rx_post_page()` 补设备侧同步**，同步整个硬件写窗口：
+   归还给硬件的缓冲区必须先同步到设备。
+
+**不搬 4 项**：
+
+* RX 调试转储（`rx_dump` / `dump_frame` / `dump_nonzero` / `rx_find_header` /
+  `find_broadcast`）—— 诊断用，不属于交付路径；
+* `rx_is_jack` 与 `rx_jack_frames` / `rx_jack_dropped` —— **划入第 9 片**：
+  它依赖 DSA 拓扑，要实机对拍才有意义；
+* `cpu_dp->rcv()` 直调 tagger —— **划入第 9 片**，同上；
+* `bp_ring_cfg`。
+
+**一处布局差异，不是缺陷，不能搬**：
+
+| | page pool 的 `.offset` |
+|---|---|
+| 6.18 世代（ours） | `PAYLOAD_OFFSET` |
+| 7.3 世代（theirs） | `PAYLOAD_OFFSET + rx_frame_offset` |
+
+两边的 **CPU 侧同步各自自洽**（逐条核过 `page_pool_dma_sync_for_cpu` 的偏移）。
+把一边搬到另一边会**双重偏移** ⇒ 这不是「哪个更好」的问题，是**两边各自对**。
+
+### 8之八.2 证据：两代函数逐个对照
+
+`tools/func-body-diff.py` 对照 `kernel-overlays/.../zx279133-idm.c`（ours = 6.18 世代）
+与 7.3 世代 cnjn 实现：
+
+* **ours 独有 10 个**：`zx279133_idm_bp_ring_cfg`、`zx279133_idm_dump_frame`、
+  `zx279133_idm_dump_nonzero`、`zx279133_idm_find_broadcast`、
+  `zx279133_idm_give_frame_back`、`zx279133_idm_rx_find_header`、
+  `zx279133_idm_rx_has_ethertype`、`zx279133_idm_rx_is_jack`、
+  `zx279133_idm_rx_sync_xsk_for_cpu`、`zx279133_idm_xdp_pass_valid`；
+* **theirs 独有 6 个**：`module_param` / `MODULE_PARM_DESC`
+  （`zx279133_idm_rx_frame_offset` 可调）、`zx279133_idm_rx_count`、
+  `zx279133_idm_rx_parsed`、`zx279133_idm_rx_prepare_dsa`、
+  `zx279133_idm_rx_sync_xsk_for_device`；
+* **REWRITE 4 个**：`rx_flush_refill`(27/32)、`rx_preserve_dsa_vlan`(21/21)、
+  `rx_sync_for_device`(15/9)、`tx_configure`(129/68，第 1 片已解决)；
+* **similar 11 个**（RX 侧 7 个）；
+* 主体函数 `zx279133_idm_rx_process_queue`：ours 653 行 vs theirs 424 行。
+
+### 8之八.3 补丁 170 与它的两道门
+
+`kernel-patches/7.3-local/170-sk-rx-delivery-safety.patch`：改
+`drivers/net/ethernet/zte/zx279133-idm.c` 一个文件，**106 插入 / 27 删除**，
+12173 字节，sha256 `58772d4cd557c7d9697e20f4a38d2f3580f52b79156193cd1784795b0ec0a35e`。
+
+* `tools/check-sk-rx-delivery.py`：**39 条**，全部**按位置**判，参照点都是**执行点**：
+  `rx_restore_lan_l2(` 调用点往上最近的 `if (` 条件里必须有
+  `zx279133_idm_rx_has_ethertype`；`pskb_may_pull` 必须早于它的「首次出现」与
+  「rewrite 条件里的使用点」两处；XDP 校验必须早于同一 `case` 块里的 `data = xdp`；
+  设备侧同步必须早于 `WRITE_ONCE(eth->rx_normal_bp[`，且全文件**恰好一处**。
+* `tests/test_sk_rx_delivery.py`：**24 项**负控，突变跑在**真树副本**上。
+* `scratch/reverse_check_rx_delivery.py`：**17 处**（14 处削弱门禁判据 + 3 处破坏工作流），
+  全部**转红在指定的那条检查上**。
+
+**两个踩过的坑（写在这里，别人会踩）**：
+
+1. **补丁必须相对「上一个补丁已应用」的基线生成。** 170 的第一版把 160 的改动
+   也裹了进去（`git diff` 取的是旧基线），CI 路径 apply 直接失败：
+   `error: patch failed: drivers/net/ethernet/zte/zx279133-idm.c:1281`。
+   修法是把本机 git 基线推进到「160 已应用」再生成。
+2. **C 解析器必须区分「函数定义」与「调用点」。** `function_body()` 原来把
+   「调用点后面跟着 `{`」（`if (unlikely(!zx279133_idm_xdp_pass_valid(xdp, true))) {`）
+   当成了函数定义。判据是**名字前面有没有类型词**。同一个修复顺带应用到了
+   第 7 片的 `tools/check-sk-tx-isolation.py`。
+
+### 8之八.4 未做
+
+1. **没有实机证据**：ethertype 守卫与三处越界读在 6.18 世代上有实机记录，
+   但**在 7.3 树上还没有**。板子回来之前，第 8 片只有「树里的形状对」这一层证据。
+2. **jack 计数与 `cpu_dp->rcv()` 直调 tagger 留给第 9 片** —— 它们要 DSA 拓扑与实机。
+3. `zx279133_idm_rx_parsed()` 与 `CHECKSUM_UNNECESSARY` 被**删掉**了：
+   那个字段在 7.3 树里恒为 0（idm.c 从不给它加数），厂商 `npu.ko.rodata.txt` 里
+   也有这个名字 ⇒ 保留字段名是对的，但不再加数。
 
 ---
 
@@ -4842,6 +5032,32 @@ python3 scratch/run_kcheck_73.py
 # 59) 补丁本身：生成、登记、再验一次能干净应用
 python3 scratch/make_txiso_patch.py
 python3 scratch/add_txiso_manifest.py
+
+# 60) 第 8 片：RX 交付路径的门禁、负控与反向验证
+python3 ci-build-repo/tools/check-sk-rx-delivery.py --tree scratch/linux-73-base
+python3 ci-build-repo/tests/test_sk_rx_delivery.py --tree scratch/linux-73-base
+python3 scratch/reverse_check_rx_delivery.py
+
+# 61) prepare 步的内容校验：它的负控与反向验证（都不需要内核树）
+python3 ci-build-repo/tests/test_sk_prepare_content.py
+python3 scratch/reverse_check_prepare_content.py
+
+# 62) 整链 prepare（39 vendored + 8 local，含 170），以及它带出的树指纹
+python3 ci-build-repo/tools/prepare-sk-kernel-73.py \
+        --tree scratch/linux-73-verify4 --report scratch/prepare-73-170.json
+
+# 63) #46 的失败在本机复现：把「160 之前」的树喂给同一个 commit 版的门禁
+#     （得到恰好 25 条检查、19 条红，与 CI 逐条一致）
+python3 scratch/exp_pre160_gate.py
+
+# 64) CI 上的门禁脚本与本机的是不是同一份（逐字节），以及补丁与 MANIFEST 同样
+python3 scratch/cmp_gate_script_remote.py
+python3 scratch/check_manifest_remote.py
+python3 scratch/hash_local_patches.py
+
+# 65) 文档里的替换字符：一个 U+FFFD 会让 ripgrep 把整篇文档当成二进制，
+#     于是对这个文档的每一次 grep 都静默地返回「没有匹配」
+python3 scratch/fix_doc_replacement_chars.py
 ```
 
 第十节的 18~24 号命令里，`cfg73_sim.py` 与 `kdeps73.py` 是**一对**：

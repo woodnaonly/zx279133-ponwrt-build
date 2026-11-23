@@ -37,6 +37,17 @@ ROOT = Path(__file__).resolve().parents[1]
 LOCK = ROOT / "configs/sk-d840n-73.json"
 MARKER_NAME = ".sk-series-applied.json"
 
+# The driver's own files, with the hashes that go into the provenance
+# file.  They are the files the gates read, so two runs' trees can be
+# compared without shipping either tree.
+FINGERPRINT_FILES = (
+    "drivers/net/ethernet/zte/zx279133-idm.c",
+    "drivers/net/ethernet/zte/zx279133-main.c",
+    "drivers/net/ethernet/zte/zx279133-netdev.c",
+    "drivers/net/ethernet/zte/zx279133-np.c",
+    "drivers/net/ethernet/zte/zx279133.h",
+)
+
 
 def require(condition, message):
     if not condition:
@@ -173,6 +184,68 @@ def extract(tarball, tree, version):
     return tree
 
 
+def patch_sections(payload):
+    """The files a unified diff writes to, with the lines it adds.
+
+    `git apply` reports success when the hunks matched.  That is not the
+    same promise as "the content is in the file the gates will read", so
+    the additions are collected here and looked up in the tree afterwards.
+    """
+    sections = []
+    current = None
+    text = payload.decode("utf-8", errors="replace")
+    for line in text.split("\n"):
+        if line.startswith("+++ "):
+            path = line[4:].strip()
+            if path.startswith("b/"):
+                path = path[2:]
+            current = {"path": path, "added": []}
+            sections.append(current)
+        elif current is not None and line.startswith("+"):
+            current["added"].append(line[1:])
+    return sections
+
+
+def verify_patch_content(tree, name, payload):
+    """The lines a patch adds have to be in the file the patch names.
+
+    A patch that reports success but leaves the tree without the change
+    is the worst kind of half-applied patch: the tree still compiles,
+    the build still runs, and the driver is quietly the older one.  So
+    the check is against the tree, not against git's exit code.
+    """
+    problems = []
+    for section in patch_sections(payload):
+        rel = section["path"]
+        if rel == "/dev/null":
+            continue
+        path = tree / rel
+        if not path.is_file():
+            problems.append(f"{name} writes {rel}, which is not in the tree")
+            continue
+        text = path.read_text(encoding="utf-8", errors="replace")
+        missing = [line for line in section["added"]
+                   if line and line not in text]
+        if missing:
+            problems.append(f"{name} adds to {rel} but the tree does not "
+                            f"carry {missing[0][:70]!r}")
+    return problems
+
+
+def fingerprint(tree, rel):
+    """What a driver file in the prepared tree amounts to."""
+    path = tree / rel
+    if not path.is_file():
+        return {"present": False}
+    data = path.read_bytes()
+    return {
+        "present": True,
+        "sha256": hashlib.sha256(data).hexdigest(),
+        "bytes": len(data),
+        "lines": data.count(b"\n"),
+    }
+
+
 def apply_series(tree, series, marker_payload):
     """Apply the series, one patch at a time, refusing anything that does not
     apply cleanly.  A partially applied driver is worse than no driver: the
@@ -224,6 +297,13 @@ def apply_series(tree, series, marker_payload):
             capture_output=True, text=True)
         if run.returncode != 0:
             raise ValueError(f"{origin}/{name} failed to apply:\n{run.stderr.strip()}")
+        # git said the hunks matched.  The tree has to show it: this is
+        # where a series that applied without landing is caught, before
+        # the build spends an hour compiling the older driver.
+        problems = verify_patch_content(tree, name, payload)
+        if problems:
+            raise ValueError(f"{origin}/{name} applied but the tree does not "
+                             f"carry it:\n" + "\n".join(problems))
         applied.append(f"{origin}/{name}")
         print(f"Applied {origin}/{name}", flush=True)
 
@@ -329,6 +409,11 @@ def main():
         "patches_applied": applied,
         "patches_already_present": skipped,
         "source_directory": tree.as_posix(),
+        # What the driver files in this tree amount to.  A run that says
+        # it applied a patch and a tree that does not carry it are two
+        # different stories, and these hashes say which one this was.
+        "tree_files": {rel: fingerprint(tree, rel)
+                       for rel in FINGERPRINT_FILES},
     }
     args.report.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     print(f"Prepared Linux {lock['version']} with {len(applied)} patches"

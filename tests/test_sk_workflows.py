@@ -87,6 +87,13 @@ BRINGUP_TRIGGERS = [
     "kernel-overlays-73/**",
     "overlays-73/**",
     "tools/prepare-sk-kernel-73.py",
+    # The control that says the prepare step's content check still bites.
+    # The prepare decides what tree the build compiles, so a change to it
+    # changes what the build checks and has to start a build.
+    "tests/test_sk_prepare_content.py",
+    # The control that says the documents carry no replacement character:
+    # one of those makes every search against the document come back empty.
+    "tests/test_sk_text_hygiene.py",
     "tools/apply-sk-overlay-73.sh",
     "tools/check-sk-board-api.py",
     "tools/check-sk-switch-api.py",
@@ -135,6 +142,10 @@ BRINGUP_TRIGGERS = [
     # the quarantine is taken out.
     "tools/check-sk-tx-isolation.py",
     "tests/test_sk_tx_isolation.py",
+    # The gate that says the receive path proves what it hands over, and the
+    # controls that say whether it still notices when the proof is taken out.
+    "tools/check-sk-rx-delivery.py",
+    "tests/test_sk_rx_delivery.py",
     "scripts/configure-sk-d840n.sh",
     "configs/sk-d840n-73.json",
 ]
@@ -732,6 +743,41 @@ def main():
         failures.check(bool(control_line) and
                        '--tree "$KERNEL_TREE"' in control_line[0],
                        "the quarantine gate's controls run on the same tree")
+
+    # A frame that goes up to the stack has to be a frame the driver can
+    # account for.  The L2 rewrite ran on frames that carry an Ethernet type
+    # field, which shifts the IP header four bytes to the right and drops
+    # every IPv4 and IPv6 frame; the delivery path read the frame as an
+    # Ethernet header without asking how long it was; and a buffer went back
+    # to the hardware without the device-side synchronisation.  The gate that
+    # asks about those runs on the tree the build uses, and it runs before the
+    # Compile step - a proof that is only there after seventy minutes is a
+    # proof that costs an hour every time it is wrong.
+    print("\nthe 7.3 line proves what the receive path hands over")
+    failures.check((ROOT / "tools" / "check-sk-rx-delivery.py").is_file(),
+                   "the RX delivery gate is in the repository")
+    failures.check((ROOT / "tests" / "test_sk_rx_delivery.py").is_file(),
+                   "the RX delivery gate's controls are in the repository")
+    rx_steps = [step for step in steps_of(bringup, "build")
+                if "tools/check-sk-rx-delivery.py" in str(step.get("run") or "")]
+    failures.check(bool(rx_steps),
+                   "the 7.3 line runs the RX delivery gate")
+    if rx_steps:
+        names = step_names(bringup, "build")
+        failures.check(names.index(str(rx_steps[0].get("name") or "")) <
+                       names.index("Compile"),
+                       "the RX delivery gate runs before the Compile step")
+        body = str(rx_steps[0].get("run") or "")
+        gate_line = [line for line in body.splitlines()
+                     if "tools/check-sk-rx-delivery.py" in line]
+        failures.check(bool(gate_line) and
+                       '--tree "$KERNEL_TREE"' in gate_line[0],
+                       "the RX delivery gate runs on the tree the build uses")
+        control_line = [line for line in body.splitlines()
+                        if "tests/test_sk_rx_delivery.py" in line]
+        failures.check(bool(control_line) and
+                       '--tree "$KERNEL_TREE"' in control_line[0],
+                       "the RX delivery gate's controls run on the same tree")
 
     # A failed build has to say why.  OpenWrt throws every sub-make's
     # stdout and stderr away unless V=s is set (include/verbose.mk), so the

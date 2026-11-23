@@ -49,6 +49,12 @@
       "sha256": "254174b3169bc14dd438339bec018e858c827cd86b856191bb5d9bc24dfa32fc",
       "bytes": 24508,
       "what": "The TX fault isolation model of the 6.18 generation, moved into the 7.3 tree. The tree believed the TX completion counter: an impossible delta was clamped to the number of pending frames and the slots were freed, which releases a buffer the DMA may still own. The ring is now quarantined instead, both logical TX devices are stopped, and a recovery worker flushes the ring, reclaims it and restarts the shared datapath at most once per real completion - a watchdog that keeps firing must not become a reset loop. A datapath that cannot be brought back up is marked failed and the next user restores it."
+    },
+    {
+      "file": "170-sk-rx-delivery-safety.patch",
+      "sha256": "58772d4cd557c7d9697e20f4a38d2f3580f52b79156193cd1784795b0ec0a35e",
+      "bytes": 12173,
+      "what": "The RX delivery path of the 6.18 generation, moved into the 7.3 tree. The tree rewrote the L2 header on every frame of the CPU's LAN queues, including the frames that carry an Ethernet type field: that shifts the IP header four bytes to the right and drops every IPv4 and IPv6 frame for a total length of 0x0800. The rewrite is now guarded by a test for the type field. Three places that read past the end of what they had are fixed as well - the ARP branch of the rewrite, the delivery path's read of the frame as an Ethernet header, and the frame an XDP program may have moved. A frame is no longer handed up as CHECKSUM_UNNECESSARY on the strength of the PPU's parsed flag, which says the packet was taken apart and not that its checksum was verified. And a buffer is now handed back to the hardware with the whole window it writes into synchronised, because the IDM is not coherent with the CPU's cache. The 6.18 generation's own page pool layout is left alone: each tree's CPU-side synchronisation is written for its own offset, and moving one without the other would offset the frame twice."
     }
   ]
 }

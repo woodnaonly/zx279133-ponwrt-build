@@ -1,0 +1,277 @@
+From: the SK-D840N 7.3 line
+Subject: [PATCH] net: zx279133: make the RX delivery path prove what it hands
+ over
+
+The 7.3 tree's receive path handed frames to the stack on the strength of
+what the descriptor said and of what the frame's own header happened to
+look like.  Both are weaker than the stack needs.
+
+The L2 rewrite was the sharp one.  The 9132 is a transparent MAC-learning
+bridge, so the frame the CPU receives still has the Ethernet header the
+client sent; the rewrite in zx279133_idm_rx_restore_lan_l2() exists for
+the other shape, a frame whose type field the PPU took off.  Applied to a
+frame that has one, it shifts the payload four bytes to the right and
+writes the type and the IP version word twice, so the IP header the stack
+reads starts four bytes too far in and every IPv4 and IPv6 frame is
+dropped for a total length of 0x0800.  The 6.18 generation of this driver
+guards the rewrite with zx279133_idm_rx_has_ethertype(); the 7.3 tree calls
+it unconditionally.  That guard moves with it.
+
+The rest of the path had three more places where it read past the end of
+what it had:
+
+  * the ARP branch of the rewrite read the hardware type and the protocol
+    type without asking how long the frame was;
+  * the delivery path never asked for ETH_HLEN before reading the frame as
+    an Ethernet header;
+  * an XDP program that moved the frame's head left the stack with a
+    pointer outside the buffer, and nothing looked.
+
+Two more places changed what the frame said about itself.
+
+The 7.3 tree marked a frame CHECKSUM_UNNECESSARY when the PPU's "parsed"
+flag was set and the header's shape checked out.  A parsed header is not a
+verified checksum: the flag says the packet was taken apart, and the check
+only looks at lengths and versions.  CHECKSUM_UNNECESSARY tells the stack
+to skip the checksum, so a bad frame was handed up as a good one.  The
+frame is now handed up as CHECKSUM_NONE and the stack does the check.
+
+And a buffer was posted back to the hardware without the device-side
+synchronisation.  The IDM is not coherent with the CPU's cache, and the
+window the hardware writes into starts where the driver posted the
+buffer, not where the frame was: an XDP program can change both ends of a
+packet, so the whole window is handed over, not the last packet's adjusted
+length.  The synchronisation now happens where the buffer is handed back,
+which is the one place every path goes through.
+
+The 6.18 generation's own layout is left alone.  Its page pool carries the
+payload offset while the 7.3 tree's carries the payload offset plus the
+frame offset, and each tree's CPU-side synchronisation is written for its
+own layout; moving one without the other would offset the frame twice.
+
+diff --git a/drivers/net/ethernet/zte/zx279133-idm.c b/drivers/net/ethernet/zte/zx279133-idm.c
+index 2b33e0f..ae5a058 100644
+--- a/drivers/net/ethernet/zte/zx279133-idm.c
++++ b/drivers/net/ethernet/zte/zx279133-idm.c
+@@ -182,6 +182,9 @@ static int zx279133_idm_rx_track_xsk(struct zx279133_eth *eth,
+ 	return -ENOSPC;
+ }
+ 
++static void zx279133_idm_rx_sync_for_device(struct zx279133_eth *eth,
++					    dma_addr_t dma);
++
+ static int __zx279133_idm_rx_post_page(struct zx279133_eth *eth,
+ 				       struct page *page)
+ {
+@@ -192,6 +195,7 @@ static int __zx279133_idm_rx_post_page(struct zx279133_eth *eth,
+ 	ret = zx279133_idm_rx_track_page(eth, page);
+ 	if (ret)
+ 		return ret;
++	zx279133_idm_rx_sync_for_device(eth, dma);
+ 	WRITE_ONCE(eth->rx_normal_bp[eth->rx_bp_prod],
+ 		   cpu_to_be32(lower_32_bits(dma)));
+ 	eth->rx_bp_prod = (eth->rx_bp_prod + 1) &
+@@ -371,15 +375,30 @@ static u16 zx279133_idm_rx_lan_vport(u32 word1)
+ 	return 0;
+ }
+ 
+-/* Whether word 1 names the port of a frame the PPU parsed for this side. */
+-static bool zx279133_idm_rx_parsed(u32 word1, bool lan_source)
++/*
++ * Whether the frame still carries an Ethernet type field.
++ *
++ * The 9132 is a transparent MAC-learning bridge: it does not take the
++ * Ethernet header off a frame, and the frame it hands to the CPU has the
++ * same header the client sent.  The rewrite in
++ * zx279133_idm_rx_restore_lan_l2() is for the other shape - a frame whose
++ * type field the PPU took off - and applied to a frame that has one it
++ * shifts the payload four bytes to the right and writes the type and the
++ * IP version word twice, so the IP header the stack reads starts four
++ * bytes too far in and every IPv4 and IPv6 frame is dropped for a total
++ * length of 0x0800.
++ *
++ * The rest of this file already assumes the frame has its header: the
++ * checksum path reads the IP header at ETH_HLEN and the DSA path reads the
++ * frame as a vlan_ethhdr.  So the rewrite may only run on a frame that
++ * has no type field of its own.
++ */
++static bool zx279133_idm_rx_has_ethertype(const struct sk_buff *skb)
+ {
+-	u16 port = (word1 >> 16) & 0x3f;
++	if (skb->len < ETH_HLEN)
++		return false;
+ 
+-	if (lan_source)
+-		return port == ZX279133_LAN_TX_PORT ||
+-		       zx279133_idm_rx_lan_vport(word1);
+-	return port == zx279133_tx_port;
++	return get_unaligned_be16(skb->data + 2 * ETH_ALEN) >= ETH_P_802_3_MIN;
+ }
+ 
+ static u16 zx279133_idm_rx_restore_lan_l2(struct sk_buff *skb, u32 metadata0)
+@@ -392,6 +411,7 @@ static u16 zx279133_idm_rx_restore_lan_l2(struct sk_buff *skb, u32 metadata0)
+ 	} else if ((l3_prefix & 0xf000) == 0x6000) {
+ 		protocol = ETH_P_IPV6;
+ 	} else if (l3_prefix == ARPHRD_ETHER &&
++		   skb->len >= 2 * ETH_ALEN + 4 &&
+ 		   get_unaligned_be16(skb->data + 2 * ETH_ALEN) == ETH_P_IP &&
+ 		   skb->data[2 * ETH_ALEN + 2] == ETH_ALEN &&
+ 		   skb->data[2 * ETH_ALEN + 3] == 4) {
+@@ -460,21 +480,58 @@ static void zx279133_idm_rx_prepare_dsa(struct sk_buff *skb, u32 word1)
+ }
+ 
+ static void zx279133_idm_rx_sync_for_device(struct zx279133_eth *eth,
+-					    struct page *page, u16 len)
++					    dma_addr_t dma)
+ {
+-	dma_addr_t dma = page_pool_get_dma_addr(page);
++	unsigned int size = zx279133_idm_rx_frame_offset +
++			    ZX279133_IDM_RX_FRAME_LIMIT;
+ 
+-	dma_sync_single_range_for_device(eth->dev, dma,
+-					 ZX279133_IDM_RX_PAYLOAD_OFFSET +
+-					 zx279133_idm_rx_frame_offset, len,
+-					 DMA_BIDIRECTIONAL);
++	/*
++	 * XDP can change both ends of a packet.  Reposting always transfers
++	 * the entire hardware write window, not the last packet's adjusted
++	 * length: the window is where the hardware may write, and the frame
++	 * that was in it last time is not the frame that will be in it next
++	 * time.
++	 *
++	 * The window starts where the driver posted the buffer and it covers
++	 * the frame offset in front of the frame as well, because that is
++	 * where the hardware puts the frame.
++	 *
++	 * This block is not coherent with the CPU's cache whatever the
++	 * device tree says, so the window is handed over with the call that
++	 * does not consult the tree's dma-need-sync flag.
++	 */
++#if defined(CONFIG_HAS_DMA) && defined(CONFIG_DMA_NEED_SYNC)
++	__dma_sync_single_for_device(eth->dev, dma, size, DMA_BIDIRECTIONAL);
++#else
++	dma_sync_single_for_device(eth->dev, dma, size, DMA_BIDIRECTIONAL);
++#endif
++}
++
++/*
++ * Whether the XDP program left a frame the stack can be handed.
++ *
++ * An XDP program may move the frame's head, shorten it, or leave it
++ * pointing outside the buffer altogether.  The page-pool path builds an skb
++ * in the page, so the shared-info tailroom has to be left alone; the
++ * AF_XDP path copies into a new skb, so its frame size is the limit.  Either
++ * way the frame has to sit inside the buffer and carry a whole Ethernet
++ * header, or the stack reads past the end of it.
++ */
++static bool zx279133_idm_xdp_pass_valid(struct xdp_buff *xdp, bool xsk)
++{
++	unsigned long start = (unsigned long)xdp->data_hard_start;
++	unsigned long data = (unsigned long)xdp->data;
++	unsigned long end = (unsigned long)xdp->data_end;
++	unsigned long hard_end = xsk ? start + xdp->frame_sz :
++				(unsigned long)xdp_data_hard_end(xdp);
++
++	return !xdp_buff_has_frags(xdp) && data >= start && end >= data &&
++	       end <= hard_end && end - data >= ETH_HLEN;
+ }
+ 
+-/* XMAC IPC rejects checksum errors before IDM. Its protocol metadata alone
+- * does not report checksum validity. Trust only the tested unfragmented
+- * TCP/UDP formats; tunnels, extension headers and XDP-modified packets keep
+- * software validation. The MAC error filter remains enabled when RXCSUM is
+- * off, which disables only the stack's use of this validation result.
++/* Recognize transport layouts whose hardware hash can describe the skb.
++ * A parsed TCP/UDP header does not prove that its checksum is valid.
++ * Tunnels, extension headers and XDP-modified packets keep software hashing.
+  */
+ static bool zx279133_idm_rx_l4_valid(struct sk_buff *skb)
+ {
+@@ -666,6 +723,12 @@ static int zx279133_idm_rx_process_queue(struct zx279133_eth *eth,
+ 			case XDP_PASS:
+ 				if (xdp_prog)
+ 					u64_stats_inc(&stats->xdp_pass);
++				if (unlikely(!zx279133_idm_xdp_pass_valid(xdp, true))) {
++					zx279133_stats_rx_error(eth, ndev);
++					zx279133_stats_rx_length_error(eth, ndev);
++					zx279133_stats_rx_dropped(eth, ndev);
++					goto xsk_recycle;
++				}
+ 				data = xdp->data;
+ 				len = xdp->data_end - xdp->data;
+ 				break;
+@@ -767,6 +830,12 @@ static int zx279133_idm_rx_process_queue(struct zx279133_eth *eth,
+ 				switch (act) {
+ 				case XDP_PASS:
+ 					u64_stats_inc(&stats->xdp_pass);
++					if (unlikely(!zx279133_idm_xdp_pass_valid(&xdp, false))) {
++						zx279133_stats_rx_error(eth, ndev);
++						zx279133_stats_rx_length_error(eth, ndev);
++						zx279133_stats_rx_dropped(eth, ndev);
++						goto xdp_recycle;
++					}
+ 					data = xdp.data;
+ 					len = xdp.data_end - xdp.data;
+ 					break;
+@@ -835,7 +904,6 @@ static int zx279133_idm_rx_process_queue(struct zx279133_eth *eth,
+ 				u64_stats_inc(&stats->rx_skb_alloc_failures);
+ 				zx279133_stats_rx_dropped(eth, ndev);
+ 			}
+-			zx279133_idm_rx_sync_for_device(eth, page, len);
+ 			if (zx279133_idm_rx_post_page(eth, page)) {
+ 				u64_stats_inc(&stats->rx_refill_post_failures);
+ 				zx279133_rx_recycle_page(page);
+@@ -850,13 +918,31 @@ static int zx279133_idm_rx_process_queue(struct zx279133_eth *eth,
+ 			struct net_device *rx_ndev = ndev;
+ 			bool lan_dsa_active;
+ 
++			if (unlikely(!pskb_may_pull(skb, ETH_HLEN))) {
++				zx279133_stats_rx_dropped(eth, ndev);
++				zx279133_stats_rx_error(eth, ndev);
++				zx279133_stats_rx_length_error(eth, ndev);
++				dev_kfree_skb_any(skb);
++				goto release_desc;
++			}
++			/*
++			 * No descriptor field proves checksum validity on every
++			 * ingress.  The PPU's "parsed" flag says the packet was
++			 * taken apart, not that its checksum was verified, and the
++			 * header check only looks at the shape of the header.  The
++			 * frame is handed up as CHECKSUM_NONE so that the stack
++			 * does the check itself.
++			 */
++			skb->ip_summed = CHECKSUM_NONE;
++
+ 			lan_dsa_active = READ_ONCE(eth->lan_dsa_active);
+ 			/* Factory CPU RX queues 0..7 belong to the external switch;
+ 			 * queues 8..15 belong to the other CPU datapath group. Unlike the
+ 			 * parsed descriptor fields, that split remains stable when CPU8
+ 			 * strips the LAN transport VLAN before PPU.
+ 			 */
+-			if (queue < ZX279133_LAN_RX_QUEUE_COUNT)
++			if (queue < ZX279133_LAN_RX_QUEUE_COUNT &&
++			    !zx279133_idm_rx_has_ethertype(skb))
+ 				len += zx279133_idm_rx_restore_lan_l2(
+ 					skb, le32_to_cpu(READ_ONCE(desc->metadata[0])));
+ 			if (lan_source && !lan_dsa_active) {
+@@ -870,12 +956,6 @@ static int zx279133_idm_rx_process_queue(struct zx279133_eth *eth,
+ 				rx_ndev = eth->lan_ndev;
+ 				zx279133_idm_rx_prepare_dsa(skb, word1);
+ 			}
+-			if (!xdp_ran && (rx_ndev->features & NETIF_F_RXCSUM) &&
+-			    zx279133_idm_rx_parsed(word1, lan_source) &&
+-			    zx279133_idm_rx_l4_valid(skb)) {
+-				skb->ip_summed = CHECKSUM_UNNECESSARY;
+-				u64_stats_inc(&stats->rx_hw_csum_packets);
+-			}
+ 			/* The terminal PPU program marks only parsed transport tuples.
+ 			 * XDP may have changed that tuple before XDP_PASS delivery.
+ 			 */
+@@ -899,7 +979,6 @@ static int zx279133_idm_rx_process_queue(struct zx279133_eth *eth,
+ 			zx279133_rx_recycle_page(page);
+ 			goto release_desc;
+ 		}
+-		zx279133_idm_rx_sync_for_device(eth, page, len);
+ 
+ reuse_buffer:
+ 		if (buffer.xsk) {

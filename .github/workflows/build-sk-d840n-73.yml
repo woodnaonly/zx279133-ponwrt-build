@@ -74,6 +74,17 @@ on:
       # the quarantine is taken out.
       - tools/check-sk-tx-isolation.py
       - tests/test_sk_tx_isolation.py
+      # The gate that says the receive path proves what it hands over, and the
+      # controls that say whether it still notices when the proof is taken out.
+      - tools/check-sk-rx-delivery.py
+      - tests/test_sk_rx_delivery.py
+      # The control that says the prepare step's content check still bites:
+      # the prepare decides what tree the build compiles, so a change to it
+      # changes what the build checks.
+      - tests/test_sk_prepare_content.py
+      # The text hygiene control: a replacement character in a document
+      # makes every search against that document come back empty.
+      - tests/test_sk_text_hygiene.py
       # The flash gate: it decides which bytes may be written to a board, so a
       # change to it - or to the controls that say whether it still refuses
       # what it used to - changes what the build checks.
@@ -137,6 +148,15 @@ jobs:
           python3 tools/check-baked-version.py
           # The release says which kernel it ships; the image has to agree.
           python3 tests/test_release_kernel_version.py
+          # The prepare step decides what the tree the build compiles is.
+          # Its content check is what keeps a patch that applied without
+          # landing from reaching the compiler, so the control that says
+          # the check still bites runs with the rest of the gates.
+          python3 tests/test_sk_prepare_content.py
+          # A replacement character in a document is a character the reader
+          # cannot read, and it makes ripgrep treat the whole file as
+          # binary - so every search against it comes back empty, silently.
+          python3 tests/test_sk_text_hygiene.py
 
   build:
     name: ${{ matrix.mode }}
@@ -550,6 +570,22 @@ jobs:
           set -e
           python3 tools/check-sk-tx-isolation.py --tree "$KERNEL_TREE"
           python3 tests/test_sk_tx_isolation.py --tree "$KERNEL_TREE"
+
+      # The 7.3 tree's receive path handed frames to the stack on the
+      # strength of what the descriptor said.  The L2 rewrite ran on frames
+      # that carry an Ethernet type field, which shifts the IP header four
+      # bytes to the right and drops every IPv4 and IPv6 frame; the delivery
+      # path read the frame as an Ethernet header without asking how long it
+      # was; an XDP program could leave the stack with a pointer outside the
+      # buffer; and a buffer went back to the hardware without the
+      # device-side synchronisation.  The 170 patch fixes those, and this
+      # gate says the fix is really in the tree that is about to be
+      # compiled - not in a synthetic copy of it.
+      - name: 'Gate: the RX delivery path proves what it hands over'
+        run: |
+          set -e
+          python3 tools/check-sk-rx-delivery.py --tree "$KERNEL_TREE"
+          python3 tests/test_sk_rx_delivery.py --tree "$KERNEL_TREE"
 
       - name: Check the overlay for what a compiler would have caught
         run: |

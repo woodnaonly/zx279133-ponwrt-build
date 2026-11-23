@@ -18,7 +18,7 @@
      `dropbear`、`ethtool`、`brctl`、`udhcpc`，**没有 nft，也没有 iptables**；
      busybox 在这个 feed 里连 iptables applet 都没有
      （`package/utils/busybox/config/Config.in` 里搜不到 `IPTABLES`）。
-2. **feed 的 nftables 包在��个分支上根本选不出来**：它 `DEPENDS:=+kmod-nft-core`，
+2. **feed 的 nftables 包在这个分支上根本选不出来**：它 `DEPENDS:=+kmod-nft-core`，
    而这个分支里 `package/kernel/modules/` 下的 netfilter kmod 全部 404
    （`nf_tables.ko`、`nft_masq.ko`、`nft_nat.ko`、`nf_conntrack.ko`、`nf_nat.ko` 都试过）。
 3. ⇒ **run97（`4129a20`）把两半都补上**：内核里把 netfilter 全部 **编进内核**
