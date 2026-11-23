@@ -12,7 +12,9 @@ a way the release could be wrong in a way that only shows up on the board:
     image header";
   * the uImage does not carry a gzip stream the loader can read - the board's
     U-Boot answers "Unimplemented compression type N" for everything else;
-  * the kernel inside is not the 6.18.38 this project is about;
+  * the kernel inside is not the vendor one, and it is the version this
+    release says it ships - the release says which one in its own report,
+    so this gate does not have to know which line the release belongs to;
   * the rootfs does not carry the NAT rule, so the image would come up as a
     box that answers ssh and routes nothing.
 
@@ -46,6 +48,7 @@ failed check.
 import gzip
 import hashlib
 import io
+import json
 import os
 import struct
 import sys
@@ -62,6 +65,7 @@ MAGIC = 0x27051956
 
 problems = []
 allowed = False
+EXPECT = None
 
 
 def note(ok, what, detail=""):
@@ -91,6 +95,25 @@ def sha256(path):
     return h.hexdigest()
 
 
+def release_version(directory):
+    """The kernel version this release says it ships, if it says one.
+
+    The statement is in the release's own report, which the export step
+    writes next to the images.  Reading it here is what keeps this gate from
+    having to know which line the release belongs to.
+    """
+    path = os.path.join(directory, "sysupgrade-report.json")
+    if not os.path.isfile(path):
+        return None
+    try:
+        with io.open(path, encoding="utf-8") as fh:
+            report = json.load(fh)
+    except (OSError, ValueError):
+        return None
+    version = (report.get("kernel") or {}).get("version")
+    return version or None
+
+
 def main():
     global allowed
     tag = sys.argv[1] if len(sys.argv) > 1 else None
@@ -102,6 +125,12 @@ def main():
     if not os.path.isdir(d):
         print("  there is no such directory")
         return 2
+
+    # The kernel version this release says it ships.  It is read from the
+    # release's own report rather than written down here, because a gate that
+    # knows the version refuses the other line's image.
+    global EXPECT
+    EXPECT = release_version(d)
 
     # The permission to flash this release even though a check failed.
     if os.path.isfile(ALLOW):
@@ -159,7 +188,31 @@ def main():
             i = k.find(b"Linux version")
             if i >= 0:
                 text = k[i:i + 160].split(b"\x00")[0].decode("utf-8", "replace")
-                note("6.18.38" in text, "the kernel announces 6.18.38", text[:90])
+                words = text.split()
+                ver = words[2] if len(words) > 2 else ""
+                # Two different questions, and they have different answers.
+                #
+                # The first one is about the vendor: a vendor kernel in the
+                # slot that is about to be written is a release that does not
+                # do what it says, whatever its version says.
+                #
+                # The second one is about *this* release: the version the
+                # kernel announces has to be the one the release says it
+                # ships, and the release says it in its own report
+                # (sysupgrade-report.json, written by tools/check_sysupgrade.py
+                # when the image was exported).  That is where the expectation
+                # comes from - writing a version into this gate would refuse
+                # the other line's image and accept a stale one of its own.
+                note(bool(ver) and not ver.startswith("4.19"),
+                     "the kernel is not the vendor one", ver)
+                if EXPECT:
+                    note(ver == EXPECT,
+                         "the kernel announces the version this release says",
+                         "%s (the release says %s)" % (ver, EXPECT))
+                else:
+                    info("the release says no kernel version",
+                         "sysupgrade-report.json has no kernel.version - only "
+                         "the vendor-kernel check applies")
                 note("SMP" in text, "the kernel's version line is complete",
                      text[-40:])
             else:

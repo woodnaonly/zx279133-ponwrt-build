@@ -1,0 +1,36 @@
+{
+  "_comment": "The places where a kernel version really belongs in a decision. Every entry says what it is and why it may stay. A version written into a decision is right for one line and wrong for every other one, so an entry here is a promise that this particular place is about that version on purpose - and the reason has to say why the version cannot change.",
+  "_about_the_vendor": "Most of the entries are about the vendor kernel. Its version is 4.19.136+ and it is a fact about the board, not about a build of ours: it was burned into the flash by the manufacturer and no line of this project can change it. A check that has to recognise the vendor system may say so. A check that has to recognise *our* kernel may not - that is the whole point of the check.",
+  "allowed": [
+    {
+      "file": "tools/checkrollback.sh",
+      "contains": "*4.19*)",
+      "reason": "the vendor kernel is 4.19 and always will be: the rollback package has to carry the vendor kernel, so this check refuses every mainline build - the 6.18 one and the 7.3 one alike"
+    },
+    {
+      "file": "tools/gatecheck.sh",
+      "contains": "4.19*)",
+      "reason": "the vendor kernel is 4.19: a vendor round proves nothing about mainline, so the gate refuses it"
+    },
+    {
+      "file": "tools/preflash.py",
+      "contains": "startswith(\"4.19\")",
+      "reason": "the vendor kernel is 4.19: the pre-flash gate refuses a vendor image. The version this release ships is not written here - it comes from the release's own report"
+    },
+    {
+      "file": "tools/pstorecatch.sh",
+      "contains": "4.19*)",
+      "reason": "the vendor kernel is 4.19: the pstore capture is read off the vendor system"
+    },
+    {
+      "file": "tools/runround.sh",
+      "contains": "4.19*)",
+      "reason": "the installed system has to be the vendor one before the round writes anything into the flash"
+    },
+    {
+      "file": "tools/siminit.sh",
+      "contains": "4.19.136",
+      "reason": "the rehearsal fabricates a vendor round, and the vendor kernel is 4.19.136+"
+    }
+  ]
+}

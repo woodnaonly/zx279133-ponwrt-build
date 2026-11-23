@@ -160,6 +160,20 @@
     顺带查明：**bench 的硬件链路早就断了**（CH340 不在枚举里、网口无载波、
     本机有个 TUN 代理在应答 `192.168.9.0/24` 的 ARP），所以第 6 片推不动
     **不是代码问题**。见 7.31。
+21. **「把内核版本写进判断」这个类别，在整条 PC 侧链上还有八处。**
+    7.29 与 7.30 修掉了两处（闸门与 payload），本轮把它**整个类别**查完并堵上：
+    新写的 lint（`tools/check-baked-version.py`）扫出**八处**，
+    其中**三处会让 7.3 直接失败**：
+    `tools/preflash.py`（刷机前门禁，硬编码 `6.18.38`）、
+    live 的 `tools/flashverify.sh`（刷后验收，硬编码 `Linux version 6\.18\.38`）、
+    live 的 `tools/round.sh` 与 `tools/onewindow.sh`
+    （RAM 轮判据「是不是 mainline 内核」写死 `6.18*` ⇒
+    板子跑着 7.3 会被判成「不是 mainline 内核」）。
+    三处都改成**从待刷镜像自己读**（或从**这份出货报告自己说**——
+    出货报告现在带 `kernel.version` 了）。
+    剩下的五处全是**厂商内核 4.19**：那是**板子上的固定事实**，
+    烧死在厂商 flash 里，我们改不动，所以进允许清单并写明理由。
+    见 7.32。
 
 ---
 
@@ -393,7 +407,10 @@ CONFIG_EXTERNAL_KERNEL_TREE=<树>   OpenWrt 把这棵树当自己的内核目录
 | `tests/test_ctl_payload.py` | 上面那条的**负控**：版本必须来自镜像、显式指定优先、模板里不能再有 `6.*`、厂商内核仍不匹配 |
 | `tools/check-sk-image-drivers.py` | **产物级门禁**：问**要刷进板子的那个 uImage** 里有没有我们自己的驱动。每个探针两半分开判 —— 串还在它声称的源文件里（不是过期探针）**且**串在 inflate 后的内核里（代码真被编进去了）。「在树里 / 能编 / 配成内建 / 在镜像里」是四句话，前三句有门禁管，第四句原来没有（见 7.31） |
 | `configs/sk-d840n-73-image-drivers.json` | 上面那道门禁的**探针清单**（7 条，覆盖第 3/4/5 片与 conduit）。清单**不在工具里**：发布线的内核里是另一批驱动，得有另一份；清单本身也进了 path filter，改了它就要重跑构建 |
-| `tests/test_sk_image_drivers.py` | 上面那道门禁的**负控**：针不在像里、针不在源里（=过期探针）、源文件不存在、不是 uImage、载荷不是 gzip、清单没有探针、**针在第二个 gzip 成员里** —— 每一种都必须转红（见 7.31） || `overlays-73/target/linux/zte/zx279133/target.mk` | 7.3 线的 subtarget 默认包：**清空 OpenWrt 的 `DEFAULT_PACKAGES.tweak`**，否则其中的 `luci` 元包会拉进 `luci-theme-bootstrap`（见 7.8） |
+| `tests/test_sk_image_drivers.py` | 上面那道门禁的**负控**：针不在像里、针不在源里（=过期探针）、源文件不存在、不是 uImage、载荷不是 gzip、清单没有探针、**针在第二个 gzip 成员里** —— 每一种都必须转红（见 7.31） |
+| `tools/check-baked-version.py` | **lint**：找出**把内核版本写进判断**的地方。判据是**位置**（case 分支、比较的一边、grep 的模式参数、指名版本行的模式串），不是文本 —— 消息、docstring、IP、元数据版本都不算（见 7.32） |
+| `configs/baked-version-allow.json` | 上面那道 lint 的**允许清单**：每一条都写明「为什么这个版本可以留在这里」。现在只有**厂商内核 4.19** 那一类（板子上的固定事实），**失效的允许项会被报出来** —— 那是洞 |
+| `tests/test_sk_baked_version.py` | 上面那道 lint 的**负控**：该判的四种形状都判、不该判的五种形状都不判、允许项的三种边界都验（15 项） || `overlays-73/target/linux/zte/zx279133/target.mk` | 7.3 线的 subtarget 默认包：**清空 OpenWrt 的 `DEFAULT_PACKAGES.tweak`**，否则其中的 `luci` 元包会拉进 `luci-theme-bootstrap`（见 7.8） |
 | `tools/func-surface-diff.py` | 两代驱动的函数面对照，输出「只在我们这边」与「只在 7.3 那边」两张工作清单 |
 | `tools/func-port-coverage.py` | **按能力对账**：171 个函数逐条必须有归属（同名 / 账本写明搬到哪 / 有处置记录），未记账即非零退出；账本指着的目标函数必须真在 7.3 树里（见八之七） |
 | `tools/kcheck.py` + `tools/kshadow.py` | **编译预言机**：用宿主 clang 对 7.3 树做 `-fsyntax-only`，生成树自己的头文件与影子头文件；7.3 线在 Compile 之前先跑它（见 7.17） |
@@ -3210,6 +3227,109 @@ ifIndex 13  192.168.9.1   Probe
 
 ---
 
+### 7.32 「把内核版本写进判断」这个类别：查完、改掉、加 lint
+
+#### 7.32.1 判决
+
+1. **整条 PC 侧链上还有八处「拿内核版本字面量做判断」**，
+   其中**三处会让 7.3 线直接失败**（不是误报，是**真会拒绝好东西**）。
+2. 三处都改成**从待刷镜像自己读**，或者从**这份出货报告自己说**。
+3. 剩下五处全是**厂商内核 4.19** —— 那是**板子上的固定事实**
+   （烧死在厂商 flash 里，我们改不动），所以进**允许清单**并写明理由。
+4. 新增一道 **lint**（`tools/check-baked-version.py` + `configs/baked-version-allow.json`）
+   把这个类别钉死，接进 7.3 线的门禁作业。
+
+#### 7.32.2 证据一：改之前，三处会让 7.3 直接失败
+
+| 位置 | 原来写死的东西 | 7.3 上会发生什么 |
+|---|---|---|
+| `ci-build-repo/tools/preflash.py:162` | `note("6.18.38" in text, "the kernel announces 6.18.38", ...)` | 刷机前门禁**报问题**、退出码非零 ⇒ **刷不下去** |
+| live `tools/flashverify.sh:97` | `check "kernel from flash starts" 'Linux version 6\.18\.38' "$WAIT"` | 刷完之后的验收**判 FAIL**（板子可能好得很） |
+| live `tools/round.sh:97` / `onewindow.sh:111,117` | `case "$ver" in 6.18*)` | RAM 轮会说「板子回了 '7.3.4' —— 不是 mainline 内核」⇒ **一轮白跑** |
+
+**这三处的共同点**：它们问的是「这个内核是不是我以为的那个」，
+而答案被写死成**某一个系列**。7.29 与 7.30 已经把同样的毛病从
+**闸门**与**payload** 里拿掉了，这一轮把它从**其余全部**地方拿掉。
+
+#### 7.32.3 ⇒ 改法：版本从待刷镜像自己读
+
+| 地方 | 改成 |
+|---|---|
+| `tools/check_sysupgrade.py` | 出货报告的 `kernel` 段**多一个 `version`**（从内核自己的 banner 读），**两条线共用这个工具** ⇒ 两边的出货报告都带版本 |
+| `tools/preflash.py` | 期望版本 = **这份出货报告自己说的**（`sysupgrade-report.json` 的 `kernel.version`）；另问一句「它是不是厂商内核」（4.19 ⇒ 拒）。**报告没写版本**时只做厂商检查，并说明为什么 |
+| `tools/checkrollback.sh` | 「是不是厂商内核」这件事**对任何 mainline 都是错的**（回滚包必须装厂商内核，否则回滚不回 PON）⇒ 判据从「`6.18*` 是 mainline」改成「**不是 4.19 就是 mainline**」，6.18 与 7.3 一视同仁 |
+| live `tools/flashverify.sh` | 期望版本 = `python tools/uimage-kver.py "$DIR/flash-uImage"`（**仓库那份已定向同步到工装区**）；`KVER=` 留给离线控制 |
+| live `tools/round.sh`、`onewindow.sh` | 判据 = **「不是厂商内核」**（`''|4.19*` 是「不是」，其余都是）；严格版本判据在**闸门**与**刷机前门禁**里 |
+
+#### 7.32.4 证据二：新写的 lint 扫出来的**全量命中**
+
+`tools/check-baked-version.py` 的判据是**位置**而不是文本：
+版本字面量必须落在**决策位**上（shell 的 case 分支、比较的一边、
+grep 的模式参数、指名内核版本行的模式串），
+而**不在**消息、docstring、IP 地址、fwtool 元数据版本里。
+
+```
+$ python tools/check-baked-version.py --root tools
+allowed tools/checkrollback.sh:73  4.19*   (the vendor kernel is 4.19 ...)
+allowed tools/gatecheck.sh:97      4.19*   (the vendor kernel is 4.19 ...)
+allowed tools/preflash.py:206      4.19    (the vendor kernel is 4.19 ...)
+allowed tools/pstorecatch.sh:36    4.19*   (the vendor kernel is 4.19 ...)
+allowed tools/runround.sh:134      4.19*   (the installed system has to be the vendor one ...)
+allowed tools/runround.sh:140      4.19*   (the installed system has to be the vendor one ...)
+allowed tools/siminit.sh:232       4.19.136 (the rehearsal fabricates a vendor round ...)
+allowed tools/siminit.sh:267       4.19.136 (the rehearsal fabricates a vendor round ...)
+
+0 version literal(s) in a decision, 8 allowed
+```
+
+**为什么 4.19 可以留在判断里，而 6.18/7.3 不行**：
+厂商内核是**板子上的固定事实** —— 它烧死在厂商 flash 里，
+这个项目里**没有任何一条线能改它**；
+而 6.18 与 7.3 是**我们自己的两个构建**，写进判断里就必然有一边是错的。
+允许清单里每一条都必须写明这个理由，**否则 lint 变红**。
+
+**允许清单不许失效**：一条允许项在扫描的树里**匹配不到任何行**时，
+lint 会报 `stale allowance` —— 那是**洞**：它原来守的地方没了，
+下一个长得像的地方也会被放行。
+
+#### 7.32.5 live 工装区也扫了（它不在仓库里 ⇒ lint 覆盖不到）
+
+```
+$ python tools/check-baked-version.py --root C:/UGit/openwrt/SK-D840N/tools ...
+0 version literal(s) in a decision, 6 allowed
+```
+
+改之前同一棵树上是 **11 处**（多出来的三处就是 7.32.2 那三处）。
+
+#### 7.32.6 门禁自己的负控与反向验证
+
+* `tests/test_sk_baked_version.py`：**15 项负控** ——
+  该判的四种形状（case 分支 / 比较 / grep 模式 / 指名版本行）都判，
+  不该判的五种形状（消息、docstring、IP、元数据版本、只被赋值的变量）都不判，
+  允许项的三种边界（命中、不命中、失效）都验。
+* `scratch/reverse_check_baked_version.py`：**7 处突变**，
+  每一处都**转红在指定的那条控制上**（实测 7/7）。
+
+**这轮 lint 自己抓到了它自己的两个漏洞**：第一版的判据只认
+「字符串后面跟比较符」的形状，认不出 `x == "6.18.38"`；
+也认不出 `grep -q 'kver=4.19.136+'`（grep 和模式之间隔着选项）。
+两条都是**负控先红了**才改的 —— 门禁自己也是靠负控长的。
+
+#### 7.32.7 未做
+
+1. **发布线没有跑这道 lint**：仓库的 `tools/` 是两条线共用的，
+   7.3 线的门禁作业已经会扫到它；给发布线也加一道是另一件事，
+   本轮没做（发布线一动就要发版）。
+2. **live 工装区不在仓库里** ⇒ CI 的 lint 覆盖不到它；
+   本机扫过了（7.32.5），但**下一次有人改 live 的脚本，CI 不会拦**。
+   这些脚本（`flashverify.sh`、`round.sh`、`onewindow.sh`、`flashverify-test.sh`）
+   **仓库里一份都没有** —— 这是个记着的缺口。
+3. **`round.sh` / `onewindow.sh` 的判据是「不是厂商内核」而不是精确版本**：
+   严格版本判据在**闸门**（`tools/gatecheck.sh`，7.29）与
+   **刷机前门禁**（`tools/preflash.py`，本节）里；那两处是精确比对。
+
+---
+
 ## 八、BP 池：逐槽位对照（第 1 片剩余部分的结论）
 
 **判决**：**BP 池布局在 7.3 上不需要移植。** 我们 6.18 世代那套写法是
@@ -4389,6 +4509,15 @@ python3 ci-build-repo/tools/check-sk-image-drivers.py \
 # 51) 上面那道门禁自己的负控与反向验证
 python3 ci-build-repo/tests/test_sk_image_drivers.py
 python3 scratch/reverse_check_image_gate.py
+
+# 52) 「把内核版本写进判断」的全量排查：仓库与 live 工装区各扫一次
+python3 ci-build-repo/tools/check-baked-version.py --root ci-build-repo/tools
+python3 ci-build-repo/tools/check-baked-version.py \
+        --root tools --allow ci-build-repo/configs/baked-version-allow.json
+
+# 53) 上面那道 lint 自己的负控与反向验证
+python3 ci-build-repo/tests/test_sk_baked_version.py
+python3 scratch/reverse_check_baked_version.py
 ```
 
 第十节的 18~24 号命令里，`cfg73_sim.py` 与 `kdeps73.py` 是**一对**：

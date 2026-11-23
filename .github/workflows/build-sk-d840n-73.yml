@@ -58,6 +58,12 @@ on:
       - tools/check-sk-image-drivers.py
       - configs/sk-d840n-73-image-drivers.json
       - tests/test_sk_image_drivers.py
+      # The lint that keeps a kernel version out of a decision, and the list
+      # of the places where a version really belongs: both change what the
+      # build checks.
+      - tools/check-baked-version.py
+      - configs/baked-version-allow.json
+      - tests/test_sk_baked_version.py
       # The flash gate: it decides which bytes may be written to a board, so a
       # change to it - or to the controls that say whether it still refuses
       # what it used to - changes what the build checks.
@@ -113,6 +119,12 @@ jobs:
           python3 tests/test_gatecheck.py
           python3 tests/test_ctl_payload.py
           python3 tests/test_sk_image_drivers.py
+          # No script of this repository may decide something with a kernel
+          # version written into it: a version in a decision is right for one
+          # line and wrong for every other one, and three gates once refused
+          # a good image for exactly that reason.
+          python3 tests/test_sk_baked_version.py
+          python3 tools/check-baked-version.py
 
   build:
     name: ${{ matrix.mode }}

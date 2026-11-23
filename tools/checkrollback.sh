@@ -71,9 +71,12 @@ head2 "4. the kernel is the vendor one, not a mainline build"
 ver=$(tail -c +65 "$OUT/flash-uImage" | gzip -dc 2>/dev/null | grep -a -o -m1 'Linux version [0-9][^ ]*' || true)
 case "$ver" in
 	*4.19*) ok "vendor 4.19 kernel" "$ver";;
-	*6.18*) bad "vendor 4.19 kernel" "this is a mainline build: $ver - rolling back would NOT restore PON";;
 	"")     note "kernel banner not readable" "the payload may not be gzip";;
-	*)      bad "vendor 4.19 kernel" "unexpected: $ver";;
+	# Every mainline build is wrong here, not just the release line's: the
+	# rollback package has to carry the vendor kernel, because the point of
+	# rolling back is to restore PON.  Naming one series would let the other
+	# line's kernel through with a different message.
+	*)      bad "vendor 4.19 kernel" "this is a mainline build ($ver), not the vendor one - rolling back would NOT restore PON";;
 esac
 
 head2 "5. the rollback dtb satisfies the table the vendor kernel boots with"

@@ -11,6 +11,7 @@ import hashlib
 import io
 import json
 from pathlib import Path
+import re
 import shutil
 import struct
 import subprocess
@@ -21,6 +22,7 @@ from sk_layout import inspect_layout
 
 BOARD = "skyworth_sk-d840n"
 PREFIX = "sysupgrade-" + BOARD
+BANNER = re.compile(rb"Linux version ([0-9][^\x00\s]*)")
 LIMITS = {"kernel": 8 * 1024 * 1024, "dtb": 1024 * 1024,
           "root": 241 * 1024 * 1024}
 MAIN_IMAGE = "immortalwrt-sk-d840n-sysupgrade.bin"
@@ -90,7 +92,17 @@ def inspect_kernel(data, raw_kernel=None):
     if raw_kernel is not None:
         require(raw == Path(raw_kernel).read_bytes(),
                 "uImage does not decompress to the built raw Image")
-    return {"raw_bytes": len(raw), "raw_sha256": hashlib.sha256(raw).hexdigest()}
+    # Which kernel this is.  The report travels with the release, so the gate
+    # that stands in front of the flash can compare the image against the
+    # release's own statement instead of against a version written into the
+    # gate: a gate that says "6.18.38" refuses the 7.3 image, and one that
+    # says "7.3.4" refuses the release line's image.  The banner is the same
+    # string the running system reports as uname -r.
+    match = BANNER.search(raw)
+    require(match is not None, "the kernel carries no version banner")
+    version = match.group(1).decode("utf-8", "replace")
+    return {"raw_bytes": len(raw), "raw_sha256": hashlib.sha256(raw).hexdigest(),
+            "version": version}
 
 
 def inspect_image(image, raw_kernel=None):

@@ -120,6 +120,11 @@ BRINGUP_TRIGGERS = [
     "tools/check-sk-image-drivers.py",
     "configs/sk-d840n-73-image-drivers.json",
     "tests/test_sk_image_drivers.py",
+    # The lint that keeps a kernel version out of a decision, and the list of
+    # the places where a version really belongs.
+    "tools/check-baked-version.py",
+    "configs/baked-version-allow.json",
+    "tests/test_sk_baked_version.py",
     "scripts/configure-sk-d840n.sh",
     "configs/sk-d840n-73.json",
 ]
@@ -133,6 +138,14 @@ SHARED_GATES = [
     "tests/test_conduit_netdev_name.py",
     "tests/test_gatecheck.py",
     "tests/test_ctl_payload.py",
+]
+
+# The gates only the 7.3 line runs, because they are about the 7.3 line: the
+# image gate asks the produced artifact whether it carries the board's
+# drivers, and the lint keeps a kernel version out of a decision.
+BRINGUP_ONLY_GATES = [
+    "tests/test_sk_image_drivers.py",
+    "tests/test_sk_baked_version.py",
 ]
 
 # The zte drivers that have to end up inside the kernel image on the 7.3
@@ -320,6 +333,9 @@ def main():
 
     bringup_gate = run_text(bringup, "check-gates")
     for gate in SHARED_GATES:
+        failures.check(gate in bringup_gate,
+                       f"the 7.3 line runs {gate}")
+    for gate in BRINGUP_ONLY_GATES:
         failures.check(gate in bringup_gate,
                        f"the 7.3 line runs {gate}")
 
