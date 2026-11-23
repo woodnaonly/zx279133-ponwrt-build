@@ -791,6 +791,49 @@ def main():
                          "+#define __attribute_const__ __attribute__((__const__))"],
             "the workflow checks the patched file and the added lines, not a phrase")
 
+    # The partition table inside the dtb is what decides where root is:
+    # U-Boot's bootargs hard-code root=/dev/mtdblock5, and the board's
+    # table puts root at 0xf00000 with the final 241 MiB.  A table that is
+    # off by one erase block writes the jffs2 where the new kernel will not
+    # look for it - a panic with no serial to read, and the one failure
+    # mode a flashed image cannot explain afterwards.
+    #
+    # The 6.18 line has this gate; the 7.3 line did not, and the 7.3
+    # line's image is the one that is going to be flashed next.  The check
+    # reads the blob and compares the arguments it asks for with the ones
+    # the board needs - not whether the word "native241" appears somewhere.
+    print("\nthe dtb that is going to be flashed carries the board's partition table")
+    dtb_step = [step for step in steps_of(bringup, "build")
+                if str(step.get("name") or "") ==
+                "Gate: the board device tree compiles against the 7.3 tree"]
+    export_step = [step for step in steps_of(bringup, "build")
+                   if str(step.get("name") or "") == "Validate and export the partitions"]
+    failures.check(bool(dtb_step) and bool(export_step),
+                   "the 7.3 line still has the dtb gate and the export step")
+    wanted = [("layout=native241", "root=0xf00000,0xf100000")]
+    if dtb_step:
+        body = str(dtb_step[0].get("run") or "")
+        flat = body.replace("\\\n", " ")
+        commands = "\n".join(ln for ln in flat.splitlines()
+                             if not ln.strip().startswith("#"))
+        calls = re.findall(r"tools/dtbparts\.py[ \t]+(\S+)[ \t]+(\S+)[ \t]+(\S+)",
+                           commands)
+        failures.check(
+            calls == [("/tmp/sk-d840n.dtb", "layout=native241",
+                       "root=0xf00000,0xf100000")],
+            "the dtb gate checks the board's partition layout")
+    if export_step:
+        body = str(export_step[0].get("run") or "")
+        flat = body.replace("\\\n", " ")
+        commands = "\n".join(ln for ln in flat.splitlines()
+                             if not ln.strip().startswith("#"))
+        calls = re.findall(r"tools/dtbparts\.py[ \t]+(\S+)[ \t]+(\S+)[ \t]+(\S+)",
+                           commands)
+        failures.check(
+            calls == [("flash-dtb.bin", "layout=native241",
+                       "root=0xf00000,0xf100000")],
+            "the export step checks the board's partition layout")
+
     # The migration note's increment table is the measured one, and the
     # workflow contract test parses that table and adds the numbers up.
     # It does not look for the number 171 in the text, because that is

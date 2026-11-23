@@ -1036,6 +1036,13 @@ jobs:
           cat sysupgrade-report.json
           ls -l flash-uImage flash-dtb.bin flash-rootfs.jffs2 \
                 flash-sysupgrade.bin immortalwrt-sk-d840n-sysupgrade.bin
+          # The partition table in the dtb that is about to be flashed has to
+          # be the board's: root at 0xf00000, the final 241 MiB, and the
+          # sixth mtd child.  This reads the artifact, because the artifact
+          # is what goes on the board - and the table inside a dtb is the
+          # one thing about it that a panic on the wrong partition would
+          # not explain over a serial that never comes up.
+          python3 tools/dtbparts.py flash-dtb.bin layout=native241 root=0xf00000,0xf100000
           cp -a flash-uImage flash-dtb.bin flash-rootfs.jffs2 \
                 flash-sysupgrade.bin immortalwrt-sk-d840n-sysupgrade.bin \
                 sysupgrade-report.json images/
@@ -1076,6 +1083,16 @@ jobs:
           dtc -q -I dts -O dtb -o /tmp/sk-d840n.dtb -i "$PFX" -i "$KT/include" /tmp/sk.pp.dts
           test -s /tmp/sk-d840n.dtb
           echo "the board device tree compiles"
+          # It also has to say the same partition table as the board's.  The
+          # table inside the dtb is what decides where root is, U-Boot's
+          # bootargs hard-code root=/dev/mtdblock5, and the board's table
+          # puts root at 0xf00000 with the final 241 MiB.  A table that is
+          # off by one erase block writes the jffs2 where the new kernel
+          # will not look for it - a panic with no serial to read.
+          #
+          # This reads the blob that was compiled, not the dts we think we
+          # wrote.  The 6.18 line has the same gate (build-sk-d840n.yml).
+          python3 tools/dtbparts.py /tmp/sk-d840n.dtb layout=native241 root=0xf00000,0xf100000
 
       - name: Upload the build log
         if: failure()

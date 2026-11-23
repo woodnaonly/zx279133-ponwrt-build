@@ -68,6 +68,12 @@
     已加内核分支（内核优先于包），三条断言 + 三处突变反向验证。
     **五片驱动补丁从未被真正的编译器编过，内核是最可能的下一个失败面**，
     见 7.22。
+12. **7.3 线导出 dtb 时不查分区表。** 6.18 线有这道门禁，7.3 线没有，
+    而 7.3 线的镜像正是接下来要刷进板子的那一件。分区表决定 root 在哪，
+    表差一个擦除块就是「panic 且串口没输出」——
+    本机 `staging/trial/` 里那个 dtb 恰好就是旧布局（`current240`），
+    刷错的后果不用猜。已补两道（编出来的 blob + 要刷进去的件），
+    两条断言 + 两处突变反向验证。见 7.23。
 
 ---
 
@@ -2114,6 +2120,91 @@ fi
 
 ---
 
+### 7.23 导出 dtb 时不查分区表：正对着实机对拍的那一步
+
+**判决**
+
+1. **7.3 线导出 `flash-dtb.bin` 时没有查分区表**；6.18 线有
+   （`build-sk-d840n.yml:661`）。
+2. **分区表决定 root 在哪**：U-Boot 的 bootargs 写死 `root=/dev/mtdblock5`，
+   板子的表是 root@`0xf00000`、241 MiB、且 root 是**第六个孩子**。
+   表差一个擦除块 ⇒ jffs2 写到新内核不会去看的地方 ⇒
+   **panic，而且串口没有输出可读** —— 这是刷机之后最难查的一种失败。
+3. **板级 dts 里写死的就是这张表**，两条线共用同一份
+   （`kernel-overlays/arch/arm64/boot/dts/zte/zx279133-sk-d840n.dts:940-965`）
+   ⇒ 7.3 线的 dtb 也是 native241 ⇒ **这道门禁不会误伤**。
+4. 补法：dtb 编译步查一次编出来的 blob，导出步**再查一次那个要刷进去的件**。
+
+**证据**
+
+证据一：板级 dts 里的分区表（逐条）
+
+| 分区 | 偏移 | 大小 |
+|---|---|---|
+| boot | `0x000000` | `0x200000` |
+| kernel | `0x200000` | `0x800000` |
+| dtb | `0xa00000` | `0x100000` |
+| parameter tags | `0xb00000` | `0x400000` |
+| **root** | **`0xf00000`** | **`0xf100000`**（241 MiB） |
+
+root 是第六个孩子 ⇒ `mtdblock5` ⇒ 与 U-Boot 的 bootargs 对得上。
+
+证据二：6.18 线本来就有这道门禁
+
+`build-sk-d840n.yml:661`：
+
+```sh
+python3 tools/dtbparts.py /tmp/zx279133-sk-d840n.dts.dtb layout=native241 root=0xf00000,0xf100000
+```
+
+7.3 线没有。
+
+证据三：**本机暂存的那个 dtb 是旧布局** —— 这道门禁不是假想
+
+```sh
+python tools/dtbparts.py staging/trial/flash-dtb.bin layout=native241 root=0xf00000,0xf100000
+# TABLE WRONG - unexpected layout: current240     （退出码 1）
+```
+
+`staging/trial/flash-dtb.bin` 是 **#337 之前**的那件（板子那时还是
+`current240`；#337 之后板子是 `native241`，241 MiB root）。
+⇒ **没有这道门禁，一件旧布局的 dtb 会被当成新件刷进板子**，
+而刷完的板子什么日志都不给你。
+⇒ 同时也说明：**实机对拍必须用 CI 导出的那三个件，
+不能拿 `staging/trial/` 里现成的旧件**。
+
+**修法**
+
+7.3 线补两处，都在问同一个问题：
+
+```sh
+# “Gate: the board device tree compiles against the 7.3 tree” 步：问编出来的 blob
+python3 tools/dtbparts.py /tmp/sk-d840n.dtb layout=native241 root=0xf00000,0xf100000
+
+# “Validate and export the partitions” 步：问要刷进去的那一件
+python3 tools/dtbparts.py flash-dtb.bin layout=native241 root=0xf00000,0xf100000
+```
+
+**门禁**
+
+`tests/test_sk_workflows.py` 多两条断言：把 `tools/dtbparts.py` 的调用
+**连同它的参数**抽出来精确比较 —— 查的是哪个 blob、`layout=` 是什么、
+`root=` 是什么，三样都要对。
+
+`scratch/reverse_check_workflow.py` 多两处突变：
+把 dtb 步的那行换成 `echo`、把导出步的那行换成 `echo`，
+各自只转红在**指定**的那条检查上。
+
+**未做**
+
+- 本机没有 dtc，**没法在本地编出 7.3 线的 dtb 来试这道门禁**；
+  它在 CI 里第一次真正执行。
+- 这道门禁只管**布局**；容量、别名、各段偏移都由 `tools/dtbparts.py` 自己查。
+- 暂存的 `staging/trial/` 那三件是 **6.18 旧布局**，
+  实机对拍前必须换成 CI 导出的那三件，并先 `sha256sum -c sha256sums`。
+
+---
+
 ## 八、BP 池：逐槽位对照（第 1 片剩余部分的结论）
 
 **判决**：**BP 池布局在 7.3 上不需要移植。** 我们 6.18 世代那套写法是
@@ -2900,6 +2991,10 @@ artifact 的**列表**是公开的，**内容要登录态**
 这份清单是 CI 那边跟文件一起生成的，**而且它自己也在 CI 里被校验过一遍**
 （导出步末尾的 `sha256sum -c`）——
 手取下来的东西必须能自证没坏。
+
+**不要拿 `staging/trial/` 里现成的那三件**：那是 6.18 旧布局
+（`current240`），板子现在是 `native241`（见 7.23），
+拿旧件去刷等于把 jffs2 写到新内核不会去看的地方。
 
 #### 八之八.2 刷机（两条路）
 
