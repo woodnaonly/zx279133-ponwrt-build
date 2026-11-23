@@ -49,10 +49,27 @@ repo=$(CDPATH= cd -- "$script_dir/.." && pwd)
 # mcode_intel.bin" with CONFIG_EXTRA_FIRMWARE_DIR="firmware", which the
 # kernel resolves against its own source tree, so the file has to sit in the
 # tree we hand to OpenWrt - not in the OpenWrt checkout.
+#
+# Two blobs have that name and that size (103,456 B) and different bytes:
+# the one read out of this board's own flash (the 6.18 line's copy) and the
+# one the 7.3 driver was written against.  The 7.3 driver compares the blob
+# it gets against one crc32 and refuses any other one when vlan offload is
+# on - and the microcode is a built-in firmware, so the blob in the tree is
+# the blob the board gets.  A wrong one leaves the PPU without its firmware
+# and the data path never comes up.
+#
+# So the 7.3 line carries its own copy, and the copy is checked against the
+# crc32 the tree's driver asks for - read out of the driver, not written
+# down here.
 fw="$repo/overlays/target/linux/zte/zx279133/firmware/zte/zx279133/mcode_intel.bin"
+fw73="$repo/overlays-73/target/linux/zte/zx279133/firmware/zte/zx279133/mcode_intel.bin"
+if [ -f "$fw73" ]; then fw="$fw73"; fi
 [ -f "$fw" ] || { echo "missing NPU microcode: $fw" >&2; exit 1; }
 mkdir -p "$tree/firmware/zte/zx279133"
 cp "$fw" "$tree/firmware/zte/zx279133/mcode_intel.bin"
+python3 "$repo/tools/check-sk-mcode.py" --tree "$tree" || {
+	echo "the NPU microcode in the tree is not the one this driver takes" >&2
+	exit 1; }
 
 # What the copy has to have produced.
 [ -f "$tree/arch/arm64/boot/dts/zte/zx279133-sk-d840n.dts" ] || {
