@@ -6402,7 +6402,7 @@ run **#57**（整轮 Success，1 h 20 m 46 s）的 flash job 里
 | 步 | 做什么 | 命令 | 这一步的判据 |
 |---|---|---|---|
 | **0** | **物理**：插 CH340、插网线、确认智能插座供电 | `sh tools/bench-keep.ps1` | 继电器与冷启动看门狗起来；`staging/ctl/serial.log` 开始长 |
-| **1** | **换件**：把 7.3 的三件放进 `staging/trial/`。**三件必须来自带微码修复的那一轮** —— 本机现在备的那三件是 #53 的，带的是驱动拒收的那份微码 ⇒ 换之前先刷新（八之十九.2） | 先把那一轮的 artifact 里的三件放进 `staging/trial73d/flash/`（旧件别删），再复制到 `staging/trial/` | `sha256sum -c` 过那一轮的 `sha256sums`；**且** `python3 ci-build-repo/tools/check-sk-mcode-image.py --image staging/trial/flash-uImage --tree <7.3 树> --blob <那份微码>` 过（镜像里那份是驱动收的那一份） |
+| **1** | **换件**：把 7.3 的三件放进 `staging/trial/`。**三件必须来自带微码修复的那一轮** —— 本机现在备的那三件是 #53 的，带的是驱动拒收的那份微码 ⇒ 换之前先刷新（八之十九.2） | 先 `python3 scratch/extract_flash_members.py <那一轮的 artifact.zip> staging/trial73d/flash/`（旧件别删），再复制到 `staging/trial/` | `sha256sum -c` 过那一轮的 `sha256sums`；**且** `python3 ci-build-repo/tools/check-sk-mcode-image.py --image staging/trial/flash-uImage --tree <7.3 树> --blob <那份微码>` 过（镜像里那份是驱动收的那一份） |
 | **2** | **重建门禁夹具** | `sh tools/mkgate.sh` | 打印 `the gate kernel IS the flash kernel`；`gate.src` 里的 `uimage_md5` = 第 1 步那对 |
 | **3** | **announce 载荷**：**直接用预置的那份** `staging/trial73d/ctl/ctl-initramfs.cpio.gz`（它已经骑 `7.3.4*`，而且一个 md5 都不钉 ⇒ 不随三件变化）。**要重建只能用 `ci-build-repo/tools/mkctlram.py`** —— 现场那份 `tools/mkctlram.py` 比仓库那份旧 41 行，重建会**丢掉** sysfs / netdevs / eth_bound_driver 那几项诊断（八之十九.5） | `python3 ci-build-repo/tools/mkctlram.py --mode announce --tag K73 --kver 7.3.4* ...` | 载荷里的 `/init` 是 **19,117 B**（仓库那份产的）；`grep -c eth_bound_driver` ≥ 1 |
 | **4** | **判决轮**：把 7.3 的内核 kexec 进 RAM | `python tools/ncsrv.py &` → `CTLTAG=K73 IMAGE_LOCAL=staging/ctl/gate-Image REMOTE_IMAGE=gate-Image DTB_LOCAL=staging/ctl/gate-dtb REMOTE_DTB=gate-dtb INITRD=ctl-initramfs.cpio.gz sh tools/pushctl.sh` → `sh tools/catchctl.sh` → ssh 点火 | 板子**跳走了**（`gone=1`），且 `staging/ctl/reports.log` 里出现 **CTLALIVE** 且 `kver=7.3.4` |
@@ -6711,7 +6711,12 @@ doc 100 第 281 行原写：「`overlays/…/mcode_intel.bin` **保留** —— 
 ⇒ **八之十七 第 3 步因此改了**：announce 载荷**不要**用现场那份脚本重建；
 用预置的那份（它已经骑 `7.3.4*`），或者用**仓库那份**重建。
 
-**另外两件事（顺带查实的）**：
+**另外三件事（顺带查实的）**：
+
+- **解包脚本 `scratch/extract_flash_members.py` 本轮修了两处**：
+  成员名拼成了 `flash-rootfs.jiffs2`（真名是 `flash-rootfs.jffs2`），
+  而且**缺成员仍退出 0** ⇒ 只看退出码的调用方会把「三件只解出两件」当成成功。
+  现在缺成员就非零退出，并且三件都要对上 **artifact 自己的 `sha256sums`** 才算成功。
 
 - announce 载荷**一个 md5 都不钉**（实测：载荷里没有任何 32 位十六进制串）⇒
   **它不随三件变化而变** ⇒ 预置那份直接可用。
@@ -7385,6 +7390,11 @@ python3 scratch/payload_pin_where.py staging/trial73d/ctl/ctl-flash.cpio.gz
 # 112) 按字节打印一个串的拼写与码位（**别靠眼睛比对字母**）：
 #      本轮据此排除了一个并不存在的「产物与仓库拼写不一致」的 bug
 python3 scratch/spell_bytes.py
+
+# 113) 从取回的 artifact 里把三件解出来，并对上 artifact 自己的 sha256sums：
+#      这一支脚本本轮修过两处（成员名拼错成 jiffs2；缺成员仍退出 0）——
+#      缺一个就非零退出，且对不上 manifest 就不算成功
+python3 scratch/extract_flash_members.py scratch/artifact57-flash.zip scratch/extract-test
 ```
 
 第十节的 18~24 号命令里，`cfg73_sim.py` 与 `kdeps73.py` 是**一对**：
