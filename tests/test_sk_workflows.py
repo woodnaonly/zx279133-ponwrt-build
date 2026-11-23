@@ -837,6 +837,50 @@ def main():
                        "root=0xf00000,0xf100000")],
             "the export step checks the board's partition layout")
 
+    # The panel LEDs are how this board reports things when it has no
+    # console, and the LOS lamp is one of the six readings the board trial
+    # takes: it has to follow the optical signal.  The 6.18 release line
+    # has this gate; the 7.3 line had none, and the 7.3 line's image is
+    # the one that is going to be flashed.
+    #
+    # The check asks three separate things, and each is asked of the
+    # workflow rather than of a phrase about it: the gate tool runs on the
+    # blob this line compiled, the gate's own negative controls run on the
+    # same blob (so a gate that accepts anything cannot pass), and the
+    # merged kernel config is asked for the seven LED symbols the panel
+    # needs - the custom zx279133-los / zx279133-pon triggers live behind
+    # CONFIG_LEDS_TRIGGERS, and a merge that clamped them to =m would
+    # leave the board dark with no error anywhere.
+    print("\nthe panel LED topology is gated on the blob the 7.3 line compiled")
+    led_steps = [step for step in steps_of(bringup, "build")
+                 if str(step.get("name") or "") ==
+                 "Gate: the panel LED topology and its kernel support"]
+    failures.check(bool(led_steps),
+                   "the 7.3 line has the panel LED gate")
+    if led_steps:
+        body = str(led_steps[0].get("run") or "")
+        flat = body.replace("\\\n", " ")
+        commands = "\n".join(ln for ln in flat.splitlines()
+                             if not ln.strip().startswith("#"))
+        gate_calls = re.findall(
+            r"tools/check-sk-lan1-led\.py[ \t]+--dtb[ \t]+(\S+)", commands)
+        failures.check(
+            gate_calls == ["/tmp/sk-d840n.dtb"],
+            "the LED gate reads the blob the 7.3 line compiled")
+        control_calls = re.findall(
+            r"tests/test_sk_lan1_led\.py[ \t]+--dtb[ \t]+(\S+)", commands)
+        failures.check(
+            control_calls == ["/tmp/sk-d840n.dtb"],
+            "the LED gate's own negative controls run on the same blob")
+        config_calls = re.findall(
+            r"tools/check-sk-lan1-led\.py[ \t]+--kernel-config[ \t]+(\S+)", commands)
+        failures.check(
+            config_calls == ['"$KC"'],
+            "the LED gate asks the merged kernel config for the LED symbols")
+        failures.check(
+            re.search(r"linux-\$KVER/\.config", commands) is not None,
+            "the LED gate reads the merged config of the kernel this line builds")
+
     # The migration note's increment table is the measured one, and the
     # workflow contract test parses that table and adds the numbers up.
     # It does not look for the number 171 in the text, because that is

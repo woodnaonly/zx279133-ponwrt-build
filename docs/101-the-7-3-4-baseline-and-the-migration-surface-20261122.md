@@ -93,6 +93,13 @@
     native241，工装区的旧参数会**拒绝正确的件**并报「大小不对」。
     已**定向**同步（不整包覆盖：`gettrial.sh` 工装区有 81 行独有）。
     见 7.25。
+15. **7.3 线的面板 LED 拓扑没有门禁，而 LOS 灯正是实机对拍要看的那盏。**
+    6.18 发布线有（`build-sk-d840n.yml:663`），7.3 线编出了板级 dtb 却只查了
+    分区表。dtb 里 GPIO 号 / 极性 / 触发器 / 占用关系改错了，**7.3 线不会拦** ——
+    而灯不亮或灯亮错**看起来像板子没光**，板子其实有光。
+    已补三样：门禁本体、门禁自己的负控、真合并配置里的 7 个 LED 符号。
+    这不是配置问题（那些符号早就被 pin 成 =y），是**没人查编出来的 dtb**。
+    见 7.26。
 
 ---
 
@@ -2312,7 +2319,7 @@ python3 tools/dtbparts.py flash-dtb.bin layout=native241 root=0xf00000,0xf100000
 `scratch/reverse_check_workflow.py` 多两处突变：
 把 dtb 步的那行换成 `echo`、把导出步的那行换成 `echo`，
 各自只转红在**指定**的那条检查上。
-⇒ 连同之前各节的突变，反向验证累计 **50 处**（工作流 48 + 工具 2），
+⇒ 连同之前各节的突变，反向验证累计 **55 处**（工作流 53 + 工具 2），
 每处只红在指定的那条检查上；脚本自己的结语行会把计数打出来。
 
 **未做**
@@ -2496,6 +2503,101 @@ rc=0
 - 工装区**不在版本库里**（工作区根不是 git 仓库），
   所以这次同步**没有可推送的产物**；仓库 `tools/` 本来就是对的。
 - 实机那一步仍要等 7.3 的镜像，且**必须用 CI 导出的那三件**。
+
+---
+
+### 7.26 面板 LED 拓扑：6.18 线有门禁，7.3 线没有
+
+**判决**
+
+1. **6.18 发布线有这道门禁，7.3 线没有。**
+   6.18 线（`build-sk-d840n.yml:663`）：
+
+   ```sh
+   python3 tools/check-sk-lan1-led.py --dtb /tmp/zx279133-sk-d840n.dts.dtb &&
+   python3 tests/test_sk_lan1_led.py --dtb /tmp/zx279133-sk-d840n.dts.dtb
+   ```
+
+   7.3 线编出了板级 dtb（`/tmp/sk-d840n.dtb`），却**只查了分区表**。
+2. **后果**：dtb 里 GPIO 号、极性、触发器或占用关系改错了，7.3 线**不会拦**。
+   而那盏灯正是实机对拍的六项读数之一（**LOS 灯随 `opsd` 翻转，有光⇒灯灭**）——
+   灯不亮、或者灯亮反了，**看起来像板子没光**，而板子其实有光。
+3. **这不是配置问题，是 dtb 的问题。**
+   面板灯需要的内核符号 —— `LEDS_CLASS`、`LEDS_TRIGGERS`、
+   `LEDS_TRIGGER_NETDEV`、`LEDS_TRIGGER_DEFAULT_ON`、`USB_LEDS_TRIGGER_USBPORT` ——
+   **早就被 pin 成 =y**（`scripts/configure-sk-d840n.sh:126-135`；
+   `pin_y` 按 glob 写进**这条线自己的** `config-7.3` 片段，
+   见该脚本 `:473-475`），而 7.3 的两个自定义触发器
+   （`zx279133-pon` 在 `kernel-overlays-73/.../zx279133-pon.c:346`，
+   `zx279133-los` 在 `kernel-patches/7.3-local/140-sk-pon-omci-transport.patch:166`）
+   也都在，`tools/check-sk-pon-api.py:489-516` 逐条查过
+   `LEDS_CLASS` 与 `LEDS_TRIGGERS`。
+   ⇒ **缺的不是符号，是没人查编出来的那个 dtb。**
+4. **修法**：给 7.3 线加一道门禁，跑三样东西：
+   - `tools/check-sk-lan1-led.py --dtb /tmp/sk-d840n.dtb` —— 门禁本体；
+   - `tests/test_sk_lan1_led.py --dtb /tmp/sk-d840n.dtb` ——
+     **门禁自己的负控**（在内存里改同一棵树，要求每一处改动都被拒），
+     所以一个「什么形状都放行」的门禁过不去；
+   - `tools/check-sk-lan1-led.py --kernel-config "$KC"` ——
+     真合并配置里那 7 个 LED 符号（kconfig 把 tristate 夹成 `=m` 的那条路）。
+
+**证据**
+
+门禁查什么（`tools/check-sk-lan1-led.py:37-112`）：九个 GPIO 面板灯 +
+**恰好一个** PHY LAN1 灯；标签、颜色、功能、初态、触发器**逐条**；
+GPIO 占用唯一（谁都不能抢同一根针）；pinctrl 映射；
+四个 DSA 用户口（port@8=lan1 / @5=lan2 / @6=lan3 / @7=lan4）；
+NPPT 的 `opsd-gpios` 接线。
+
+负控是什么（`tests/test_sk_lan1_led.py:287-343`）：对每个面板灯改
+`gpios` / 极性 / `default-state` / `color` / `function` / 触发器 / `label`，
+删灯、复制灯、加第二个占用者；对 LAN1 灯、对 GPIO4_2 的旧占用者、
+对 DSA 口标签、对 `opsd` 接线 —— **每一处都必须被拒**。
+
+本机跑（不带 dtb，走门禁自己的合成树）：
+
+```
+$ python3 tests/test_sk_lan1_led.py
+PASS: all panel board defaults; SR1010 and unrelated boards unchanged
+PASS: missing-only migration, custom/disabled/duplicate LEDs, exact WPS cleanup, idempotence and failure guards
+PASS: RAM beacon yields before start and between pulses when the system LED service takes over
+PASS: nine GPIO LEDs plus unique port-8 PHY LAN1, ownership, triggers and DSA mapping; real lamps require observation
+PASS: LED declaration negative controls reject changed GPIO/polarity/color/function/state/trigger, WPS, duplicates and conflicts; not physical verification
+PASS: shipped kernel has built-in GPIO LEDs, netdev/default-on and USB port triggers
+PASS: missing or modular panel GPIO/netdev/default-on/USB support rejected
+exit=0
+```
+
+**这道门禁有牙齿**（拿暂存的旧 dtb 跑，**转红**）：
+
+```
+$ python3 tools/check-sk-lan1-led.py --dtb staging/trial/flash-dtb.bin
+AssertionError: wrong panel LED count (no WPS/WLAN on this SKU)
+rc=1
+```
+
+那个 dtb 是更早一代的板级 dtb（LED 拓扑已经不同）——
+门禁不是「什么形状都放行」。
+
+**门禁**
+
+- `tests/test_sk_workflows.py` 多 **5 条**断言，比的是**调用与参数**、
+  不是字符串出现：门禁步存在、读的是本线编出来的 blob、
+  负控读**同一个** blob、问的是合并配置、读的是**本线内核**的合并配置。
+- `scratch/reverse_check_workflow.py` 多 **5 处**突变
+  （4 处严格只红一条 + 1 处整步改名）：换 blob、换负控的 blob、
+  把 `--kernel-config` 的参数改掉、读另一个内核的配置、整步改名。
+  ⇒ `reverse check: OK (55 mutations, each red on its own check)`。
+
+**未做**
+
+- 本机**没有 dtc**，所以这道门禁在 7.3 线编出来的 dtb 上
+  **第一次真正执行是在 CI 里**。
+- 门禁查的是 **dtb 里的拓扑**，**不是实物灯**。
+  板上的灯到底亮不亮，仍然只能靠实机观测
+  （docs/96 §96.31 记着哪些是厂商声明、哪些实测过）。
+- 7.3 线**没有** `zrec`（恢复服务）：那是 6.18 发布线的产品面，
+  这条线只出镜像，刻意不含。
 
 ---
 
@@ -3540,7 +3642,7 @@ python3 scratch/cpio_pick.py scratch/re_other_fw/fit/initrd-1.bin \
 # 15) 在本机跑工作流里那一步的 shell（从 YAML 原样取出，不复制）
 python3 scratch/pin_step_check.py
 
-# 16) 门禁的反向验证：五十处变异逐个转红
+# 16) 门禁的反向验证：五十五处变异逐个转红
 python3 scratch/reverse_check_workflow.py
 
 # 17) 四个驱动并进同一个内核会不会撞名（用本机编出的目标码）

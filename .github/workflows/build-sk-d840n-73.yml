@@ -1101,6 +1101,35 @@ jobs:
           # wrote.  The 6.18 line has the same gate (build-sk-d840n.yml).
           python3 tools/dtbparts.py /tmp/sk-d840n.dtb layout=native241 root=0xf00000,0xf100000
 
+      # The panel LEDs are how this board says things when it has no console,
+      # and the LOS lamp is one of the six readings the board trial takes:
+      # it has to follow the optical signal (light present -> lamp dark).
+      # The 6.18 release line has this gate (build-sk-d840n.yml:663); the 7.3
+      # line had none, so a device tree with a changed GPIO, a changed
+      # polarity, a changed trigger or a second consumer of the same pin
+      # would reach the board - and the LOS reading would then mean nothing
+      # without anything looking wrong.
+      #
+      # It reads the blob this line compiled, not the dts we think we wrote.
+      # The second command is the gate's own negative controls: it mutates the
+      # same tree in memory and requires every mutation to be rejected, so a
+      # gate that accepts anything cannot pass here.
+      # The third command checks the merged kernel config for the seven LED
+      # symbols the panel needs - the custom zx279133-los / zx279133-pon
+      # triggers live behind CONFIG_LEDS_TRIGGERS, and a merge that clamped
+      # them to =m would leave the board dark with no error anywhere.
+      - name: 'Gate: the panel LED topology and its kernel support'
+        run: |
+          set -e
+          python3 tools/check-sk-lan1-led.py --dtb /tmp/sk-d840n.dtb
+          python3 tests/test_sk_lan1_led.py --dtb /tmp/sk-d840n.dtb
+          KC=$( { ls -d openwrt/build_dir/target-*/linux-*/linux-$KVER/.config 2>/dev/null || true; } | head -1 )
+          [ -n "$KC" ] || {
+            echo "::error::no merged kernel .config for linux-$KVER"
+            ls -d openwrt/build_dir/target-*/linux-* 2>&1 || true
+            exit 1; }
+          python3 tools/check-sk-lan1-led.py --kernel-config "$KC"
+
       - name: Upload the build log
         if: failure()
         uses: actions/upload-artifact@v4
