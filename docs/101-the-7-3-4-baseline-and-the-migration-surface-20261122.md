@@ -5929,6 +5929,73 @@ zip 73,415,840 B，zip 的 SHA256 `20b7ff262ebc336f21b419615ebea1edff8ff2ced1bbf
 **没做的**：取日志时 #58 的 initramfs job 仍在 Compile；
 上面这些判决只覆盖 **flash job**。
 
+### 8之十五.1 附记二（#59）
+
+**成立**：run **#59**（head `fb869089`）整轮 **completed / success** ——
+`repository gates`、`flash`、`initramfs` 三个 job 全绿。
+flash job **44 步全过**（第 45 步「Upload the build log」是 `if: failure()` 的，skipped）。
+
+**这一轮第一次验了新加的那道门禁**：第 40 步
+「Gate: the flash gate accepts this pair of bytes」——
+它拿**这一轮真产出的那对字节**去问 RAM 通道那道不可逆刷机前的授权门
+（`tools/gatecheck.sh`），问的是「这对字节**能不能拿到许可**」，
+而不是问「门禁的逻辑对不对」（后者是 `tests/test_gatecheck.py` 的事，
+它用的是自己造的 uImage）。
+
+判决：正例 **8 项、0 失败**；反向控制 **7 项、0 失败**。
+
+**证据**（#59 flash job 的原始日志，2026-11-23T16:53:03Z 起）：
+
+```
+the uImage carries kernel 7.3.4
+  uimage .../flash-uImage  md5 4b5189792c4f1c3dcaef7e28b5dec258
+  dtb    .../flash-dtb.bin  md5 ff6914d007b9b21895e1a6b3f67d5ea5
+PASS: the gate allows the pair of bytes this build produced
+PASS: the gate names the kernel it read out of the image
+PASS: the gate says which record it allowed
+PASS: a record about another kernel is refused
+PASS: the refusal names both versions
+PASS: a record whose root was not read back is refused
+PASS: a record about other bytes is refused
+PASS: the flash gate accepts this build's bytes, and only them
+PASS: the unmutated gate passes the control
+PASS: the version comparison is short-circuited - the check turns red
+PASS: the version comparison is short-circuited - it is the expected check that turned red
+PASS: root_read is no longer required of a gate record - the check turns red
+PASS: root_read is no longer required of a gate record - it is the expected check that turned red
+PASS: the uImage checksum is no longer matched - the check turns red
+PASS: the uImage checksum is no longer matched - it is the expected check that turned red
+PASS: the flash-permit gate still notices
+```
+
+⇒ 每一项控制都**转红在它自己那条检查上**（不是「在某处变红」）。
+
+**这一轮的产物侧**（同一份日志）：
+
+| 项 | 值 |
+|---|---|
+| kernel / dtb / root 三段尺寸 | 5,813,531 B / 14,958 B / 5,767,172 B |
+| 膨胀后的裸 Image | 14,051,336 B，sha256 `7a36227f…` |
+| Image 里的版本 | `7.3.4`（`version_known: true`） |
+| 分区表 | `TABLE OK - all 2 expectations matched` |
+| `sha256sum -c`（六件） | 全部 OK |
+
+⇒ **uImage 与 dtb 与 #53/#57 逐位相同**（尺寸与 md5 都对得上：
+uImage `4b518979…`、dtb `ff6914d0…`）⇒ 「跨轮次逐位可复现」这条性质在 CI 上又印证了一次。
+
+**但这一轮不是要刷的那一轮**：#59 的 head `fb869089` **在微码修复之前**
+（修复是 `055b5577` + `7611b344`，排在 `fb869089` 后面）
+⇒ 它那个 uImage 里嵌的仍是**驱动拒收的那份微码**
+（八之十八.1、8之十七.1 那张对照表里量到的 `0xc839b946`；字节与 #53 相同 ⇒ 同一条结论）
+⇒ **实机那一轮要取的是带微码修复的那一轮**（head `15e97c48`，run #62）。
+这一轮也**没有**那道产物级微码门禁（它在 #62 才进工作流）。
+
+**这一轮的产物**：artifact `sk-d840n-73-images-flash`，
+artifact ID `14839239552`，zip 73,416,000 B
+（另有 `sk-d840n-73-images-initramfs`，ID `14840159113`，15,880,367 B）。
+
+**没做的**：这一轮**没有**取 artifact、没有验镜像里那份微码、也没有碰板子。
+
 ### 8之十五.2 那张「字段偏移表」其实不需要 —— 编译器的**行号表**就够
 
 八之十四.4 记下的两处卡点：
