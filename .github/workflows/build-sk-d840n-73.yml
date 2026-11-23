@@ -45,6 +45,11 @@ on:
       # build, or the image is built from a checkout a fresh clone would not
       # reproduce.
       - .gitattributes
+      # This line runs the text hygiene gate, and that gate reads every
+      # document in the repository.  A document that grows a character no
+      # reader can see has to start a build that would notice - and this is
+      # the line that runs it.
+      - docs/**
       - kernel-patches/**
       - tools/prepare-sk-kernel-73.py
       - tools/apply-sk-overlay-73.sh

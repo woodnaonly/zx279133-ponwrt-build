@@ -64,6 +64,14 @@ GLOB_CHARS = ("*", "?", "[")
 # produce, and the gate that reads the tree cannot tell.
 ALWAYS = ('.gitattributes',)
 
+# A workflow that runs the text hygiene gate reads every document in the
+# repository, so it has to collect the documents: otherwise a document can
+# grow a character no reader can see, and the run that would have noticed
+# never starts.  The rule is about the workflow that reads the files, not
+# about the workflow that happens to collect them today.
+READS_EVERY_DOCUMENT = 'tests/test_sk_text_hygiene.py'
+DOCUMENT_DIR = 'docs'
+
 
 class Report:
     def __init__(self):
@@ -236,6 +244,11 @@ def covered_by(name, entries):
     return None
 
 
+def covers_documents(entries):
+    """The paths entry that collects the documents, if there is one."""
+    return covered_by(DOCUMENT_DIR + '/', entries)
+
+
 def check_workflow(path, root, report):
     """The checks for one workflow."""
     text = path.read_text(encoding="utf-8")
@@ -279,6 +292,18 @@ def check_workflow(path, root, report):
         report.require(target.exists(),
                        f"{name}: {entry} exists",
                        "the paths: list names a file that is not in the repository")
+
+    # A gate that reads files the workflow does not name still has to be
+    # reachable: the workflow that runs it has to be started by a change to
+    # those files.
+    if any(item.endswith(READS_EVERY_DOCUMENT) for item in invocations):
+        entry = covers_documents(entries)
+        report.require(entry is not None,
+                       f"{name}: the documents are covered by paths",
+                       "this workflow runs the text hygiene gate, which reads "
+                       "every document in the repository, but no path entry "
+                       "collects them; editing a document would then not "
+                       "start a build that would notice")
 
 
 def main() -> int:

@@ -299,7 +299,32 @@ def main():
                           % (name, victim, expected),
                           ", ".join(sorted(names)[:3]))
 
-            # 8. A control must not publish a verdict.  The gate writes its
+            # 8. A workflow that reads every document has to collect them.
+            #    The text hygiene gate reads every .md in the repository, so
+            #    the workflow that runs it has to be started by a change to
+            #    a document - otherwise a document can grow a character no
+            #    reader can see and no run would ever look at it.
+            runs_hygiene = any(item.endswith(GATE_MODULE.READS_EVERY_DOCUMENT)
+                               for item in invocations)
+            entry = GATE_MODULE.covers_documents(entries)
+            if not runs_hygiene:
+                check(True,
+                      "%s: it does not run the text hygiene gate, so the "
+                      "documents are not its business" % name)
+            elif entry is None:
+                check(False, "%s: the documents are collected" % name)
+            else:
+                broken = copy_as(
+                    text.replace("      - %s\n" % entry, "", 1),
+                    work, "dropdocs", name)
+                names, rc = failed_checks(broken, ROOT)
+                expected = "%s: the documents are covered by paths" % name
+                check(expected in names,
+                      "%s: dropping the entry that collects the documents -> "
+                      "red on %r" % (name, expected),
+                      ", ".join(sorted(names)[:3]))
+
+            # 9. A control must not publish a verdict.  The gate writes its
             #    report to GITHUB_STEP_SUMMARY, and a control runs the gate on
             #    a broken copy: if that run publishes, the broken copy's
             #    verdict is the one the run page shows, and a green job reads
