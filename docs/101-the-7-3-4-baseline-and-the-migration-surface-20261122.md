@@ -253,7 +253,9 @@
     四个驱动文件的 sha256 与「160 已应用」逐个相同。
     顺带：本文里当时藏着一个 **NUL 字节**，让所有针对本文的 grep 静默返回空
     ⇒ 文本卫生门禁扩到「U+FFFD + NUL + 其它控制字符」。
-    见 7.39。
+    **#49 的结果**：prepare 绿、36 条 TX 门禁与 39 条 RX 门禁**第一次同时绿**
+    ⇒ 7.3 线此前产出的每一个镜像，编的都是少了这两片的驱动。
+    见 7.39 与 7.40。
 
 ---
 
@@ -3888,6 +3890,30 @@ Skipped patch 'drivers/net/ethernet/zte/zx279133.h'.
 已清掉，并把 `tests/test_sk_text_hygiene.py` 从「只查 U+FFFD」
 扩到「**U+FFFD + NUL + 其它控制字符**」（131 个文件、0 问题）。
 
+#### 7.40 **#49 的结果：补丁真的进树了，两道门禁第一次同时变绿**
+
+**判决**：修复生效。head `9e97ff2a` 的这一轮，
+**7.3 线第一次编译的是带 TX 隔离与 RX 交付修复的驱动**。
+
+| 步骤 | 结果 | 说明 |
+|---|---|---|
+| `repository gates`（作业 137632470854） | ✅ success | 新的 apply 上下文负控在 CI 的 git **2.56.1** 上也绿 ⇒ ceiling 机制与 git 版本无关 |
+| 8 `Prepare the Linux 7.3.4 tree` | ✅ success | 38 秒；**47 个补丁全部落地**，160 与 170 也在内 |
+| 19 `Check the drivers with the host compiler` | ✅ success | 编译预言机在带 160/170 的树上过 |
+| 20 `Gate: a TX ring with an untrusted counter is quarantined` | ✅ success | **36 条 TX 门禁第一次绿** |
+| 21 `Gate: the RX delivery path proves what it hands over` | ✅ success | **39 条 RX 门禁第一次绿** |
+
+（initramfs 作业 137632800488。）
+
+**⇒ 这两道门禁在 CI 上从来没有绿过** ——
+不是因为它们太严，是因为**树里没有它们要问的那两片东西**：
+每次红，都是在问「160 的符号呢？」而树停在 160 之前。
+门禁是对的，**树是错的**；现在树对了，门禁自己就绿了。
+
+**⇒ 由此可知一件必须记住的事**：
+**7.3 线此前产出过的每一个镜像，编的都是少了 TX 隔离与 RX 交付修复的驱动。**
+那些镜像不能拿来当「7.3 能跑」的证据。
+
 ---
 
 ## 八、BP 池：逐槽位对照（第 1 片剩余部分的结论）
@@ -4486,7 +4512,8 @@ OMCI 把帧写进 `eth->tx_descs + eth->omci_producer`，`omci_producer`
 | 问题 | 读数位置 | 出处 |
 |---|---|---|
 | conduit 的 RX 计数在涨？ | `/sys/class/net/lan-cpu0/statistics/rx_{packets,bytes}` | `zx279133-lan-conduit.c:176` 把网设备名**播种**成 `"lan-cpu%d"`，内核在 `register_netdevice()` 时把它解析成 `lan-cpu0`（见 7.27） |
-| 四个 DSA 用户口 link 状态正确？ | `/sys/class/net/lan{0,1,2,3,4}/{operstate,carrier,speed}` | 板级 DTS 的 `switch` 节点声明 `port@4..port@8`，label 是 `lan0`/`lan2`/`lan3`/`lan4`/`lan1` |
+| 帧是被交出去了还是被扔了？ | `/sys/class/net/*/statistics/rx_dropped` | `zx279133-idm.c:948-953`：DSA 路径没起来时丢的帧计在 conduit 的 `rx_dropped` 上。**`rx_packets` 涨而 `rx_dropped` 也涨**，与**`rx_packets` 涨而 `rx_dropped` 不动**，是两回事（见八之九.2） |
+| 四个 DSA 用户口 link 状态正确？ | `/sys/class/net/lan{0,1,2,3,4}/{operstate,carrier,speed}` | 板级 DTS 的 `switch` 节点声明 `port@4..port@8`，label 是 `lan0`/`lan2`/`lan3`/`lan4`/`lan1`；**2.5G 插孔是 port@8 ⇒ `lan1`**（见八之九.2） |
 | LOS 灯随 `opsd` 翻转？ | `/sys/class/leds/*/{brightness,trigger}` + `/sys/kernel/debug/gpio` 里 **gpio 65** 的电平 | `zx279133-main.c:297-299` 用 `gpiod_get_value_cansleep()` 读 opsd，再用 `led_trigger_event()` 点灯；opsd 在 DTS 里是 `gpio2 pin 1`（`GPIO_ACTIVE_HIGH`），平铺编号 65 |
 | `pon_state` 从 O1 往 O5 走？ | `/sys/class/net/<wan>/device/pon_state` | `zx279133-pon.c:351` 在 `ndev->dev` 上建这个属性 |
 | `omci_transport` 的 submitted/completed 在涨？ | `/sys/class/net/<wan>/device/omci_transport` | 同上，`zx279133-pon.c:353` |
@@ -4833,6 +4860,118 @@ sh tools/trialsurvey.sh 10
 3. `zx279133_idm_rx_parsed()` 与 `CHECKSUM_UNNECESSARY` 被**删掉**了：
    那个字段在 7.3 树里恒为 0（idm.c 从不给它加数），厂商 `npu.ko.rodata.txt` 里
    也有这个名字 ⇒ 保留字段名是对的，但不再加数。
+
+---
+
+## 八之九、第 9 片：jack 帧的计数，与 CPU 侧 tagger 的交接方式
+
+**判决**：第 8 片留下的三件事，查清之后是**一件不用搬、两件不能搬**：
+
+| ours（6.18 世代） | 7.3 树 | 判决 |
+|---|---|---|
+| `zx279133_idm_rx_is_jack()`（`zx279133-idm.c:410`） | 判据用的 `ZX279133_9132_OUTERPHY_PPU`（= 5）在 7.3 板层 `zx279133-9132.h:131` **已有**，且 `zx279133-idm.c:24` 已经 include 了那个头 | 判据可用，但**用不上**（见下） |
+| `rx_jack_frames`（`:1212`）/ `rx_jack_dropped`（`:1216`） | 树里没有这两个计数器，**也没有能读它们的地方** | **不搬** |
+| `cpu_dp->rcv(skb, eth->lan_ndev)`（`:1290`） | 树里**没有 `cpu_dp`**，而且**也不需要** | **不搬** |
+
+**⇒ 第 9 片没有补丁可写。** 这不是一个还没查清的待办，是查清之后的**否定结论**。
+
+### 8之九.1 为什么 `cpu_dp->rcv()` 直调不能搬
+
+**7.3 的 RX 交付路径**（`zx279133-idm.c` 的 `deliver_skb`）：
+
+```
+955:  if (lan_dsa_active && lan_source && eth->lan_ndev) {
+956:          rx_ndev = eth->lan_ndev;
+957:          zx279133_idm_rx_prepare_dsa(skb, word1);
+958:  }
+...
+971:  skb->protocol = eth_type_trans(skb, rx_ndev);
+972:  napi_gro_receive(napi, skb);
+```
+
+⇒ 帧被交给 **conduit netdev**（`eth->lan_ndev`，`zx279133-netdev.c:2081` 赋值），
+再由 **DSA 核心**在 conduit 的接收路径上调用 tagger。
+7.3 树里带的那个 tagger 是 `net/dsa/tag_zx279133_rtl8372n.c`：
+
+```
+33:  static struct sk_buff *
+34:  zx279133_rtl8372n_rcv(struct sk_buff *skb, struct net_device *netdev)
+...
+65:          skb->dev = dsa_conduit_find_user(netdev, 0, port);
+```
+
+它读 transport VID、把它映射到 DSA 用户口。
+
+**⇒ 7.3 的等价路径已经存在，而且就是标准 DSA 模型**：
+IDM → conduit netdev → DSA 核心 → tagger → 用户口。
+ours 那一代把 CPU 口做成**另一个 netdev**（`cpu_dp`），
+所以驱动必须**亲手**调 `cpu_dp->rcv()`；7.3 不用。
+
+**⇒ 搬过去会做什么**：树里根本没有 `cpu_dp` 这个符号，搬不了；
+就算硬搬，也是**在 DSA 核心已经会做一遍的地方再做一遍** ——
+帧会被 tagger 处理两次。
+
+**⇒ 这一项不是「还没查清」，是「查清了，不搬」。**
+
+### 8之九.2 jack 判定与计数器：**不搬**
+
+ours 那两个计数器回答的是两个问题：
+
+* `rx_jack_frames`：**有多少帧是从 2.5G 插孔回来的**；
+* `rx_jack_dropped`：其中**多少被丢掉了** ——
+  ours 的注释说得很清楚（`zx279133.h:1446-1449`）：
+  「`rx_jack_dropped` 只在 DSA 路径**不在**的时候动，
+  所以它是那个说明 RX 路径到底把帧交出去了还是扔掉了的计数器」。
+
+**在 7.3 上，这两个问题都已经被回答了，而且是回答得更准**：
+
+1. **插孔已经是 DSA 用户口。**
+   板层 `kernel-overlays-73/.../zx279133-switch.c:378-387`：
+   `ZX279133_SWITCH_DSA_PORT_MIN = 4`，
+   「四个带内部 PHY 的插孔，**然后是 2.5G 插孔**；
+   2.5G 插孔是 9132 的第五个用户口 —— 厂商叫它 outerphy」，
+   「**它和另外四个一样是用户口**」。
+   ⇒ 插孔进来的帧由**那个用户口自己的 netdev 计数器**统计
+   （设备树给 port@4..port@8 的标号是 lan0、lan2、lan3、lan4、**lan1**，
+   插孔是 port@8 ⇒ `lan1`）。
+   `tools/trialsurvey.sh` 本来就把**每个网口**的 `rx_packets` 读出来 ⇒ 现成的。
+
+2. **丢帧已经被 7.3 自己计了。**
+   `zx279133-idm.c:948-953`：
+   ```
+   if (lan_source && !lan_dsa_active) {
+           if (eth->lan_ndev)
+                   zx279133_stats_rx_dropped(eth, eth->lan_ndev);
+           dev_kfree_skb_any(skb);
+   ```
+   ⇒ DSA 路径没起来时丢的帧，**已经**计在 conduit 的丢帧计数器上。
+   ours 是**在这之上**又细分出「其中来自插孔的那部分」。
+
+3. **7.3 树里没有能读这两个计数器的地方。**
+   ours 读它们的地方是 SPA 调试控制台（`zx279133-np.c:1182`）。
+   7.3 的 np.c 只有一处 `seq_printf`（用户表转储，`:986`），
+   树里的 `zx279133-native-debug.c` 是 NPPT 芯片诊断控制台，不是 RX 统计。
+
+**⇒ 搬过去会得到两个只有写、没有读的计数器** —— 死代码。
+**⇒ 真正的计数器是 netdev 的那两个**，而仪器已经在读它们了。
+
+**顺带**：仪器现在**多读一个 `rx_dropped`**
+（每个网口、每个 DSA 用户口、以及第二次采样），
+因为「`rx_packets` 在涨而 `rx_dropped` 也在涨」与
+「`rx_packets` 在涨而 `rx_dropped` 不动」是两回事：
+前者是帧被丢着，后者才是 RX 路径把它们交出去了。
+
+### 8之九.3 未做
+
+1. **没有补丁，也没有门禁** —— 本节的结论是「**没有东西要搬**」，
+   所以这一片不需要新的补丁、新的门禁或新的负控。
+   要有的话，反而是一个「别再搬 jack 计数器」的负控；等有人再提这件事时再加。
+2. **没有实机证据**：上面每一条都是**读树**读出来的，
+   不是在跑着的板子上量出来的。
+   板子回来之后，插拔 2.5G 网线，看 **`lan1` 的 `rx_packets`** 涨不涨、
+   **`lan-cpu0` 的 `rx_dropped`** 动不动 —— 那才是这一步的实机证据。
+3. **DSA 拓扑**（四个用户口的 PHY、VID 与 conduit 的对应关系）
+   要在实机对拍里一起验；本节只验了**交付路径的形状**。
 
 ---
 

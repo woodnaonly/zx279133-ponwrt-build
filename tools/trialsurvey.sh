@@ -10,12 +10,19 @@
 #      (drivers/net/ethernet/zte/zx279133-lan-conduit.c names it
 #      "lan-cpu%d"; the counter is what proves the BP pool and the
 #      receive path work, and the frame offset of patch 110/120 is only
-#      meaningful if frames land here at all)
+#      meaningful if frames land here at all.  Its rx_dropped counter is
+#      read as well: idm.c counts there every frame the receive path
+#      threw away because the DSA path was not up, so a counter that
+#      moves while rx_packets does not says the frames are being dropped
+#      instead of handed over)
 #
 #   2. the DSA user ports report a link
 #      (the board's switch node declares port@4..port@8 with the labels
 #      lan0, lan2, lan3, lan4 and lan1; a port that never appears means
-#      the 9132 driver did not register)
+#      the 9132 driver did not register.  The 2.5G jack is the fifth of
+#      those - DSA port 8, the one the vendor calls the outerphy - so
+#      the frames that come in on it are counted on that port's own
+#      interface, and this survey reads them there)
 #
 #   3. the LOS lamp follows the optical RX signal detect
 #      (main.c drives the lamp from the opsd GPIO: the lamp is off when
@@ -99,8 +106,8 @@ print_lamp() {
 }
 
 echo "=== 1. the netdevs ==="
-printf '%-12s %-10s %-9s %-8s %-14s %-14s\n' \
-	name operstate carrier mtu rx_packets rx_bytes
+printf '%-12s %-10s %-9s %-8s %-14s %-14s %-14s\n' \
+	name operstate carrier mtu rx_packets rx_bytes rx_dropped
 for d in "$CLASS"/*; do
 	[ -d "$d" ] || continue
 	n=$(basename "$d")
@@ -109,18 +116,22 @@ for d in "$CLASS"/*; do
 	mt=$(cat "$d/mtu" 2>/dev/null || echo "?")
 	rp=$(cat "$d/statistics/rx_packets" 2>/dev/null || echo "?")
 	rb=$(cat "$d/statistics/rx_bytes" 2>/dev/null || echo "?")
-	printf '%-12s %-10s %-9s %-8s %-14s %-14s\n' "$n" "$op" "$ca" "$mt" "$rp" "$rb"
+	rd=$(cat "$d/statistics/rx_dropped" 2>/dev/null || echo "?")
+	printf '%-12s %-10s %-9s %-8s %-14s %-14s %-14s\n' \
+		"$n" "$op" "$ca" "$mt" "$rp" "$rb" "$rd"
 done
 
 echo
 echo "=== 2. the DSA ports the switch node declares ==="
 for n in lan0 lan1 lan2 lan3 lan4; do
 	if [ -e "$CLASS/$n" ]; then
-		printf '  %-6s present  operstate=%-10s carrier=%-3s speed=%s\n' \
+		printf '  %-6s present  operstate=%-10s carrier=%-3s speed=%-8s rx_packets=%-12s rx_dropped=%s\n' \
 			"$n" \
 			"$(cat "$CLASS/$n/operstate" 2>/dev/null || echo '?')" \
 			"$(cat "$CLASS/$n/carrier" 2>/dev/null || echo '?')" \
-			"$(cat "$CLASS/$n/speed" 2>/dev/null || echo '?')"
+			"$(cat "$CLASS/$n/speed" 2>/dev/null || echo '?')" \
+			"$(cat "$CLASS/$n/statistics/rx_packets" 2>/dev/null || echo '?')" \
+			"$(cat "$CLASS/$n/statistics/rx_dropped" 2>/dev/null || echo '?')"
 	else
 		printf '  %-6s MISSING - the 9132 driver did not register this port\n' "$n"
 	fi
@@ -182,7 +193,9 @@ for d in "$CLASS"/*; do
 	n=$(basename "$d")
 	rp=$(cat "$d/statistics/rx_packets" 2>/dev/null || echo "?")
 	rb=$(cat "$d/statistics/rx_bytes" 2>/dev/null || echo "?")
-	printf '  %-12s rx_packets=%-14s rx_bytes=%-14s operstate=%s\n' "$n" "$rp" "$rb" \
+	rd=$(cat "$d/statistics/rx_dropped" 2>/dev/null || echo "?")
+	printf '  %-12s rx_packets=%-14s rx_bytes=%-14s rx_dropped=%-14s operstate=%s\n' \
+		"$n" "$rp" "$rb" "$rd" \
 		"$(cat "$d/operstate" 2>/dev/null || echo '?')"
 done
 for f in "$CLASS"/*/device/pon_state "$CLASS"/*/device/omci_transport; do
