@@ -177,6 +177,13 @@ on:
       # them is dropped.
       - tools/check-sk-workflow-paths.py
       - tests/test_sk_workflow_paths.py
+      # The judge that turns the trial's read-out table into a verdict, and
+      # the controls that say whether it can still tell a healthy board from
+      # a broken one.  Both are edited together with the read-out table's
+      # own tool (tools/trialsurvey.sh), so all three are listed.
+      - tools/trialsurvey-verdict.py
+      - tests/test_trialsurvey_verdict.py
+      - tools/trialsurvey.sh
       # The compressor the image profile runs, and the OpenWrt-side overlays
       # this line copies into the tree.  Both are inputs of the image and
       # neither was listed: editing the compressor would have left the 7.3
@@ -731,6 +738,28 @@ jobs:
           set -e
           python3 tools/check-sk-tx-isolation-stats.py --tree "$KERNEL_TREE"
           python3 tests/test_sk_tx_isolation_stats.py --tree "$KERNEL_TREE"
+
+      # The trial's read-out table is a table of relations, and a relation is
+      # what a person reading numbers under time pressure gets wrong: "the
+      # lamp is off" is a finding next to "there was light" and nothing at
+      # all without it, and a pon_state that did not move is expected on a
+      # board with no optical signal.
+      #
+      # So the relations are made explicit in a judge that reads the
+      # instrument's transcript and prints one verdict per criterion, each
+      # with the lines it took the reading from.  It cannot run here - there
+      # is no board in CI - but it can be shown to tell a healthy transcript
+      # from a broken one, and to stay quiet on the two readings that are
+      # not findings at all.
+      #
+      # The controls below are the point of this step: each breaks one
+      # reading, and the judge has to turn red on that criterion and on no
+      # other, and it must NOT turn red on a board with no light whose PON
+      # state stayed at O1, nor on an OMCI channel that was not ready.
+      - name: 'Gate: the trial read-out table can be judged'
+        run: |
+          set -e
+          python3 tests/test_trialsurvey_verdict.py
 
       # A datapath that could not be brought up is marked failed, and the
       # board has to have a way back from that.  The 6.18 generation had

@@ -4902,6 +4902,14 @@ sh tools/trialsurvey.sh 10
 | `omci_transport` 的 `submitted`/`completed` 在涨 | 涨 | OMCI 队列（补丁 140） |
 | `ethtool -S eth0` 的四个 `tx_*` 名字都在 | 都在 | 名字不在 ⇒ 镜像里的驱动不是带补丁 180 那份（**读树**别读镜像） |
 
+> 📌 **这张表现在是机器判的，不是人判的** ⇒ 用 `tools/trialsurvey-verdict.py`
+> 吃仪器的输出，它把上面的关系变成七条带编号的判决
+> （C1..C7，判据、证据行、FAIL / INCONCLUSIVE / N/A 分开），
+> 控制在 `tests/test_trialsurvey_verdict.py`（14 项）。
+> 见 8之二十三。**特别是**：无光时 `pon_state` 不动**不是**故障
+> （判 N/A），OMCI 通道没 ready 时计数不动**不是**故障（判 N/A），
+> 一整轮没有流量时 conduit 不动**不是**故障（判 INCONCLUSIVE）。
+
 **注意第三条与第四条是耦合的**：`zx279133_pon_note_rxsd()` 用的是**同一个**读数，
 所以「无光 ⇒ pon_state 不动」**不是故障**。
 
@@ -6549,7 +6557,7 @@ run **#57**（整轮 Success，1 h 20 m 46 s）的 flash job 里
 | **4** | **判决轮**：把 7.3 的内核 kexec 进 RAM | `python tools/ncsrv.py &` → `CTLTAG=K73 IMAGE_LOCAL=staging/ctl/gate-Image REMOTE_IMAGE=gate-Image DTB_LOCAL=staging/ctl/gate-dtb REMOTE_DTB=gate-dtb INITRD=ctl-initramfs.cpio.gz sh tools/pushctl.sh` → `sh tools/catchctl.sh` → ssh 点火 | 板子**跳走了**（`gone=1`），且 `staging/ctl/reports.log` 里出现 **CTLALIVE** 且 `kver=7.3.4` |
 | **5** | **打分 + 换许可** | **`CTLTAG=K73 sh tools/gatewatch.sh 600`**（`CTLTAG` **必须**是载荷里烘进去的那个 tag，见下面那条注） | `staging/ctl/flash.permit` 多了一行 `proven=gate-K73`，且 `kver=7.3.4`、`root_index=5`、`root_read=IDENTICAL`、`jffs2_ro=OK` |
 | **6** | **刷** | `sh tools/flash-round.sh dry`（干跑）→ `sh tools/flash-round.sh write`（要连 root 就 `write-root`） | `gatecheck: ALLOWED (gate-K73)`；擦除前后 `mtd read` 回读一致 |
-| **7** | **验收** | 冷启动后跑对拍清单（八之十五.5） | 那份清单 |
+| **7** | **验收**：冷启动后跑对拍清单（八之十五.5），**并把仪器的输出喂给判决器** | `sh tools/trialsurvey.sh 10 \| tee /tmp/survey.txt` → `python3 tools/trialsurvey-verdict.py --input /tmp/survey.txt` | 判决器**七条全 PASS**（退出码 0）。**INCONCLUSIVE 不是「过了」**：它说这一轮测不了（例如没有流量），须补条件重跑 |
 
 ⇒ 第 4 步的**点火**要在板子上单独执行：
 `ssh root@192.168.9.1 'DELAY=150 CTLTAG=K73 setsid sh /tmp/ctl/ctl-exec.sh &'`
@@ -6587,6 +6595,14 @@ run **#57**（整轮 Success，1 h 20 m 46 s）的 flash job 里
 | 5 | `root read: DIFFERENT` | 7.3 的 ECC/OOB 布局与 4.19 不一致 | **不要刷**；这是门禁在替你挡一次开不了机的板子 |
 | 5 | `root mount: FAILED` | 7.3 能读 root 的字节但挂不上 | 同上，**不要刷** |
 | 6 | `gatecheck: REFUSE - no record proves these bytes boot` | permit 里没有那对字节的记录 | 回第 5 步 |
+| **7** | 判决器 `C1` 红 | 帧进来了但没落到 conduit（`lan1` 在动而 `lan-cpu0` 不动），或 `rx_dropped` 在动 | 先查 BP 池投递（补丁 120）与帧落点 0x80（补丁 110），八之八.4 |
+| **7** | 判决器 `C2` 红 | 某个 DSA 口 `MISSING` | 查 `dmesg \| grep 9132`：交换表驱动没注册 |
+| **7** | 判决器 `C3` 红 | 灯与 `opsd` 不成对 | 有光而灯亮 ⇒ 驱动没接上 `opsd`（补丁 140） |
+| **7** | 判决器 `C4` 红 | **有光**而 `pon_state` 不动 | PON 状态机没走（补丁 140）；**无光时它判 N/A，那不是故障** |
+| **7** | 判决器 `C5` 红 | 两次都 `ready=1` 而计数不动 | OMCI 队列（补丁 140）；**通道没 ready 时它判 N/A** |
+| **7** | 判决器 `C6` 红 | 四个 `tx_*` 名字没发布 | 镜像里的驱动不是带补丁 180 那份；**读树别读镜像** |
+| **7** | 判决器 `C7` 红 | 某个 `CONFIG_ZTE_ZX279133_*` 不是 `=y` | 镜像不是这条线编出来的 |
+| **7** | 判决器报 `INCONCLUSIVE` | **这一轮测不了**（没有流量 / 灯读不到 / `opsd` 在变） | **不要当它通过**：补条件（插网线到 2.5G 口、稳住信号）再跑一遍 |
 
 ### 8之十七.4 这一节没做到的
 
@@ -7437,6 +7453,155 @@ announce 载荷用**仓库那份**的 `mkctlram.py` 重建，或者直接用**�
 - **`mkctlram.py` 那 40 行差异只在 announce 侧成立**：已从「模板字节相同」**升级为**
   「两份 `--mode flash` 各跑一遍，**cpio 逐位相同**（1,297,008 B，sha256 `429e4bd3…`）」，
   但**没有把两份 `--mode announce` 各跑一遍再比**（announce 侧只有模板比对了字节）。
+
+## 八之二十三、把实机对拍那张**判读表**变成会自己转红的东西
+
+### 8之二十三.1 判决
+
+1. **实机对拍清单里最靠不住的一环，是「人要眼睛判读」那一环。**
+   `tools/trialsurvey.sh` 读出来的是**原始读数**：一张网口表、一串 DSA 口、
+   一个灯和一个 GPIO、两个 sysfs 属性、四个驱动计数器。
+   它**不说**这些读数意味着板子是好的还是坏的 ——
+   因为那个判断要看读数**之间**的关系，
+   而「关系」正是人在时间压力下对着数字看会看错的东西。
+
+2. ⇒ **新增 `tools/trialsurvey-verdict.py`**：吃一份仪器输出（文件或 stdin），
+   打印**一条判据一行判决**，每行带**它自己是从哪几行读出来的**。
+   七条判据，编号稳定：
+
+   | # | 判据 | 期望 |
+   |---|---|---|
+   | C1 | `lan-cpu0` 的 RX 计数在涨 | 涨 |
+   | C2 | `lan0..lan4` 都在 | 都在 |
+   | C3 | LOS 灯与 `opsd` 成对 | 有光⇒灯灭，无光⇒灯亮 |
+   | C4 | `pon_state` 从 O1 往 O5 走 | **有光时**才要求走 |
+   | C5 | `omci_transport` 的 `submitted`/`completed` 在涨 | 涨 |
+   | C6 | `ethtool -S` 的四个 `tx_*` 名字都在 | 都在 |
+   | C7 | 四个 `CONFIG_ZTE_ZX279133_*` 都是 `=y` | 都是 |
+
+3. **判决有四种，不是两种**：
+   `PASS` / `FAIL` / `INCONCLUSIVE`（**测不了**）/ `N/A`（**这一轮不适用**）。
+   退出码：**0** 全过；**1** 有失败；**2** 没有失败但有测不了的。
+   ⇒ 「测不了」与「坏了」必须分开：**没有光时 `pon_state` 不动不是故障**，
+   一个把它们混为一谈的判决器会训练操作员忽略它。
+
+4. **它挂进 CI 了，但挂进去的不是它本身，是它的控制** ——
+   CI 里没有板子，判决器跑不了；
+   能验的是「**它分得清好板子与坏板子**」，
+   所以进 CI 的是 `tests/test_trialsurvey_verdict.py`（**14 项控制**）。
+
+### 8之二十三.2 三条耦合规则，和它们为什么必须成对判读
+
+| 关系 | 单独看会怎样 | 成对看 |
+|---|---|---|
+| 灯 ↔ `opsd` | 「灯是灭的」在**无光**的板子上也是真的 | 有光⇒灯灭；无光⇒灯亮 |
+| `pon_state` ↔ `opsd` | 无光时状态机**本来就不该**走过 O1 | **只有有光时**「不动」才是故障 |
+| `omci_transport` ↔ `ready` | 通道没 ready 时**什么都不会提交** | 两次都 ready 才要求计数在涨 |
+
+⇒ 这三条在判读表（八之八.4）里是三行字，在判决器里是**代码**：
+C3 读出 `opsd` 的电平再判灯；C4 在 `opsd=low` 时直接判 **N/A**；
+C5 在任一次 `ready != 1` 时判 **N/A**。
+
+### 8之二十三.3 十四项控制，每一项**只**红在指定那一条
+
+正控：一份合成的健康 transcript ⇒ **七条全 PASS**，退出码 0。
+
+十个「必须红」的控制，每个改一处读数：
+
+| 控制 | 改坏的是什么 | 必须红在 |
+|---|---|---|
+| `conduit-rx-does-not-move` | 第 7 节的 `lan-cpu0` 的 `rx_packets` 不动（而 `lan1` 在动） | **C1** |
+| `conduit-drops-what-it-received` | `rx_packets` 不动而 `rx_dropped` 动了 | **C1** |
+| `a-dsa-port-is-missing` | `lan3` 变成 `MISSING` | **C2** |
+| `the-lamp-is-the-wrong-way-round` | 有光（`opsd=high`）而灯 `brightness=1` | **C3** |
+| `the-lamp-changed-under-a-steady-signal` | 信号不变而灯的亮度变了 | **C3** |
+| `the-pon-state-does-not-walk-with-light` | 有光而 `pon_state` 两次都是 O1 | **C4** |
+| `the-omci-counters-do-not-move-while-ready` | 两次都 `ready=1` 而计数不动 | **C5** |
+| `a-tx-counter-is-not-published` | `tx_recovery_restarts` 变成 `NOT PUBLISHED` | **C6** |
+| `a-driver-is-not-built-into-the-kernel` | `CONFIG_ZTE_ZX279133_SWITCH=m` | **C7** |
+| `a-driver-is-missing-from-the-kernel-config` | 删掉 `CONFIG_ZTE_ZX279133_FNOFFLOAD` | **C7** |
+
+**「只红在那一条」是断言的一部分**：每个控制都检查
+「红的判据集合 == {指定的那一条}」，不是「有一条红了」。
+⇒ 一个改坏了 C3 却让 C1 也红了的判决器，控制会当场抓住。
+
+三个「必须**不**红」的控制（**它们比红的那些更要紧**）：
+
+| 控制 | 场景 | 必须不红在 | 实际 |
+|---|---|---|---|
+| `no-light-so-the-pon-state-may-stay-at-o1` | `opsd=low`、灯亮、`pon_state` 停在 O1 | **C4** | **N/A** |
+| `the-omci-channel-is-not-ready-so-nothing-is-submitted` | `ready=0`、计数不动 | **C5** | **N/A** |
+| `no-traffic-so-the-conduit-need-not-move` | 全网口计数都不动 | **C1** | **INCONCLUSIVE** |
+
+⇒ 第三条尤其要紧：**一轮里根本没有流量**不是故障，
+判决器必须说「这一轮没有流量可测」，而不是「conduit 没动」。
+
+### 8之二十三.4 写这个判决器时改掉的两个真缺陷
+
+**（一）`ready` 原来只取第一次的值。**
+第一版 C5 写的是 `ready = kv1.get("ready") or kv2.get("ready")` ——
+第一次 `ready=1`、第二次 `ready=0`（通道掉了）时它仍判成「通道 ready 而计数不动」
+⇒ **FAIL**。改正后：**两次都 `ready=1` 才要求计数在涨**，
+任一次不是 1 就判 **N/A**（通道没有 ready 过，或者它掉了）。
+⇒ 是**控制**抓到的（`the-omci-channel-is-not-ready-so-nothing-is-submitted` 那一条红了）。
+
+**（二）`dmesg` 那一段不能当判据。**
+仪器的最后一行是 `dmesg | grep -iE '…' | tail -25 || echo "(no dmesg access)"` ——
+**管道的退出码是 `tail` 的**（sh 没有 `pipefail`）⇒
+「dmesg 读不到」与「grep 没匹配到任何行」**在输出里长得一模一样**（都是空段落）。
+⇒ 第一版把「空段落」当成「读不到」⇒ 判 INCONCLUSIVE；
+后来发现它也把「读到了但没有驱动相关行」当成了同一件事。
+⇒ **C7 改用 `/proc/config.gz` 那一段**（四个 `CONFIG_ZTE_ZX279133_*=y`）——
+那是**可靠**的判据（产物级已经验过 `modules.builtin` 点名 `npu.ko`），
+`dmesg` 只作为**辅助信息**附在判决里，不参与判红。
+
+### 8之二十三.5 怎么用
+
+```sh
+# 在板子旁边
+sh tools/trialsurvey.sh 10 | tee /tmp/survey.txt
+python3 tools/trialsurvey-verdict.py --input /tmp/survey.txt
+```
+
+输出形如：
+
+```
+VERDICT C1  conduit-rx          PASS          rx_packets 1200 -> 1400 (+200)  [L8; L57]
+VERDICT C2  dsa-ports           PASS          all of lan0 lan1 lan2 lan3 lan4 are present  [L15; L16; L17; L18; L19]
+VERDICT C3  los-lamp            PASS          signal detect high, lamp brightness 0 (light -> lamp off)  [L26; L28]
+VERDICT C4  pon-state           PASS          the PON state walked O1 -> O5  [L33; L60]
+VERDICT C5  omci-transport      PASS          submitted 0 -> 12, completed 0 -> 10  [L36; L61]
+VERDICT C6  tx-isolation-stats  PASS          all four names are published  [L43; L44; L45; L46]
+VERDICT C7  driver-registration PASS          all four drivers are built into the kernel (2 kernel log lines mention them)  [L79; L80; L81; L82]
+SUMMARY 7 PASS
+```
+
+⇒ **一行一判据，方括号里是它读的那几行** ——
+判决本身可以被核对，不必相信它。
+（行号是**整个 transcript 里的行号**，不是「第 1 次采样那段」的行号 ——
+第一版把两半各自从 1 数，证据写着 `L3` 而实际是 `L42`，那是**核不出来的证据**。
+已修：每个读取函数都拿到自己那一半的偏移量。）
+
+⇒ **判决器已定向同步到现场工装区**（**逐字节**，sha256 `926f5bfd226802c4…`），
+与仓库那份相同 —— 它跟仪器一样是**现场要用的东西**。
+
+### 8之二十三.6 这一节没做到的
+
+- **没有在真板子上跑过**：这一节是**判决器与其控制**，
+  合成 transcript 是**按仪器的输出格式手写的**，
+  **不是**板子上的真实输出 ⇒ 解析器对**真格式**的适应性还没验过。
+  ⇒ 板子接上后的**第一件事**应当是：跑一次仪器，把输出喂给判决器，
+  看它是否**读懂了**（每条判据都拿到读数，而不是 INCONCLUSIVE）。
+- **C7 只判了 `=y`**：产物级已验过四个符号在 `modules.builtin` 里，
+  但**板子上 `/proc/config.gz` 是否可读**没验过
+  （读不到时它判 INCONCLUSIVE，不判失败）。
+- **没有接进第 7 步的流程**：`trialsurvey.sh` 目前是**人工**跑的，
+  判决器**还没有**被写进八之十七.2 的第 7 步 ——
+  要接，需要把「跑仪器 + 喂判决器」合成一条命令，并在八之十七.3 里加上
+  「判决红了停在哪」。
+- **没有测过仪器的输出在**换了内核版本**之后**会不会变形**：
+  判决器对格式的假设是「第 1 节是列对齐的表、第 7 节是 `key=value`」，
+  这两条来自仪器的源码，**不是**来自任何一次真输出。
 
 ---
 
