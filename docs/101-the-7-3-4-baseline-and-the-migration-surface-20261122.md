@@ -5832,13 +5832,102 @@ ok   no hardware check in the machine code -> red on 'the compiled function asks
 ⇒ 每一个变异都**转红在它自己那条检查上**，且「机器码读到了」这一条也过了
 （否则后两个变异会假红在「读不到机器码」上）。
 
-**这一版是 7 项检查、3 个变异控制**；加了第 9 条检查与第 6 个控制的那一版
-（`013ce317`）在 run **#58** 上，判决见 8之十五.1 附记。
+**这一版是 7 项检查、3 个变异控制**；加严后的那一版（`013ce317`）
+在 run **#58** 上，判决见 8之十五.1 附记。
 
 ### 8之十五.1 附记（#58）
 
-（待填：run #58 的判决 —— 9 项检查 + 6 个控制，
-外加 build job 早期那道「用合成内核跑一遍门禁自身」的步骤。）
+**成立**：加严后的那一版在 run **#58** 的 flash job 上**绿**。
+
+`013ce317`（commit 名 `ci: make the machine-code gate prove it read the function it claims`）
+比 #57 那一版多两样东西：一条检查「the machine code is the function's own」，
+外加五个控制。门禁现在**先证明「我读到的机器码确实是 `zx279133_lan_netdev_open`
+这个函数」**，再谈顺序 —— 少了这一条，后面的顺序判据可能整个建立在别人的机器码上，
+而门禁照样绿。
+
+判决：门禁 **9 项检查、0 失败**；反向控制 **8 项、0 失败**；整个 flash job **succeeded**。
+
+**证据**（#58 flash job 的原始日志，2026-11-23T14:30:34Z 起）：
+
+```
+source: .../linux-7.3.4/drivers/net/ethernet/zte/zx279133-netdev.c
+  the restore call is on line 2161
+  the hardware check is on line 2165
+  the helper's body is on lines 913..926
+kernel: .../linux-7.3.4/vmlinux
+  zx279133_lan_netdev_open is at 0xffff8000804fdaf8, 144 bytes
+  36 instruction(s) read
+  [OK ] the machine code is the function's own
+  [OK ] the kernel carries line information
+  [OK ] the compiled function carries the restore
+  [OK ] the compiled function asks about the hardware
+  [OK ] the hardware check loads the flag it tests
+  [OK ] the hardware check branches on the loaded value
+  [OK ] the restore comes before the hardware check in the machine code
+  [OK ] the hardware check is not hoisted in front of the restore
+  [OK ] the shipped image carries this exact code
+  the function is at offset 0x4fdaf8 of the image
+OK: 9 check(s)
+```
+
+报告 `sk-kernel-order.json`：`"checks": 9, "failed": 0`、
+`"address": "0xffff8000804fdaf8"`、`"size": 144`、
+`"restore_line": 2161`、`"check_line": 2165`、`"image_offset": 5233400`。
+
+**反向验证**（`tests/test_sk_kernel_order.py`，同一内核、同一镜像）—— **8 项、0 失败**：
+
+```
+ok   the machine code of the function was read
+ok   the kernel as it is passes the gate
+ok   the hardware check in front of the restore -> red on 'the restore comes before the hardware check in the machine code'
+ok   no restore in the machine code -> red on 'the compiled function carries the restore'
+ok   no hardware check in the machine code -> red on 'the compiled function asks about the hardware'
+ok   a kernel without line information -> red on 'the kernel carries line information'
+ok   an image without the function -> red on 'the shipped image carries this exact code'
+ok   a machine code that is not the function's -> red on "the machine code is the function's own"
+8 checks, 0 failed
+```
+
+⇒ 每一个变异都**转红在它自己那条检查上**，且「机器码读到了」这一条也过了
+（否则后三个变异会假红在「读不到机器码」上）。
+
+**「用合成内核跑一遍门禁自身」那一步也在同一轮里绿了**（build job 早期，
+`tests/test_sk_kernel_order_local.py --tree "$KERNEL_TREE"`）：
+
+```
+ok   the source has the two things the gate compares
+ok   the gate passes on a kernel that is right
+ok   the controls pass on a kernel that is right
+3 checks, 0 failed
+```
+
+再往前一步是 `tools/kcheck.py --gen`：它**自己生成一套头文件**（9403 个 config 符号、
+48 个 asm wrapper、3 个 arch 头、6 个 bounds 常量、5 个 shadow 头、5 个 syscall 头），
+用 clang-15 把九个驱动文件各编一遍 ⇒ `9 file(s) asked for, 0 failed, 0 could not be judged`。
+这两步合起来的意思是：**门禁自己的逻辑在还没有真树的时候也能被证伪**。
+
+**同一轮里另外几道门禁也都绿了**（同一份原始日志）：
+
+| 门禁 | 检查 | 控制 | 管的是哪一片 |
+|---|---|---|---|
+| `tools/check-sk-kernel-order.py` | 9 | 8 | 第 11 片：机器码里 restore 排在硬件检查之前 |
+| `tools/check-sk-datapath-restore.py` | 18 | 9 | 第 11 片：源码层，同一件事的上一层判据 |
+| `tools/check-sk-tx-isolation.py` | 36 | 14 | 第 7 片：故障分支不落空 |
+| `tools/check-sk-tx-isolation-stats.py` | 33 | 11 | 第 10 片：三张平行表同序 |
+| `tools/check-sk-rx-delivery.py` | 39 | 24 | 第 8 片：RX 交付路径 |
+| `tools/check-sk-image-drivers.py` | 9 个探针 | — | 产物里带着它声称的驱动 |
+
+产物侧同时核过：产物探针 9/9；`prepare-sk-kernel-73.py --check-built` 报
+`Verified actual Image and module release: 7.3.4`；`tools/dtbparts.py` 报
+`TABLE OK - all 2 expectations matched`（root 在 `/dev/mtdblock5`）；
+`tools/prepush.py` 报 `prepush: 34 files, 0 problems`。
+
+**这一轮的产物**（artifact，不是 release —— 7.3 线不发 release）：
+`sk-d840n-73-images-flash`，artifact ID `14833506523`，
+zip 73,415,840 B，zip 的 SHA256 `20b7ff262ebc336f21b419615ebea1edff8ff2ced1bbf666e7366f4fa577a287`。
+
+**没做的**：取日志时 #58 的 initramfs job 仍在 Compile；
+上面这些判决只覆盖 **flash job**。
 
 ### 8之十五.2 那张「字段偏移表」其实不需要 —— 编译器的**行号表**就够
 
