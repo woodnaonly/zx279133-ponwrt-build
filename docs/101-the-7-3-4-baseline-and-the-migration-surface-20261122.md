@@ -4890,8 +4890,8 @@ artifact 的**列表**是公开的，**内容要登录态**
 sh tools/trialsurvey.sh 10
 ```
 
-它一次回答五个问题（见工具头部），每个计数**采两次**，
-灯与 `opsd` **也采两次**。判读表：
+它一次回答**六个**问题（见工具头部），每个计数**采两次**，
+灯与 `opsd` **也采两次**，驱动自己那四个 TX 隔离计数器**也采两次**。判读表：
 
 | 观察 | 期望 | 不符时先查 |
 |---|---|---|
@@ -4900,6 +4900,7 @@ sh tools/trialsurvey.sh 10
 | LOS 灯与 `opsd` **成对**读 | 有光⇒灭，无光⇒亮 | 只读灯不说事：必须同时有 `opsd` 的读数 |
 | `pon_state` 从 O1 往 O5 走 | 有光时走 | **无光时本就不该走** ⇒ 必须与 LOS 成对判读 |
 | `omci_transport` 的 `submitted`/`completed` 在涨 | 涨 | OMCI 队列（补丁 140） |
+| `ethtool -S eth0` 的四个 `tx_*` 名字都在 | 都在 | 名字不在 ⇒ 镜像里的驱动不是带补丁 180 那份（**读树**别读镜像） |
 
 **注意第三条与第四条是耦合的**：`zx279133_pon_note_rxsd()` 用的是**同一个**读数，
 所以「无光 ⇒ pon_state 不动」**不是故障**。
@@ -4914,7 +4915,7 @@ sh tools/trialsurvey.sh 10
 
 #### 八之八.6 不符时的取证顺序
 
-1. `dmesg | grep -iE 'zx279133|9132|lan conduit|nppu'`（仪器第 7 节已经带这一条）；
+1. `dmesg | grep -iE 'zx279133|9132|lan conduit|nppu'`（仪器第 8 节已经带这一条）；
 2. `/proc/net/dev` 与 `ethtool -S lan-cpu0`（看有没有 RX 欠载）；
 3. `cat /sys/kernel/debug/gpio`（`opsd` 的原始读数）；
 4. bench 的寄存器读（`nppt_reg` / `soc_read` / `eram_read`）。
@@ -4933,6 +4934,12 @@ sh tools/trialsurvey.sh 10
 
 **已定向同步**（不整包覆盖）：仓库那份**逐字节**复制到现场
 （sha256 `33fb8a1d…`，`sh -n` 过）。
+
+**这一轮又同步过一次**（仪器加了第 6 项之后）：
+仓库那份加了「读 `ethtool -S` 上的四个 TX 隔离计数器」那一节，
+sha256 变成 `c2dbf5c7…`，**再逐字节**复制到现场（`sh -n` 过，
+仓库与现场两份仍**逐字节相同**）。
+⇒ 第 10 片那四个计数器从此**在仪器里**，不用人在板子上手敲 `ethtool -S`。
 
 **顺带体检了整条刷机链**（`scratch/live_flash_tools_check.py`）：
 `gatecheck.sh` / `flash-round.sh` / `flash-direct.sh` / `preflight.sh` /
@@ -5280,9 +5287,15 @@ ours 那两个计数器回答的是两个问题：
 1. **没有实机证据**：本节每一句都是**读树**读出来的。
    板子回来之后，`ethtool -S` 的输出里应当出现这四个名字，
    隔离真发生过的时候 `tx_invalid_completions` / `tx_recovery_requests` 应当**大于 0**。
-2. **`ethtool` 包本身没有在本机验过它在 7.3 镜像里**：
-   `overlays-73/target/linux/zte/zx279133/target.mk` 的 `DEFAULT_PACKAGES` 里有 `ethtool`
-   （与 6.18 线同一份清单），但**镜像里到底有没有那个二进制**，要等实机。
+   ⇒ 这一条现在**由仪器代读**：仪器第 6 节读的就是这四个名字（读两次），
+   名字不在就打印 `NOT PUBLISHED`，`ethtool` 不在镜像里就明说
+   （八之八.4）。**判读**：四个名字都在且隔离发生时那两个大于 0 ⇒ 隔离模型生效。
+2. **`ethtool` 包本身**已在本机验过它在 7.3 镜像里**（这一条从「没做」变成「已验」）**：
+   #59 那轮的产物 manifest 里写着 `ethtool - 6.15-r1`；
+   而且 7.3 线那道「Gate: the image carries the packages the board needs」
+   现在**把 `ethtool` 列进必查名单** ⇒ 以后谁把它从 `DEFAULT_PACKAGES` 里拿掉，
+   那一轮构建会红，而不是等到板子上才发现仪器瞎了。
+   （6.18 发布线**不动**：它自己的管理面门禁是产品面的，不掺这件事。）
 3. **第 7 片留下的缺口本片没有动**：
    `zx279133_xsk_pool_cycle()` 里数据面挂起/恢复失败会把 `datapath_failed` 置上
    （`zx279133_datapath_suspend()` `:864`、`zx279133_datapath_resume()` `:879`），
@@ -7493,6 +7506,11 @@ python3 scratch/spell_bytes.py
 #      这一支脚本本轮修过两处（成员名拼错成 jiffs2；缺成员仍退出 0）——
 #      缺一个就非零退出，且对不上 manifest 就不算成功
 python3 scratch/extract_flash_members.py scratch/artifact57-flash.zip scratch/extract-test
+
+# 114) 对拍仪器的排练（不碰板子）：合成一棵 /sys/class/net 树 + 一个 ethtool 桩，
+#      六个问题都要有答案；两个负例（表里没有那四个名字、镜像里没有 ethtool）
+#      必须 survivable；再把仪器改坏六处，每一处都要被抓住
+python3 scratch/trialsurvey_check.py
 ```
 
 第十节的 18~24 号命令里，`cfg73_sim.py` 与 `kdeps73.py` 是**一对**：

@@ -1292,15 +1292,21 @@ jobs:
             find openwrt/bin/targets -maxdepth 3 2>&1 | head -20 || true
             exit 1; }
           echo "manifest: $MANIFEST"
+          # ethtool is on this list for the board trial, not for the
+          # management plane: the trial's instrument reads the four TX
+          # isolation counters through `ethtool -S`, and they are the only
+          # thing that tells a ring that was quarantined from a ring that
+          # never had a problem.  An image without ethtool builds green and
+          # leaves the trial blind, so the image has to carry it.
           for package in zxpond libzxpon-omci luci-app-sk-d840n-pon \
                          luci-mod-system firewall4 nftables tc-tiny \
-                         luci-app-firewall rpcd-mod-ucode ucode-mod-fs; do
+                         luci-app-firewall rpcd-mod-ucode ucode-mod-fs ethtool; do
             grep -q "^$package " "$MANIFEST" || {
               echo "::error::the image manifest is missing $package"
-              grep -E '^(zxpond|libzxpon-omci|luci-|firewall4|nftables|tc-|rpcd-|ucode-)' "$MANIFEST" || true
+              grep -E '^(zxpond|libzxpon-omci|luci-|firewall4|nftables|tc-|rpcd-|ucode-|ethtool)' "$MANIFEST" || true
               exit 1; }
           done
-          echo "the image carries the management packages"
+          echo "the image carries the packages the board needs"
 
       # Validate the native sysupgrade image and export its members.
       # This is the release line's own tool: it checks the fwtool metadata

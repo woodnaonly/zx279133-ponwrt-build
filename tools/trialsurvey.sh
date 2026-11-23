@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-2.0-only
 # Read-only survey of the SK-D840N running the 7.3 kernel.
 #
-# This is the board trial's instrument.  It answers the five questions the
+# This is the board trial's instrument.  It answers the six questions the
 # trial has to answer, and it answers them by reading the interfaces the
 # ported drivers expose - no guessing, no writing, no configuration.
 #
@@ -42,6 +42,16 @@
 #   5. omci_transport's submitted and completed counters move
 #      (the same file, the second attribute of the same device)
 #
+#   6. the driver publishes the four TX isolation counters
+#      (ethtool -S on the WAN netdev: tx_invalid_completions,
+#      tx_recovery_requests, tx_recovery_restarts and tx_recovery_failures.
+#      They are the only thing that tells a ring that was quarantined from
+#      a ring that never had a problem - the isolation model is invisible
+#      without them, because a ring that was pulled out of the pool looks
+#      exactly like a healthy one from the outside.  zx279133-main.c
+#      installs the driver's ethtool_ops on the WAN netdev, which the
+#      board's network configuration names eth0)
+#
 # Two samples are taken, with the interval between them, so that a
 # counter which does not move says so instead of being read once and
 # looked at.
@@ -66,6 +76,38 @@ LOS_TRIGGER=${SK_LOS_TRIGGER:-zx279133-los}
 # can be overridden, because the flat number depends on how many gpio
 # chips the kernel was given.
 OPSD_GPIO=${SK_OPSD_GPIO:-65}
+
+# The interface that carries the driver's own statistics, and the counters
+# the TX isolation model publishes on it.  The names are the ones the
+# driver's statistics table holds, so a name that is not there is a
+# finding, not a formatting accident.
+STATDEV=${SK_STATDEV:-eth0}
+TXSTATS="tx_invalid_completions tx_recovery_requests tx_recovery_restarts tx_recovery_failures"
+
+# The driver's own counters, read through ethtool.  Three different
+# failures are told apart, because they are three different findings: no
+# ethtool in the image at all, an interface that publishes no driver
+# statistics, and a statistics table that does not carry the four names.
+print_ethtool_stats() {
+	if ! command -v ethtool >/dev/null 2>&1; then
+		echo "  (no ethtool in this image - the TX isolation counters cannot be read here)"
+		return 0
+	fi
+	out=$(ethtool -S "$STATDEV" 2>/dev/null) || {
+		echo "  (ethtool -S $STATDEV failed - this interface publishes no driver statistics)"
+		return 0
+	}
+	echo "  $STATDEV:"
+	for n in $TXSTATS; do
+		v=$(printf '%s\n' "$out" | awk -v k="$n" \
+			'{ gsub(":", "", $1); if ($1 == k) { print $2; exit } }')
+		if [ -n "$v" ]; then
+			printf '    %-28s %s\n' "$n" "$v"
+		else
+			printf '    %-28s NOT PUBLISHED\n' "$n"
+		fi
+	done
+}
 
 # The level of one gpio line, read from the kernel's own gpio dump.
 # The dump's exact shape has changed between kernel versions, so the
@@ -186,7 +228,11 @@ done
 [ "$found" = 1 ] || echo "  (no omci_transport attribute - the PON stack did not attach to a netdev)"
 
 echo
-echo "=== 6. the same counters ${INTERVAL}s later ==="
+echo "=== 6. the driver's own statistics (ethtool -S $STATDEV) ==="
+print_ethtool_stats
+
+echo
+echo "=== 7. the same counters ${INTERVAL}s later ==="
 sleep "$INTERVAL"
 for d in "$CLASS"/*; do
 	[ -d "$d" ] || continue
@@ -202,11 +248,13 @@ for f in "$CLASS"/*/device/pon_state "$CLASS"/*/device/omci_transport; do
 	[ -r "$f" ] || continue
 	echo "  $(basename "$(dirname "$(dirname "$f")")")/$(basename "$f"): $(cat "$f")"
 done
+echo "  -- and the driver's own counters again, so they can be compared with the first reading:"
+print_ethtool_stats
 echo "  -- and the lamp again, so it can be compared with the first reading:"
 print_lamp
 
 echo
-echo "=== 7. the kernel's own idea of the drivers ==="
+echo "=== 8. the kernel's own idea of the drivers ==="
 if [ -r /proc/modules ]; then
 	grep -E '^(npu|fnoffload|zx279133)' /proc/modules || \
 		echo "  (no zte modules loaded - on this line the drivers are built into the kernel)"
