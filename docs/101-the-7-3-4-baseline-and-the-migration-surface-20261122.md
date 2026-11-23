@@ -7078,8 +7078,13 @@ python3 ci-build-repo/tools/kcheck.py --tree scratch/test73c \
 python3 ci-build-repo/tests/test_sk_kcheck.py   # 判决规则的单元测试
 
 # 12) 哪些 .c 真会被编进内核（Kbuild 的 obj-$(CONFIG_X) 解析）
+#     用**上了钉**的那份配置（.sim，第 19 号命令产的）。.merged 是**上钉之前**
+#     的基线：mkcfg73.py 只合并三个片段 + /dev/mem 那一处，不施加工作流的驱动
+#     钉子，也不施加 configure-sk-d840n.sh 的 pin_y / 命令行 / 优化级别。用它
+#     会把 zx279133-switch.c 判成「CONFIG 没开 ⇒ 跳过」—— 就是那个让 7.3 线
+#     连红三轮的坑（三个驱动 =m、switch 直接不编）
 python3 scratch/kobjmap73.py --tree scratch/test73c \
-        --config scratch/cfg73/config-7.3.merged
+        --config scratch/cfg73/config-7.3.sim
 
 # 13) 驱动在 7.3 里是内建还是模块（决定镜像里有没有它）
 python3 scratch/kcfg73.py
