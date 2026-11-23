@@ -121,12 +121,21 @@ echo "nc \$1 \$2 <- \$3" >>"$T/pushes"
 cat >"$T/pushed.\$2"
 exit 0
 EOF
+# The version the staged image declares.  The gate compares the version a gate round
+# reports with the version of the image that is about to be written, so the rehearsal has
+# to state the image's own version: a constant agrees with it only until the staged image
+# changes, and then the rehearsal would fail for a reason that has nothing to do with
+# the payload.
+KVER=$(tail -c +65 staging/trial/flash-uImage 2>/dev/null | gzip -dc 2>/dev/null |
+	grep -a -o -m1 'Linux version [0-9][0-9A-Za-z.+_-]*' 2>/dev/null |
+	head -1 | sed 's/^Linux version //')
+[ -n "$KVER" ] || { echo "the staged image declares no kernel version - the rehearsal cannot state one" >&2; exit 1; }
 cat >"$T/bin/uname" <<EOF
 #!/bin/sh
 # The report line's value only has to be *this kernel's* version, and the point of the field
-# is that gatecheck demands the 6.x build being flashed - so state it, rather than letting
+# is that gatecheck demands the build being flashed - so state it, rather than letting
 # the PC kernel 3.6.3 pass as evidence about a board kernel.
-echo "6.18.38+"
+echo "$KVER"
 EOF
 chmod +x "$T/bin/nc" "$T/bin/uname"
 
@@ -367,7 +376,7 @@ sleep 3
 [ -s "$T/pushed.419" ] || echo "  (the vendor round pushed no report at all - the checks below will say so)"
 check "a vendor kernel writes nothing to /dev/mem" 'test ! -e "$T/devmem.2557440" && test ! -e "$T/devmem.2359296" && test ! -e "$T/devmem.70795394"'
 check "and says why" 'grep -q "^mbox_write=off-kernel-is-not-the-payload$" "$T/pushed.419"'
-echo '#!/bin/sh' >"$T/bin/uname"; echo 'echo "6.18.38+"' >>"$T/bin/uname"
+echo '#!/bin/sh' >"$T/bin/uname"; echo "echo \"$KVER\"" >>"$T/bin/uname"
 chmod +x "$T/bin/uname"
 
 echo

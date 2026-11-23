@@ -95,6 +95,12 @@ BRINGUP_TRIGGERS = [
     # build checks and has to start a build.
     "tools/check-conduit-netdev-name.py",
     "tests/test_conduit_netdev_name.py",
+    # The flash gate and the controls that say whether it still has teeth: the
+    # gate decides which bytes may be written to a board, so a change to it
+    # changes what the build checks.
+    "tools/gatecheck.sh",
+    "tools/uimage-kver.py",
+    "tests/test_gatecheck.py",
     # The host compiler check and the shadow headers it needs: the build
     # runs them, so a change to either of them changes what the build
     # checks and has to start a build.
@@ -112,6 +118,7 @@ SHARED_GATES = [
     "tests/test_sk_layout.py",
     "tests/test_sk_uboot.py",
     "tests/test_conduit_netdev_name.py",
+    "tests/test_gatecheck.py",
 ]
 
 # The zte drivers that have to end up inside the kernel image on the 7.3

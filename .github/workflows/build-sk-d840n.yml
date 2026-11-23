@@ -63,6 +63,11 @@ on:
       - tests/test_sk_layout.py
       - tests/test_sk_uboot.py
       - tests/test_conduit_netdev_name.py
+      # The flash gate and its controls: the gate decides which bytes may be
+      # written to a board, so a change to either has to start a build.
+      - tools/gatecheck.sh
+      - tools/uimage-kver.py
+      - tests/test_gatecheck.py
       - tests/sk_layout_fixture.py
       - tests/sk_omci*
       - templates/**
@@ -130,6 +135,7 @@ jobs:
           python3 tests/test_sk_uboot.py
           python3 tests/test_sk_workflows.py
           python3 tests/test_conduit_netdev_name.py
+          python3 tests/test_gatecheck.py
 
   build:
     name: ${{ matrix.mode }}

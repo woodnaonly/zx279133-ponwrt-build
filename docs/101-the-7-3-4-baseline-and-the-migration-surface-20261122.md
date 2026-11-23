@@ -112,6 +112,28 @@
     但**需要一道门禁**：格式串一改，发布名就会变，或者驱动直接注册失败、
     板子上根本没有 conduit，而对拍读的是**固定名字**，读不到会**静默地**读出空值。
     见 7.27。
+17. **7.3 线第一次真的把镜像编出来了。**
+    API 全表：这条线 39 轮里 **#1~#35 无一成功**（26 轮 failure、9 轮 cancelled），
+    **#36 是第一次全绿**（三个 job 全 success，1 h 21 m 51 s），
+    #37 同样全绿。⇒ 7.21 的 libbpf 修复是对的，它就是那最后一道门。
+    产物在本机**自证一致**：`sha256sums` 六项全对、dtb 是 **native241**
+    （root 在 mtd5、别名钉死）、inflate 出来的 Image 是 14,051,336 B，
+    与 `sysupgrade-report.json` 的 `raw_bytes` 逐字节吻合，uImage 名字就是
+    `ARM64 ImmortalWrt Linux-7.3.4`。
+    ⇒ **但板子还没跑过 7.3**：`staging/ctl/flash.permit` 里没有这对字节的凭证，
+    `tools/gatecheck.sh` 不放行；而且它对 `gate-*` 凭证只认 `kver=6.*`，
+    **7.3 得先跑一轮 RAM 门禁（不写 flash）**，闸门还得为 7.3 放开一档。
+    见 7.28。
+18. **刷机闸门的版本判据改成了「从待刷镜像自己读」。**
+    旧写法只认 `kver=6.*` ⇒ 7.3 的门禁凭证（`kver=7.3.4`）**永远过不了**，
+    而那条判据的本意是「必须是**正在刷的这一个内核**」，不是「必须是 6.x」。
+    现在期望版本从**待刷那个 uImage 的 banner** 里读出来，再与凭证**逐字符**比对：
+    6.18 配 6.18 放行、7.3 配 7.3 放行、**6.18 配 7.3 拒绝**、
+    厂商 4.19 一律拒绝、**读不出版本就拒绝**（fail closed）。
+    ⇒ 比写死系列**更严**，两条线都不用改代码。
+    顺带修掉一个真缺陷：GNU `md5sum` 遇到含反斜杠的文件名会输出转义形式，
+    于是许可行永远匹配不上、闸门对**任何**字节对都拒绝。
+    见 7.29。
 
 ---
 
@@ -338,6 +360,9 @@ CONFIG_EXTERNAL_KERNEL_TREE=<树>   OpenWrt 把这棵树当自己的内核目录
 | `tests/test_sk_workflows.py` | 工作流自身的门禁：每个工作流文件可解析、7.3 线依赖的步骤都在、门禁点名的测试文件都存在、7.3 线的路径过滤覆盖这条线的输入（见 7.9） |
 | `tools/check-conduit-netdev-name.py` | **conduit 网口发布名**的门禁：不 grep 格式串，而是按内核的规则（`dev_valid_name()` → `__dev_alloc_name()`）把发布名**算**出来再比对，必须是 `lan-cpu0`（见 7.27） |
 | `tests/test_conduit_netdev_name.py` | 上面那道门禁的**负控**：格式串改了、说明符不对、名字被占用、驱动不注册、驱动命名两次 —— 每一种都必须转红 |
+| `tools/gatecheck.sh` | **刷机闸门**：只放行「这块板上真跑起来过」的那对字节。版本判据改成**从待刷 uImage 的 banner 读出期望版本**再与凭证逐字符比对（`6.*` 那种写死系列的老写法已删），并去掉 `md5sum` 在 Windows 路径下的转义（见 7.29） |
+| `tools/uimage-kver.py` | 从 uImage 的 banner 读出内核版本（独立的第二套实现，与闸门里的 shell 读法交叉对拍） |
+| `tests/test_gatecheck.py` | 闸门的**负控**：6.18 凭证配 7.3 镜像、厂商 4.19 凭证、读不出版本的镜像、缺 `root_read`/`root_index`/`jffs2_ro` 的凭证、空标签 —— 每一种都必须转红（见 7.29） |
 | `overlays-73/target/linux/zte/zx279133/target.mk` | 7.3 线的 subtarget 默认包：**清空 OpenWrt 的 `DEFAULT_PACKAGES.tweak`**，否则其中的 `luci` 元包会拉进 `luci-theme-bootstrap`（见 7.8） |
 | `tools/func-surface-diff.py` | 两代驱动的函数面对照，输出「只在我们这边」与「只在 7.3 那边」两张工作清单 |
 | `tools/func-port-coverage.py` | **按能力对账**：171 个函数逐条必须有归属（同名 / 账本写明搬到哪 / 有处置记录），未记账即非零退出；账本指着的目标函数必须真在 7.3 树里（见八之七） |
@@ -2727,6 +2752,184 @@ case 4: two format specifiers (control)
    门禁把这条当成前提（`--taken` 可以显式给出占用者），
    但两棵树里都只有 `zx279133-lan-conduit.c` 一处用 `lan-cpu%d`。
 
+### 7.28 7.3 线**第一次**产出镜像（run #36 / #37），以及产物的自证
+
+**判决**
+
+1. **run #36（head `ac50502`）是 7.3 线的第一次成功。**
+   API 全表列出这条线 39 轮（#5 的工作流自己解析失败、连 job 都没有，
+   所以不在表里）：**#1~#35 无一成功**（26 轮 failure、9 轮 cancelled），
+   #36 的三个 job（repository gates / flash / initramfs）**全部 success**，
+   用时 1 h 21 m 51 s。
+   ⇒ **7.21 的 libbpf 修复是对的**，而且它就是那最后一道门。
+2. **run #37（head `9e5f56d`）同样全绿** ⇒ 不是偶然。
+3. **产物在本机自证一致**（不是转述 CI 的说法）：
+   - `sha256sums` 里 6 个文件**全部对上**；
+   - `flash-dtb.bin` 过 `tools/dtbparts.py layout=native241 root=0xf00000,0xf100000`
+     ⇒ **native241**、root 在 **mtd5**、5 个分区、每个分区的序号都被别名钉死；
+   - `flash-uImage` inflate 出来的 Image 是 **14,051,336 B**，与
+     `sysupgrade-report.json` 里的 `kernel.raw_bytes` **逐字节吻合**；
+   - uImage 的名字就是 `ARM64 ImmortalWrt Linux-7.3.4`；
+   - 内核包叫 `kernel-7.3.4~074c9ff4fc2d9852f38c6476458c9e5e-r1.apk`。
+4. ⇒ **7.3 的三件套可以进板子**——但还差一道闸（见「未做」第 1 条）。
+
+**证据**
+
+```sh
+# 产物从哪来：artifact 的列表是公开的，内容要登录态（本机走内置 Browser）
+$ python scratch/ci_artifacts.py 45116803192
+run 45116803192: 2 artifact(s)
+  id=14795466830  sk-d840n-73-images-initramfs   15878929 bytes
+  id=14792934429  sk-d840n-73-images-flash        73408482 bytes
+
+# 自证：三件套的和、分区表、内核版本
+$ python scratch/verify_artifact.py staging/trial73/flash
+ok   flash-uImage  d62cac18e355fa90352fa2e6a73716b455ba634323bedc540b9c65183a734efc
+ok   flash-dtb.bin  1c80886a5df7a0ae44a27ea07f7b2993cec7ba1e4f68d8988d3e7f3cf0d37a0e
+ok   flash-rootfs.jffs2  2d781630be436fecd7e2a19d8d999165d3e2b43ac94c740c425b3e2f222111d4
+ok   flash-sysupgrade.bin  9fe87cbcc581b85d8b350987c4224bcd859eb168cc609dcf5b9768aaa6ef19b2
+ok   immortalwrt-sk-d840n-sysupgrade.bin  9fe87cbcc581b85d8b350987c4224bcd859eb168cc609dcf5b9768aaa6ef19b2
+ok   sysupgrade-report.json  3c1dc2fe4f04564add1d11e7e0ad093cdf29dddd6f714f31d0ea4e6bd1a39bb6
+validated layout: native241
+...
+index order: 1:boot 2:kernel 3:dtb 4:parameter tags 5:root
+root is /dev/mtdblock5 - U-Boot's bootargs hard-code 5, so OK
+OK: the artifact is self-consistent
+
+# 门禁载荷：由**要刷的那对字节**推出来（仓库自己的 tools/mkgate.sh）
+$ sh tools/mkgate.sh
+uImage      5811995 B  name='ARM64 ImmortalWrt Linux-7.3.4' load=0x80200000 ep=0x80200000 os/arch/type/comp=5/22/2/1
+Image      14051336 B  text_offset=0x0 image_size=0xdd0000  md5=bd3e45a2bd547350743569fa6be2227e
+dtb           14958 B  md5=ff6914d007b9b21895e1a6b3f67d5ea5
+the gate kernel IS the flash kernel: inflated flash-uImage md5 == gate-Image md5 (bd3e45a2bd547350743569fa6be2227e)
+```
+
+**未做 / 还欠着**
+
+1. **板子还没跑过 7.3。** 7.3 的那对字节在 `staging/ctl/flash.permit` 里
+   **没有凭证**，而 `tools/gatecheck.sh` 只放行有凭证的字节对 ——
+   而且它对 `gate-*` 凭证还要求 `kver=6.*`（那是 6.18 那次门禁跑出来的）。
+   ⇒ **7.3 必须先跑一轮 RAM 门禁**（kexec 进 RAM，**不写 flash**），
+   拿到 `kver=7.3.4` 的报告之后，那道闸还得为 7.3 放开一档。
+   （**那道闸的版本判据已经在 7.29 改掉了**：期望版本改成从待刷镜像自己读。）
+   这是**设计如此**，不是缺陷：写进去的字节如果没有在这块板上起来过，
+   板子上就没有任何东西能跑（无串口、无 U-Boot 控制台、无 A/B）。
+2. **本轮没做实机对拍。** bench 的 inbox 被另一个会话占着；
+   板子此刻停在 **U-Boot 提示符**（`192.168.9.1` 是 U-Boot 自己的 IP：
+   应答 ICMP，但没有 sshd，所以 `ssh` 卡在 banner 交换上）。
+   ⇒ 既不能 SSH 进正在跑的系统，也不能发继电器命令，两条路都走不了。
+3. **#38~#40 还在跑**，它们会顺带回答「本轮新加的三道门禁
+   （dtb 分区表 / 面板 LED / conduit 名字）在真产物上过不过」。
+4. 6.18 发布线的 gate round 凭证只认 `kver=6.*`，**这是本轮第一次撞上的
+   设计边界**，下一节记它。
+
+---
+
+### 7.29 刷机闸门 `gatecheck.sh`：版本判据从「写死 6.x」改成「**从待刷镜像自己读**」
+
+**判决**
+
+1. **7.3 过不去的原因查实了**：闸门对 `gate-*` 凭证的判据是
+   `case "$KV" in 6.*)`，而 7.3 的门禁轮报的是 `kver=7.3.4` ⇒ **永远拒绝**。
+   这条判据的**本意**不是「必须是 6.x」——原注释写的是
+   「the flash target is the 6.18.38 build this dtb was made for」，
+   意思明明是「必须是**正在刷的那一个内核**」；写成 `6.*` 把「同一个内核」
+   放宽成了「同一个大版本」。
+2. **改成精确比对**：期望版本从**待刷那个 uImage 自己**读出来（内核的 banner），
+   再与凭证里的 `kver` **逐字符相等**地比：
+
+   | 凭证的 kver | 待刷镜像 | 结果 |
+   |---|---|---|
+   | `6.18.38+` | 6.18 的 uImage | 放行（旧写法也放行） |
+   | `7.3.4` | 7.3 的 uImage | **放行**（旧写法拒绝） |
+   | `6.18.38+` | 7.3 的 uImage | **拒绝**（旧写法**放行**） |
+   | `4.19.136+` | 任意 | 拒绝（厂商内核不证明 mainline，保留） |
+   | 任意 | 读不出版本的镜像 | 拒绝（fail closed） |
+
+   ⇒ 比写死某个系列**更严**，而且**两条线都不用改代码**。
+3. **顺带修掉一个真缺陷**：GNU `md5sum` 在**文件名含反斜杠或换行**时输出转义形式
+   （hash 前面多一个 `\`），于是许可行永远匹配不上 —— 闸门对**任何**字节对都拒绝。
+   Windows 上的绝对路径正是这种文件名。⇒ 现在把那个转义去掉。
+4. **`tools/siminit.sh` 的伪造 `uname` 跟着改**：演练里那个假 `uname` 原来写死
+   `6.18.38+`。新规则下凭证版本必须等于镜像声明的版本 ⇒ 演练改为
+   **从暂存镜像里读**，否则 7.3 那轮会误报失败。
+5. **闸门有了自己的负控测试** `tests/test_gatecheck.py`（30 项），
+   并做了 **10 处突变的反向验证**：每改坏一处，控制必须**转红在指定的那条检查上**。
+6. **banner 的位置不是固定的** —— 这是动手前必须先量的一件事：
+   内核的 banner 串在 `.rodata` 里，链接器把它放哪儿它就在哪儿
+   （7.3 那份在 inflate 后的 `0x84009a`，6.18 那份在 `0xc400b8`），
+   **不是** arm64 头后第 64 字节（那里是全零）。
+   ⇒ 只能**搜文本**，不能切固定偏移 —— 仓库里 `tools/checkrollback.sh:71` 与
+   `tools/mkrollback.sh:44` 早就是这么做的（后者注释写得很清楚：
+   「The banner is not at a fixed offset inside the Image, so search the text rather
+   than slice it」）。
+
+**证据**
+
+```sh
+# 1) banner 在哪：量出来的事实（不是假设）
+$ python scratch/kver_members.py staging/trial73/flash/flash-uImage
+uImage size=5811931 body=5811931 bytes
+member 1: offset=0 compressed=5811931 inflated=14051336
+  first 16: 1f 20 03 d5 27 40 2d 14 00 00 00 00 00 00 00 00
+  'ARM\x64' magic at 56
+  'Linux version' at [8650906, 9820220]
+    8650906: b'Linux version 7.3.4 (runner@runnervmxfy6o) (aarch64-openwrt-linux-musl...'
+    bytes before 8650906: 00 69 6e 69 74 63 61 6c 6c 5f 64 65 62 75 67 00
+#    8650906 = 0x84009a；6.18 那份是 12845240 = 0xc400b8；两处的前一个串都是
+#    .rodata 里的 "initcall_debug"
+
+# 2) 两个暂存镜像各自声明的版本（闸门要的就是这个）
+$ sh scratch/check_gate_scripts.sh
+syntax OK  ci-build-repo/tools/gatecheck.sh
+syntax OK  tools/gatecheck.sh
+syntax OK  ci-build-repo/tools/siminit.sh
+syntax OK  tools/siminit.sh
+the version each staged image declares:
+  staging/trial/flash-uImage -> [6.18.38+]
+  staging/trial73/flash/flash-uImage -> [7.3.4]
+
+# 3) 闸门的负控（30 项）
+$ python ci-build-repo/tests/test_gatecheck.py
+PASS: a record about this kernel allows the flash
+PASS: the gate says what it allowed
+PASS: a 6.18 record allows a 6.18 image
+PASS: a 6.18 record does NOT allow a 7.3 image
+PASS: the refusal names both versions
+PASS: a 7.3 record does NOT allow a 6.18 image
+PASS: a vendor-kernel record does NOT allow a mainline image
+PASS: a vendor-kernel record does NOT allow the vendor image
+PASS: an image without a banner is refused
+PASS: an image that is not gzip is refused
+...
+PASS: the flash gate has teeth
+
+# 4) 反向验证：10 处突变逐个转红，且只红在指定的那条检查上
+$ python scratch/reverse_check_gate.py
+PASS: accept any 6.x record again turns the control red (a 6.18 record does NOT allow a 7.3 image)
+PASS: trust the record instead of the image turns the control red (an image without a banner is refused)
+PASS: stop reading the version at all turns the control red (a record about this kernel allows the flash)
+PASS: let the vendor kernel count as a proof turns the control red (a vendor-kernel record does NOT allow the vendor image)
+PASS: accept an empty gate tag turns the control red (proven=gate- is refused)
+PASS: stop asking for the ECC read to have matched turns the control red (a record with root_read=DIFFERENT is refused)
+PASS: stop asking for the root to have mounted turns the control red (a record with jffs2_ro=FAIL is refused)
+PASS: stop asking which root partition was read turns the control red (a record with root_index=4 is refused)
+PASS: let any proven= value through turns the control red (proven=guessed is refused)
+PASS: keep md5sum's escape in front of the hash turns the control red (a record about this kernel allows the flash)
+PASS: every mutation of the gate turns its own control red
+```
+
+**未做 / 还欠着**
+
+1. **闸门放开 ≠ 凭证有了**：7.3 那对字节仍然**没有**门禁凭证
+   （`staging/ctl/flash.permit` 里没有它们的记录）⇒ 闸门照样拒绝。
+   要真的刷进去，仍须先跑一轮 **RAM 门禁**（kexec 进 RAM，**不写 flash**），
+   拿到 `kver=7.3.4` 的报告；**那一轮就会把凭证写进去**，闸门随即放行。
+2. **本轮没有跑那轮 RAM 门禁**：bench 的 inbox 被别的会话占着，板子停在 U-Boot。
+3. **闸门自身没在真板子上验过**：负控是 PC 侧跑的（合成 uImage）；
+   7.3 的真 uImage 只验过「读得出版本」这一件事。
+   ⇒ **真凭证那一轮**才会第一次把真字节喂给闸门。
+
 ---
 
 ## 八、BP 池：逐槽位对照（第 1 片剩余部分的结论）
@@ -3855,6 +4058,22 @@ python3 scratch/netdev_name_resolve.py
 # 40) conduit 名字门禁的负控（格式串改了 / 说明符不对 / 名字被占用 / 不注册 /
 #     命名两次 / 空文件，每一种都必须转红）
 python3 ci-build-repo/tests/test_conduit_netdev_name.py
+
+# 41) 7.3 线的全表：第一次成功是哪一轮（不是靠最近几轮推断）
+python3 scratch/ci_first_success.py
+
+# 42) 产物的自证：sha256sums + dtb 分区表 + 内核版本 banner
+python3 scratch/verify_artifact.py staging/trial73/flash
+
+# 43) uImage 的 banner 在哪：inflate 后按 gzip 成员拆开量（不是假设偏移）
+python3 scratch/kver_members.py staging/trial73/flash/flash-uImage
+
+# 44) 闸门的负控：版本相符放行、6.18 凭证配 7.3 镜像拒绝、厂商内核拒绝、
+#     读不出版本拒绝、缺证据字段拒绝，每一种都必须转红
+python3 ci-build-repo/tests/test_gatecheck.py
+
+# 45) 上面那道负控的反向验证：10 处突变逐个转红，且只红在指定的那条检查上
+python3 scratch/reverse_check_gate.py
 ```
 
 第十节的 18~24 号命令里，`cfg73_sim.py` 与 `kdeps73.py` 是**一对**：
@@ -3892,3 +4111,10 @@ uapi 头都过一遍 `scripts/headers_install.sh`，而它的 sed（第 34 行�
 `dev_get_valid_name()`）**原样**抬出来编成宿主程序，让它走驱动自己的调用序列 ——
 不是复述内核的行为，是**跑一遍内核的代码**。
 ⇒ 上一轮「网口叫 `lan-cpu%d`」那个结论就是被这一步推翻的（见 7.27）。
+
+43~45 号命令是**第五对**，也是本轮**唯一一处改「能不能刷」而不是改「能不能编」**的地方：
+43 号回答「内核的版本串到底在 uImage 的哪个位置」——
+量出来的答案是**不在固定偏移**（7.3 那份在 inflate 后的 `0x84009a`，6.18 那份在 `0xc400b8`），
+所以只能搜文本；44 号是闸门自己的负控；45 号证明 44 号不是靠「没查所以没报」蒙混过去的。
+⇒ 43 号那个「量」直接决定了闸门怎么写：**按 arm64 头后第 64 字节去切，
+会切出全零**，那扇闸就会永远拒绝 —— 它会「安全地」拒绝一切，而这比放行错误更费时间。
