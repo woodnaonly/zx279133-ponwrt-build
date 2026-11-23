@@ -47,6 +47,13 @@ on:
       - tools/check-sk-switch-api.py
       - tools/check-sk-pon-api.py
       - tools/check-sk-9132-api.py
+      # The PPU microcode gate: it asks the tree's own driver which blob it
+      # will take and checks the blob the tree carries against it.  Two blobs
+      # have the same name and the same size and different bytes, so a change
+      # to either the gate or the blob it checks changes what the build
+      # checks.
+      - tools/check-sk-mcode.py
+      - tests/test_sk_mcode.py
       - tools/check-conduit-netdev-name.py
       - tools/kcheck.py
       - tools/kshadow.py
@@ -386,6 +393,22 @@ jobs:
         run: |
           python3 tools/check-sk-board-api.py post \
             --tree "$KERNEL_TREE" --report sk-board-api.json
+
+      # The PPU microcode is a *built-in* firmware: config-7.3 sets
+      # CONFIG_EXTRA_FIRMWARE="zte/zx279133/mcode_intel.bin" with
+      # CONFIG_EXTRA_FIRMWARE_DIR="firmware", so the blob the board gets is
+      # the one in the kernel tree - and the rootfs carries none (measured:
+      # the jffs2 image has no /lib/firmware at all, and neither name is in
+      # it).  Two blobs have that name and that size (103,456 B) and
+      # different bytes, and the 7.3 driver compares the blob it gets
+      # against one crc32 and refuses any other one when vlan offload is on
+      # - so a tree carrying the 6.18 line's copy leaves the PPU without
+      # its firmware and the data path never comes up.  The expected crc32
+      # is read out of the driver, not written down here.
+      - name: 'Gate: the NPU microcode is the one this driver will take'
+        run: |
+          python3 tools/check-sk-mcode.py --tree "$KERNEL_TREE"
+          python3 tests/test_sk_mcode.py --tree "$KERNEL_TREE"
 
       # The 9132 LAN switch driver is this repository's own code in the 7.3
       # tree, and it cannot be compiled on the machine that pushes this
