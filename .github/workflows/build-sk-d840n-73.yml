@@ -82,6 +82,10 @@ on:
       # the prepare decides what tree the build compiles, so a change to it
       # changes what the build checks.
       - tests/test_sk_prepare_content.py
+      # The control that says the prepare's apply really lands a patch in a
+      # tree that sits inside this checkout: git drops such a patch without
+      # a word, and the tree would keep the older driver.
+      - tests/test_sk_prepare_apply_context.py
       # The text hygiene control: a replacement character in a document
       # makes every search against that document come back empty.
       - tests/test_sk_text_hygiene.py
@@ -153,6 +157,9 @@ jobs:
           # landing from reaching the compiler, so the control that says
           # the check still bites runs with the rest of the gates.
           python3 tests/test_sk_prepare_content.py
+          # The apply context: a patch that git drops without a word leaves
+          # the tree with the older driver, and the build compiles it.
+          python3 tests/test_sk_prepare_apply_context.py
           # A replacement character in a document is a character the reader
           # cannot read, and it makes ripgrep treat the whole file as
           # binary - so every search against it comes back empty, silently.

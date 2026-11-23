@@ -13,7 +13,8 @@ external tree.  So this tool does the whole preparation itself:
      pinned value (the mirrors are interchangeable; the hash is not),
   2. apply the vendored patch series, one patch at a time, with
      `git apply --check` first and no fuzz, no rejects and no whole-file
-     overlays,
+     overlays, and with the checkout kept out of git's reach so that a
+     patch cannot be dropped without a word,
   3. rewrite OpenWrt's kernel metadata so it names 7.3.4 and the tarball's
      hash, instead of the 7.3.1 its tree was pinned to.
 
@@ -331,6 +332,87 @@ def diagnose_undelivered(tree, name, payload, before):
     return lines
 
 
+def apply_context(tree):
+    """The environment an apply has to run in.
+
+    `git apply` inside a repository resolves a patch that carries a
+    `diff --git` header against the repository root.  The kernel tree is
+    a directory inside the checkout, so such a patch falls outside the
+    current subdirectory and git drops it without a word: exit code 0,
+    nothing written.  A patch without that header is resolved against the
+    current directory and lands.  That is how two patches of this series
+    stayed out of the tree for three builds without anybody noticing, and
+    the tree the build compiled was quietly the older driver.
+
+    The ceiling keeps git from discovering the checkout at all, so the
+    patch is resolved against the tree and lands whatever shape it has.
+    """
+    env = dict(os.environ)
+    dirs = [str(tree.parent)]
+    existing = os.environ.get("GIT_CEILING_DIRECTORIES")
+    if existing:
+        dirs.append(existing)
+    env["GIT_CEILING_DIRECTORIES"] = os.pathsep.join(dirs)
+    return env
+
+
+def apply_one_patch(tree, origin, name, payload, env):
+    """Apply one patch to the tree, or refuse to go on.
+
+    The patch has to land.  git says it out loud when it drops a patch
+    file, and the tree has to show the lines the patch adds.
+    """
+    path = tree / ".sk-series" / origin / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(payload)
+    # The patch is named relative to the tree and the apply runs with the
+    # tree as its working directory: the checkout must not be able to
+    # decide where the patch lands.
+    patch_rel = path.relative_to(tree).as_posix()
+    # What the files look like before the patch goes in: an apply that
+    # reports success and changes nothing is the failure this is here
+    # to name.
+    before = {rel: file_digest(tree, rel)
+              for rel in patch_targets(payload)}
+    check = subprocess.run(
+        ["git", "-c", "core.autocrlf=false", "-C", str(tree), "apply",
+         "--check", "--whitespace=nowarn", patch_rel],
+        capture_output=True, text=True, cwd=str(tree), env=env)
+    if check.returncode != 0:
+        raise ValueError(f"{origin}/{name} does not apply cleanly:\n{check.stderr.strip()}")
+    run = subprocess.run(
+        ["git", "-c", "core.autocrlf=false", "-C", str(tree), "apply",
+         "--verbose", "--whitespace=nowarn", patch_rel],
+        capture_output=True, text=True, cwd=str(tree), env=env)
+    if run.returncode != 0:
+        raise ValueError(f"{origin}/{name} failed to apply:\n{run.stderr.strip()}")
+    # git says it out loud when it drops a patch file.  It says nothing
+    # when the patch carries no hunks, so the exit code alone is no
+    # promise that the tree changed.
+    skipped = [line.strip() for line in (run.stderr + run.stdout).splitlines()
+               if "Skipped patch" in line]
+    if skipped:
+        raise ValueError(f"{origin}/{name} was dropped by git without "
+                         "writing anything:\n" + "\n".join(skipped)
+                         + "\nthe checkout around the tree must not be able "
+                           "to decide where a patch lands")
+    # git said the hunks matched.  The tree has to show it: this is
+    # where a series that applied without landing is caught, before
+    # the build spends an hour compiling the older driver.
+    problems = verify_patch_content(tree, name, payload)
+    if problems:
+        after = {rel: file_digest(tree, rel)
+                 for rel in patch_targets(payload)}
+        detail = diagnose_undelivered(tree, name, payload, before)
+        raise ValueError(f"{origin}/{name} applied but the tree does not "
+                         f"carry it:\n" + "\n".join(problems)
+                         + "\nwhat the files looked like:\n"
+                         + "\n".join(detail)
+                         + "\nafter the patch:\n"
+                         + "\n".join(f"  {rel}: {digest}"
+                                    for rel, digest in after.items()))
+
+
 def apply_series(tree, series, marker_payload):
     """Apply the series, one patch at a time, refusing anything that does not
     apply cleanly.  A partially applied driver is worse than no driver: the
@@ -366,42 +448,9 @@ def apply_series(tree, series, marker_payload):
             "it was prepared by another tool - refusing to apply the series twice")
 
     applied = []
+    env = apply_context(tree)
     for origin, name, payload in series:
-        path = tree / ".sk-series" / origin / name
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(payload)
-        # What the files look like before the patch goes in: an apply that
-        # reports success and changes nothing is the failure this is here
-        # to name.
-        before = {rel: file_digest(tree, rel)
-                  for rel in patch_targets(payload)}
-        check = subprocess.run(
-            ["git", "-c", "core.autocrlf=false", "-C", str(tree), "apply",
-             "--check", "--whitespace=nowarn", str(path)],
-            capture_output=True, text=True)
-        if check.returncode != 0:
-            raise ValueError(f"{origin}/{name} does not apply cleanly:\n{check.stderr.strip()}")
-        run = subprocess.run(
-            ["git", "-c", "core.autocrlf=false", "-C", str(tree), "apply",
-             "--whitespace=nowarn", str(path)],
-            capture_output=True, text=True)
-        if run.returncode != 0:
-            raise ValueError(f"{origin}/{name} failed to apply:\n{run.stderr.strip()}")
-        # git said the hunks matched.  The tree has to show it: this is
-        # where a series that applied without landing is caught, before
-        # the build spends an hour compiling the older driver.
-        problems = verify_patch_content(tree, name, payload)
-        if problems:
-            after = {rel: file_digest(tree, rel)
-                     for rel in patch_targets(payload)}
-            detail = diagnose_undelivered(tree, name, payload, before)
-            raise ValueError(f"{origin}/{name} applied but the tree does not "
-                             f"carry it:\n" + "\n".join(problems)
-                             + "\nwhat the files looked like:\n"
-                             + "\n".join(detail)
-                             + "\nafter the patch:\n"
-                             + "\n".join(f"  {rel}: {digest}"
-                                        for rel, digest in after.items()))
+        apply_one_patch(tree, origin, name, payload, env)
         applied.append(f"{origin}/{name}")
         print(f"Applied {origin}/{name}", flush=True)
 

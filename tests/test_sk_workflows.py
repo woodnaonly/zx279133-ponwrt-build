@@ -91,6 +91,9 @@ BRINGUP_TRIGGERS = [
     # The prepare decides what tree the build compiles, so a change to it
     # changes what the build checks and has to start a build.
     "tests/test_sk_prepare_content.py",
+    # The control that says the prepare's apply lands a patch in a tree
+    # that sits inside the checkout: git drops such a patch without a word.
+    "tests/test_sk_prepare_apply_context.py",
     # The control that says the documents carry no replacement character:
     # one of those makes every search against the document come back empty.
     "tests/test_sk_text_hygiene.py",

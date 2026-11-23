@@ -218,7 +218,7 @@
     它们要 DSA 拓扑与实机对拍才有意义。
     **一处布局差异不能搬**：两代的 page pool `.offset` 各不相同
     （ours = `PAYLOAD_OFFSET`，theirs = `PAYLOAD_OFFSET + rx_frame_offset`），
-     两边 CPU 侧同步**各自自洽**，搬过去会双重偏移。
+    两边 CPU 侧同步**各自自洽**，搬过去会双重偏移。
     `170-sk-rx-delivery-safety.patch`（12173 B，106 插入 / 27 删除）
     + 39 条门禁 + 24 项负控 + 17 处反向验证。
     **顺带把 #46 的失败查到了底**：门禁在 CI 上红了 19 条、说树里没有 160 的符号，
@@ -234,6 +234,26 @@
     provenance 带**树指纹**；两道门禁把它们读到的文件 sha256 写进
     `GITHUB_STEP_SUMMARY`（job log 匿名下载不到，step summary 谁都能读）。
     见八之八与 7.37。
+25. **#46 / #47 / #48 的红查到了底：补丁 160 与 170 从未进入 CI 的树。**
+    `git apply` 在**一个仓库里、从子目录**运行时，对**带 `diff --git` 头**的
+    补丁按**仓库根**解析路径；内核树是 checkout 里的一个目录，
+    这样的路径落在当前子目录之外，git 就把整个补丁文件**默默丢掉** ——
+    退出码 0、一个字节都不写、默认什么都不说。
+    **带纯 unified diff 头的补丁不受影响**，于是同一批 47 个补丁里
+    vendored 的 39 个和 local 的 100~150 落地了，
+    只有带 git 头的 `160`（TX 隔离）与 `170`（RX 交付修复）没有。
+    git 加 `--verbose` 会自己说出来：`Skipped patch '...'.`
+    ⇒ **7.3 线此前编译过的每一个镜像，编的都是少了这两片的驱动**；
+    36 条 TX 门禁与 39 条 RX 门禁在 CI 上一次都没绿过。
+    修法：apply 放进 git 找不到 checkout 的上下文
+    （`GIT_CEILING_DIRECTORIES` = 树的上级目录）、补丁路径相对树给出、
+    工作目录就是树；再加一道守卫，git 说 `Skipped patch` 就直接拒绝。
+    门禁：`tests/test_sk_prepare_apply_context.py`（12 项）+
+    反向验证 5 项；本机用**真的**补丁在**真的** checkout 布局里跑通，
+    四个驱动文件的 sha256 与「160 已应用」逐个相同。
+    顺带：本文里当时藏着一个 **NUL 字节**，让所有针对本文的 grep 静默返回空
+    ⇒ 文本卫生门禁扩到「U+FFFD + NUL + 其它控制字符」。
+    见 7.39。
 
 ---
 
@@ -482,6 +502,8 @@ CONFIG_EXTERNAL_KERNEL_TREE=<树>   OpenWrt 把这棵树当自己的内核目录
 | `tools/check-sk-rx-delivery.py` | **第 8 片的门禁**：按**位置**判 39 条不变量 —— 参照点全是**执行点**（调用点、条件、使用点），不是声明点（见八之八.3） |
 | `tests/test_sk_rx_delivery.py` | 上面那道门禁的**负控**（24 项）：突变跑在**真树副本**上，不在合成树上 |
 | `tests/test_sk_prepare_content.py` | **prepare 步内容校验的负控**（16 项）：一个补丁加了行而树里没有，就必须被拒；空行不算缺失；自包含，不需要内核树 |
+| `tests/test_sk_prepare_apply_context.py` | **apply 上下文的负控**（12 项）：自建一个 checkout 加一个树在里面，断言**带 `diff --git` 头的补丁也落地**、**纯 diff 的补丁落地**、**context 挡住了 checkout**；反向三项：**git 确实会默默丢掉补丁**（退出 0、零写入、stderr 里有 `Skipped patch`）、**被丢掉的补丁被拒绝**、**被拒绝的树没有那行内容**（见 7.39） |
+| `tests/test_sk_text_hygiene.py` | 文档的**文本卫生**门禁：查 **U+FFFD、NUL 与其它控制字符**。一个 NUL 就足以让 ripgrep 把整个文件当成二进制，**所有针对该文档的搜索都静默返回空**（见 7.39） |
 | `tools/func-surface-diff.py` | 两代驱动的函数面对照，输出「只在我们这边」与「只在 7.3 那边」两张工作清单 |
 | `tools/func-port-coverage.py` | **按能力对账**：171 个函数逐条必须有归属（同名 / 账本写明搬到哪 / 有处置记录），未记账即非零退出；账本指着的目标函数必须真在 7.3 树里（见八之七） |
 | `tools/kcheck.py` + `tools/kshadow.py` | **编译预言机**：用宿主 clang 对 7.3 树做 `-fsyntax-only`，生成树自己的头文件与影子头文件；7.3 线在 Compile 之前先跑它（见 7.17） |
@@ -3759,6 +3781,113 @@ ValueError: local/160-sk-tx-fault-isolation.patch applied but the tree does not 
 **这一轮的设备在两条线上都还在跑**（7.3 的 #41~#47、6.18 的 #391~#397），
 按约定**一个都不取消**。
 
+#### 7.39 **#48 的结果：根因是 git 把补丁默默丢掉了，而它说的是「成功」**
+
+**判决**：`git apply` 在**一个仓库里、从子目录**运行时，对**带 `diff --git` 头**
+的补丁是按**仓库根**解析路径的。内核树是 checkout 里的一个目录，
+这样的路径落在当前子目录之外，git 就把整个补丁文件**默默丢掉**：
+
+* 退出码 **0**；
+* **一个字节都不写**；
+* **默认什么都不说**。
+
+带**纯 unified diff 头**（只有 `---`/`+++`）的补丁不受影响 ——
+它按当前目录解析。于是同一批 47 个补丁里，
+vendored 的 39 个和 local 的 100~150 **都落地了**，
+只有带 git 头的 `160-sk-tx-fault-isolation.patch` 和
+`170-sk-rx-delivery-safety.patch` **没有**。
+
+**证据一：#48 的 prepare 步自己把话说清楚了**（`00c84ca8`）：
+
+```
+ValueError: local/160-sk-tx-fault-isolation.patch applied but the tree does not carry it:
+  ... adds to .../zx279133-idm.c   but the tree does not carry '\tu16 done;'
+  ...
+what the files looked like:
+  drivers/net/ethernet/zte/zx279133-idm.c: did not change at all
+    before 7c461f9a19635214af07ed2948b77fce15aa3400bd5ddf26d54596a15632460e
+    after  7c461f9a19635214af07ed2948b77fce15aa3400bd5ddf26d54596a15632460e
+```
+
+⇒ 四个文件的 **before 与 after 逐字节相同** —— 不是「落错了地方」，
+是**什么都没发生**。
+
+**证据二：那几个哈希就是「160 之前」的状态**。本机
+`scratch/linux-73-base` 的 `8c4d767`（= 160 之前）四个文件的 sha256
+**逐个等于** CI 报出来的那四个：
+
+| 文件 | CI 报的 before/after | 本机 `8c4d767` | 本机 `5e63e46`（160 已应用） |
+|---|---|---|---|
+| `zx279133-idm.c` | `7c461f9a…` | `7c461f9a…` ✓ | `a1921333…` |
+| `zx279133-main.c` | `84f393eb…` | `84f393eb…` ✓ | `4713f0bd…` |
+| `zx279133-netdev.c` | `e29cfdbe…` | `e29cfdbe…` ✓ | `b72390f7…` |
+| `zx279133.h` | `6cdde38e…` | `6cdde38e…` ✓ | `ca990f56…` |
+
+⇒ **CI 的树就是「160 之前」**，而本机树的状态是同一套补丁**真的落进去**之后的样子。
+
+**证据三：补丁的头不一样**。这就是全部差别：
+
+| 补丁 | `diff --git` 头 | `index` 行 | 在 CI 上 |
+|---|---|---|---|
+| vendored 39 个 | 无 | 无 | **落地** |
+| local 100~150 | 无 | 无 | **落地** |
+| local `160`/`170` | **有** | **有** | **被丢掉** |
+
+**证据四：git 自己会说出来，只是要加 `--verbose`**。
+本机用**同一个补丁字节**、**同一个脚本**、**同一个 checkout 布局**逐字复现：
+
+```
+$ git apply --verbose ...   # 树在 checkout 里面
+Skipped patch 'drivers/net/ethernet/zte/zx279133-idm.c'.
+Skipped patch 'drivers/net/ethernet/zte/zx279133-main.c'.
+Skipped patch 'drivers/net/ethernet/zte/zx279133-netdev.c'.
+Skipped patch 'drivers/net/ethernet/zte/zx279133.h'.
+```
+
+退出码 0，四个文件**零字节变化**。把树换成「自己的仓库」或「不在任何仓库里」，
+同一个补丁立刻正常落地（四个文件都变了）⇒ **变量就是「树是不是某个仓库的子目录」**。
+
+**证据五：为什么本机之前一直复现不出来**。
+本机的树 `scratch/linux-73-verify*` **不在任何仓库里**
+（它们是 prepare 跑完之后才 `git init` 做了快照的），
+所以 apply 走的是「无仓库」那条路，从来没踩到过这个坑。
+
+**⇒ 结论（这条要记住）**：
+**7.3 线此前编译过的每一个镜像，编的都是少了 TX 隔离与 RX 交付修复两片的驱动。**
+而 36 条 TX 门禁与 39 条 RX 门禁**在 CI 上一次都没绿过** ——
+它们每次红，都是因为树里没有那两片。
+
+**⇒ 修法**（`tools/prepare-sk-kernel-73.py`）：
+
+1. apply 放进一个 **git 找不到 checkout** 的上下文：
+   `GIT_CEILING_DIRECTORIES` = 树的上级目录；
+2. 补丁路径**相对树**给出，apply 的**工作目录就是树**；
+3. 加一道守卫：apply 带 `--verbose`，输出里出现 `Skipped patch`
+   就**直接拒绝**，不许当已应用。
+
+**⇒ 门禁与验证**：
+
+* `tests/test_sk_prepare_apply_context.py`（**12 项**）：自建一个 checkout
+  加一个树在里面，断言**带 git 头的补丁落地**、**纯 diff 的补丁落地**、
+  **context 挡住了 checkout**，以及三项反向：
+  **git 确实会默默丢掉**（退出 0、零写入、stderr 里有 `Skipped patch`）、
+  **被丢掉的补丁会被拒绝**、**被拒绝的树确实没有那行内容**；
+* `scratch/reverse_check_prepare_apply_context.py`（**5 项**）：
+  抽掉 ceiling ⇒ 门禁**在指定的那条检查上**转红；
+  抽掉 `Skipped patch` 守卫 ⇒ 门禁**在指定的那条检查上**转红；
+* `scratch/prove_apply160_in_checkout.py`：拿**真的** `160` 补丁、
+  **真的**「160 之前」的树、**真的** checkout 布局，
+  apply 之后四个文件的 sha256 **逐个等于**本机「160 已应用」的状态；
+* `scratch/run_prepare_in_checkout.py`：**完整 47 个补丁**在 checkout 布局里
+  跑一遍，**每一个都落地**（`Applied local/170-...` 在列），
+  四个驱动文件的 sha256 与 `scratch/linux-73-verify4` **逐个相同**。
+
+**⇒ 顺带查出来的第二件事**：这份文档里当时藏着一个 **NUL 字节**
+（判决 24 的正文里），它让 ripgrep 把整个文件当成二进制 ——
+**所有针对本文的 grep 都静默返回空**（本轮因此又误判了一轮）。
+已清掉，并把 `tests/test_sk_text_hygiene.py` 从「只查 U+FFFD」
+扩到「**U+FFFD + NUL + 其它控制字符**」（131 个文件、0 问题）。
+
 ---
 
 ## 八、BP 池：逐槽位对照（第 1 片剩余部分的结论）
@@ -5093,6 +5222,24 @@ python3 scratch/hash_local_patches.py
 # 65) 文档里的替换字符：一个 U+FFFD 会让 ripgrep 把整篇文档当成二进制，
 #     于是对这个文档的每一次 grep 都静默地返回「没有匹配」
 python3 scratch/fix_doc_replacement_chars.py
+
+# 66) apply 上下文：一个 checkout 里的树，带 diff --git 头的补丁落地了吗
+#     （本机复现 git 的 "Skipped patch"：退出 0、零字节变化）
+python3 scratch/exp_ci_apply_layout.py
+python3 scratch/exp_ci_apply_fix.py
+
+# 67) apply 上下文的负控与反向验证（12 项 + 5 项）
+python3 ci-build-repo/tests/test_sk_prepare_apply_context.py
+python3 scratch/reverse_check_prepare_apply_context.py
+
+# 68) 真的 160 补丁，在真的 checkout 布局里，落到「160 已应用」的状态
+python3 scratch/prove_apply160_in_checkout.py
+
+# 69) 整链 47 个补丁在 checkout 布局里跑一遍，每一个都落地
+python3 scratch/run_prepare_in_checkout.py
+
+# 70) 文档里的控制字符（NUL 与其它控制字符也会让 ripgrep 把文件当二进制）
+python3 scratch/fix_control_chars.py ci-build-repo/docs/101-*.md
 ```
 
 第十节的 18~24 号命令里，`cfg73_sim.py` 与 `kdeps73.py` 是**一对**：
