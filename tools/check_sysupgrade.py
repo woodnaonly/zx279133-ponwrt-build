@@ -98,11 +98,19 @@ def inspect_kernel(data, raw_kernel=None):
     # gate: a gate that says "6.18.38" refuses the 7.3 image, and one that
     # says "7.3.4" refuses the release line's image.  The banner is the same
     # string the running system reports as uname -r.
+    #
+    # A banner that is not there is not damage: a synthetic image has none.
+    # But it does mean the version is unknown, and the report says so
+    # instead of guessing at one.  Two different consumers read this field
+    # and they want different things: the flash gate falls back to the
+    # vendor-kernel check alone when there is no version to compare with,
+    # and the release line's own export step demands that the version is
+    # there - a release whose report cannot name its kernel cannot be
+    # compared against anything.
     match = BANNER.search(raw)
-    require(match is not None, "the kernel carries no version banner")
-    version = match.group(1).decode("utf-8", "replace")
+    version = match.group(1).decode("utf-8", "replace") if match else None
     return {"raw_bytes": len(raw), "raw_sha256": hashlib.sha256(raw).hexdigest(),
-            "version": version}
+            "version": version, "version_known": match is not None}
 
 
 def inspect_image(image, raw_kernel=None):

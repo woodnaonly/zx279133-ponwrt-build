@@ -64,6 +64,11 @@ on:
       - tools/check-baked-version.py
       - configs/baked-version-allow.json
       - tests/test_sk_baked_version.py
+      # The gate that compares the kernel version a release says it ships
+      # with the version the image announces, and the controls that say
+      # whether it still refuses a report that names the wrong kernel.
+      - tools/check-release-kernel-version.py
+      - tests/test_release_kernel_version.py
       # The flash gate: it decides which bytes may be written to a board, so a
       # change to it - or to the controls that say whether it still refuses
       # what it used to - changes what the build checks.
@@ -125,6 +130,8 @@ jobs:
           # a good image for exactly that reason.
           python3 tests/test_sk_baked_version.py
           python3 tools/check-baked-version.py
+          # The release says which kernel it ships; the image has to agree.
+          python3 tests/test_release_kernel_version.py
 
   build:
     name: ${{ matrix.mode }}
@@ -1093,6 +1100,13 @@ jobs:
             --fwtool openwrt/staging_dir/host/bin/fwtool \
             --export-dir . > sysupgrade-report.json
           cat sysupgrade-report.json
+          # The report names the kernel this image ships, and the name is
+          # compared with the image on disk rather than taken on the
+          # report's word.  The gate in front of a flash reads the expected
+          # version out of this report, so a report that names the wrong
+          # kernel would let a stale image through.
+          python3 tools/check-release-kernel-version.py \
+            --report sysupgrade-report.json --image flash-uImage
           ls -l flash-uImage flash-dtb.bin flash-rootfs.jffs2 \
                 flash-sysupgrade.bin immortalwrt-sk-d840n-sysupgrade.bin
           # The partition table in the dtb that is about to be flashed has to

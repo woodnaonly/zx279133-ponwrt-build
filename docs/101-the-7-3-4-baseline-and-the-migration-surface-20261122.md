@@ -174,6 +174,20 @@
     剩下的五处全是**厂商内核 4.19**：那是**板子上的固定事实**，
     烧死在厂商 flash 里，我们改不动，所以进允许清单并写明理由。
     见 7.32。
+22. **发布线上「版本从待刷镜像读」这条链一直是空的；而上一轮改它的时候把发布线弄红了。**
+    6.18 的 #394 在「Prepare firmware tools and upgrade regression tests」这一步就红了，
+    真因是**上一轮（`ecefbd0f`）自己加的**：`tools/check_sysupgrade.py` 的
+    `inspect_kernel()` 改成「从 banner 读版本」之后，把「读不到 banner」变成了**硬失败**，
+    而测试夹具造的合成 kernel **本来就没有 banner**。
+    顺带查出**更严重**的一件事：**出货报告从来没有落过盘** ——
+    6.18 工作流只把 JSON 打进 CI 日志，release 资产里**没有** `sysupgrade-report.json`，
+    ⇒ `tools/preflash.py` 的 `release_version()` 永远返回 `None`，
+    ⇒ 上一轮改的「期望版本 = 报告里的版本」在发布线上**是死代码**。
+    现在：报告落盘并**进 release 资产**；新增一道**独立对照**的门禁
+    （报告与镜像各读一遍再比对版本 —— 写报告的工具替自己作证不算证据）；
+    `preflash.py` 改成三态（新报告说这镜像没有 banner ⇒ **红灯**；
+    旧报告没有这个字段 ⇒ 降级为只做厂商检查并说明）。
+    见 7.33。
 
 ---
 
@@ -411,6 +425,10 @@ CONFIG_EXTERNAL_KERNEL_TREE=<树>   OpenWrt 把这棵树当自己的内核目录
 | `tools/check-baked-version.py` | **lint**：找出**把内核版本写进判断**的地方。判据是**位置**（case 分支、比较的一边、grep 的模式参数、指名版本行的模式串），不是文本 —— 消息、docstring、IP、元数据版本都不算（见 7.32） |
 | `configs/baked-version-allow.json` | 上面那道 lint 的**允许清单**：每一条都写明「为什么这个版本可以留在这里」。现在只有**厂商内核 4.19** 那一类（板子上的固定事实），**失效的允许项会被报出来** —— 那是洞 |
 | `tests/test_sk_baked_version.py` | 上面那道 lint 的**负控**：该判的四种形状都判、不该判的五种形状都不判、允许项的三种边界都验（15 项） || `overlays-73/target/linux/zte/zx279133/target.mk` | 7.3 线的 subtarget 默认包：**清空 OpenWrt 的 `DEFAULT_PACKAGES.tweak`**，否则其中的 `luci` 元包会拉进 `luci-theme-bootstrap`（见 7.8） |
+| `tools/check-release-kernel-version.py` | **独立对照门禁**：读一遍出货报告、再读一遍镜像，比对两边的内核版本。写报告的那个工具**不替自己作证** —— 它刚把 banner 读错过一次（见 7.33） |
+| `tests/test_release_kernel_version.py` | 上面那道门禁的**负控**（25 项）：不只验「拒绝」，还验**拒绝的理由**；也验旧格式报告仍然被接受 |
+| `tools/check_sysupgrade.py` | 改了：读不到 banner **不再硬失败**，版本记 `null` 并加 `version_known` 标志 —— 「旧报告没这个字段」与「新报告说这镜像没有 banner」要能分开（见 7.33） |
+| `tools/preflash.py` | 改了：报告的版本读成**三态**（`version` / `no-banner` / `absent`）。新报告说没有 banner ⇒ 红灯；旧报告没有这个字段 ⇒ 降级为只做厂商检查并说明（见 7.33） |
 | `tools/func-surface-diff.py` | 两代驱动的函数面对照，输出「只在我们这边」与「只在 7.3 那边」两张工作清单 |
 | `tools/func-port-coverage.py` | **按能力对账**：171 个函数逐条必须有归属（同名 / 账本写明搬到哪 / 有处置记录），未记账即非零退出；账本指着的目标函数必须真在 7.3 树里（见八之七） |
 | `tools/kcheck.py` + `tools/kshadow.py` | **编译预言机**：用宿主 clang 对 7.3 树做 `-fsyntax-only`，生成树自己的头文件与影子头文件；7.3 线在 Compile 之前先跑它（见 7.17） |
@@ -3330,6 +3348,126 @@ $ python tools/check-baked-version.py --root C:/UGit/openwrt/SK-D840N/tools ...
 
 ---
 
+### 7.33 6.18 的 #394 红了：是我上一轮加的；而「版本从待刷镜像读」那条链一直没人走过
+
+#### 7.33.1 怎么发现的
+
+6.18 的 #394（head `ecefbd0f`）在**第 6 步**
+「Prepare firmware tools and upgrade regression tests」就红了，
+后面 28 个步骤全是 skipped。job 日志匿名下载不可用（403），
+所以走 `check-runs → annotations`：
+注解只有两条，第一条是 Node.js 20 的弃用警告，第二条是
+`Process completed with exit code 1`（`.github:187`）—— **没有说哪一行**。
+
+那一步跑的是：
+
+```sh
+"$PY" tests/test_sysupgrade.py
+"$PY" tests/test_mtd_rw.py
+sh -n overlays/.../platform.sh
+```
+
+**本机复现**（`python tests/test_sysupgrade.py`）：
+
+```
+ValueError: the kernel carries no version banner
+...
+FAIL: test_cli_selects_exact_board_and_refuses_ambiguity
+Ran 19 tests ... FAILED (failures=1, errors=10)
+```
+
+#### 7.33.2 真因：上一轮自己加的硬失败
+
+`ecefbd0f`（判决 21 那一轮）把 `tools/check_sysupgrade.py` 的 `inspect_kernel()`
+改成「从内核 banner 读出版本，写进出货报告」，而**读不到就 `require()` 掉了**：
+
+```python
+match = BANNER.search(raw)
+require(match is not None, "the kernel carries no version banner")   # ← 这一行
+```
+
+而 `tests/test_sysupgrade.py` 的夹具（`uimage()`，第 62 行）造的合成 kernel 是
+
+```python
+raw = b"self-contained ARM64 kernel" * 32      # ← 里面没有 banner
+```
+
+⇒ 合成镜像**本来就没有 banner**，被当成损坏处理了。
+**这条错误是我自己写进去的**，而且它拦的是**所有**用到 kernel 成员的测试（10 个 error 是它的级联）。
+
+修法：**读不到 banner 不是损坏，是「版本未知」。**
+报告改成写 `"version": null` 并加一个 `"version_known"` 标志 ——
+这样「报告没这个字段」（旧报告）和「报告说这镜像没有 banner」（新报告，是构建出了问题）
+**能被分开**。
+
+#### 7.33.3 更严重的那件事：出货报告从来没有落过盘
+
+顺着这条线查下去，发现上一轮改的「期望版本 = 报告里的版本」**在发布线上是死代码**：
+
+| | 7.3 线 | 6.18 发布线 |
+|---|---|---|
+| `check_sysupgrade.py` 的输出去哪了 | `> sysupgrade-report.json`，并 `cp -a` 进 `images/` | **只打进 CI 日志** |
+| release 资产里有 `sysupgrade-report.json` 吗 | 不发 release | **没有** |
+| `tools/preflash.py` 的 `release_version()` | （同上） | **永远返回 `None`** |
+
+⇒ `preflash.py` 里那句「期望版本 = 报告里的 `kernel.version`」
+**从来没有拿到过值**，一直走的是「报告没版本 ⇒ 只做厂商检查」那条降级分支。
+**判决 21 修掉的三处「把版本写进判断」是实的，但换上去的那一处当时并没有真的接上。**
+
+这才是本轮真正要补的：**报告得落盘，而且得进 release 资产**
+（`preflash.py` 读的是 `staging/trial/<tag>/sysupgrade-report.json`，
+那个目录的内容来自 release 资产）。
+
+#### 7.33.4 改法
+
+1. **`tools/check_sysupgrade.py`**：banner 读不到**不再硬失败**；
+   `version` 记 `null`，另加 `version_known` 标志。
+2. **新增 `tools/check-release-kernel-version.py`**：**独立**读一遍报告、
+   **独立**读一遍镜像，再比对两个版本。
+   为什么不复用 `check_sysupgrade.py` 写报告时读的那份？
+   **写报告的工具替自己作证不算证据** —— 它刚把 banner 读错过一次。
+   这道门禁要求：报告必须说出版本；镜像必须带 banner；**两者必须相等**。
+3. **6.18 发布线**：`check_sysupgrade.py` 的 stdout 落盘成 `sysupgrade-report.json`，
+   进 artifact、**进 release 资产**；导出之后立刻跑上面那道对照门禁。
+4. **7.3 线**：本来就有落盘（`images/`），补上同一道对照门禁。
+5. **`tools/preflash.py`**：改成**三态**。
+   - `version`（新报告说得出版本）⇒ **精确比对**，版本不同即失败；
+   - `no-banner`（新报告说这镜像没有 banner）⇒ **红灯**：
+     没有可比的东西，一道不能被检查的刷机不是这道门禁放行的刷机；
+   - `absent`（旧报告没有这个字段）⇒ 降级为只做厂商检查，**并说明**。
+   旧报告仍然能刷：这条降级是给已经发出去的 release 留的路。
+
+#### 7.33.5 负控与反向验证
+
+* `tests/test_release_kernel_version.py`：**25 项控制**。
+  不只验「拒绝」，还验**拒绝的理由** —— 「报告说这镜像没有 banner」与
+  「报告说有 banner 却不说版本」是两种不同的毛病，
+  只知道「被拒了」的门禁分不出它们。
+  也验**旧格式报告仍然被接受**（向后兼容）。
+* `scratch/reverse_check_release_kver.py`：**12 处突变**，
+  每一处都必须**转红在指定的那条控制上**（实测 12/12）：
+  门禁 4 处、`preflash.py` 3 处、`check_sysupgrade.py` 1 处、两个工作流 4 处。
+  其中「把 `check_sysupgrade.py` 改回硬失败」那一处，
+  红的是 `tests/test_sysupgrade.py` 自己的
+  `test_cli_selects_exact_board_and_refuses_ambiguity` —— **正好是 #394 的那个失败**。
+* `tests/test_sk_workflows.py` 新增 6 条：两个工作流都必须有这道对照门禁、
+  且必须**排在导出之后**；发布线必须**写出**报告、必须**把报告放进 release 资产**；
+  两条线都必须跑这道负控。
+
+#### 7.33.6 未做
+
+1. **发布线的 release 已经有历史资产了**：新的 release 会带报告，
+   **旧的 release 不会** ⇒ 刷旧 release 走的是 `absent` 降级分支。
+   这是有意的（见上），但它意味着**旧 release 的刷机没有版本这一层检查**。
+2. **initramfs 模式的 release 没有报告**：那一步只跑 flash 模式，
+   而 initramfs 镜像本来就不是刷进 flash 的东西。
+3. **本机 `tests/test_sysupgrade.py` 仍有 1 个 error**：本机缺 `libfdt`
+   （`cc -lfdt` 找不到库），CI 上有。这是**环境**，不是代码。
+4. **这轮只修了报告链，没有碰 live 工装区**：live 的四个脚本不在仓库里（7.32.7），
+   `preflash.py` 是仓库里的那一份，live 用的可能不是它 —— **这一条没查**。
+
+---
+
 ## 八、BP 池：逐槽位对照（第 1 片剩余部分的结论）
 
 **判决**：**BP 池布局在 7.3 上不需要移植。** 我们 6.18 世代那套写法是
@@ -4518,6 +4656,15 @@ python3 ci-build-repo/tools/check-baked-version.py \
 # 53) 上面那道 lint 自己的负控与反向验证
 python3 ci-build-repo/tests/test_sk_baked_version.py
 python3 scratch/reverse_check_baked_version.py
+
+# 54) 出货报告与镜像的版本对照：门禁本身、它自己的负控
+python3 ci-build-repo/tests/test_release_kernel_version.py
+
+# 55) 上面那道门禁的反向验证：12 处突变，每一处都转红在指定的那条控制上
+python3 scratch/reverse_check_release_kver.py
+
+# 56) #394 的失败在本机复现（那一步跑的就是它）
+python3 ci-build-repo/tests/test_sysupgrade.py
 ```
 
 第十节的 18~24 号命令里，`cfg73_sim.py` 与 `kdeps73.py` 是**一对**：

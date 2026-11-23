@@ -66,6 +66,7 @@ MAGIC = 0x27051956
 problems = []
 allowed = False
 EXPECT = None
+EXPECT_STATE = "absent"
 
 
 def note(ok, what, detail=""):
@@ -101,17 +102,68 @@ def release_version(directory):
     The statement is in the release's own report, which the export step
     writes next to the images.  Reading it here is what keeps this gate from
     having to know which line the release belongs to.
+
+    Three answers are possible and they are not the same thing:
+
+      * a version - the release says which kernel it ships, and the image
+        has to announce exactly that one;
+      * "no banner" - the release's own report says its image carries no
+        kernel banner at all.  There is then nothing to compare the image
+        against, and that is not a reason to let the flash through;
+      * "absent" - an older report that does not carry the field at all.  It
+        says nothing about the kernel, so only the vendor-kernel check
+        applies.
     """
     path = os.path.join(directory, "sysupgrade-report.json")
     if not os.path.isfile(path):
-        return None
+        return None, "absent"
     try:
         with io.open(path, encoding="utf-8") as fh:
             report = json.load(fh)
     except (OSError, ValueError):
-        return None
-    version = (report.get("kernel") or {}).get("version")
-    return version or None
+        return None, "absent"
+    kernel = report.get("kernel") or {}
+    version = kernel.get("version")
+    known = kernel.get("version_known")
+    if known is False:
+        return None, "no-banner"
+    if version:
+        return version, "version"
+    if known is None:
+        return None, "absent"
+    return None, "no-banner"
+
+
+def release_version_check(ver):
+    """How the image's own version compares with what the release says.
+
+    Three answers, and they are not the same thing:
+
+      * the release names a version and the image announces that one - the
+        check passes;
+      * the release names a version and the image announces another one -
+        the check fails, and this is the case the whole report exists for;
+      * the release says its image carries no banner - there is nothing to
+        compare against, and a flash that cannot be checked is not a flash
+        this gate lets through;
+      * an older report that says nothing about the kernel - only the
+        vendor-kernel check applies, and that is said out loud.
+
+    The third value of the answer is None: that is a statement, not a check.
+    """
+    if EXPECT_STATE == "version":
+        return (ver == EXPECT,
+                "the kernel announces the version this release says",
+                "%s (the release says %s)" % (ver, EXPECT))
+    if EXPECT_STATE == "no-banner":
+        return (False,
+                "the release says its image carries no kernel banner",
+                "sysupgrade-report.json says version_known is false - "
+                "there is nothing to compare this image against")
+    return (None,
+            "the release says no kernel version",
+            "sysupgrade-report.json has no kernel.version - only "
+            "the vendor-kernel check applies")
 
 
 def main():
@@ -129,8 +181,8 @@ def main():
     # The kernel version this release says it ships.  It is read from the
     # release's own report rather than written down here, because a gate that
     # knows the version refuses the other line's image.
-    global EXPECT
-    EXPECT = release_version(d)
+    global EXPECT, EXPECT_STATE
+    EXPECT, EXPECT_STATE = release_version(d)
 
     # The permission to flash this release even though a check failed.
     if os.path.isfile(ALLOW):
@@ -205,14 +257,11 @@ def main():
                 # the other line's image and accept a stale one of its own.
                 note(bool(ver) and not ver.startswith("4.19"),
                      "the kernel is not the vendor one", ver)
-                if EXPECT:
-                    note(ver == EXPECT,
-                         "the kernel announces the version this release says",
-                         "%s (the release says %s)" % (ver, EXPECT))
+                ok, what, detail = release_version_check(ver)
+                if ok is None:
+                    info(what, detail)
                 else:
-                    info("the release says no kernel version",
-                         "sysupgrade-report.json has no kernel.version - only "
-                         "the vendor-kernel check applies")
+                    note(ok, what, detail)
                 note("SMP" in text, "the kernel's version line is complete",
                      text[-40:])
             else:

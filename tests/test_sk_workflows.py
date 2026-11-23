@@ -125,6 +125,11 @@ BRINGUP_TRIGGERS = [
     "tools/check-baked-version.py",
     "configs/baked-version-allow.json",
     "tests/test_sk_baked_version.py",
+    # The gate that compares the kernel version a release says it ships with
+    # the version the image announces, and the controls that say whether it
+    # still refuses a report that names the wrong kernel.
+    "tools/check-release-kernel-version.py",
+    "tests/test_release_kernel_version.py",
     "scripts/configure-sk-d840n.sh",
     "configs/sk-d840n-73.json",
 ]
@@ -352,6 +357,43 @@ def main():
     # Compile step with "ERROR: package/libs/libzxpon-omci failed to
     # build" and nothing that said why.  The check is here so that a line
     # cannot lose the toolchain again without a gate noticing.
+    # The release says which kernel it ships, and the gate in front of the
+    # flash reads that statement out of the release's own report.  For the
+    # report to be there, the export step has to write it down; for the
+    # statement to be worth anything, the image has to announce the same
+    # version.  A workflow that drops either half leaves the gate with
+    # nothing to compare against, and nothing says so - which is how the
+    # release line shipped a gate that had been reading a field that was
+    # never written.
+    print("\nthe release names the kernel it ships, and the image agrees")
+    for workflow, doc in ((RELEASE, release), (BRINGUP, bringup)):
+        text = run_text(doc, "build")
+        export_at = text.find("check_sysupgrade.py")
+        gate_at = text.find("check-release-kernel-version.py")
+        failures.check(export_at >= 0,
+                       f"{workflow} exports the sysupgrade members")
+        failures.check(export_at >= 0 and gate_at > export_at,
+                       f"{workflow} compares the release's kernel version "
+                       "with the image")
+        failures.check("> sysupgrade-report.json" in text,
+                       f"{workflow} writes the report down")
+
+    def release_files(doc):
+        for step in (doc.get("jobs") or {}).get("build", {}).get("steps") or []:
+            files = ((step.get("with") or {}).get("files") or "")
+            if files:
+                return files
+        return ""
+
+    failures.check("sysupgrade-report.json" in release_files(release),
+                   "the release line ships the report with the images")
+    failures.check("tests/test_release_kernel_version.py" in
+                   run_text(release, "build"),
+                   "the release line runs the release version controls")
+    failures.check("tests/test_release_kernel_version.py" in
+                   run_text(bringup, "check-gates"),
+                   "the 7.3 line runs the release version controls")
+
     print("\nthe OMCI engine's toolchain is installed on both lines")
     for workflow, doc in ((RELEASE, release), (BRINGUP, bringup)):
         text = run_text(doc, "build")
