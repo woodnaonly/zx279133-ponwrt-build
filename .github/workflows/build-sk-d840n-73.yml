@@ -118,6 +118,12 @@ on:
       - tools/gatecheck.sh
       - tools/uimage-kver.py
       - tests/test_gatecheck.py
+      # The same gate asked about the bytes this build produced: the control
+      # above proves the gate's logic on uImages it makes itself, which cannot
+      # say whether *these* bytes pass it.  The second one says the first still
+      # notices when the gate's teeth are taken out.
+      - tests/test_sk_flash_permit.py
+      - tests/test_sk_flash_permit_control.py
       # The gate payload: it writes the round's report only for the kernel it was
       # built for, so the version it rides has to be read from the image.
       - tools/mkctlram.py
@@ -1394,6 +1400,24 @@ jobs:
             --image flash-uImage \
             --tree "$KT" \
             --objdump "$OBJDUMP"
+
+      # The flash gate is the one-way door in front of an irreversible flash:
+      # it lets a pair of bytes through only when a gate round already booted
+      # exactly those bytes on the board.  The control the gates job runs proves
+      # that gate's logic on uImages it makes itself - which cannot say whether
+      # *these* bytes pass it.  This asks about the pair this build produced:
+      # the gate has to accept it, and the three mutations of the gate have to
+      # turn the control red on the check each of them takes away.
+      - name: 'Gate: the flash gate accepts this pair of bytes'
+        if: matrix.mode == 'flash'
+        run: |
+          set -e
+          python3 tests/test_sk_flash_permit.py \
+            --uimage flash-uImage \
+            --dtb flash-dtb.bin
+          python3 tests/test_sk_flash_permit_control.py \
+            --uimage flash-uImage \
+            --dtb flash-dtb.bin
 
       - name: Upload the images
         uses: actions/upload-artifact@v4
