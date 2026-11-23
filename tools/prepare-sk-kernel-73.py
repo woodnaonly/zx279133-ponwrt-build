@@ -206,6 +206,16 @@ def patch_sections(payload):
     return sections
 
 
+def patch_targets(payload):
+    """The files a unified diff writes to."""
+    targets = []
+    for section in patch_sections(payload):
+        rel = section["path"]
+        if rel != "/dev/null" and rel not in targets:
+            targets.append(rel)
+    return targets
+
+
 def verify_patch_content(tree, name, payload):
     """The lines a patch adds have to be in the file the patch names.
 
@@ -244,6 +254,81 @@ def fingerprint(tree, rel):
         "bytes": len(data),
         "lines": data.count(b"\n"),
     }
+
+
+def file_digest(tree, rel):
+    """The hash of a file in the tree, or None when it is not there."""
+    path = tree / rel
+    if not path.is_file():
+        return None
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def find_line(tree, needle, limit=6):
+    """Where a line turns up in the tree instead.
+
+    A patch that applied without landing is a question with three
+    possible answers: the file was never written, the file was written
+    with something else in it, or the content turned up somewhere else
+    altogether.  The first two are about hashes, the third is about
+    where the text went.
+    """
+    found = []
+    roots = (tree / "drivers" / "net" / "ethernet" / "zte",
+             tree / ".sk-series")
+    for root in roots:
+        if not root.is_dir():
+            continue
+        for path in sorted(root.rglob("*")):
+            if not path.is_file():
+                continue
+            try:
+                text = path.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            if needle in text:
+                found.append(path.relative_to(tree).as_posix())
+                if len(found) >= limit:
+                    return found
+    return found
+
+
+def diagnose_undelivered(tree, name, payload, before):
+    """What happened to a patch that applied without landing."""
+    lines = []
+    for section in patch_sections(payload):
+        rel = section["path"]
+        if rel == "/dev/null":
+            continue
+        after = file_digest(tree, rel)
+        was = before.get(rel)
+        state = "was not in the tree" if was is None else (
+            "did not change at all" if was == after else "changed")
+        lines.append(f"  {rel}: {state}")
+        if was is not None:
+            lines.append(f"    before {was}")
+            lines.append(f"    after  {after}")
+    for section in patch_sections(payload):
+        rel = section["path"]
+        if rel == "/dev/null":
+            continue
+        path = tree / rel
+        if not path.is_file():
+            continue
+        text = path.read_text(encoding="utf-8", errors="replace")
+        missing = [line for line in section["added"]
+                   if line and len(line.strip()) >= 8 and line not in text]
+        if not missing:
+            continue
+        needle = missing[0]
+        places = find_line(tree, needle)
+        if places:
+            lines.append(f"  the line {needle.strip()[:60]!r} is in "
+                         + ", ".join(places))
+        else:
+            lines.append(f"  the line {needle.strip()[:60]!r} is nowhere "
+                         "in the driver's own files")
+    return lines
 
 
 def apply_series(tree, series, marker_payload):
@@ -285,6 +370,11 @@ def apply_series(tree, series, marker_payload):
         path = tree / ".sk-series" / origin / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(payload)
+        # What the files look like before the patch goes in: an apply that
+        # reports success and changes nothing is the failure this is here
+        # to name.
+        before = {rel: file_digest(tree, rel)
+                  for rel in patch_targets(payload)}
         check = subprocess.run(
             ["git", "-c", "core.autocrlf=false", "-C", str(tree), "apply",
              "--check", "--whitespace=nowarn", str(path)],
@@ -302,8 +392,16 @@ def apply_series(tree, series, marker_payload):
         # the build spends an hour compiling the older driver.
         problems = verify_patch_content(tree, name, payload)
         if problems:
+            after = {rel: file_digest(tree, rel)
+                     for rel in patch_targets(payload)}
+            detail = diagnose_undelivered(tree, name, payload, before)
             raise ValueError(f"{origin}/{name} applied but the tree does not "
-                             f"carry it:\n" + "\n".join(problems))
+                             f"carry it:\n" + "\n".join(problems)
+                             + "\nwhat the files looked like:\n"
+                             + "\n".join(detail)
+                             + "\nafter the patch:\n"
+                             + "\n".join(f"  {rel}: {digest}"
+                                        for rel, digest in after.items()))
         applied.append(f"{origin}/{name}")
         print(f"Applied {origin}/{name}", flush=True)
 

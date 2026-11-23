@@ -3724,6 +3724,41 @@ step 20「Gate: a TX ring with an untrusted counter is quarantined」：
 但 job log **匿名下载不到**（403），GitHub 日志搜索框对被截断的部分返回 `0/0`
 ⇒ 只能靠登录态浏览器一页页翻。**step summary 是 run 自己的页面，谁都能读。**
 
+#### 7.38 **#47 的结果：prepare 步自己把话说清楚了**
+
+补上取证装置后的第一轮（**#47**，head `c9146bc`）**红在第 8 步
+「Prepare the Linux 7.3.4 tree」**，而不是门禁步 —— 新加的内容校验先一步抓住了：
+
+```
+ValueError: local/160-sk-tx-fault-isolation.patch applied but the tree does not carry it:
+  ... adds to .../zx279133-idm.c   but the tree does not carry '\tu16 done;'
+  ... adds to .../zx279133-main.c   but the tree does not carry '\tzx279133_tx_recovery_init(eth);'
+  ... adds to .../zx279133-netdev.c but the tree does not carry 'static void zx279133_tx_recovery_work(...);'
+  ... adds to .../zx279133.h        but the tree does not carry '\t * Recovery state and counters are protected by tx_lock.'
+```
+
+⇒ **日志里没有 `Applied local/160-...` 那一行**（100~150 都有）。
+⇒ `git apply` **返回了 0**，而那四个文件里**没有它的任何一行**。
+
+**这是本机 100% 复现不出来的现象**：同一份补丁（逐字节相同）、
+同一份脚本、同一棵 vanilla + 39 vendored + 100~150 的树，
+本机上 apply 之后内容确实落进去了（门禁 36/36 全绿）。
+
+**所以现在的判决是**：这不是补丁写错了，也不是清单写错了，
+而是**在 CI 那个环境里，`git apply` 报成功而内容没有落到它声称写的文件里**。
+「apply 说成功」与「树里有这个改动」在那一刻是**两件事**，
+而过去整条流水线里**只有后者会被门禁发现**。
+
+**下一步（#48）回答「apply 到底做了什么」**：prepare 现在在 apply **前后**
+各记下那几个文件的哈希，并在内容对不上时把这三件事分开说：
+
+* 文件**一个字节都没变**（apply 什么也没做）；
+* 文件变了但内容不含新增行（apply 做了别的事）；
+* 那行字**落到了别的文件里**（apply 落错了地方）。
+
+**这一轮的设备在两条线上都还在跑**（7.3 的 #41~#47、6.18 的 #391~#397），
+按约定**一个都不取消**。
+
 ---
 
 ## 八、BP 池：逐槽位对照（第 1 片剩余部分的结论）
