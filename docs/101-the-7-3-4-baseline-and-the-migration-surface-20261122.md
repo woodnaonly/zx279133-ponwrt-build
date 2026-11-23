@@ -83,6 +83,16 @@
     ⇒ 补丁里那一行降级为**防御性定义**（`#ifndef` 守卫），**不补它不会失败**；
     顺带解开了 6.18 侧「为什么没有这一类错」的悬案：**同一个机制**，
     6.18 线**整份补丁都不需要**。见 7.24。
+14. **实机刷机路径上的分区表门禁，工装区落后于仓库。**
+    工作区根目录的 `tools/` 才是实机真正会跑的那套脚本，而它的
+    `dtbparts.py` 是旧版（没有 `layout=`）、`sk_layout.py` 不存在；
+    `flash-round.sh`/`preflight.sh`/`lan1roundcheck.sh`/`gettrial.sh`
+    问的是 **240 MiB 的旧布局**，`mkrollback.sh` 问的却是 **241 MiB** ——
+    同一块板子两套门禁，一套放行旧件、一套拒绝旧件。
+    ⇒ 7.23 在 CI 里补的那道门禁**管不到实机**；而 7.3 的新 dtb 又是
+    native241，工装区的旧参数会**拒绝正确的件**并报「大小不对」。
+    已**定向**同步（不整包覆盖：`gettrial.sh` 工装区有 81 行独有）。
+    见 7.25。
 
 ---
 
@@ -2208,7 +2218,7 @@ fi
 1. **7.3 线导出 `flash-dtb.bin` 时没有查分区表**；6.18 线有
    （`build-sk-d840n.yml:661`）。
 2. **分区表决定 root 在哪**：U-Boot 的 bootargs 写死 `root=/dev/mtdblock5`，
-   板子的表是 root@`0xf00000`、241 MiB、且 root 是**第六个孩子**。
+   板子的表是 root@`0xf00000`、241 MiB，**由 `mtd5` 别名钉死**。
    表差一个擦除块 ⇒ jffs2 写到新内核不会去看的地方 ⇒
    **panic，而且串口没有输出可读** —— 这是刷机之后最难查的一种失败。
 3. **板级 dts 里写死的就是这张表**，两条线共用同一份
@@ -2228,7 +2238,34 @@ fi
 | parameter tags | `0xb00000` | `0x400000` |
 | **root** | **`0xf00000`** | **`0xf100000`**（241 MiB） |
 
-root 是第六个孩子 ⇒ `mtdblock5` ⇒ 与 U-Boot 的 bootargs 对得上。
+root 由 **`mtd5` 别名**钉死（dts:71-75，`mtd1`..`mtd5` 一一对应这五个分区），
+**不是按节点顺序数出来的** ⇒ `/dev/mtdblock5` ⇒ 与 U-Boot 的 bootargs 对得上。
+（`mtd0` 是不是 SPI-NAND master 取决于 `CONFIG_MTD_PARTITIONED_MASTER`，
+但别名让 root 的号与那个配置无关 —— 这正是 dts:61-76 注释里写的用意。
+旧布局多一个 `scratch`，它拿 `mtd6`，**root 仍然是 `mtd5`**。）
+
+**本机核实（不是假设）**：门禁要的每一个条件，都对着板级 dts 的源码查过
+（`python3 scratch/check_board_dts_layout.py`）：
+
+```
+the dts declares 5 partitions:
+  bootpart     @       0 reg=<0x000000 0x200000> label=boot read-only
+  kernelpart   @  200000 reg=<0x200000 0x800000> label=kernel
+  dtbpart      @  a00000 reg=<0xa00000 0x100000> label=dtb
+  tagspart     @  b00000 reg=<0xb00000 0x400000> label=parameter tags read-only
+  rootpart     @  f00000 reg=<0xf00000 0xf100000> label=root
+the dts pins 5 mtd aliases: mtd1..mtd5
+compatible: ('skyworth,sk-d840n', 'zte,zx279133')
+bootargs: console=ttyAMA0,115200n8 root=/dev/mtdblock5 rootfstype=jffs2 ro rootwait
+
+the board dts satisfies what the native241 gate will ask of the compiled dtb
+```
+
+⇒ `tools/sk_layout.py` 的严格解析器要问的每一项（compatible、bootargs、
+分区个数、root 容量、mtd 别名、标签与偏移、read-only 标志）**都对得上**
+⇒ **7.3 线编出来的 dtb 一定是 native241，这道门禁不会误伤**。
+（7.3 线用的就是这份 dts：`tools/apply-sk-overlay-73.sh:35-40` 把
+`kernel-overlays/` 整体拷进 7.3 树，只排除 6.18 世代的驱动与 PHY。）
 
 证据二：6.18 线本来就有这道门禁
 
@@ -2354,6 +2391,111 @@ toolchain/kernel-headers/Makefile:106     $(CP) $(BUILD_DIR_TOOLCHAIN)/linux-dev
   加了它不影响别的头；删了它在**原始头**那轮会多一条错。
 - 本节只更正了**结论**；`overlays-73/` 里那个补丁**正文一个字没改**
   （只改了它的说明文字），所以 7.3 线的构建面不变。
+
+---
+
+### 7.25 实机刷机路径上的分区表门禁：**工装区落后于仓库**
+
+**判决**
+
+1. **7.3 线的 CI 已经查了分区表（7.23），但真正下手的工装区没跟上。**
+   工作区根目录的 `tools/` 是**实机那一侧真正会跑的脚本**，
+   而它的 `dtbparts.py` 是**旧版**（没有 `layout=` 这个参数），
+   `sk_layout.py` **根本不存在**。
+2. **更糟的是参数不一致，而且方向相反**：
+   工装区里 `flash-round.sh` / `preflight.sh` / `lan1roundcheck.sh` /
+   `gettrial.sh` 问的是 **`root=0xf00000,0xf000000`（240 MiB）**，
+   而 `mkrollback.sh` 问的是 **`root=0xf00000,0xf100000`（241 MiB）**。
+   仓库 `tools/` 里**全部**已经是 241 MiB。
+   ⇒ 同一块板子上的两套门禁，一套放行旧布局、一套拒绝旧布局。
+3. **后果有两个方向**：
+   - **旧载荷能过工装区的门禁**：`staging/trial/` 里那三件正好就是
+     **current240**，工装区的旧参数**放行**它 ⇒ 7.23 在 CI 里补的那道门禁
+     **管不到实机**。
+   - **新载荷反而会被工装区拒绝**：7.3 的新 dtb 是 **native241**，
+     工装区的旧参数会报 `MISMATCH root` ⇒ 正确的件被拒，
+     而报错说的是「大小不对」，会让人去查一个不存在的问题。
+4. **工装区的脚本不能整包覆盖**：两边已经**双向分叉**了 ——
+   76 个共有文件里 58 个相同、18 个不同，而方向不一：
+   `gettrial.sh` 工装区有 **81 行独有**（`RELEASE=` 精确指定 tag、
+   绕开 GitHub API 60 次/小时的额度），仓库那份反而旧。
+   ⇒ **只做定向同步**，不整包搬。
+
+**证据**
+
+```
+# 工装区（旧）：问 240 MiB
+tools/flash-round.sh:45      python tools/dtbparts.py staging/trial/flash-dtb.bin root=0xf00000,0xf000000
+tools/preflight.sh:74        python tools/dtbparts.py staging/trial/flash-dtb.bin root=0xf00000,0xf000000
+tools/lan1roundcheck.sh:135  python tools/dtbparts.py "$D/flash-dtb.bin" root=0xf00000,0xf000000
+tools/gettrial.sh:198        ... root=0xf00000,0xf000000 ...
+tools/mkrollback.sh:52       python tools/dtbparts.py "$OUT/flash-dtb.bin" root=0xf00000,0xf100000   # 已经是新的
+
+# 仓库（对）：全部 native241
+tools/flash-round.sh:45      ... layout=native241 root=0xf00000,0xf100000
+tools/preflight.sh:98        ... layout=native241 root=0xf00000,0xf100000
+tools/gettrial.sh:157        ... layout=native241 root=0xf00000,0xf100000
+tools/dtbparts.py            import sk_layout; layout= 由 inspect_layout() 判
+
+# 两份 dtbparts.py 的差异是纯增量（工装区独有行 = 0，仓库独有 16 行）
+```
+
+**本机实测（暂存的旧 dtb）**
+
+```
+$ python tools/dtbparts.py staging/trial/flash-dtb.bin layout=native241 root=0xf00000,0xf100000
+  ... root @0x00f00000 len=0x0f000000 (240 MiB) ...
+TABLE WRONG - unexpected layout: current240
+rc=1
+
+$ python tools/dtbparts.py staging/trial/flash-dtb.bin root=0xf00000,0xf000000
+TABLE OK - all 1 expectations matched
+rc=0
+```
+
+⇒ **新门禁能分清两种布局**，而旧参数**分不清** ——
+只比 root 的偏移和大小，不看分区有几个。
+
+**为什么两种布局都要认**
+
+板级 dts（`kernel-overlays/arch/arm64/boot/dts/zte/zx279133-sk-d840n.dts:940-965`）
+声明的是 **5 个**分区：boot / kernel / dtb / parameter tags / **root 0xf00000/0xf100000**，
+**没有 scratch** ⇒ `native241`。而旧 dtb 是 6 个分区，最后多一个
+`scratch @0xff00000/0x100000`，root 只有 240 MiB ⇒ `current240`。
+两者的 **root 都是 `/dev/mtdblock5`** —— 不是数出来的，是**别名钉死的**
+（新布局 `mtd1..mtd5`，旧布局 `mtd1..mtd6`，root 在两边都是 `mtd5`）——
+差别只在 root 吃掉了多少闪存、以及有没有 scratch。
+`tools/sk_layout.py:113` 把这两种组合都列为合法，
+`tools/sk_layout.py:131` 用「分区个数」来命名它们。
+
+**修了什么（工装区，不进仓库）**
+
+- 装入 `tools/sk_layout.py`（自包含，只依赖 `struct`）。
+- 换掉 `tools/dtbparts.py`（仓库那份是**严格超集**：工装区独有行 = 0）。
+- 换掉 `tools/flash-round.sh`（仓库那份也是**严格超集**：工装区独有行 = 1，
+  就是那行旧门禁；它还多一道 `write-root` 的新鲜度门禁）。
+- **定向**改四处参数（不动别的内容，因为工装区那些文件里有独有内容）：
+  `flash-direct.sh`（`EXPECT` 默认值 + 注释）、`preflight.sh`、
+  `lan1roundcheck.sh`、`gettrial.sh` ⇒ 全部 `layout=native241 root=0xf00000,0xf100000`。
+- 顺带带上仓库那份 `flash-direct.sh` 里的一个**真 bug 修复**：
+  `ok=$(... | grep -c "READ_OK")` 在 `set -eu` 下**找不到时 `grep` 退出 1，
+  会把脚本在这里杀掉** —— 正好是在「零条 READ_OK」这种**最该说话**
+  的情形（ABORT / TIMEOUT）之前。改成 `grep -c ... || true`。
+
+**验证**
+
+- 五个改过的脚本 `sh -n` 全过（`scratch/live_syntax_check.sh`）。
+- 新门禁对暂存的旧 dtb **明确拒绝**（`current240`，rc=1），
+  不带 `layout=` 时**仍可只读检查**（rc=0）——
+  历史的 vendor 载荷要能查，只是不能被当成新件刷进去。
+
+**未做**
+
+- 工装区里另外 14 个与仓库不同的文件**没有动**（`postflash.sh`、
+  `preflashbackup.sh`、`mkctlram.py` 等各有用途上的分叉）。
+- 工装区**不在版本库里**（工作区根不是 git 仓库），
+  所以这次同步**没有可推送的产物**；仓库 `tools/` 本来就是对的。
+- 实机那一步仍要等 7.3 的镜像，且**必须用 CI 导出的那三件**。
 
 ---
 
@@ -3464,6 +3606,18 @@ python3 scratch/openwrt_headers_chain.py     # OpenWrt 侧：toolchain/kernel-he
 
 # 34) 重新生成 libbpf 补丁，并校验它能干净 apply 到上游 libbpf 1.6.2
 python3 scratch/make_libbpf_patch.py
+
+# 35) live 工装区与仓库 tools/ 的差异（谁有谁没有、谁更旧）
+python3 scratch/cmp_live_tools.py
+
+# 36) 工装区独有的内容（盲拷贝会丢掉的行）
+python3 scratch/live_only_lines.py
+
+# 37) live 工装区改过的五个脚本的语法检查
+sh scratch/live_syntax_check.sh
+
+# 38) 板级 dts 满足 native241 门禁的每一个条件（不是假设，是逐条查源码）
+python3 scratch/check_board_dts_layout.py
 ```
 
 第十节的 18~24 号命令里，`cfg73_sim.py` 与 `kdeps73.py` 是**一对**：
