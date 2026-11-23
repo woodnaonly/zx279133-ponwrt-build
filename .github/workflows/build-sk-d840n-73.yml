@@ -84,6 +84,11 @@ on:
       # notices when that way back is taken away.
       - tools/check-sk-datapath-restore.py
       - tests/test_sk_datapath_restore.py
+      # The gate that says the machine code of the conduit's open puts the
+      # restore in front of the check for the hardware, and the controls that
+      # say whether it still notices when that order is broken.
+      - tools/check-sk-kernel-order.py
+      - tests/test_sk_kernel_order.py
       # The gate on the gates: it decides which steps this line has and
       # which paths start a build, so a change to it changes what the build
       # checks and has to start a build.
@@ -1322,6 +1327,51 @@ jobs:
             --board-layer kernel-overlays-73 \
             --report sk-image-drivers.json
           cat sk-image-drivers.json
+
+      # The gate above says the tree has a way back from a datapath that
+      # could not be brought up, and that the way back comes before the
+      # check for the hardware.  That is a statement about the source, and
+      # the compiler gets the last word.
+      #
+      # This gate is a statement about the machine code the board runs: the
+      # kernel is built with debug information, so the compiler's line table
+      # says which source line every instruction came from, and the gate
+      # reads the two lines out of the source and asks the machine code
+      # where they landed.  The order that is checked is the branch against
+      # the restore, not a load against a load: a load can be moved, but a
+      # branch that decides whether the open fails cannot be moved in front
+      # of a restore that can change what it tests.
+      #
+      # And the machine code that was read has to be the machine code that
+      # goes on the board: the gate looks for those bytes in the image that
+      # is about to be flashed, so a tree that is not the image says nothing
+      # about a board.
+      #
+      # The controls run on the same kernel and the same image - a
+      # synthetic one would only prove that the gate reads a synthetic one.
+      - name: 'Gate: the restore comes before the hardware check in the machine code'
+        if: matrix.mode == 'flash'
+        run: |
+          set -e
+          KT=$( { ls -d openwrt/build_dir/target-*/linux-*/linux-$KVER 2>/dev/null || true; } | head -1 )
+          [ -n "$KT" ] || { echo "::error::no kernel build tree for linux-$KVER"; exit 1; }
+          [ -f "$KT/vmlinux" ] || { echo "::error::no vmlinux under $KT"; exit 1; }
+          OBJDUMP=$( { ls openwrt/staging_dir/toolchain-*/bin/*-objdump 2>/dev/null || true; } | head -1 )
+          [ -n "$OBJDUMP" ] || { echo "::error::no objdump in the toolchain"; exit 1; }
+          echo "kernel: $KT"
+          echo "objdump: $OBJDUMP"
+          python3 tools/check-sk-kernel-order.py \
+            --vmlinux "$KT/vmlinux" \
+            --image flash-uImage \
+            --tree "$KT" \
+            --objdump "$OBJDUMP" \
+            --report sk-kernel-order.json
+          cat sk-kernel-order.json
+          python3 tests/test_sk_kernel_order.py \
+            --vmlinux "$KT/vmlinux" \
+            --image flash-uImage \
+            --tree "$KT" \
+            --objdump "$OBJDUMP"
 
       - name: Upload the images
         uses: actions/upload-artifact@v4
