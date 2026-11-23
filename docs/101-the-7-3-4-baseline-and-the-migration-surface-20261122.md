@@ -7389,7 +7389,7 @@ announce 载荷用**仓库那份**的 `mkctlram.py` 重建，或者直接用**�
 | 工作区根 `staging/trial/` | 8,333,349 B `35685e15e79c27bb30ca6fdb3b0af1d5` | 13,381 B `ee287b5c1bc47c26c35cdaa2a462176d` | 4,849,668 B `d3aef45b39bcfbcf4c798bfe037aebbe` | `80dade59…` / `ee287b5c…`（2026-11-01） |
 | 仓库 `ci-build-repo/staging/trial/` | 8,131,590 B `45d8a140b41294e84186f7ee33e5e014` | 13,357 B `2b2855f98718397635ec99c0b8ff4476` | 4,718,596 B `af68f503d993a51e6d10ca8238d4fe40` | `45d8a140…` / `2b2855f9…`（2026-10-31） |
 | **7.3 那对（本轮要刷的）** | 5,816,299 B `3664b8cb1bb091db891126cf33b355c6` | 14,958 B `ff6914d007b9b21895e1a6b3f67d5ea5` | 5,767,172 B `6a9840f5fe7e0f27812788cf0d69a3df` | — |
-| 7.3 那对现在放在 | `staging/trial73d/flash/`（另存 `flash-run53/`、`flash-run60/`、`flash-run62/` 三套旧件） | | | |
+| 7.3 那对现在放在 | `staging/trial73d/flash/`（另存 `flash-run53/`、`flash-run60/`、`flash-run62/` 三套旧件；**八之二十二那轮量的是 #62 那套，现已换成 #71，见八之二十六**） | | | |
 
 ⇒ **三处 `staging/` 三套互不相同的字节**；7.3 那对**只在 `staging/trial73d/flash/`**，
 **还没进 `staging/trial/`**（这是有意的：不预先覆盖，免得打断 6.18 线与别人占用的 bench）。
@@ -7428,7 +7428,7 @@ announce 载荷用**仓库那份**的 `mkctlram.py` 重建，或者直接用**�
    换一个目录但**同名** ⇒ 也逐位相同（md5 `a8c51e18…` 两遍一样）。
 2. **预置那份载荷可以按原样重建出来。** 实测：用仓库那份 `mkctlram.py`、
    `--mode flash --tag K73F --stage net`、同样三件、同样的输出名
-   `ctl-flash.cpio.gz` 重建 ⇒ **595,403 B，md5 `8f6148ac3f70ce26e2f7248c91d3369b`**，
+   `ctl-flash.cpio.gz` 重建 ⇒ **595,403 B，md5 `8f6148ac3f70ce26e2f7248c91d3369c`**，
    与磁盘上那份**逐位相同**（cpio sha256 `fa1b90f4…` 两边一样）。
    ⇒ 之前记的「载荷 md5 不可复现」是**被文件名长度掩盖的假象**：
    那次比较的两份载荷**文件名不一样**。
@@ -7916,6 +7916,97 @@ object 归属是从那个目录的 `Makefile` 解析出来的。）
   这四个符号在那边的名字与取地址情况**没有查过**。
 
 ---
+
+## 八之二十六、把**第一轮全绿**的那一轮取回来：#71 的三件、可复现性的实证、载荷重建
+
+### 8之二十六.1 判决
+
+1. **取件规则落地**：按「取**第一个既绿、又跑了产物级门禁**的轮次」，
+   这一轮是 **`8742f0d1`**（7.3 run `45273622551`，run_number **#71**；
+   6.18 run `45273622851`；两条线都 success）。
+
+2. **产物取回来了**，而且**当场对上了三把尺**：
+   - artifact `sk-d840n-73-images-flash`（id `14868944605`）**73,429,614 B**，
+     与 API 报的 `size_in_bytes` **逐个相同**；
+   - sha256 **`4427f80157916bf5989c6abdfb02fa1bbab7f170b806e0e0b1cabd8db4bce636`**，
+     与 **run 页上印的 digest 逐位相同**；
+   - 产物**自带**的 `sha256sums` 六项，`extract_flash_members.py` 逐项对上 ⇒ exit 0。
+
+3. **跨轮可复现性，第一次被实证**（#71 对 #62）：
+   `flash-uImage` 与 `flash-dtb.bin` **逐位相同**，
+   只有 `flash-rootfs.jffs2` **每一轮都不同**。
+   ⇒ 「uImage 与 dtb 在源码状态相同时跨轮次逐位可复现、jffs2 rootfs 每轮不同」
+   这条判断，第一次有了**两轮真产物的对照**，而不再是推理。
+
+4. **「三件必须同轮」这条规则再次生效**：#71 的 rootfs 是 `cf70d221…`，
+   与 #62 的 `6a9840f5…` 不同
+   ⇒ 刷机载荷里钉的那三个 md5 **必须跟着换**，
+   否则板子会 `STAGE_FAIL` 拒写 —— 这正是那个钉的意义。
+
+### 8之二十六.2 取件机制：**三条错路，一条对路**
+
+| 试法 | 实测结果 |
+|---|---|
+| `fetch('https://api.github.com/repos/<o>/<r>/actions/artifacts/<id>/zip', {credentials:'include'})` | **CORS 拒绝**（「Failed to fetch」）：凭据请求不接受 `Access-Control-Allow-Origin: *` |
+| `fetch('https://github.com/<o>/<r>/actions/artifacts/<id>/zip')` | **404** |
+| `fetch('https://github.com/<o>/<r>/actions/runs/<run>/artifacts/<id>/zip')` | **404** |
+| **Browser `open_tab` 打开 artifact 详情页** `/<o>/<r>/actions/runs/<run>/artifacts/<id>` | **浏览器直接下载** ⇒ 落到 `Downloads\<uuid>.tmp` |
+
+⇒ **导航报 `net::ERR_ABORTED` 是正常的**：那不是失败，是「这次响应是一份下载」。
+⇒ 下载是否完整，不用等也不用猜：**文件大小与 API 报的 `size_in_bytes` 相同**，
+且**连续两次读到的长度不再变**。
+⇒ 与前几轮一致：#59/#60/#62 三份也都是 `<uuid>.tmp` 落地
+（73,416,000 B / 73,429,772 B / 73,429,346 B）。
+
+### 8之二十六.3 换件与载荷重建
+
+| 对象 | #62 那套 | #71 那套 |
+|---|---|---|
+| `flash-uImage` | 5,816,299 B `3664b8cb…` | **逐位相同** |
+| `flash-dtb.bin` | 14,958 B `ff6914d0…` | **逐位相同** |
+| `flash-rootfs.jffs2` | 5,767,172 B `6a9840f5…` | 5,767,172 B **`cf70d221…`**（**每轮不同**） |
+| 产物里另有变化 | — | 13 个文件：rootfs 族、`sysupgrade.bin`、两个 apk、`profiles.json`、`sha256sums` |
+
+⇒ **#71 那套**放在 `staging/trial73d/flash/`（工作位），另存 `flash-run71/`；
+**#62 那套**仍在 `flash-run62/`（旧件不删）。
+
+| 载荷 | 换件前 | 换件后 | 为什么 |
+|---|---|---|---|
+| `ctl-initramfs.cpio.gz`（announce，`K73`） | 583,486 B md5 `a8551582…` | **逐位未变** | announce **一个 md5 都不钉**，只骑 `7.3.4*`；uImage 没变 ⇒ `kver` 没变 |
+| `ctl-flash.cpio.gz`（flash，`K73F`，**干跑**变体 `DO_WRITE=0`） | 595,403 B md5 `8f6148ac…` | 595,402 B md5 **`8b1e2890…`** | `init` 里钉的三个 md5 必须跟着换（rootfs 那条换成 `cf70d221…`） |
+
+⇒ 旧的 flash 载荷留档 `staging/trial73d/ctl/ctl-flash.cpio.gz.old62`。
+
+**构建器**：两份 `mkctlram.py`（现场 `tools/` 与仓库 `ci-build-repo/tools/`）
+**都能逐字节复现**旧的 flash 载荷（md5 `8f6148ac…`，两遍一样）；
+但 **announce 只有仓库那份能复现**：
+仓库那份 **717 行**、现场那份 **677 行**（**仓库那份多出的正好是那 41 行**），
+产出的 `init` 是 **19,117 B**（仓库）与 **16,338 B**（现场）——
+现场那份会**丢掉** sysfs / netdevs / `eth_bound_driver` 那几项诊断。
+⇒ **canonical 是仓库那份**；这是本轮**第二次**坐实「现场那份 `mkctlram.py` 比仓库那份旧」。
+
+### 8之二十六.4 换件之后重跑的四道本地校验（全过）
+
+| 校验 | 实测 |
+|---|---|
+| 取件契约（`sim_flash_stage.py`） | **served == pinned == on disk**，三件逐个相同；负控（钉 6.18 那一对的旧载荷）被拒 ⇒ `SIM OK` |
+| 产物级（`verify_73_artifact.py`） | **9 个探针全 HIT**；内核装得下（8 MiB 分区，headroom 2,572,373 B）⇒ `OK` |
+| RAM 通道门禁（`gate73_check.py`） | 正例 **ALLOWED**；五个负控逐条被拒（kver 不符 / 厂商核 / `root_read` 缺 / `jffs2_ro` 缺 / `root_index` 不符） |
+| 分区表门禁（`dtbparts.py`） | `TABLE OK`，root 落在 `/dev/mtdblock5`，与 U-Boot 的 bootargs 一致 |
+
+⇒ **这四道必须在换件之后重跑**：载荷只允许写它被构建时的那对字节，
+而门禁认的是**字节**，不是轮次。
+
+### 8之二十六.5 这一节没做的
+
+- **没有刷机**：板子不在本机（CH340 未枚举、网线未插），
+  且 **bench inbox 被别的会话占着** ⇒ 全程没发过一条 bench 命令。
+- **没有把三件拷进 `staging/trial/`**：有意的（八之二十二.4），
+  不预先覆盖，免得打断 6.18 线与别人占用的 bench。
+- **没有动现场 `staging/ctl/`**：那套 gate 夹具仍是 6.18 时代
+  （`flash.permit` 25 行里没有 `proven=gate-K73`）
+  ⇒ **第 2 步仍要重建夹具，而重建会覆盖别人的夹具 ⇒ 要等 bench 空**。
+- **没有跑现场 `preflight.sh`**。
 
 ## 九、下一步（按片重打，每片一次 CI）
 
@@ -8580,6 +8671,49 @@ python3 scratch/extract_flash_members.py scratch/artifact57-flash.zip scratch/ex
 #      六个问题都要有答案；两个负例（表里没有那四个名字、镜像里没有 ethtool）
 #      必须 survivable；再把仪器改坏六处，每一处都要被抓住
 python3 scratch/trialsurvey_check.py
+
+# 115) 列这一轮的产物：先问 API 要 artifact 的 id 与 size_in_bytes
+python3 scratch/ci_artifacts.py 45273622551
+#      下载本身走 Browser：open_tab 打开 artifact 详情页
+#      /<o>/<r>/actions/runs/<run>/artifacts/<id> ⇒ 浏览器直接下载到
+#      Downloads\<uuid>.tmp（导航报 net::ERR_ABORTED 属正常，不是失败）；
+#      判据：大小与上面的 size_in_bytes 相同、且长度不再增长；
+#      落地后 sha256 必须与 run 页上印的 digest 逐位相同
+#      （本轮实测 73,429,614 B，sha256 4427f801…）
+
+# 116) 解包并对上产物自己的 sha256sums（缺成员/对不上 manifest 必须非零退出）
+python3 scratch/extract_flash_members.py scratch/artifacts/run45273622551-73-flash.zip scratch/artifact63
+
+# 117) 与上一轮那套逐件比：uImage/dtb 跨轮逐位相同、rootfs 每轮不同
+#      （本轮实测：前两件 [OK]，rootfs 那件 [FAIL] —— 那正是「每轮不同」的证据）
+python3 scratch/zip_compare.py scratch/artifacts/run45273622551-73-flash.zip staging/trial73d/flash-run62
+
+# 118) 换件：把 #71 那套放进工作位 staging/trial73d/flash/（旧件别删），
+#      另存一份 flash-run71/；三件用 extract_flash_members.py 取（自带 manifest 自校验）
+python3 scratch/extract_flash_members.py scratch/artifacts/run45273622551-73-flash.zip staging/trial73d/flash-run71
+
+# 119) 重建两个载荷（announce 逐位不变、flash 的 rootfs 那条换成新 md5）；
+#      **不要传 --lib**（它是 append，再传会把默认那两条再添一遍）
+python3 ci-build-repo/tools/mkctlram.py --mode announce --tag K73 \
+        --staged staging/trial73d/flash/flash-uImage \
+        --out staging/trial73d/ctl/ctl-initramfs.cpio.gz
+python3 ci-build-repo/tools/mkctlram.py --mode flash --stage net --tag K73F \
+        --staged staging/trial73d/flash/flash-uImage \
+        --extra sbin/mtd=staging/ctl/rootfs/mtd \
+        --extra sbin/devmem2=staging/ctl/rootfs/devmem2 \
+        --payload p/flash-uImage=staging/trial73d/flash/flash-uImage \
+        --payload p/flash-dtb.bin=staging/trial73d/flash/flash-dtb.bin \
+        --payload p/flash-rootfs.jffs2=staging/trial73d/flash/flash-rootfs.jffs2 \
+        --out staging/trial73d/ctl/ctl-flash.cpio.gz
+
+# 120) 换件之后重跑：取件契约排练 + 产物级校验 + RAM 通道门禁
+python3 scratch/sim_flash_stage.py staging/trial73d/ctl/ctl-flash.cpio.gz
+python3 scratch/verify_73_artifact.py staging/trial73d/flash
+python3 scratch/gate73_check.py
+
+# 121) 换 7.3 的 dtb 之前再验一遍分区表门禁（实测 TABLE OK）
+python3 ci-build-repo/tools/dtbparts.py staging/trial73d/flash/flash-dtb.bin \
+        layout=native241 root=0xf00000,0xf100000
 ```
 
 第十节的 18~24 号命令里，`cfg73_sim.py` 与 `kdeps73.py` 是**一对**：
@@ -8689,3 +8823,19 @@ uapi 头都过一遍 `scripts/headers_install.sh`，而它的 sed（第 34 行�
 刷机载荷的 pin 是 `flash-round.sh` 每次现读现算的（八之十九.5）。
 112 号是本轮的一条教训：**字母相近的串不能靠眼睛比** ——
 它当场排除了一个并不存在的「产物与仓库拼写不一致」的 bug。
+
+**115~121 号命令是第十一组**，合起来回答的是一个问题：
+**「要刷进板子的那三件，是不是这一轮产出的、载荷钉住的那一对」**。
+
+- 115 号先问 API 要 **id 与 size_in_bytes**（下载完要用它当尺子，
+  不要用「看着下完了」当尺子）；下载走 Browser 的 artifact 详情页，
+  **`net::ERR_ABORTED` 是下载本身的正常返回**。
+- 116 与 117 号是**两轮真产物的对照**：uImage 与 dtb 跨轮**逐位相同**，
+  rootfs **每轮不同** ⇒ 「三件必须同轮」这条规则第一次有实证。
+- 118 号是**换件**：工作位换成 #71 那套，旧件另存不删。
+- 119 号是**重建载荷**：announce 一个 md5 都不钉 ⇒ **逐位不变**；
+  flash 载荷钉的那三个 md5 必须跟着换（rootfs 那条从 `6a9840f5…` 换成 `cf70d221…`）。
+  ⇒ **载荷只允许写它被构建时的那对字节**，所以换件不重钉，板子会拒写。
+- 120 与 121 号是**换件之后必须重跑**的四道门禁
+  （取件契约 / 产物级 / RAM 通道门禁 / 分区表）：
+  它们认的是**字节**，不是轮次。
