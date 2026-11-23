@@ -6007,7 +6007,8 @@ uImage `4b518979…`、dtb `ff6914d0…`）⇒ 「跨轮次逐位可复现」这
 artifact ID `14839239552`，zip 73,416,000 B
 （另有 `sk-d840n-73-images-initramfs`，ID `14840159113`，15,880,367 B）。
 
-**没做的**：这一轮**没有**取 artifact、没有验镜像里那份微码、也没有碰板子。
+**没做的**：这一轮**没有**在 CI 里跑产物级微码门禁（它在 #62 才进工作流）。
+**取件与验件是后来做的** —— artifact 已取回，微码已双向验过，见八之二十。
 
 ### 8之十五.2 那张「字段偏移表」其实不需要 —— 编译器的**行号表**就够
 
@@ -6106,9 +6107,10 @@ CI 那一轮构建出来的 **`vmlinux`**（带符号表），而 `vmlinux` 与
 （第十节 47 号命令，`SIM OK`），跑在真的字节上、没有板子。
 
 **刷机前的那条自检也已经过了**：`staging/trial73d/flash/sha256sums`
-对三个 flash 成员**逐位相同**（`flash-uImage` = `e4bb3b02…`、
-`flash-dtb.bin` = `1c80886a…`、`flash-rootfs.jffs2` = `befbf232…`）
+对三个 flash 成员**逐位相同**（`flash-uImage` = `57744525…`、
+`flash-dtb.bin` = `1c80886a…`、`flash-rootfs.jffs2` = `b7242410…`）
 ⇒ 本地这份产物是完整的，可以直接进刷机流程。
+（这三行是 **#62** 那轮的字节 —— 换轮次要跟着换，见八之二十。）
 
 **本轮补上的一样**：两个载荷已经为 **7.3 那对字节**重建好了，
 放在 `staging/trial73d/ctl/`（**不动现场 `staging/ctl/`**）：
@@ -6116,7 +6118,7 @@ CI 那一轮构建出来的 **`vmlinux`**（带符号表），而 `vmlinux` 与
 | 载荷 | 骑/钉什么 | 判据 |
 |---|---|---|
 | `ctl-initramfs.cpio.gz`（announce） | 骑内核 `7.3.4*` | 判决里的 `kver=$(uname -r)` 必须是 `7.3.4` |
-| `ctl-flash.cpio.gz`（flash，net staging，**干跑**：`DO_WRITE=0`、`DO_ROOT=0`） | 钉 `uimage_md5=4b518979…`、`dtb_md5=ff6914d0…`、`root_md5=1dc238cc…` | 钉错了板子自己会打 `STAGE_FAIL` 拒写 |
+| `ctl-flash.cpio.gz`（flash，net staging，**干跑**：`DO_WRITE=0`、`DO_ROOT=0`） | 钉 `uimage_md5=3664b8cb…`、`dtb_md5=ff6914d0…`、`root_md5=6a9840f5…` | 钉错了板子自己会打 `STAGE_FAIL` 拒写 |
 
 现场那份 `staging/ctl/ctl-flash.cpio.gz` 钉的仍是 **6.18** 的那一对
 （`35685e15…` / `ee287b5c…`）⇒ 刷 7.3 之前必须重建，否则板子会拒写
@@ -6131,7 +6133,7 @@ CI 那一轮构建出来的 **`vmlinux`**（带符号表），而 `vmlinux` 与
 **还缺的三样，按顺序**：
 
 1. **许可**：`tools/gatecheck.sh` 要求 `staging/ctl/flash.permit` 里有一行
-   **同时**写着 `uimage_md5=4b518979…` 与 `dtb_md5=ff6914d0…`，
+   **同时**写着 `uimage_md5=3664b8cb…` 与 `dtb_md5=ff6914d0…`，
    而且 `proven=` 只能是 `live-partition-match` / `preflash-snapshot`（证据）
    或 `operator-waiver`（**决定**，不是证据）**或 `gate-<tag>`** ——
    最后这一种正是 7.3 那一轮要用的（`proven=gate-K73`，
@@ -6298,7 +6300,7 @@ ts=… uimage_md5=<裸 uImage 的 md5> image_md5=… dtb_md5=<gate-dtb 的 md5> 
 - 还要 `root_read=IDENTICAL`、`root_index=5`、`jffs2_ro=OK` 三项缺一不可。
 
 **本机实测**（`scratch/gate73_check.py`，用 7.3 的**真件**
-`staging/trial73d/flash/flash-uImage`（5,813,531 B，md5 `4b5189792c4f1c3dcaef7e28b5dec258`）
+`staging/trial73d/flash/flash-uImage`（5,816,299 B，md5 `3664b8cb1bb091db891126cf33b355c6`）
 与 `flash-dtb.bin`（14,958 B，md5 `ff6914d007b9b21895e1a6b3f67d5ea5`））：
 
 ```
@@ -6439,34 +6441,42 @@ mailbox 报告」的自检开关；报告里写下的 `kver=$(uname -r)` 才是�
 run **#57**（整轮 Success，1 h 20 m 46 s）的 flash job 里
 `ls -l` 与 `sha256sum -c` 的输出是
 
-| 文件 | #57 产出 | 本机 `staging/trial73d/flash/` |
+| 文件 | #57 产出（**修前**） | 本机 `staging/trial73d/flash/`（**#62，修后**） |
 |---|---|---|
-| `flash-uImage` | 5,813,531 B | 5,813,531 B |
+| `flash-uImage` | 5,813,531 B | 5,816,299 B |
 | `flash-dtb.bin` | 14,958 B | 14,958 B |
 | `flash-rootfs.jffs2` | 5,767,172 B | 5,767,172 B |
 
 且该轮的 `sha256sum -c` **五个文件全 OK**（含 `flash-sysupgrade.bin` 与
 `sysupgrade-report.json`）⇒ manifest 自洽。
-⇒ **大小三重一致 + 同一内核源 ⇒ 这就是那一轮的字节**。
+⇒ **大小三重一致 + 同一内核源 ⇒ 这就是那一轮的字节**（当初 #57 与本机那份对上了）。
+⚠️ **但这条判据只在「同一份微码」之内成立**：#60 的 uImage 比 #57 的大 **2,768 B**
+（微码换了 ⇒ 嵌进镜像的字节变了）⇒ **跨轮次比大小会得出「不是同一轮」的结论**，
+哪怕源码完全一样。⇒ 跨轮次能比的是 **dtb**。
 
 **md5 那一锤后来补上了**（把 #57 的 artifact `sk-d840n-73-images-flash` 取回来之后）：
 
-| 文件 | #57 的 artifact | 本机 `staging/trial73d/flash/` | 结论 |
-|---|---|---|---|
-| `flash-uImage` | md5 `4b5189792c4f1c3dcaef7e28b5dec258` | 同左 | **逐位相同** |
-| `flash-dtb.bin` | md5 `ff6914d007b9b21895e1a6b3f67d5ea5` | 同左 | **逐位相同** |
-| `flash-rootfs.jffs2` | md5 `e86158636c4ae0bbcc344fa4b0c49ed5` | `1dc238cc75ac97a56251a79cb97e5c45` | **不同** |
+| 文件 | #57（**修前**） | #60（**修后**） | #62（**修后，本机现备**） | 结论 |
+|---|---|---|---|---|
+| `flash-uImage` | md5 `4b5189792c4f1c3dcaef7e28b5dec258` | `3664b8cb1bb091db891126cf33b355c6` | **同 #60** | #57↔#60 不同（微码换了）；#60↔#62 **逐位相同** |
+| `flash-dtb.bin` | md5 `ff6914d007b9b21895e1a6b3f67d5ea5` | 同左 | 同左 | **三轮逐位相同** |
+| `flash-rootfs.jffs2` | md5 `e86158636c4ae0bbcc344fa4b0c49ed5` | `5bdcf94c48fa890866916ab37313d6e8` | `6a9840f5fe7e0f27812788cf0d69a3df` | **每一轮都不同** |
 
-⇒ **uImage 与 dtb 跨轮次逐位可复现；jffs2 的 rootfs 不可复现**（封装带时间戳）。
+⇒ **uImage 与 dtb 在「源码状态相同」的前提下跨轮次逐位可复现**：
+#53/#57/#59 三轮相同（那时微码还没换），#60/#62 两轮也相同。
+⇒ **#59↔#60 的差别是源码状态变了**（微码换了），**不是不可复现** ——
+初稿把它写成「uImage 在微码修好之后不再逐位可复现」是**过度纠正**，这里改回来。
+⇒ **jffs2 的 rootfs 每一轮都不同**（封装带时间戳）。
 ⇒ 所以**三件必须取自同一轮**，而且**载荷钉的 md5 必须跟着换**。
 
-**本机备好的那三件与预置的两个载荷是自洽的**（实测，把载荷解开扫出来的）：
+**本机现在备好的那三件与刷机载荷是自洽的**（实测，把载荷解开扫出来的）：
 `staging/trial73d/ctl/ctl-flash.cpio.gz` 里钉着的三个 md5 是
-`4b5189792c4f1c3dcaef7e28b5dec258`（uImage）、
+`3664b8cb1bb091db891126cf33b355c6`（uImage）、
 `ff6914d007b9b21895e1a6b3f67d5ea5`（dtb）、
-`1dc238cc75ac97a56251a79cb97e5c45`（rootfs）——
+`6a9840f5fe7e0f27812788cf0d69a3df`（rootfs）——
 与 `staging/trial73d/flash/` 里那三件的 md5 **逐个相同**；
 `staging/trial73d/ctl/ctl-initramfs.cpio.gz` 骑的是 `7.3.4*`。
+（这三行是**换件之后重建**出来的 —— 换之前它钉的还是 #53 那对，见八之二十.4。）
 
 ⇒ 第 1 步只要把 `staging/trial73d/flash/` 那三件拷进 `staging/trial/`，
 **第 2、6 步重建出来的夹具与载荷就会自动钉住同一对字节**
@@ -6482,7 +6492,7 @@ run **#57**（整轮 Success，1 h 20 m 46 s）的 flash job 里
 | 步 | 做什么 | 命令 | 这一步的判据 |
 |---|---|---|---|
 | **0** | **物理**：插 CH340、插网线、确认智能插座供电 | `sh tools/bench-keep.ps1` | 继电器与冷启动看门狗起来；`staging/ctl/serial.log` 开始长 |
-| **1** | **换件**：把 7.3 的三件放进 `staging/trial/`。**三件必须来自带微码修复的那一轮** —— 本机现在备的那三件是 #53 的，带的是驱动拒收的那份微码 ⇒ 换之前先刷新（八之十九.2） | 先 `python3 scratch/extract_flash_members.py <那一轮的 artifact.zip> staging/trial73d/flash/`（旧件别删），再复制到 `staging/trial/` | `sha256sum -c` 过那一轮的 `sha256sums`；**且** `python3 ci-build-repo/tools/check-sk-mcode-image.py --image staging/trial/flash-uImage --tree <7.3 树> --blob <那份微码>` 过（镜像里那份是驱动收的那一份） |
+| **1** | **换件**：把 7.3 的三件放进 `staging/trial/`。**三件必须来自带微码修复的那一轮** —— 本机现在备的那三件是 **#62** 的（`3664b8cb…` / `ff6914d0…` / `6a9840f5…`），**微码已在真产物上验过、且 CI 里那道产物级门禁是绿的**（八之二十.3、8之二十.5） | 先 `python3 scratch/extract_flash_members.py <那一轮的 artifact.zip> staging/trial73d/flash/`（旧件别删），再复制到 `staging/trial/` | `sha256sum -c` 过那一轮的 `sha256sums`；**且** `python3 ci-build-repo/tools/check-sk-mcode-image.py --image staging/trial/flash-uImage --tree <7.3 树> --blob <那份微码>` 过（镜像里那份是驱动收的那一份） |
 | **2** | **重建门禁夹具** | `sh tools/mkgate.sh` | 打印 `the gate kernel IS the flash kernel`；`gate.src` 里的 `uimage_md5` = 第 1 步那对 |
 | **3** | **announce 载荷**：**直接用预置的那份** `staging/trial73d/ctl/ctl-initramfs.cpio.gz`（它已经骑 `7.3.4*`，而且一个 md5 都不钉 ⇒ 不随三件变化）。**要重建只能用 `ci-build-repo/tools/mkctlram.py`** —— 现场那份 `tools/mkctlram.py` 比仓库那份旧 41 行，重建会**丢掉** sysfs / netdevs / eth_bound_driver 那几项诊断（八之十九.5） | `python3 ci-build-repo/tools/mkctlram.py --mode announce --tag K73 --kver 7.3.4* ...` | 载荷里的 `/init` 是 **19,117 B**（仓库那份产的）；`grep -c eth_bound_driver` ≥ 1 |
 | **4** | **判决轮**：把 7.3 的内核 kexec 进 RAM | `python tools/ncsrv.py &` → `CTLTAG=K73 IMAGE_LOCAL=staging/ctl/gate-Image REMOTE_IMAGE=gate-Image DTB_LOCAL=staging/ctl/gate-dtb REMOTE_DTB=gate-dtb INITRD=ctl-initramfs.cpio.gz sh tools/pushctl.sh` → `sh tools/catchctl.sh` → ssh 点火 | 板子**跳走了**（`gone=1`），且 `staging/ctl/reports.log` 里出现 **CTLALIVE** 且 `kver=7.3.4` |
@@ -6848,17 +6858,184 @@ doc 100 第 281 行原写：「`overlays/…/mcode_intel.bin` **保留** —— 
 
 ### 8之十九.6 这一节没做到的
 
-- **产物级门禁还没在 CI 里跑过**：本轮把它接进了工作流，但**判决要等下一轮**
-  （7.3 线 #61 起）。
+- **产物级门禁在 CI 里的判决**：本轮把它接进了工作流，**判决在 #62 出了**
+  （#62 的 flash job 第 41 步 success，八之二十.5）；
+  #59/#60 的真产物在本机也把这道门禁双向跑过（八之二十.3）。
 - **镜像里那份到底是不是 `0xef1d7647`，本机还没验过**：
-  本机手上只有 #53 那份镜像（带的是 6.18 那份），
-  新镜像要等 CI 出来才拿得到（八之十九.3 那两条红是**旧镜像**上的证据）。
+  ⇒ **已验**（八之二十.2、8之二十.3）：#59 的镜像里是 `0xc839b946`（驱动拒收那份），
+  #60 的镜像里是 `0xef1d7647`（驱动收的那份），字节与固件名字都在。
 - **板子那一头依旧一次都没验过**：这一节全是**产物级**的结论。
 - **`EXTRA_FIRMWARE_DIR` 为什么会被钉到检出目录**：注释里写的是
   cnjn 那个相对路径「只在他自己的机器上成立」；**那个改写本身是对的**
   （不改的话编译直接死于 “No rule to make target”），
   但**它顺带把「内核树里那份」变成了没人读的文件** ——
   这是本轮才看出来的，初稿以为那就是生效路径。
+
+---
+
+## 八之二十、微码那条链的第三轮：#59 的双向红、#60 与 #62 的双向绿，和**第一份能刷的三件**
+
+### 8之二十.1 判决
+
+**成立**：微码这条链第一次在**真产物**上**双向**跑通了，
+而且**CI 里那道产物级门禁也是绿的** ⇒ 实机那一轮要刷的三件**已经定下来**。
+
+1. **#59 的产物是坏的**，而且坏在指定的那一条上：
+   它的 uImage 里嵌的是 `0xc839b946`（驱动拒收那份）⇒ **那一轮不能刷**。
+2. **#60 与 #62 的产物都是好的**：uImage 里嵌的是 `0xef1d7647`（驱动收的那份），
+   **字节与固件的名字都在镜像里**。
+3. **本机现在备着的三件取的是 #62 那对** ——
+   取件规则是「**第一个既绿、又跑了产物级门禁的轮次**」；
+   刷机载荷也已按这新的字节重建 ⇒
+   实机那一轮的第 1 步与第 6 步的**夹具已经齐了**，缺的只剩物理与板子。
+
+### 8之二十.2 为什么 #60 就够了，而最后取的却是 #62
+
+微码修复是 commit **`055b5577`**。它在历史里的位置（实测 `merge-base --is-ancestor`）：
+
+| commit | 是哪一轮的 head | `055b5577` 是它的祖先吗 |
+|---|---|---|
+| `fb869089` | run **#59** | **否** ⇒ #59 的镜像里是旧微码 |
+| `5f96cc52` | run **#60** | **是** ⇒ #60 的镜像里是新微码 |
+| `15e97c48` | run **#62** | 是 ⇒ #62 的镜像里也是新微码 |
+
+⇒ **#60 已经在修复之后**；#62 之所以特别，是因为它是**第一个把产物级微码门禁
+放进工作流**的 head（那道门禁是 `c0e735e5` 接进来的，`10de67a8` 又给它补了
+「名字也要在」那一条）。
+⇒ 两者的**微码状态相同**，区别只在「CI 里有没有那道门禁」。
+
+⇒ 于是**不等编译**：直接取 #60 的 artifact，在本机用**同一道门禁**
+（同一个脚本、同一份期望值 —— 期望值仍然是从树里驱动自己的代码读出来的，
+不是写死的）双向跑一遍。
+⇒ 这是**同一道门禁**，不是另写一份判据。
+⇒ #62 随后也绿了（8之二十.5）⇒ **最终取 #62 那对**：
+它是**第一个既绿、又让 CI 自己跑过那道产物级门禁**的轮次。
+
+### 8之二十.3 真产物上的双向证据
+
+**#59**（`flash-uImage`，inflate 后 14,051,336 B）：
+
+| 问法 | 判决 | 红在哪一条 |
+|---|---|---|
+| 查驱动要的那份（`0xef1d7647`） | **红** | 「镜像里没有微码」 |
+| 查镜像里真有的那份（`0xc839b946`） | **红** | 「驱动不收这一份」（并报出 offset **9,073,808**） |
+
+⇒ 两条**各红一条**，且红的不是同一条 ⇒ 这道门禁**有分辨力**，不是恒红。
+
+**#60**（`flash-uImage`，inflate 后 **14,051,336** B）：
+
+```
+the driver wants: 0xef1d7647
+the microcode: …/overlays-73/…/mcode_intel.bin (103456 B) crc32 0xef1d7647
+the image: …/extract60/flash-uImage (14051336 B inflated)
+[OK ] the microcode is one the driver accepts
+[OK ] the image carries the microcode
+     found at offset 9073808 (0x8a7490)
+the firmware name: zte/zx279133/mcode_intel.bin (the configuration)
+[OK ] the image names the firmware
+     found at offset 11184533 (0xaaa995)
+OK: the image carries the microcode this driver will take
+```
+
+**反向控制**（把 6.18 那份拿去找）：
+
+```
+the microcode: …/overlays/…/mcode_intel.bin (103456 B) crc32 0xc839b946
+[FAIL] the microcode is one the driver accepts: crc32 0xc839b946 is not in 0xef1d7647
+[FAIL] the image carries the microcode: the 103456 bytes are not in the image
+2 check(s) failed
+```
+
+⇒ **三条全过**，反向控制**红在指定的那两条**上；
+而「镜像里没有固件的名字」那一条**在 #60 上是绿的** ⇒ 名字确实在镜像里
+（offset 11,184,533）。
+
+**#62**（同一道门禁，本机）：三条同样全过、反向控制同样红在那两条上 ——
+**因为 #62 的 uImage 与 #60 的逐位相同**（八之十七.1 那张表），
+门禁的输入本来就是同一串字节。
+
+⇒ **树级门禁的判决被产物独立证实**：
+#60 的 flash job 里那道「Gate: the NPU microcode is the one this driver will take」
+**跑了且是绿的**（实测该 job 的步骤列表），而本机的产物级门禁说
+「镜像里那份也是对的」—— 两件事**互不依赖**（一个问树，一个问产物），
+却**一致**。
+⇒ 反过来，#60 的 job 里**没有**产物级那道（它 #62 才进工作流）
+⇒ #60 的「CI 内」判决只覆盖到树级；产物级那道是**本机**跑的。
+
+### 8之二十.4 三件与载荷：换件之后必须重建，以及一个会撑大 initrd 的坑
+
+**#62** 的 artifact `sk-d840n-73-images-flash`（ID `14847931418`，zip 73,429,346 B，
+GitHub 公布的 zip sha256 `3a9ec2147d4c7e4139ec0fd3d8f628f47c898674481ee048f1003cf84a85533d`
+与本机下载到的**逐位相同**）解出三件，
+`extract_flash_members.py` 对 **artifact 自己的 `sha256sums`** 三项全自洽：
+
+| 文件 | 大小 | md5 | sha256 |
+|---|---|---|---|
+| `flash-uImage` | 5,816,299 B | `3664b8cb1bb091db891126cf33b355c6` | `57744525adba874c…` |
+| `flash-dtb.bin` | 14,958 B | `ff6914d007b9b21895e1a6b3f67d5ea5` | `1c80886a5df7a0ae…` |
+| `flash-rootfs.jffs2` | 5,767,172 B | `6a9840f5fe7e0f27812788cf0d69a3df` | `b7242410d3b30a3f…` |
+
+⇒ 前两套三件**都留着**，没有删：`staging/trial73d/flash-run53/`（#53）与
+`staging/trial73d/flash-run60/`（#60）。
+
+**刷机载荷必须重建**（它把三个 md5 钉在 `/init` 里）：实测解包扫出来，
+重建前它钉的是 `4b518979…` / `ff6914d0…` / `1dc238cc…`（#53 那对），
+重建后是 `3664b8cb…` / `ff6914d0…` / `6a9840f5…` ⇒ **逐个对上现在这三件**
+（`TAG=K73F`、`DO_WRITE=0`、`DO_ROOT=0`、`/init` 8,615 B —— 干跑变体）。
+
+⚠️ **本轮踩到的一个坑：`--lib` 是 `action="append"` 且默认值非空。**
+再显式传一遍 `--lib` ⇒ **两个动态库各嵌了两份** ⇒ 膨胀的 cpio 从 1,297,004 B
+涨到 2,019,208 B、压缩后从 595,404 B 涨到 **935,994 B**。
+⇒ 而 `tools/flash-round.sh` 的注释写着：**厂商内核已证明能加载的最大 initrd 是 577 kB**
+⇒ 936 kB 那个很可能**根本载不进去**，而症状看起来像「板子死了」，
+不像是「载荷写胖了」。
+⇒ **重建载荷不要传 `--lib`**（默认值已经指向 `staging/ctl/rootfs/` 那两个）。
+
+### 8之二十.5 CI 内的判决
+
+run **#62**（head `15e97c48`）整轮 **completed / success**（1 小时 14 分 38 秒）——
+它是**第一个**把产物级微码门禁放进工作流的 head。
+
+**flash job 的关键几步**（后台轮询器逐条读回来的）：
+
+| 步 | 名字 | 判决 |
+|---|---|---|
+| 17 | `Gate: the NPU microcode is the one this driver will take`（**树级**） | success |
+| 32 | `Compile` | success |
+| 41 | `Gate: the image carries the PPU microcode this driver will take`（**产物级**） | success |
+| 42 | `Gate: the flash gate accepts this pair of bytes` | success |
+| 47 | `Upload the build log` | skipped（`if: failure()`） |
+
+第 41 步的**原始输出**（`checks/137845892434/logs`，2026-11-23T17:50:28Z）：
+
+```
+the driver wants: 0xef1d7647
+the microcode: openwrt/target/linux/zte/zx279133/firmware/zte/zx279133/mcode_intel.bin (103456 B) crc32 0xef1d7647
+the image: flash-uImage (14051336 B inflated)
+[OK ] the microcode is one the driver accepts
+[OK ] the image carries the microcode
+     found at offset 9073808 (0x8a7490)
+the firmware name: zte/zx279133/mcode_intel.bin (the configuration)
+[OK ] the image names the firmware
+     found at offset 11184533 (0xaaa995)
+OK: the image carries the microcode this driver will take
+```
+
+第 17 步（树级）在同一份日志里也是绿的，而且**查的是检出目录里那份**
+（`openwrt/target/linux/zte/zx279133/firmware/…`）—— 正是被嵌进镜像的那一份
+（八之十九.2）。
+
+⇒ CI 里跑的那道门禁与本机跑的是**同一道**（同一个脚本、同一份期望值、
+同一串镜像字节 —— #60 与 #62 的 uImage 逐位相同）⇒ **判决也一致**。
+
+### 8之二十.6 这一节没做到的
+
+- **板子那一头依旧一次都没验过**：这一节全是**产物级**的结论。
+- **#60 那一轮 CI 里没有产物级门禁**（它 #62 才进工作流）⇒ #60 的「CI 内」判决
+  只覆盖到树级那道；产物级那道是**本机**跑的（8之二十.3）。
+- **本机没有解 jffs2 的工具** ⇒ 根文件系统里的内容仍然只能靠板子自己挂上来才看得见。
+- **产物级门禁在 CI 里只验了「正例」** ⇒ 它在 CI 里的**反向控制**仍然是本机跑的
+  （`tests/test_sk_mcode_image.py` 的 7 项负控 + 本机上那一次反向控制）。
 
 ---
 
