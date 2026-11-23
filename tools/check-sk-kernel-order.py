@@ -249,7 +249,16 @@ def branch_on(records, start, register):
     return None
 
 
-def analyze(records, restore_line, check_line, helper_lines):
+def distinct_lines(records):
+    """The source lines the machine code of a function came from."""
+    lines = sorted({r["line"] for r in records if r["line"]})
+    shown = ", ".join(str(line) for line in lines[:60])
+    if len(lines) > 60:
+        shown += ", ..."
+    return shown
+
+
+def analyze(records, restore_line, check_line, helper_lines, address):
     """Ask the machine code where the two things are.
 
     The checks are the gate's, and they are named so that a control can say
@@ -260,6 +269,29 @@ def analyze(records, restore_line, check_line, helper_lines):
     mine = [r for r in records
             if r["file"] and Path(r["file"]).name == driver]
 
+    # The disassembly has to be the function's own machine code.  The column
+    # objdump prints in front of an instruction is its address, and the
+    # function starts at the address the symbol table gives - so the first
+    # instruction has to be at that address.  If that column ever held
+    # something else (a source line number, say), every comparison below
+    # would be about the wrong thing and would still look plausible, which
+    # is why this is a check of its own and not a comment.
+    first = records[0]["addr"] if records else None
+    report.require(first is not None and abs(first - address) <= 0x1000,
+                   "the machine code is the function's own",
+                   "the disassembly starts at %s, the symbol is at 0x%x"
+                   % (("0x%x" % first) if first is not None else "nothing",
+                      address))
+
+    # A kernel without line information cannot answer the question at all,
+    # and that is worth saying plainly: the build has to carry debug
+    # information for the compiler's line table to exist.
+    report.require(any(r["line"] for r in records),
+                   "the kernel carries line information",
+                   "the disassembly names no source line at all - the build "
+                   "has to have CONFIG_DEBUG_INFO=y for the compiler's line "
+                   "table to exist")
+
     restore = [r for r in mine
                if r["line"] == restore_line or r["line"] in helper_lines]
     check = [r for r in mine if r["line"] == check_line]
@@ -267,12 +299,14 @@ def analyze(records, restore_line, check_line, helper_lines):
     if not report.require(bool(restore),
                           "the compiled function carries the restore",
                           "no instruction of the restore was found in the "
-                          "conduit's open"):
+                          "conduit's open; the function's lines are: %s"
+                          % distinct_lines(mine)):
         return report
     if not report.require(bool(check),
                           "the compiled function asks about the hardware",
                           "no instruction of the hardware check was found in "
-                          "the conduit's open"):
+                          "the conduit's open; the function's lines are: %s"
+                          % distinct_lines(mine)):
         return report
 
     load = None
@@ -507,7 +541,7 @@ def main(argv=None) -> int:
                                                  address, size, OPEN))
     print("  %d instruction(s) read" % len(records))
 
-    report = analyze(records, restore_line, check_line, helper_lines)
+    report = analyze(records, restore_line, check_line, helper_lines, address)
 
     # The bytes: the machine code that was read has to be the machine code
     # that is on the board.

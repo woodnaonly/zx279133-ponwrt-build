@@ -58,13 +58,13 @@ def failed_checks(args, extra):
     return names, result.returncode, result.stdout + result.stderr
 
 
-def emit(records):
+def emit(records, with_lines=True):
     """The machine code as an objdump run would print it."""
     out = []
     current = None
     for record in records:
         key = (record["file"], record["line"])
-        if key != current:
+        if with_lines and key != current:
             out.append("%s:%s" % (record["file"] or "?", record["line"] if record["line"] else 0))
             current = key
         out.append("  %x:\t00000000 \t%s\t%s"
@@ -72,10 +72,16 @@ def emit(records):
     return "\n".join(out) + "\n"
 
 
-def renumber(records):
-    """The records with fresh addresses, in their own order."""
+def renumber(records, start=0x1000):
+    """The records with fresh addresses, in their own order.
+
+    The addresses stay in the kernel's address space on purpose: the gate
+    checks that the machine code it reads starts at the function's own
+    address, and a control must not turn that check red by accident - each
+    control has to turn red on the check that names the thing it broke.
+    """
     out = []
-    address = 0x1000
+    address = start
     for record in records:
         copy = dict(record)
         copy["addr"] = address
@@ -186,9 +192,12 @@ def main():
         if not restore or not check_group:
             check(False, "the machine code has both things to reorder")
         else:
-            first = records.index(restore[0])
-            moved = [r for r in records if r not in check_group]
-            broken = renumber(moved[:first] + check_group + moved[first:])
+            split = restore[0]["addr"]
+            before = [r for r in records
+                      if r not in check_group and r["addr"] < split]
+            after = [r for r in records
+                     if r not in check_group and r["addr"] >= split]
+            broken = renumber(before + check_group + after, address)
             path = work / "reordered.dis"
             path.write_text(emit(broken), encoding="utf-8")
             names, rc, output = failed_checks(base, ["--disassembly", str(path)])
@@ -199,7 +208,7 @@ def main():
 
         # 2. No restore at all.
         restore, check_group = groups(records)
-        broken = renumber([r for r in records if r not in restore])
+        broken = renumber([r for r in records if r not in restore], address)
         path = work / "no-restore.dis"
         path.write_text(emit(broken), encoding="utf-8")
         names, rc, output = failed_checks(base, ["--disassembly", str(path)])
@@ -210,7 +219,7 @@ def main():
 
         # 3. No hardware check at all.
         restore, check_group = groups(records)
-        broken = renumber([r for r in records if r not in check_group])
+        broken = renumber([r for r in records if r not in check_group], address)
         path = work / "no-check.dis"
         path.write_text(emit(broken), encoding="utf-8")
         names, rc, output = failed_checks(base, ["--disassembly", str(path)])
@@ -219,7 +228,16 @@ def main():
               "no hardware check in the machine code -> red on %r" % expected,
               ", ".join(sorted(names)[:3]))
 
-        # 4. An image that does not carry the function.
+        # 4. A kernel without line information.
+        path = work / "no-lines.dis"
+        path.write_text(emit(records, with_lines=False), encoding="utf-8")
+        names, rc, output = failed_checks(base, ["--disassembly", str(path)])
+        expected = "the kernel carries line information"
+        check(expected in names,
+              "a kernel without line information -> red on %r" % expected,
+              ", ".join(sorted(names)[:3]))
+
+        # 5. An image that does not carry the function.
         image = gate.inflate_uimage(args.image)
         offset = gate.va_to_offset(segments, address, size or 4)
         if offset is None:
@@ -239,6 +257,21 @@ def main():
                 check(expected in names,
                       "an image without the function -> red on %r" % expected,
                       ", ".join(sorted(names)[:3]))
+
+        # 6. A machine code that is not the function's own.  The column
+        #    objdump prints in front of an instruction is its address, and
+        #    every comparison this gate makes is about addresses - so a file
+        #    whose column holds something else (a source line number, say)
+        #    would still look plausible while answering a different
+        #    question.  This control feeds it one.
+        path = work / "wrong-place.dis"
+        path.write_text(emit([dict(r, addr=r["line"] or 0) for r in records]),
+                        encoding="utf-8")
+        names, rc, output = failed_checks(base, ["--disassembly", str(path)])
+        expected = "the machine code is the function's own"
+        check(expected in names,
+              "a machine code that is not the function's -> red on %r" % expected,
+              ", ".join(sorted(names)[:3]))
 
     print("%d checks, %d failed" % (checks, len(failures)))
     return 1 if failures else 0

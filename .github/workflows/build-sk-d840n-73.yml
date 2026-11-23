@@ -89,6 +89,10 @@ on:
       # say whether it still notices when that order is broken.
       - tools/check-sk-kernel-order.py
       - tests/test_sk_kernel_order.py
+      # The same gate's own logic, checked on a kernel built for the purpose:
+      # it needs the tree, so it runs in the build job and not in the gates
+      # job - which has no tree.
+      - tests/test_sk_kernel_order_local.py
       # The gate on the gates: it decides which steps this line has and
       # which paths start a build, so a change to it changes what the build
       # checks and has to start a build.
@@ -623,6 +627,21 @@ jobs:
             --file drivers/net/ethernet/zte/zx279133-switch.c \
             --file drivers/net/ethernet/zte/zxpon.c \
             --gen "$RUNNER_TEMP/kcheck-73"
+
+      # The gate that reads the machine code of the conduit's open runs at the
+      # end of the flash job, where the linked kernel and the image are.  Its
+      # own logic - reading a symbol table, reading the compiler's line table,
+      # finding the two things and comparing them - is checked here instead,
+      # on a kernel built for the purpose, so that a broken gate is reported
+      # in minutes rather than after an hour of compiling.
+      #
+      # It needs the tree, because the two source lines it asks about are
+      # found in the driver's source: so it runs here, right after the tree
+      # is prepared, and not in the gates job - which has no tree.
+      - name: Check the machine-code gate on a kernel built for the purpose
+        run: |
+          set -e
+          python3 tests/test_sk_kernel_order_local.py --tree "$KERNEL_TREE"
 
       # The 7.3 tree's driver believed the TX completion counter.  When the
       # counter reported more completions than the ring had frames in it, it
@@ -1356,7 +1375,10 @@ jobs:
           KT=$( { ls -d openwrt/build_dir/target-*/linux-*/linux-$KVER 2>/dev/null || true; } | head -1 )
           [ -n "$KT" ] || { echo "::error::no kernel build tree for linux-$KVER"; exit 1; }
           [ -f "$KT/vmlinux" ] || { echo "::error::no vmlinux under $KT"; exit 1; }
-          OBJDUMP=$( { ls openwrt/staging_dir/toolchain-*/bin/*-objdump 2>/dev/null || true; } | head -1 )
+          OBJDUMP=$( { ls openwrt/staging_dir/toolchain-*/bin/aarch64-*-objdump 2>/dev/null || true; } | head -1 )
+          if [ -z "$OBJDUMP" ]; then
+            OBJDUMP=$( { ls openwrt/staging_dir/toolchain-*/bin/*-objdump 2>/dev/null || true; } | head -1 )
+          fi
           [ -n "$OBJDUMP" ] || { echo "::error::no objdump in the toolchain"; exit 1; }
           echo "kernel: $KT"
           echo "objdump: $OBJDUMP"

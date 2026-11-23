@@ -5756,18 +5756,18 @@ flash 产物已取回本地（`staging/trial73d/flash/`）。
 单独成段），于是补丁改一个函数会让别的段跟着重排。
 ⇒ **「净指令数」与「那个 .o 变大的指令数」不相等**，这是量的时候要知道的事。
 
-**这一环没做到（如实记下）**：把「restore 的调用排在 `hardware_prepared` 检查之前」
-**在机器码里直接读出来**。两处卡住：
+**这一环在八之十五做到了，而且没有用上那张偏移表**：把「restore 的调用排在
+`hardware_prepared` 检查之前」**在机器码里直接读出来**，靠的不是字段偏移，
+而是**编译器的行号表**（内核带 `CONFIG_DEBUG_INFO=y` ⇒ CI 那份 `vmlinux`
+有 DWARF ⇒ 每条指令都知道自己来自哪一行）。
 
-- 裸 arm64 Image 没有符号表，`zx279133_lan_netdev_open` 这个名字**不在镜像里**
-  （kallsyms 的名字表是 token 压缩的；netdev.c 里也没有 `__func__`）；
-- `hardware_prepared` 与 `datapath_failed` 的**绝对偏移**本机算不出来 ——
-  树没有 `include/generated`（没 prepared），要算 `offsetof` 得用 arm64
-  交叉工具链，**只有 CI 有那条工具链**。
-
-⇒ 源码那一环是有的：`tools/check-sk-datapath-restore.py` 在 #53 的 gates job 里
-跑过（绿），它证明「restore 排在 hardware 检查之前」在**源码**里成立。
-⇒ **产物那一环还差一张偏移表**，见第九节的新条目。
+⇒ 上面那两处「卡住」要分开看：**第一处是真的卡点**（裸 arm64 Image 里没有
+`zx279133_lan_netdev_open` 这个名字，kallsyms 的名字表是 token 压缩的），
+但它也被绕过了 —— 符号改从 CI 那份 `vmlinux` 的符号表里读；
+**第二处其实不是卡点**：要认的不是两个**字段**，而是两个**源码行**，
+偏移表从一开始就没派上用场。
+⇒ 详见八之十五；源码那一环（`tools/check-sk-datapath-restore.py`，
+#53 的 gates job 里绿）仍然成立，两环是叠加的。
 
 **顺带记下三条量法上的经验**（下一次做产物级差分会用到）：
 
@@ -5782,6 +5782,149 @@ flash 产物已取回本地（`staging/trial73d/flash/`）。
    `__init_begin = 0xffff800080000000` 这个常量**不在** 7.3 的 Image 里。）
 3. **同一对产物要能当自证负控**：字节级差分工具拿「#51 vs #52」跑，
    必须报 **IDENTICAL** —— 否则「它报告了差异」这件事本身没有意义。
+
+---
+
+## 八之十五、第 11 片的最后一环：在**机器码**里把顺序读出来
+
+### 8之十五.1 判决
+
+（待填：这一版的 7.3 线 run 的 flash job 里，新门禁
+`tools/check-sk-kernel-order.py` 的 9 项检查，以及反向验证
+`tests/test_sk_kernel_order.py` 的 6 项控制。）
+
+### 8之十五.2 那张「字段偏移表」其实不需要 —— 编译器的**行号表**就够
+
+八之十四.4 记下的两处卡点：
+
+- 裸 arm64 Image 没有符号表，`zx279133_lan_netdev_open` 这个名字**不在镜像里**；
+- `hardware_prepared` 与 `datapath_failed` 的**绝对偏移**本机算不出来
+  （树没 prepared，要 `offsetof` 得用 arm64 交叉工具链，只有 CI 有）。
+
+**第二处不是真的卡点**：要认的不是两个**字段**，而是两个**源码行**。
+
+内核是带调试信息编的 —— `target/linux/zte/zx279133/config-7.3` 里写着
+`CONFIG_DEBUG_INFO=y`（7.3 的 generic 片段是 `# CONFIG_DEBUG_INFO is not set`，
+target 片段在后、赢）⇒ 链接出来的 `vmlinux` 里有 DWARF，
+**编译器的行号表知道每一条指令来自哪一行**。
+
+于是三样东西都有了：
+
+| 要什么 | 从哪来 |
+|---|---|
+| 函数在哪 | `vmlinux` 的符号表（静态函数也在 `.symtab` 里） |
+| 那两行是哪两行 | **源码里找**：函数体里第一次出现 restore 调用 / `hardware_prepared` 的行 |
+| 机器码把它们放在哪 | `objdump -d -l` 的行号标注 |
+
+⇒ **不需要偏移表，也不需要为此专门编一个探针 TU。**
+（第九节第 9 条原来说「算一张偏移表登记成表」，实测这条路没派上用场。）
+
+**第一处卡点也被绕过了**：裸 Image 里确实没有那个名字，但门禁读的是
+CI 那一轮构建出来的 **`vmlinux`**（带符号表），而 `vmlinux` 与
+`flash-uImage` 出自同一轮构建 —— 门禁第 4 层就是在核这一条。
+
+### 8之十五.3 判据取「**分支** vs restore」，不是「load vs load」
+
+`READ_ONCE(eth->hardware_prepared)` 是一次 **volatile 读**：编译器不会把它挪动。
+而 restore 的路径 `zx279133_datapath_restore_failed_locked()`
+→ `zx279133_datapath_resume()` → `zx279133_hardware_prepare()`
+**跨文件**（最后那个在 `zx279133-main.c` 里写 `eth->hardware_prepared = true`），
+对编译器是不透明的 ⇒ 那次调用之后的 volatile 读不可能被提到它前面。
+
+所以真正要判的是**做决定的那一刻**：
+
+- 找 `hardware_prepared` 那次 volatile 读（机器码里的 `ldrb`）；
+- 找**用这个寄存器做条件跳转**的那条分支；
+- 要求这条分支**在 restore 之后**。
+
+一个 load 可以被挪，一条「决定 open 是否失败」的分支不能被挪到
+「可能改变被测值的 restore」前面 —— 这不是希望，是编译器的义务。
+
+### 8之十五.4 门禁问的五层，与六个反向控制
+
+门禁问的是五层，每一层都答在**产物**上：
+
+0. **读到的确实是这个函数的机器码吗** —— 反汇编里第一条指令的地址必须落在
+   符号表给的那个地址上。objdump 打在指令前面的那一列是**地址**
+   （binutils 2.44 的 `objdump/objdump.c`：`show_line()` 只打印 `file:line` 头，
+   地址列照旧；这是本轮查过源码确认的，不是猜的），
+   而「地址的比较」是这道门禁全部结论的立足点 ⇒ 它是一条独立的检查，
+   不是一句注释。
+1. **内核里有这个函数吗** —— `vmlinux` 的符号表里 `zx279133_lan_netdev_open`
+   的地址与长度；
+2. **机器码里有 restore 吗** —— 按行号表找 restore 那一行
+   （或被内联进来的 helper 那些行）的指令；
+3. **机器码里 hardware 检查在 restore 之后吗** —— 找 `hardware_prepared` 那次
+   volatile 读，再找用这个寄存器做条件跳转的分支，要求分支在 restore 之后；
+4. **要刷进板子的镜像里就是这段代码吗** —— 把这段机器码在 `flash-uImage`
+   的膨胀产物里**逐字节**找出来。
+
+外加一条前提：**内核带行号信息** —— 没有它，上面第 2、3 层都无从谈起，
+所以它也是一条独立的检查（不是一句注释）。
+
+六个反向控制，每个改坏一处、必须**转红在指定的那条检查上**：
+
+| 控制 | 改坏什么 | 必须转红的检查 |
+|---|---|---|
+| 1 | 把 hardware 检查搬到 restore 前面 | the restore comes before the hardware check in the machine code |
+| 2 | 去掉 restore | the compiled function carries the restore |
+| 3 | 去掉 hardware 检查 | the compiled function asks about the hardware |
+| 4 | 去掉行号信息 | the kernel carries line information |
+| 5 | 镜像里改掉这段代码的一个字节 | the shipped image carries this exact code |
+| 6 | 把反汇编里那一列地址换成行号（读到的不是这个函数） | the machine code is the function's own |
+
+控制跑在**同一个内核、同一个镜像**上（改的是机器码，不是另造一份合成驱动）
+—— 合成驱动只能证明「门禁读的是合成驱动」。
+
+本机用**合成内核**（自己编的 ELF64：真符号表 + 真加载段 + 真机器码）把这套跑通：
+门禁 9 项全过、6 个控制全咬住（第十节 96 号命令）。
+
+### 8之十五.5 实机那一环现在到底缺什么
+
+**先说已经有的**：整条链（payload → 报告 → 凭证 → 闸门）**已经在沙箱里跑通过**
+（第十节 47 号命令，`SIM OK`），跑在真的字节上、没有板子。
+
+**本轮补上的一样**：两个载荷已经为 **7.3 那对字节**重建好了，
+放在 `staging/trial73d/ctl/`（**不动现场 `staging/ctl/`**）：
+
+| 载荷 | 骑/钉什么 | 判据 |
+|---|---|---|
+| `ctl-initramfs.cpio.gz`（announce） | 骑内核 `7.3.4*` | 判决里的 `kver=$(uname -r)` 必须是 `7.3.4` |
+| `ctl-flash.cpio.gz`（flash，net staging，干跑） | 钉 `uimage_md5=4b518979…`、`dtb_md5=ff6914d0…`、`root_md5=1dc238cc…` | 钉错了板子自己会打 `STAGE_FAIL` 拒写 |
+
+现场那份 `staging/ctl/ctl-flash.cpio.gz` 钉的仍是 **6.18** 的那一对
+（`35685e15…` / `ee287b5c…`）⇒ 刷 7.3 之前必须重建，否则板子会拒写
+（这个拒绝是对的）。
+
+**还缺的三样，按顺序**：
+
+1. **许可**：`tools/gatecheck.sh` 要求 `staging/ctl/flash.permit` 里有一行
+   **同时**写着 `uimage_md5=4b518979…` 与 `dtb_md5=ff6914d0…`，
+   而且 `proven=` 只能是 `live-partition-match` / `preflash-snapshot`
+   （证据）或 `operator-waiver`（**决定**，不是证据）。
+   现在的 permit 里只有 6.18 那几对（`a265fe5b…` / `d3a029f5…` / `b1e23db1…`）
+   ⇒ **7.3 这对现在必然被拒**。
+2. **判决从哪来**：RAM 门禁那一轮的判决是 `kver=$(uname -r)` ——
+   载荷自己的 `/init` 把它写进报告（`CTLFLASH … kver=…`）。
+   它必须是 **7.3.4**；现场独有的 `tools/permit-from-verdict.sh`
+   用这个判决生成 permit。
+3. **板子本身**：CH340、网线、智能插座供电，然后 `tools/bench-keep.ps1`
+   把继电器与冷启动看门狗拉起来。
+
+⇒ 三样里前两样是**软件侧的最后一格**（板上跑一轮 RAM 门禁，
+拿到 `kver=7.3.4` 的判决 ⇒ 生成 permit），第三样是**物理的**，
+本机做不了。
+
+### 8之十五.6 这一环没做到的
+
+- 这仍然**只是静态**：它证明「编译出来的代码里，restore 排在 hardware 检查之前」，
+  **不**证明「板子上那条路径真的会跑通」。后者只能由实机回答。
+- 本机仍然没有 arm64 交叉工具链 ⇒ 这道门禁只能在 CI 里跑；
+  本地能做的只有拿合成内核做端到端（8之十五.4）。
+- 它只覆盖第 11 片这一个顺序。别的补丁若也要产物级的顺序证明，
+  得照这个办法再做一遍 —— 要的不是偏移表，是**行号表 + 源码里的那几行**。
+- 它判的是**这一轮**的产物：`vmlinux` 与 `flash-uImage` 必须出自同一轮构建
+  （门禁第 4 层就是在核这一条）。换一轮镜像（哪怕只差一个补丁），它要重跑一遍。
 
 ---
 
@@ -5921,21 +6064,30 @@ flash 产物已取回本地（`staging/trial73d/flash/`）。
      + 18 条门禁 + 9 项负控。
    ⇒ **软件侧到此为止**：剩下的全是**实机对拍**。
 
-9. **产物级地读出「restore 排在 hardware 检查之前」**（第 11 片的最后一环）。
-   * **现状**：源码级已经成立 —— `tools/check-sk-datapath-restore.py`
-     在 #53 的 gates job 里跑过（绿）；产物级已经证明「190 进了镜像、
-     且差异落在 `zx279133-netdev.o` 里」（8之十四.4），
-     但**没有**在机器码里把那两个字段的读取先后读出来。
-   * **卡在哪**：裸 arm64 Image 没有符号表，而 `hardware_prepared` 与
-     `datapath_failed` 的绝对偏移本机算不出来（树没 prepared，
-     `offsetof` 要 arm64 交叉工具链，只有 CI 有那条工具链）。
-   * **做法**：在 CI 的 7.3 工作流里用树里的 arm64 工具链算一次
-     `offsetof(struct zx279133_eth, datapath_users / hardware_prepared /
-     datapath_failed)`，登记成仓库里的一张表；产物探针就能在镜像里认准
-     这两个字段，把「读 `datapath_failed` 在读 `hardware_prepared` 之前」
-     直接判出来。
-   * **注意**：这道探针要有**反向验证** —— 改坏镜像里的那一处顺序，
-     探针必须转红在指定的那条检查上。
+9. **产物级地读出「restore 排在 hardware 检查之前」**（第 11 片的最后一环）
+   —— **已落地，见八之十五**。
+   * **做法与初稿不同**：初稿写的是「在 CI 的 7.3 工作流里用树里的 arm64
+     工具链算一次 `offsetof(struct zx279133_eth, datapath_users /
+     hardware_prepared / datapath_failed)`，登记成仓库里的一张表，
+     让产物探针认准那两个字段」。
+     **实测这条路没有派上用场** ⇒ 那张表从一开始就不必存在。
+     理由：要认的不是两个**字段**，而是两个**源码行** ——
+     内核带 `CONFIG_DEBUG_INFO=y` ⇒ CI 那份 `vmlinux` 有 DWARF **行号表**，
+     `objdump -d -l` 知道每条指令来自哪一行；
+     函数地址也从同一份 `vmlinux` 的**符号表**里读
+     （裸 arm64 Image 里确实没有 `zx279133_lan_netdev_open` 这个名字，
+     但 `vmlinux` 有，而 `vmlinux` 与 `flash-uImage` 出自同一轮构建）。
+   * **判据取「分支 vs restore」，不是「读 vs 读」**：
+     `READ_ONCE(eth->hardware_prepared)` 是 volatile 读（编译器不会挪它），
+     但真正不能被挪的是**决定 open 成败的那条分支** ——
+     它不能被挪到「可能改变被测值的 restore」前面
+     （restore 路径跨文件调用 `zx279133_hardware_prepare`，对编译器不透明）。
+   * **门禁**：`tools/check-sk-kernel-order.py`（9 项检查）+
+     `tests/test_sk_kernel_order.py`（6 项反向控制）+
+     `tests/test_sk_kernel_order_local.py`（本机用合成内核端到端）。
+   * **反向验证**：改坏机器码（顺序反了 / 去掉 restore / 去掉 hardware 检查 /
+     去掉行号信息 / 镜像里改一个字节）必须**转红在指定的那条检查上**，
+     而且控制跑在**同一个内核、同一个镜像**上。
 
 验收口径与 6.18 线一致：**CI 绿 + 门禁脚本全过 + 实机启动后
 `/proc/net/dev` 有预期网口、`ethtool -S` 计数在涨**。
@@ -6324,6 +6476,37 @@ python3 scratch/diff73_controlled.py staging/trial73b/flash staging/trial73c/fla
 
 # 95) #53 的产物复核：自证 + 9 条产物探针 + 8 MiB 体积余量
 python3 scratch/verify_73_artifact.py staging/trial73d/flash
+
+# 96) 产物级顺序门禁的本地端到端：合成一个带符号表和加载段的 ELF64 当内核，
+#     门禁 9 项全过、6 个控制各自转红在指定的那条检查上
+python3 ci-build-repo/tests/test_sk_kernel_order_local.py \
+        --tree scratch/linux-73-base
+
+# 97) paths: 覆盖的反向验证：去掉那两个条目 ⇒ 门禁正好在那两条上转红
+python3 ci-build-repo/tools/check-sk-workflow-paths.py \
+        --workflow ci-build-repo/.github/workflows/build-sk-d840n-73.yml \
+        --workflow ci-build-repo/.github/workflows/build-sk-d840n.yml
+
+# 98) 现场暂存载荷的体检：刷机载荷把镜像按 md5 钉死，钉的是 6.18 的那一对
+python3 scratch/initgrep.py staging/ctl/ctl-flash.cpio.gz
+
+# 99) 沙箱夹具现在钉的是哪一对字节（要对「真正要刷的那对」重跑演练）
+python3 scratch/initgrep.py scratch/sim73/staging/ctl/ctl-initramfs.cpio.gz
+cat scratch/sim73/staging/ctl/gate.src
+
+# 100) 为 7.3 那对字节重建两个载荷：announce 骑 7.3.4*（判决要靠它报 kver），
+#      flash 按 md5 钉死那一对（钉错了板子自己会打 STAGE_FAIL 拒写）
+python3 ci-build-repo/tools/mkctlram.py --mode announce --tag K73 \
+        --staged staging/trial73d/flash/flash-uImage \
+        --out staging/trial73d/ctl/ctl-initramfs.cpio.gz
+python3 ci-build-repo/tools/mkctlram.py --mode flash --stage net --tag K73F \
+        --staged staging/trial73d/flash/flash-uImage \
+        --extra sbin/mtd=staging/ctl/rootfs/mtd \
+        --extra sbin/devmem2=staging/ctl/rootfs/devmem2 \
+        --payload p/flash-uImage=staging/trial73d/flash/flash-uImage \
+        --payload p/flash-dtb.bin=staging/trial73d/flash/flash-dtb.bin \
+        --payload p/flash-rootfs.jffs2=staging/trial73d/flash/flash-rootfs.jffs2 \
+        --out staging/trial73d/ctl/ctl-flash.cpio.gz
 ```
 
 第十节的 18~24 号命令里，`cfg73_sim.py` 与 `kdeps73.py` 是**一对**：
@@ -6388,6 +6571,22 @@ uapi 头都过一遍 `scripts/headers_install.sh`，而它的 sed（第 34 行�
 94 号是这一组自己的负控（同一对产物必须报 IDENTICAL）；
 95 号是产物到手后那条一站式复核。
 ⇒ 这一组给出的是「差异落在 190 改的那个文件里」；
-「restore 排在 hardware 检查之前」在**机器码**里的直接读法还差一张
-`struct zx279133_eth` 的字段偏移表 —— 那张表要用 CI 里的 arm64 工具链算，
-见第九节第 13 条。
+「restore 排在 hardware 检查之前」在**机器码**里的直接读法**不用**那张
+`struct zx279133_eth` 的字段偏移表 —— 用的是**编译器的行号表**
+（`vmlinux` 有 DWARF ⇒ 每条指令知道自己来自哪一行），
+见八之十五与第九节第 9 条。
+
+96~100 号命令是**第八组**，回答的是两个问题：
+「那道产物级顺序门禁**本身可不可信**」，以及「实机那一环**现在卡在哪**」。
+
+- 96 号是**合成内核**的端到端：门禁 9 项全过、6 个控制各自转红在指定的
+  那条检查上。合成内核只能证明「门禁读的是它自己造的那个内核」，
+  所以 96 号与 CI 里那道门禁是**互补的两头**，不是同一件事的两遍。
+- 97 号证明那道门禁**会被 CI 真的跑到**：`paths:` 少收一个文件，
+  门禁从那一刻起就不再被验证，而仓库看上去一切正常（见八之十二）。
+- 98 与 99 号读的是**载荷钉住的字节**：现场那份刷机载荷钉的是 **6.18** 的那一对；
+  沙箱那份夹具钉的是哪一对，也必须对「真正要刷的那对」重跑演练 ——
+  许可按字节钉死，换产物就要重跑。
+- 100 号是**重建载荷**：`announce` 骑 `7.3.4*`（判决里的 `kver` 靠它报），
+  `flash` 把那一对按 md5 钉死（钉错了板子自己会打 `STAGE_FAIL` 拒写 ——
+  这个拒绝是对的：载荷只允许写它被构建时的那对字节）。
