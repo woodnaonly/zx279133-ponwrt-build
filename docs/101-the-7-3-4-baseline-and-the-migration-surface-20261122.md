@@ -5669,11 +5669,12 @@ $ cpp -dM -x assembler-with-cpp -undef - # 有 -undef
 7.3 线的 run **#51**（`03109d6b`，第 10 片）**整轮绿**（1 小时 12 分 21 秒），
 它的 flash 产物已取回本地（`staging/trial73b/flash/`）：
 
-| 检查 | 旧产物（run #36/#37） | 新产物（run #51） |
-|---|---|---|
-| 自证（sha256sums 六项 / dtb native241 / banner 7.3.4） | OK | OK |
-| **9 条产物探针** | **7/9** | **9/9** |
-| 压缩载荷 vs 8 MiB 分区 | 5,811,931 B（余 2,576,677 B） | 5,813,416 B（余 **2,575,192 B**） |
+| 检查 | 旧产物（run #36/#37） | 新产物（run #51） | 含 190 的 run #53 |
+|---|---|---|---|
+| 自证（sha256sums 六项 / dtb native241 / banner 7.3.4） | OK | OK | OK |
+| **9 条产物探针** | **7/9** | **9/9** | **9/9** |
+| 压缩载荷 vs 8 MiB 分区 | 5,811,931 B（余 2,576,677 B） | 5,813,416 B（余 **2,575,192 B**） | 5,813,467 B（余 2,575,141 B） |
+| `flash-uImage` sha256 | `d62cac18…` | `8a4c32e8…` | `e4bb3b02…` |
 
 ⇒ 第 7 片（`shared TX recovery failed`）与第 10 片（`tx_invalid_completions`）
 的串**在要刷进板子的那个镜像里**，字节级可见。
@@ -5720,7 +5721,67 @@ GitHub 的产物 zip 要登录态，而 `fetch()` 读不了跨域跳转的响应
 
 ### 8之十四.4 实测
 
-（#53 的 flash job 跑完之后补。）
+**判决：第 11 片（190）进到了要刷进板子的那个镜像里，而且能说清它落在哪。**
+
+#53（`bb155075`，含 190 补丁）**整轮绿**（三个 job 全 success），
+flash 产物已取回本地（`staging/trial73d/flash/`）。
+
+⇒ **#52 与 #53 的 `flash-uImage` 不同**（上表最后一行）⇒ 190 进了镜像。
+
+**前提先核实一遍**（这一步是受控差分的全部立足点）：
+`git diff b1d79b17 bb155075` 只有 7 个文件，其中进内核树的只有
+`kernel-patches/7.3-local/190-sk-datapath-restore-on-conduit-open.patch`（+69）
+与它的 `MANIFEST.json` 条目（+6）；工作流那 25 行**只加了一步 gates**，
+不碰构建命令；文档、测试、门禁工具都不进镜像。
+⇒ **#52→#53 的镜像差异只能来自 190。**
+
+再加上已经实测过的可复现性对照（#51 与 #52 逐字节相同），
+「这个差异不是构建噪声」这一条也成立。
+
+**差异落在哪：三个互相独立的锚点，每个都 +16 字节（= 4 条 arm64 指令）**
+
+| 锚点 | A（#52） | B（#53） | 差 |
+|---|---|---|---|
+| netdev 驱动独有的串 `"failed to restore datapath after RSS setup"` 的 ADRP 引用 | `0x4fdd28` | `0x4fdd38` | **+16 B** |
+| `zx279133-netdev.o` 里的一个函数（两边指令**逐条相同**） | `0x502144` | `0x502154` | **+16 B** |
+| conduit 驱动的 `"lan-cpu%d"` 引用（在 `npu.o` 之后 ⇒ 随整体平移） | `0x5097e8` | `0x5097f8` | **+16 B** |
+
+⇒ `zx279133-netdev.o` 在 `npu-y` 里排在**中间**
+（`npu-y := zx279133-main.o … zx279133-mac.o zx279133-netdev.o …`），
+所以它变热 4 条指令，**它之后的每一个 .o 都跟着往后挪 16 字节**。
+⇒ 三个锚点测到的是同一件事，互相印证。
+
+**净增是 14 条指令而不是 4 条**：逐段的位移是 0 → +4 → +15 → +14。
+多出来的那 10 条来自 GCC 的 hot/cold 分割（冷代码被搬到 `.text.unlikely`，
+单独成段），于是补丁改一个函数会让别的段跟着重排。
+⇒ **「净指令数」与「那个 .o 变大的指令数」不相等**，这是量的时候要知道的事。
+
+**这一环没做到（如实记下）**：把「restore 的调用排在 `hardware_prepared` 检查之前」
+**在机器码里直接读出来**。两处卡住：
+
+- 裸 arm64 Image 没有符号表，`zx279133_lan_netdev_open` 这个名字**不在镜像里**
+  （kallsyms 的名字表是 token 压缩的；netdev.c 里也没有 `__func__`）；
+- `hardware_prepared` 与 `datapath_failed` 的**绝对偏移**本机算不出来 ——
+  树没有 `include/generated`（没 prepared），要算 `offsetof` 得用 arm64
+  交叉工具链，**只有 CI 有那条工具链**。
+
+⇒ 源码那一环是有的：`tools/check-sk-datapath-restore.py` 在 #53 的 gates job 里
+跑过（绿），它证明「restore 排在 hardware 检查之前」在**源码**里成立。
+⇒ **产物那一环还差一张偏移表**，见第九节的新条目。
+
+**顺带记下三条量法上的经验**（下一次做产物级差分会用到）：
+
+1. **字节级差分在这里会被淹没**：一个 .o 变大会让后面所有 .o 平移，
+   于是每个跨函数调用（`bl`/`b`）的立即数都变 ⇒ 实测 4,449 个差异区间、
+   3.4 MB 不同，而真正的改动只占其中一处。
+   ⇒ 必须先把 **PC 相对的立即数抹掉**（capstone 的 `CS_GRP_JUMP` / `CS_GRP_CALL`
+   组），再拿「归一化后完全相同的指令块」当锚点。
+2. **capstone 的 ADRP 操作数，在裸 Image 上就是文件偏移**：反汇编时 PC 用的是
+   文件偏移，所以「字符串在文件里的偏移」与「引用它的 ADRP+ADD 的值」可以直接相等
+   ⇒ **不必解基址**。（顺手也否掉了一个想当然的假设：arm64 的
+   `__init_begin = 0xffff800080000000` 这个常量**不在** 7.3 的 Image 里。）
+3. **同一对产物要能当自证负控**：字节级差分工具拿「#51 vs #52」跑，
+   必须报 **IDENTICAL** —— 否则「它报告了差异」这件事本身没有意义。
 
 ---
 
@@ -5859,6 +5920,22 @@ GitHub 的产物 zip 要登录态，而 `fetch()` 读不了跨域跳转的响应
      把 ours 6.18 世代「conduit 打开时恢复失败的数据面」搬进 7.3 树（+25 -2）
      + 18 条门禁 + 9 项负控。
    ⇒ **软件侧到此为止**：剩下的全是**实机对拍**。
+
+9. **产物级地读出「restore 排在 hardware 检查之前」**（第 11 片的最后一环）。
+   * **现状**：源码级已经成立 —— `tools/check-sk-datapath-restore.py`
+     在 #53 的 gates job 里跑过（绿）；产物级已经证明「190 进了镜像、
+     且差异落在 `zx279133-netdev.o` 里」（8之十四.4），
+     但**没有**在机器码里把那两个字段的读取先后读出来。
+   * **卡在哪**：裸 arm64 Image 没有符号表，而 `hardware_prepared` 与
+     `datapath_failed` 的绝对偏移本机算不出来（树没 prepared，
+     `offsetof` 要 arm64 交叉工具链，只有 CI 有那条工具链）。
+   * **做法**：在 CI 的 7.3 工作流里用树里的 arm64 工具链算一次
+     `offsetof(struct zx279133_eth, datapath_users / hardware_prepared /
+     datapath_failed)`，登记成仓库里的一张表；产物探针就能在镜像里认准
+     这两个字段，把「读 `datapath_failed` 在读 `hardware_prepared` 之前」
+     直接判出来。
+   * **注意**：这道探针要有**反向验证** —— 改坏镜像里的那一处顺序，
+     探针必须转红在指定的那条检查上。
 
 验收口径与 6.18 线一致：**CI 绿 + 门禁脚本全过 + 实机启动后
 `/proc/net/dev` 有预期网口、`ethtool -S` 计数在涨**。
@@ -6226,6 +6303,27 @@ python3 scratch/verify_73_artifact.py staging/trial73b/flash
 
 # 88) 负控不许往 run 页面发判决：跑一次控制用的门禁，摘要文件必须没被写出来
 python3 ci-build-repo/tests/test_sk_workflow_paths.py
+
+# 89) 字节级受控差分：两轮产物的 Image 逐字节比，含「全局平移」的对齐
+python3 scratch/diff73_controlled.py staging/trial73c/flash staging/trial73d/flash
+
+# 90) 指令级锚点：抹掉 PC 相对立即数后的逐点位移，改动点就在位移跳变处
+python3 scratch/diff73_anchor.py staging/trial73c/flash staging/trial73d/flash
+
+# 91) 指令级定位：把改动点钉到具体指令与所在函数
+python3 scratch/diff73_pin.py staging/trial73c/flash staging/trial73d/flash
+
+# 92) 按字符串偏移找代码里的 ADRP+ADD 引用点（netdev.o 的固定点）
+python3 scratch/diff73_locate.py staging/trial73d/flash
+
+# 93) 并排读出同一个函数的两个版本
+python3 scratch/diff73_open.py staging/trial73c/flash staging/trial73d/flash
+
+# 94) 差分工具的自证负控：同一对产物必须报 IDENTICAL
+python3 scratch/diff73_controlled.py staging/trial73b/flash staging/trial73c/flash
+
+# 95) #53 的产物复核：自证 + 9 条产物探针 + 8 MiB 体积余量
+python3 scratch/verify_73_artifact.py staging/trial73d/flash
 ```
 
 第十节的 18~24 号命令里，`cfg73_sim.py` 与 `kdeps73.py` 是**一对**：
@@ -6283,3 +6381,13 @@ uapi 头都过一遍 `scripts/headers_install.sh`，而它的 sed（第 34 行�
 `git apply` 对带 `diff --git` 头的补丁按**仓库根**解析路径，
 树是 checkout 里的一个目录，于是 git 把整个补丁**默默丢掉** ——
 退出码 0、一个字节都不写、默认什么都不说（见 7.39）。
+
+89~95 号命令是**第七组**，它们回答的是第 11 片在**产物**里到底有没有落地。
+89 号是字节级受控差分；90 与 91 号是指令级（字节级会被「函数地址平移」淹没，
+见 8之十四.4）；92 号提供 netdev.o 里的固定点；93 号把两个版本并排读出来；
+94 号是这一组自己的负控（同一对产物必须报 IDENTICAL）；
+95 号是产物到手后那条一站式复核。
+⇒ 这一组给出的是「差异落在 190 改的那个文件里」；
+「restore 排在 hardware 检查之前」在**机器码**里的直接读法还差一张
+`struct zx279133_eth` 的字段偏移表 —— 那张表要用 CI 里的 arm64 工具链算，
+见第九节第 13 条。
