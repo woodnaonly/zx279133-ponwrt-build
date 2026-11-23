@@ -208,7 +208,20 @@ fails=0
 check() { if eval "$2"; then echo "  ok   $1"; else echo "  FAIL $1"; fails=$(( fails + 1 )); fi; }
 P="$T/pushed.5555"
 check "carries this round's tag"        'grep -q "CTLALIVE tag=$TAG" "$P"'
-check "reports its kernel version"      'grep -q "^kver=6.18.38+$" "$P"'
+check "reports its kernel version"      'grep -q "^kver=$KVER$" "$P"'
+# The payload writes the RAM mailbox only for the kernel it was built for, and that mailbox
+# is the only report channel a mainline payload has: it has no lan bridge, so its TCP push
+# goes nowhere.  A payload built for another kernel would report
+# "off-kernel-is-not-the-payload" and the round would say nothing about the kernel that is
+# about to be flashed - so the payload and the staged image have to agree.
+PKVER=$(sed -n '/^case "$(uname -r)" in$/{n;s/) PAYLOAD=1$//;p;}' "$T/init" 2>/dev/null)
+PKOK=false
+if [ -n "$PKVER" ]; then
+	case "$KVER" in
+	$PKVER) PKOK=true ;;
+	esac
+fi
+check "the payload rides the kernel that is staged" "$PKOK"
 check "hashes the head of root"         'grep -q "first512k_md5=$(cat $T/ref.line)" "$P"'
 check "read the whole 512 KiB"          'grep -q "^root_bytes_read=524288$" "$P"'
 check "reports the partition list"      'grep -q "\"root\"" "$P"'

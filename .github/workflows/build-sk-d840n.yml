@@ -68,6 +68,10 @@ on:
       - tools/gatecheck.sh
       - tools/uimage-kver.py
       - tests/test_gatecheck.py
+      # The gate payload and its controls: the payload writes the round's report
+      # only for the kernel it was built for.
+      - tools/mkctlram.py
+      - tests/test_ctl_payload.py
       - tests/sk_layout_fixture.py
       - tests/sk_omci*
       - templates/**
@@ -136,6 +140,7 @@ jobs:
           python3 tests/test_sk_workflows.py
           python3 tests/test_conduit_netdev_name.py
           python3 tests/test_gatecheck.py
+          python3 tests/test_ctl_payload.py
 
   build:
     name: ${{ matrix.mode }}

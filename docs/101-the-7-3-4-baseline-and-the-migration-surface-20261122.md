@@ -134,6 +134,16 @@
     顺带修掉一个真缺陷：GNU `md5sum` 遇到含反斜杠的文件名会输出转义形式，
     于是许可行永远匹配不上、闸门对**任何**字节对都拒绝。
     见 7.29。
+19. **门禁轮的 payload 里也烤死了 `6.*`，7.3 那轮会一声不吭。**
+    `tools/mkctlram.py` 生成的 announce payload 写着
+    `case "$(uname -r)" in 6.*) PAYLOAD=1` —— 只有 6.x 内核才武装 RAM mailbox。
+    而按 payload 自己的注释，**RAM mailbox 是 mainline 唯一的报告通道**
+    （mainline 没有 lan bridge，TCP 推不出去；pstore 那条只带注册过的 pstore 写过什么）。
+    ⇒ **mailbox 不武装 ⇒ 那一轮什么也收不到 ⇒ 没有凭证 ⇒ 7.3 刷不进去。**
+    现在 payload 的版本从**待刷镜像**推导（`--kver` 默认读
+    `staging/trial/flash-uImage` 的 banner），烤成 `7.3.4*) PAYLOAD=1`；
+    厂商 4.19 仍然不匹配，真正的安全网（保留窗口必须在 `/proc/iomem` 里）一个字没动。
+    见 7.30。
 
 ---
 
@@ -363,6 +373,8 @@ CONFIG_EXTERNAL_KERNEL_TREE=<树>   OpenWrt 把这棵树当自己的内核目录
 | `tools/gatecheck.sh` | **刷机闸门**：只放行「这块板上真跑起来过」的那对字节。版本判据改成**从待刷 uImage 的 banner 读出期望版本**再与凭证逐字符比对（`6.*` 那种写死系列的老写法已删），并去掉 `md5sum` 在 Windows 路径下的转义（见 7.29） |
 | `tools/uimage-kver.py` | 从 uImage 的 banner 读出内核版本（独立的第二套实现，与闸门里的 shell 读法交叉对拍） |
 | `tests/test_gatecheck.py` | 闸门的**负控**：6.18 凭证配 7.3 镜像、厂商 4.19 凭证、读不出版本的镜像、缺 `root_read`/`root_index`/`jffs2_ro` 的凭证、空标签 —— 每一种都必须转红（见 7.29） |
+| `tools/mkctlram.py` | 门禁轮 payload 的生成器：**新增 `--kver`**（默认从 `staging/trial/flash-uImage` 的 banner 推导），payload 只为「它被造出来要骑的那个内核」写 RAM mailbox —— 厂商 4.19 控制轮照旧一个字不写（见 7.30） |
+| `tests/test_ctl_payload.py` | 上面那条的**负控**：版本必须来自镜像、显式指定优先、模板里不能再有 `6.*`、厂商内核仍不匹配 |
 | `overlays-73/target/linux/zte/zx279133/target.mk` | 7.3 线的 subtarget 默认包：**清空 OpenWrt 的 `DEFAULT_PACKAGES.tweak`**，否则其中的 `luci` 元包会拉进 `luci-theme-bootstrap`（见 7.8） |
 | `tools/func-surface-diff.py` | 两代驱动的函数面对照，输出「只在我们这边」与「只在 7.3 那边」两张工作清单 |
 | `tools/func-port-coverage.py` | **按能力对账**：171 个函数逐条必须有归属（同名 / 账本写明搬到哪 / 有处置记录），未记账即非零退出；账本指着的目标函数必须真在 7.3 树里（见八之七） |
@@ -2932,6 +2944,100 @@ PASS: every mutation of the gate turns its own control red
 
 ---
 
+### 7.30 门禁轮的 payload：版本也从**待刷镜像**推导，7.3 那轮才收得到报告
+
+**判决**
+
+1. **7.3 的门禁轮会没有报告。** `tools/mkctlram.py` 生成的 announce payload 里写着
+   `case "$(uname -r)" in 6.*) PAYLOAD=1`：只有 6.x 内核才武装 RAM mailbox，
+   在 7.3 上它只会说 `mbox_write=off-kernel-is-not-the-payload`。
+2. **而 RAM mailbox 是 mainline payload 唯一的报告通道** —— payload 自己的注释写着：
+   「mainline 没有 lan bridge，它只有 eth0，而交换驱动不在这棵内核里，
+   所以这个项目推过的每一份 TCP 报告都走进了它发不出去的网口」，
+   pstore 那条通道只带「注册过的 pstore 写过什么」。
+   ⇒ **mailbox 不武装 ⇒ 这一轮什么也收不到 ⇒ 没有凭证 ⇒ 刷不进去。**
+   这不是「少一条冗余通道」，是**主通道**。
+3. **改成从待刷镜像推导**：`--kver` 默认读 `staging/trial/flash-uImage` 的 banner，
+   烤成 `7.3.4*) PAYLOAD=1`。厂商 4.19 仍然不匹配（控制轮照样一个字都不写），
+   真正的安全网 —— 保留窗口必须在 `/proc/iomem` 里 —— **一个字没动**。
+4. **演练多了一道检查**：「payload 骑的必须是待刷的那个内核」——
+   把 payload 的 `/init` 里那条模式抠出来，和暂存镜像的版本对。
+   这正是今天才发现这个坑的那道检查（它当场转红）。
+5. **沙箱里把整条链跑通了**（`scratch/sim73/`，**不碰 live 工装区**）：
+   7.3 那对字节 → payload 报告 `kver=7.3.4` → mailbox 武装 →
+   `gatewatch` 写凭证 → **闸门放行** → 厂商轮与「根挂不上」的轮**仍然被拒**。
+   ⇒ **SIM OK**。
+
+**证据**
+
+```sh
+# 1) payload 的版本从待刷镜像推导出来（不是写死的）
+$ python tools/mkctlram.py --mode announce --tag K73 \
+        --staged scratch/sim73/staging/trial/flash-uImage \
+        --out scratch/sim73/staging/ctl/ctl-initramfs.cpio.gz
+the payload rides the kernel: 7.3.4*
+...
+$ python scratch/payload_flavour.py scratch/sim73/staging/ctl/ctl-initramfs.cpio.gz
+init: 16338 B
+case "$(uname -r)" in    yes    the payload's kernel gate
+   'case "$(uname -r)" in'
+   '7.3.4*) PAYLOAD=1'          <- 不再是 '6.*) PAYLOAD=1'
+
+# 2) 整条链的演练（沙箱，不碰 live 工装区）
+$ sh scratch/sim73_rehearsal.sh
+...
+  | kver=7.3.4
+  | mbox_write=off-window-not-reserved      <- 不再是 off-kernel-is-not-the-payload
+  ok   reports its kernel version
+  ok   the payload rides the kernel that is staged
+  ok   report states the mailbox verdict
+...
+=== permit written by that verdict ===
+  | ts=2026-11-23T15:30:01 uimage_md5=e041084ac56287d46d1f0144beab659f \
+        image_md5=bd3e45a2bd547350743569fa6be2227e \
+        dtb_md5=ff6914d007b9b21895e1a6b3f67d5ea5 \
+        kver=7.3.4 root_index=5 root_read=IDENTICAL jffs2_ro=OK proven=gate-K73
+gatecheck: ALLOWED (gate-K73)
+  ok   a flash of exactly these bytes would be permitted
+  ok   a vendor-kernel round is still recorded as it reported
+  ok   a gate round that ran the vendor kernel does NOT permit the flash
+  ok   a round that cannot mount root is recorded as it reported
+  ok   a root mainline cannot mount does NOT permit the flash
+  ok   early marker is in the window before any flash read
+  ok   the finished report is four blocks past the early marker
+  ok   and it says the window was armed
+  ok   the readback proves /dev/mem took the write
+  ok   the extras get the finished report too
+  ok   the recovered record reaches the log
+SIM OK - payload report to flash permit, all on the real /init bytes
+
+# 3) payload 门禁自己的负控
+$ python ci-build-repo/tests/test_ctl_payload.py
+PASS: the 7.3 image declares 7.3.4
+PASS: the 6.18 image declares 6.18.38+
+PASS: a file that is not a uImage declares nothing
+PASS: the payload rides the staged 7.3 image
+PASS: the payload rides the staged 6.18 image
+PASS: an explicit request wins over the image
+PASS: the payload gates on the resolved version
+PASS: the payload no longer gates on a series
+PASS: the vendor kernel still does not match
+PASS: the gate payload rides the kernel it was built for
+```
+
+**未做 / 还欠着**
+
+1. **还没在真板子上跑这一轮**：bench 的 inbox 被别的会话占着，板子停在 U-Boot。
+2. **live 工装区的 `tools/mkctlram.py` 比仓库那份旧**（少 sysfs/netdev 那几个报告字段，
+   `tools/pstore2report.py` 的字段白名单里也没有它们）。
+   本轮**只把 `--kver` 这一处改过去，没有整份覆盖** ——
+   整份覆盖要连带白名单一起改，是另一件事，不该混在「让 7.3 轮能跑」里做。
+3. **7.3 的 announce payload 已经在沙箱里生成好了**
+   （`scratch/sim73/staging/ctl/ctl-initramfs.cpio.gz`），
+   但**没有**写进 live 的 `staging/ctl/` —— 那要等 bench 空闲、真跑那一轮的时候。
+
+---
+
 ## 八、BP 池：逐槽位对照（第 1 片剩余部分的结论）
 
 **判决**：**BP 池布局在 7.3 上不需要移植。** 我们 6.18 世代那套写法是
@@ -4074,6 +4180,19 @@ python3 ci-build-repo/tests/test_gatecheck.py
 
 # 45) 上面那道负控的反向验证：10 处突变逐个转红，且只红在指定的那条检查上
 python3 scratch/reverse_check_gate.py
+
+# 46) 门禁轮 payload 的版本从待刷镜像推导（而不是写死 6.*）
+python3 ci-build-repo/tools/mkctlram.py --mode announce --tag K73 \
+        --staged scratch/sim73/staging/trial/flash-uImage \
+        --out scratch/sim73/staging/ctl/ctl-initramfs.cpio.gz
+python3 scratch/payload_flavour.py scratch/sim73/staging/ctl/ctl-initramfs.cpio.gz
+
+# 47) 7.3 那对字节的**整条链演练**（沙箱里，不碰 live 工装区）：
+#     payload → 报告 → 凭证 → 闸门 → 两个必须拒绝的负例
+sh scratch/sim73_rehearsal.sh
+
+# 48) payload 门禁自己的负控
+python3 ci-build-repo/tests/test_ctl_payload.py
 ```
 
 第十节的 18~24 号命令里，`cfg73_sim.py` 与 `kdeps73.py` 是**一对**：
@@ -4112,9 +4231,13 @@ uapi 头都过一遍 `scripts/headers_install.sh`，而它的 sed（第 34 行�
 不是复述内核的行为，是**跑一遍内核的代码**。
 ⇒ 上一轮「网口叫 `lan-cpu%d`」那个结论就是被这一步推翻的（见 7.27）。
 
-43~45 号命令是**第五对**，也是本轮**唯一一处改「能不能刷」而不是改「能不能编」**的地方：
+43~48 号命令是**第六组**，也是本轮**唯一一处改「能不能刷」而不是改「能不能编」**的地方：
 43 号回答「内核的版本串到底在 uImage 的哪个位置」——
 量出来的答案是**不在固定偏移**（7.3 那份在 inflate 后的 `0x84009a`，6.18 那份在 `0xc400b8`），
-所以只能搜文本；44 号是闸门自己的负控；45 号证明 44 号不是靠「没查所以没报」蒙混过去的。
+所以只能搜文本；44 号是闸门自己的负控；45 号证明 44 号不是靠「没查所以没报」蒙混过去的；
+46~47 号把同一条推理用到**载荷**上：payload 骑的是哪个内核，也不能写死一个系列；
+48 号是那条推理的负控。
 ⇒ 43 号那个「量」直接决定了闸门怎么写：**按 arm64 头后第 64 字节去切，
 会切出全零**，那扇闸就会永远拒绝 —— 它会「安全地」拒绝一切，而这比放行错误更费时间。
+⇒ 47 号那句 `SIM OK` 是本轮对 7.3 刷机路径**唯一**的正面证据：
+从 payload 到许可到闸门，全在真的字节上跑过一遍。

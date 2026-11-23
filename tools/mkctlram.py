@@ -34,7 +34,49 @@ import hashlib
 import os
 import re
 import stat
+import struct
 import sys
+
+
+def kernel_version(uimage):
+    """The version the kernel in a uImage declares, read out of its own banner.
+
+    The banner is not at a fixed offset inside the Image - the linker puts the string
+    wherever .rodata lands - so the text is searched for, the way the flash gate reads
+    it.  Returns None when the file is not a uImage or carries no banner.
+    """
+    try:
+        blob = open(uimage, "rb").read()
+    except OSError:
+        return None
+    if len(blob) < 64:
+        return None
+    magic, _, _, size = struct.unpack(">4I", blob[:16])
+    if magic != 0x27051956:
+        return None
+    body = blob[64:64 + size] if size else blob[64:]
+    try:
+        image = gzip.decompress(body)
+    except OSError:
+        return None
+    match = re.search(rb"Linux version ([0-9][^\x00\s]*)", image)
+    return match.group(1).decode("utf-8", "replace") if match else None
+
+
+def resolve_kver(requested, staged):
+    """The kernel version the payload rides, as a shell pattern.
+
+    Without an explicit request the version comes from the image that is about to be
+    flashed, so the payload is built for that kernel and not for a series someone
+    wrote down months ago.  The trailing "*" lets a localversion suffix match.
+    """
+    if requested:
+        return requested
+    version = kernel_version(staged)
+    if not version:
+        return None
+    return version + "*"
+
 
 INIT_TMPL = r"""#!/bin/sh
 # Control round /init: runs 1-2 s after a kexec jump on the vendor 4.19, from a RAM root
@@ -90,15 +132,20 @@ echo "ctl: /init alive tag=$TAG uptime=$U kver=$(uname -r)" >/dev/kmsg 2>/dev/nu
 # - the copy that survives is the freshest one, and the eject is only seconds away.
 #
 # Gated twice over, because this same /init also runs on vendor-4.19 control rounds where all of
-# this RAM is live: only a 6.x kernel writes at all (the kernel that has nothing left to corrupt
-# but its own round), and the ramoops window additionally requires the reservation to be really
-# there. mbox_write names which gate stopped it.
+# this RAM is live: only the kernel this payload was built for writes at all (the kernel that
+# has nothing left to corrupt but its own round), and the ramoops window additionally requires
+# the reservation to be really there. mbox_write names which gate stopped it.
+#
+# The kernel is the version of the image the payload was built for, not a series: the payload
+# rides one kernel, and a payload built for another one would report
+# "off-kernel-is-not-the-payload" and say nothing at all about the kernel that is about to be
+# flashed.  The trailing "*" is there so a localversion suffix still matches.
 MBW=2557440
 MBX="0x90000000 0x94000000 0x98000000 0x9d000000"
 PAYLOAD=0
 MBSTATE=off-kernel-is-not-the-payload
 case "$(uname -r)" in
-6.*) PAYLOAD=1
+{kver}) PAYLOAD=1
      grep -qi '9c000000-9dffffff' /proc/iomem 2>/dev/null && MBSTATE=ARMED
      [ "$MBSTATE" = ARMED ] || MBSTATE=off-window-not-reserved;;
 esac
@@ -616,9 +663,21 @@ def main():
                     help="flash mode: carry the images in the initrd, or fetch them from the PC")
     ap.add_argument("--netbase", type=int, default=5561,
                     help="first port fileserve.py must serve, in --payload order")
+    ap.add_argument("--kver", default=None,
+                    help="the kernel version this payload rides, as a shell pattern "
+                         "(default: read from --staged, so the payload is built for the "
+                         "kernel that is about to be flashed)")
+    ap.add_argument("--staged", default="staging/trial/flash-uImage",
+                    help="the uImage to read the kernel version from, when --kver is not given")
     a = ap.parse_args()
     if a.out is None:
         a.out = "staging/ctl/ctl-flash.cpio.gz" if a.mode == "flash" else "staging/ctl/ctl-initramfs.cpio.gz"
+
+    kver = resolve_kver(a.kver, a.staged)
+    if not kver:
+        ap.error("no kernel version to ride: %s declares none - stage the pair "
+                 "(sh tools/gettrial.sh flash <run>) or pass --kver" % a.staged)
+    print("the payload rides the kernel: %s" % kver)
 
     pspecs = []
     for spec in a.payload:
@@ -658,7 +717,7 @@ def main():
         init = FLASH_INIT.format(tag=a.tag, do_write=1 if a.write else 0,
                                  do_root=1 if a.root else 0, stage=stage_txt)
     else:
-        init = INIT_TMPL.format(tag=a.tag)
+        init = INIT_TMPL.format(tag=a.tag, kver=kver)
     recs = [
         newc("dev", None, stat.S_IFDIR | 0o755),
         newc("dev/console", None, stat.S_IFCHR | 0o600, makedev(5, 1)),

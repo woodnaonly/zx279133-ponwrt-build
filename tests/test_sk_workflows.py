@@ -101,6 +101,11 @@ BRINGUP_TRIGGERS = [
     "tools/gatecheck.sh",
     "tools/uimage-kver.py",
     "tests/test_gatecheck.py",
+    # The gate payload and its controls: the payload writes the round's report
+    # only for the kernel it was built for, so a change to it changes what the
+    # build checks.
+    "tools/mkctlram.py",
+    "tests/test_ctl_payload.py",
     # The host compiler check and the shadow headers it needs: the build
     # runs them, so a change to either of them changes what the build
     # checks and has to start a build.
@@ -119,6 +124,7 @@ SHARED_GATES = [
     "tests/test_sk_uboot.py",
     "tests/test_conduit_netdev_name.py",
     "tests/test_gatecheck.py",
+    "tests/test_ctl_payload.py",
 ]
 
 # The zte drivers that have to end up inside the kernel image on the 7.3

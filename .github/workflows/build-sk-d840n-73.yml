@@ -58,6 +58,10 @@ on:
       - tools/gatecheck.sh
       - tools/uimage-kver.py
       - tests/test_gatecheck.py
+      # The gate payload: it writes the round's report only for the kernel it was
+      # built for, so the version it rides has to be read from the image.
+      - tools/mkctlram.py
+      - tests/test_ctl_payload.py
       - kernel-overlays-73/**
       - tools/prepush.py
       - overlays-73/**
@@ -101,6 +105,7 @@ jobs:
           python3 tests/test_sk_workflows.py
           python3 tests/test_conduit_netdev_name.py
           python3 tests/test_gatecheck.py
+          python3 tests/test_ctl_payload.py
 
   build:
     name: ${{ matrix.mode }}
