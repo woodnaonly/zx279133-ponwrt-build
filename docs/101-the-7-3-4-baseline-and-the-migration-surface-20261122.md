@@ -559,7 +559,8 @@ CONFIG_EXTERNAL_KERNEL_TREE=<树>   OpenWrt 把这棵树当自己的内核目录
 | `tests/test_sk_image_drivers.py` | 上面那道门禁的**负控**：针不在像里、针不在源里（=过期探针）、源文件不存在、不是 uImage、载荷不是 gzip、清单没有探针、**针在第二个 gzip 成员里** —— 每一种都必须转红（见 7.31） |
 | `tools/check-baked-version.py` | **lint**：找出**把内核版本写进判断**的地方。判据是**位置**（case 分支、比较的一边、grep 的模式参数、指名版本行的模式串），不是文本 —— 消息、docstring、IP、元数据版本都不算（见 7.32） |
 | `configs/baked-version-allow.json` | 上面那道 lint 的**允许清单**：每一条都写明「为什么这个版本可以留在这里」。现在只有**厂商内核 4.19** 那一类（板子上的固定事实），**失效的允许项会被报出来** —— 那是洞 |
-| `tests/test_sk_baked_version.py` | 上面那道 lint 的**负控**：该判的四种形状都判、不该判的五种形状都不判、允许项的三种边界都验（15 项） || `overlays-73/target/linux/zte/zx279133/target.mk` | 7.3 线的 subtarget 默认包：**清空 OpenWrt 的 `DEFAULT_PACKAGES.tweak`**，否则其中的 `luci` 元包会拉进 `luci-theme-bootstrap`（见 7.8） |
+| `tests/test_sk_baked_version.py` | 上面那道 lint 的**负控**：该判的四种形状都判、不该判的五种形状都不判、允许项的三种边界都验（15 项） |
+| `overlays-73/target/linux/zte/zx279133/target.mk` | 7.3 线的 subtarget 默认包：**清空 OpenWrt 的 `DEFAULT_PACKAGES.tweak`**，否则其中的 `luci` 元包会拉进 `luci-theme-bootstrap`（见 7.8） |
 | `tools/check-release-kernel-version.py` | **独立对照门禁**：读一遍出货报告、再读一遍镜像，比对两边的内核版本。写报告的那个工具**不替自己作证** —— 它刚把 banner 读错过一次（见 7.33） |
 | `tests/test_release_kernel_version.py` | 上面那道门禁的**负控**（25 项）：不只验「拒绝」，还验**拒绝的理由**；也验旧格式报告仍然被接受 |
 | `tools/check_sysupgrade.py` | 改了：读不到 banner **不再硬失败**，版本记 `null` 并加 `version_known` 标志 —— 「旧报告没这个字段」与「新报告说这镜像没有 banner」要能分开（见 7.33） |
@@ -3453,7 +3454,7 @@ ifIndex 13  192.168.9.1   Probe
 | `tools/preflash.py` | 期望版本 = **这份出货报告自己说的**（`sysupgrade-report.json` 的 `kernel.version`）；另问一句「它是不是厂商内核」（4.19 ⇒ 拒）。**报告没写版本**时只做厂商检查，并说明为什么 |
 | `tools/checkrollback.sh` | 「是不是厂商内核」这件事**对任何 mainline 都是错的**（回滚包必须装厂商内核，否则回滚不回 PON）⇒ 判据从「`6.18*` 是 mainline」改成「**不是 4.19 就是 mainline**」，6.18 与 7.3 一视同仁 |
 | live `tools/flashverify.sh` | 期望版本 = `python tools/uimage-kver.py "$DIR/flash-uImage"`（**仓库那份已定向同步到工装区**）；`KVER=` 留给离线控制 |
-| live `tools/round.sh`、`onewindow.sh` | 判据 = **「不是厂商内核」**（`''|4.19*` 是「不是」，其余都是）；严格版本判据在**闸门**与**刷机前门禁**里 |
+| live `tools/round.sh`、`onewindow.sh` | 判据 = **「不是厂商内核」**（`''\|4.19*` 是「不是」，其余都是）；严格版本判据在**闸门**与**刷机前门禁**里 |
 
 #### 7.32.4 证据二：新写的 lint 扫出来的**全量命中**
 
@@ -5789,9 +5790,55 @@ flash 产物已取回本地（`staging/trial73d/flash/`）。
 
 ### 8之十五.1 判决
 
-（待填：这一版的 7.3 线 run 的 flash job 里，新门禁
-`tools/check-sk-kernel-order.py` 的 9 项检查，以及反向验证
-`tests/test_sk_kernel_order.py` 的 6 项控制。）
+**成立**：产物级顺序证明在 CI 的真产物上**跑通了**。
+7.3 线 run **#57**（`313d2e87`）的 flash job 里，
+第 38 步「Gate: the restore comes before the hardware check in the machine code」
+**绿**（该步 6 s），整个 flash job **succeeded**（1 h 17 m 48 s）。
+
+**证据**（#57 flash job 的原始日志，2026-11-23T15:19:56Z 起）：
+
+```
+source: .../linux-7.3.4/drivers/net/ethernet/zte/zx279133-netdev.c
+  the restore call is on line 2161
+  the hardware check is on line 2165
+  the helper's body is on lines 913..926
+kernel: .../linux-7.3.4/vmlinux
+  zx279133_lan_netdev_open is at 0xffff8000804fdaf8, 144 bytes
+  36 instruction(s) read
+  [OK ] the compiled function carries the restore
+  [OK ] the compiled function asks about the hardware
+  [OK ] the hardware check loads the flag it tests
+  [OK ] the hardware check branches on the loaded value
+  [OK ] the restore comes before the hardware check in the machine code
+  [OK ] the hardware check is not hoisted in front of the restore
+  [OK ] the shipped image carries this exact code
+  the function is at offset 0x4fdaf8 of the image
+OK: 7 check(s)
+```
+
+报告 `sk-kernel-order.json`：`"checks": 7, "failed": 0`、
+`"address": "0xffff8000804fdaf8"`、`"size": 144`、
+`"restore_line": 2161`、`"check_line": 2165`、`"image_offset": 5233400`。
+
+**反向验证**（`tests/test_sk_kernel_order.py`，同一内核、同一镜像）：
+
+```
+ok   the machine code of the function was read
+ok   the hardware check in front of the restore -> red on 'the restore comes before the hardware check in the machine code'
+ok   no restore in the machine code -> red on 'the compiled function carries the restore'
+ok   no hardware check in the machine code -> red on 'the compiled function asks about the hardware'
+```
+
+⇒ 每一个变异都**转红在它自己那条检查上**，且「机器码读到了」这一条也过了
+（否则后两个变异会假红在「读不到机器码」上）。
+
+**这一版是 7 项检查、3 个变异控制**；加了第 9 条检查与第 6 个控制的那一版
+（`013ce317`）在 run **#58** 上，判决见 8之十五.1 附记。
+
+### 8之十五.1 附记（#58）
+
+（待填：run #58 的判决 —— 9 项检查 + 6 个控制，
+外加 build job 早期那道「用合成内核跑一遍门禁自身」的步骤。）
 
 ### 8之十五.2 那张「字段偏移表」其实不需要 —— 编译器的**行号表**就够
 
@@ -5846,7 +5893,7 @@ CI 那一轮构建出来的 **`vmlinux`**（带符号表），而 `vmlinux` 与
 
 0. **读到的确实是这个函数的机器码吗** —— 反汇编里第一条指令的地址必须落在
    符号表给的那个地址上。objdump 打在指令前面的那一列是**地址**
-   （binutils 2.44 的 `objdump/objdump.c`：`show_line()` 只打印 `file:line` 头，
+   （binutils 2.44 的 `binutils/objdump.c`：`show_line()` 只打印 `file:line` 头，
    地址列照旧；这是本轮查过源码确认的，不是猜的），
    而「地址的比较」是这道门禁全部结论的立足点 ⇒ 它是一条独立的检查，
    不是一句注释。
@@ -5884,36 +5931,78 @@ CI 那一轮构建出来的 **`vmlinux`**（带符号表），而 `vmlinux` 与
 **先说已经有的**：整条链（payload → 报告 → 凭证 → 闸门）**已经在沙箱里跑通过**
 （第十节 47 号命令，`SIM OK`），跑在真的字节上、没有板子。
 
+**刷机前的那条自检也已经过了**：`staging/trial73d/flash/sha256sums`
+对三个 flash 成员**逐位相同**（`flash-uImage` = `e4bb3b02…`、
+`flash-dtb.bin` = `1c80886a…`、`flash-rootfs.jffs2` = `befbf232…`）
+⇒ 本地这份产物是完整的，可以直接进刷机流程。
+
 **本轮补上的一样**：两个载荷已经为 **7.3 那对字节**重建好了，
 放在 `staging/trial73d/ctl/`（**不动现场 `staging/ctl/`**）：
 
 | 载荷 | 骑/钉什么 | 判据 |
 |---|---|---|
 | `ctl-initramfs.cpio.gz`（announce） | 骑内核 `7.3.4*` | 判决里的 `kver=$(uname -r)` 必须是 `7.3.4` |
-| `ctl-flash.cpio.gz`（flash，net staging，干跑） | 钉 `uimage_md5=4b518979…`、`dtb_md5=ff6914d0…`、`root_md5=1dc238cc…` | 钉错了板子自己会打 `STAGE_FAIL` 拒写 |
+| `ctl-flash.cpio.gz`（flash，net staging，**干跑**：`DO_WRITE=0`、`DO_ROOT=0`） | 钉 `uimage_md5=4b518979…`、`dtb_md5=ff6914d0…`、`root_md5=1dc238cc…` | 钉错了板子自己会打 `STAGE_FAIL` 拒写 |
 
 现场那份 `staging/ctl/ctl-flash.cpio.gz` 钉的仍是 **6.18** 的那一对
 （`35685e15…` / `ee287b5c…`）⇒ 刷 7.3 之前必须重建，否则板子会拒写
 （这个拒绝是对的）。
 
+**刷机载荷的取件契约也在本机排练过了**（第十节 101 号命令，`SIM OK`）：
+载荷 `/init` 里钉的 md5、`fileserve.py` 在 5561/5562/5563 三个口送出来的字节、
+磁盘上那三个文件，三者**逐位相同**；
+负控也成立：现场那份旧载荷钉的是 `35685e15…`，
+⇒ 板子若跑它，会对这 7.3 的字节打 `STAGE_FAIL` 并拒写。
+
 **还缺的三样，按顺序**：
 
 1. **许可**：`tools/gatecheck.sh` 要求 `staging/ctl/flash.permit` 里有一行
    **同时**写着 `uimage_md5=4b518979…` 与 `dtb_md5=ff6914d0…`，
-   而且 `proven=` 只能是 `live-partition-match` / `preflash-snapshot`
-   （证据）或 `operator-waiver`（**决定**，不是证据）。
+   而且 `proven=` 只能是 `live-partition-match` / `preflash-snapshot`（证据）
+   或 `operator-waiver`（**决定**，不是证据）**或 `gate-<tag>`** ——
+   最后这一种正是 7.3 那一轮要用的（`proven=gate-K73`，
+   由 `tools/gatewatch.sh` 写，见八之十六.4）。
    现在的 permit 里只有 6.18 那几对（`a265fe5b…` / `d3a029f5…` / `b1e23db1…`）
    ⇒ **7.3 这对现在必然被拒**。
 2. **判决从哪来**：RAM 门禁那一轮的判决是 `kver=$(uname -r)` ——
    载荷自己的 `/init` 把它写进报告（`CTLFLASH … kver=…`）。
-   它必须是 **7.3.4**；现场独有的 `tools/permit-from-verdict.sh`
-   用这个判决生成 permit。
+   它必须是 **7.3.4**；**`tools/gatewatch.sh`**（仓库与现场都有）
+   收到 **CTLALIVE** 报告时把这一行写进 permit。
+   ⇒ 写这一行的是 `gatewatch.sh`，**不是**现场独有的 `permit-from-verdict.sh`
+   —— 后者是 **U-Boot 通道**那一支，与这条路无关（八之十六.3 记了它与 flasher
+   的契约缺口）。
+   ⇒ 这一行要凑齐的字段：`kver=7.3.4`、`root_index=5`、`root_read=IDENTICAL`、
+   `jffs2_ro=OK`，加上与待刷字节一致的 `uimage_md5` / `dtb_md5`。
+   **本机已实测**：这一行一旦凑齐，`gatecheck.sh` 会 `ALLOWED (gate-K73)`，
+   五个负控逐条咬住（八之十六.4）。
 3. **板子本身**：CH340、网线、智能插座供电，然后 `tools/bench-keep.ps1`
    把继电器与冷启动看门狗拉起来。
 
 ⇒ 三样里前两样是**软件侧的最后一格**（板上跑一轮 RAM 门禁，
 拿到 `kver=7.3.4` 的判决 ⇒ 生成 permit），第三样是**物理的**，
 本机做不了。
+
+**现场暂存区这一轮要动的是六个位置**（都在 `staging/` 下，别的都不动）：
+
+| 位置 | 变成什么 | 谁写 |
+|---|---|---|
+| `staging/trial/flash-uImage` | 7.3 那份（5,813,531 B） | 复制；旧件已留在 `flash-uImage.run313` 等文件里 |
+| `staging/trial/flash-dtb.bin` | 7.3 的 dtb（14,958 B） | 同上 |
+| `staging/trial/flash-rootfs.jffs2` | 7.3 的 rootfs（5,767,172 B） | 同上 |
+| `staging/ctl/gate-Image` / `gate-dtb` / `gate.src` | 按 7.3 那对重建 | `tools/mkgate.sh` |
+| `staging/ctl/flash.permit` | 加一行 7.3 那对的凭证 | 板上跑完 RAM 门禁后，用现场独有的 `permit-from-verdict.sh` |
+| `staging/ctl/ctl-flash.cpio.gz` | 按 7.3 那对重建 | `tools/flash-round.sh` 自己会重建 |
+
+⇒ 前四行是**机械替换**，第五行（凭证）要板上的一轮判决，第六行是工具自己写的。
+⇒ 这一轮**完整的九个现场位置**（多出 announce 载荷、报告落点与串口日志）
+与它们的**先后顺序**见八之十七.1。
+
+**换件之前先验过的一件事**：现场那套分区表门禁（`tools/dtbparts.py`，
+`layout=native241 root=0xf00000,0xf100000`）对 **7.3 的 dtb 是过的** ——
+本机实测输出 `TABLE OK - all 2 expectations matched`，
+且 `root` 落在 `/dev/mtdblock5`（U-Boot 的 bootargs 写死 5）。
+⇒ 换成 7.3 的 dtb **不会**被现场那套参数拒掉
+（这正是 7.25 修的那个坑：旧参数会拒绝正确的件）。
 
 ### 8之十五.6 这一环没做到的
 
@@ -5925,6 +6014,316 @@ CI 那一轮构建出来的 **`vmlinux`**（带符号表），而 `vmlinux` 与
   得照这个办法再做一遍 —— 要的不是偏移表，是**行号表 + 源码里的那几行**。
 - 它判的是**这一轮**的产物：`vmlinux` 与 `flash-uImage` 必须出自同一轮构建
   （门禁第 4 层就是在核这一条）。换一轮镜像（哪怕只差一个补丁），它要重跑一遍。
+- **现场工装区这一轮没有同步**。重测了一次：与仓库同名的 79 个文件里
+  **62 个相同、17 个不同**，方向仍是**双向的** ——
+  `gettrial.sh` / `flash-direct.sh` / `preflashbackup.sh` 是**工装区更新**
+  （工装区独有 81 / 20 / 57 行），`postflash.sh` / `preflight.sh` /
+  `siminit.sh` / `simwrite.sh` 是**仓库更新**（独有 182 / 93 / 55 / 53 行）
+  ⇒ 整包覆盖会把工装区的本地修改抹掉，定向同步又换不来必要的东西：
+  7.3 那一轮真正要用的脚本（`mkctlram.py` / `mkgate.sh` / `gatecheck.sh` /
+  `gatewatch.sh` / `fileserve.py` / `pushctl.sh`）
+  **工装区都有、都能用**，而载荷已经改在 `staging/trial73d/ctl/` 里生成，
+  **不必**碰现场暂存区。
+  ⇒ 这一轮不覆盖工装区（现场此刻还有别的会话在用）。
+  * （**订正**：这一条原先把现场独有的 `permit-from-verdict.sh` 也列进
+    「都能用」。它**在**工装区，但**不能**用 ——
+    它写出的 permit 行与 `ubflash.sh` 的门禁契约对不上，见八之十六.3。
+    7.3 那一轮走 RAM 通道，本来也不经过它。）
+
+---
+
+## 八之十六、刷机授权链：**两条通道**，一处**真断链**，以及 7.3 那对字节的许可链实测闭合
+
+> 本节全部结论都是**本机实测**的，没有碰板子、没有擦任何东西、也没有碰现场暂存区。
+> 用的都是现场/仓库里**现成的脚本**，跑在 `scratch/` 下的一次性沙箱里。
+
+### 8之十六.1 判决
+
+1. **现场其实有两条刷机通道，permit 行的格式互不相同**；而现场独有的
+   `tools/permit-from-verdict.sh`（写「证据」那一支）产出的行，**两条通道都开不了门**。
+2. **7.3 那一轮走的是 RAM 通道**（`flash-round.sh` → `gatecheck.sh`），
+   那条链**是完整的**，**不经过** `permit-from-verdict.sh` ⇒ 上面那处断链**不阻塞** 7.3 那一轮。
+3. **7.3 那对字节在板上拿到判决之后，`gatecheck.sh` 会放行** ——
+   本机实测 `gatecheck: ALLOWED (gate-K73)`，并配了**五个负控**，
+   每一个都转红在**自己那条**理由上。
+
+### 8之十六.2 两条通道，各自的门禁与各自的 permit 格式
+
+| 通道 | 谁刷 | 门禁 | permit 行必须有什么 | 谁写这一行 |
+|---|---|---|---|---|
+| **RAM 通道** | `tools/flash-round.sh`（仓库与现场都有） | `tools/gatecheck.sh` | `uimage_md5=` + `dtb_md5=`（**裸件**的 md5）+ `proven=` ∈ {`live-partition-match`, `preflash-snapshot`, `operator-waiver`, `gate-<tag>`}；`gate-<tag>` 时还要 `kver=`（**必须等于 uImage 里自己的版本**）、`root_read=IDENTICAL`、`root_index=5`、`jffs2_ro=OK` | `tools/gatewatch.sh`（写 `proven=gate-*`）、`tools/mkrollback.sh`（写 `live-partition-match` / `preflash-snapshot`） |
+| **U-Boot 通道** | `tools/ubflash.sh`（**只有现场有**） | `tools/ubflash.sh` 自己 | `^ts=… run=<N>` + `padded_md5 uimage= dtb= root=`（**填充后**的 md5）+ `stages=` + `unpinned-by-design=` | `tools/permit-waiver.sh`（**只有现场有**） |
+
+⇒ 两条通道要的**不是同一组字段**：`uimage_md5=` 对 `padded_md5 uimage=`，
+前者是**裸件**的校验和，后者是**按 2048 页填满 0xFF 之后**的校验和
+（因为 `mtd write` 写整页，回读比对的也是填充后的长度）。
+⇒ 现场 `flash.permit` 的 15 行历史正好分成两族：
+前 10 行与 2026-10-13 那一行是 **RAM 族**（`uimage_md5=` + `dtb_md5=`），
+其余是 **U-Boot 族**（`run=` + `padded_md5` + `stages=`）。
+
+### 8之十六.3 断链：`permit-from-verdict.sh` 的行，**两条通道都开不了门**
+
+现场独有的 `tools/permit-from-verdict.sh` 写出来的一行长这样：
+
+```
+ts=… run=<N> proven=net-verdict ping=0%loss arp=resolved rx_max=… profile=… \
+    padded_md5 uimage=… dtb=… root=… kit=run<N> note=both-verdicts-passed-on-this-round no-erase-yet
+```
+
+- 对 **U-Boot 通道**：缺 `stages=` ⇒ `ubflash.sh` 的 sed 取不到授权范围 ⇒ **拒**。
+- 对 **RAM 通道**：缺 `uimage_md5=` 与 `dtb_md5=`，且 `proven=net-verdict`
+  不在 `gatecheck.sh` 的白名单里 ⇒ **拒**。
+
+**实测**（`scratch/permit_chain_probe.py`，用**真的** `ubflash.sh`，一次性的假载荷树）：
+
+| 喂进去的 permit 行 | flasher 停在哪 |
+|---|---|
+| **A**：`permit-from-verdict.sh` 原样写的行 | `HALT - the run=999 line carries no stages= list, so it authorises no erase` |
+| **B**：`permit-waiver.sh` 原样写的行 | 过了 permit 门禁，停在下一个环境门禁（UDP/69 没起 TFTP） |
+| **C**：A 那行**补上** `stages=dtb kernel unpinned-by-design=no` | 过了 permit 门禁（同上） |
+| **D**：A 那行，但 root 的 md5 写错 | `HALT - ub-flash-rootfs.jffs2.pad is md5 1576a94d…, not the 0000… the run=999 permit was granted on` |
+
+⇒ A 与 C 的差别**只有那两个字段** ⇒ 缺口就定位在那儿；
+D 证明那道 md5 闸**真的在查**，不是「反正都放行」。
+⇒ **C 也证明**：修法不用动 flasher，只要让写手把 flasher 要的字段写全。
+
+又用**端到端**跑了一遍（`scratch/permit_fixed_probe.py`）：
+两支**判决器换成桩**（它们要读真实板子日志与寄存器 dump），
+其余（写手自己的检查、flasher 的门禁）全是**真代码**：
+
+- **现场那份 writer**：它自己的检查**全部通过**
+  （`pad ok` ×3、`kitsign ok` ×2、`VERDICT: PASS`），
+  写出那一行 ⇒ flasher 仍以 `authorises no erase` 拒之门外。
+- **修好的 writer**（只多写 `stages=` 与 `unpinned-by-design=`，
+  外加把 `stages` 定成判决**真正覆盖**的范围 `dtb kernel`、把 root 记进 `unproven=`）：
+  同一棵树、同一个判决、同样的三个 md5 ⇒ **permit 门禁全过**。
+
+⇒ **修法是单点的**：补两个字段 + 把授权范围钉成判决覆盖的范围。
+修好的件在 `scratch/permit-fixed-tools/permit-from-verdict.sh`（**未落地**，
+因为它要改现场那份，而现场此刻还有别的会话在用）。
+
+⇒ 顺带一件值得记的事：**这条 U-Boot 通道上的「证据授权」从来没被走通过**。
+现场 15 次真实刷机，用的凭证要么是「**决定**」（`operator-waiver`），
+要么是「证据」但走的是 **RAM 通道**（`gate-*` / `live-partition-match`）。
+⇒ **「证据 + U-Boot 通道」这条路是新的**，而它第一次被试就撞上了这道契约缺口。
+
+### 8之十六.4 7.3 那一轮的许可链：**闭合**，而且实测过
+
+7.3 那一轮走 RAM 通道，证据由 `tools/gatewatch.sh` 写（它收到 **CTLALIVE** 报告时追加一行）：
+
+```
+ts=… uimage_md5=<裸 uImage 的 md5> image_md5=… dtb_md5=<gate-dtb 的 md5> \
+    kver=<报告里的> root_index=<N> root_read=<IDENTICAL> jffs2_ro=<OK> proven=gate-<TAG>
+```
+
+`tools/gatecheck.sh` 读这一行，逐项核：
+
+- `grep -F "uimage_md5=$UM"` + `grep -F "dtb_md5=$DM"` —— 裸件的 md5；
+- `proven=gate-*` ⇒ 它**从 uImage 里读出内核版本**（`tail -c +65 "$U" | gzip -dc`），
+  要求 `kver=` **严格等于**它 —— 这道是「一条线不许替另一条线背书」；
+- 还要 `root_read=IDENTICAL`、`root_index=5`、`jffs2_ro=OK` 三项缺一不可。
+
+**本机实测**（`scratch/gate73_check.py`，用 7.3 的**真件**
+`staging/trial73d/flash/flash-uImage`（5,813,531 B，md5 `4b5189792c4f1c3dcaef7e28b5dec258`）
+与 `flash-dtb.bin`（14,958 B，md5 `ff6914d007b9b21895e1a6b3f67d5ea5`））：
+
+```
+positive case: ALLOWED
+    gatecheck: ALLOWED (gate-K73)
+```
+
+⇒ **两件先验都过了**：门禁**能**从 7.3 的 uImage 里读出 `Linux version 7.3.4`
+（读不出的话它会 `refusing - the version of the kernel in … cannot be read`），
+以及这一对字节的 md5 与 permit 行里要写的那两个一致。
+
+**五个负控，每一个都转红在它自己那条理由上**：
+
+| 负控 | 门禁的回答 |
+|---|---|
+| `kver=7.3.3`（与 uImage 里的 7.3.4 不符） | `refusing - the gated payload reported kver=7.3.3, but the kernel in … is 7.3.4` |
+| `kver=4.19.0`（vendor 内核起来了） | `refusing - the gated payload reported kver=4.19.0, i.e. the vendor kernel booted, which proves nothing about mainline` |
+| `root_read=DIFFERENT` | `refusing - the gate-K73 record lacks root_read=IDENTICAL` |
+| `jffs2_ro=FAILED` | `refusing - the gate-K73 record lacks jffs2_ro=OK` |
+| `root_index=4` | `refusing - the gate-K73 record lacks root_index=5` |
+
+⇒ 板上那一轮要凑齐的就是这一行里的**五个字段**：
+`kver=7.3.4`、`root_index=5`、`root_read=IDENTICAL`、`jffs2_ro=OK`、
+以及 `uimage_md5`/`dtb_md5` 与待刷的那对字节一致。
+
+**判决链上的版本有三处互相独立的来源**，这一点值得单独写下来：
+
+| 来源 | 它是什么 | 谁产生 |
+|---|---|---|
+| `staging/ctl/gate.src` 的 `uimage_md5` | 载荷是从**哪一个** uImage 膨胀出来的 | `tools/mkgate.sh` |
+| 报告里的 `kver=` | **正在跑的那个内核**的自报（`uname -r`） | 载荷的 `/init` |
+| `gatecheck` 的 `EXP` | **待刷的那个 uImage** 里 banner 的版本 | `tools/gatecheck.sh` 自己读 |
+
+⇒ 载荷里那个 `7.3.4*` **不是**判决：它只是「只有当 `uname -r` 匹配时才启用
+mailbox 报告」的自检开关；报告里写下的 `kver=$(uname -r)` 才是证据，
+而门禁再拿它跟**待刷镜像**里的版本比 ——
+**三者来自三个不同的地方**，所以「载荷自称 7.3.4」骗不了这道门。
+（banner 里的版本串与 `uname -r` 是同一个 `UTS_RELEASE`，
+所以带不带 localversion 后缀，两边会同时带 ⇒ 它们必然相等。）
+
+### 8之十六.5 这条链现在有一道门禁
+
+`tests/test_gatecheck.py`（CI 的 gates job 一直在跑）用**自己造的** uImage
+证明那道门有牙齿 —— 那是测**逻辑**的正确办法，但它答不了
+「这个人抱到板子跟前的那对字节，门认不认」这个问题。
+
+⇒ 新增 `tests/test_sk_flash_permit.py`：
+拿**这一轮真产出**的那对字节，按 `gatewatch.sh` 的方言写出一行 permit，
+问那道门。
+
+| 检查 | 期望 |
+|---|---|
+| 这一轮那对字节被放行 | `ALLOWED (gate-…)` |
+| 门禁说出的是它**从镜像里读出来的**那个版本 | 输出里含该版本 |
+| 一行说**别的内核**的记录 | **拒**，且拒的理由里有两个版本 |
+| 一行 `root_read=DIFFERENT` 的记录 | **拒** |
+| 一行关于**别的字节**的记录 | **拒** |
+
+本机对 7.3 的真件跑：**7/7 通过**（`ALLOWED`，版本 `7.3.4`）。
+
+**它自己也要能转红** ⇒ `tests/test_sk_flash_permit_control.py`
+把 `tools/gatecheck.sh` 的**副本**改坏三种，跑上述门禁：
+
+| 改坏什么 | 必须转红的那条检查 |
+|---|---|
+| 版本比较被短路（比较前先把 `KV` 设成镜像自己的版本） | `a record about another kernel is refused` |
+| `root_read` 不再是门禁记录必带的字段 | `a record whose root was not read back is refused` |
+| uImage 的校验和不再参与匹配 | `a record about other bytes is refused` |
+
+本机：**8/8 通过** —— 每个变异都转红在**它自己那条**检查上。
+
+⇒ 工作流的 flash 模式多了一步（initramfs 模式**没有** `flash-uImage`，
+这一步按模式限定，不去问一个永远不会出现的文件）：
+`Gate: the flash gate accepts this pair of bytes`。
+两个新文件都进了 `paths:` —— 它们是这道门的一部分，
+改了它们就改了构建在查什么。
+
+### 8之十六.6 这一节没做到的
+- **没有碰板子**。这一节证明的是「拿到板上判决之后，那道门会开」，
+  不是「判决拿得到」。判决要等 RAM 门禁那一轮真跑起来。
+- **`flash-round.sh write-root` 的新鲜度检查对 7.3 是空的**：
+  它比的是 `ci-build-repo/overlays/target/linux/zte/zx279133/base-files/etc/board.d/02_network`
+  —— **6.18 世代**的那份（mtime 2026-10-31）；
+  而 7.3 线的 `overlays-73/` 里**根本没有** `base-files/etc/board.d/02_network`
+  （那一代 rootfs 的 base-files 来自 CI 的源码树，本机没有）。
+  ⇒ 这个检查**没有检查到 7.3 的任何东西**；
+  但它**也不会误拒** —— 7.3 的 rootfs 是今天（2026-11-23）生成的，比那份 6.18 的新。
+- **U-Boot 通道仍是坏的**（那条断链）。修好的件备好了但**没落地**。
+  ⇒ 7.3 那一轮**不需要**它（走 RAM 通道）。
+  ⇒ **owner 2026-11-23 决定：先不动** —— 既不改现场那份
+    `permit-from-verdict.sh`，也不把整条 U-Boot 链收进仓库。
+    理由与后果都记在这儿：断链是真的、位置也已定位，
+    但它是**备用路线**的问题，而动它要么改现场工装区
+    （此刻还有别的会话在用），要么把 8 支脚本的范围扩进仓库。
+    修好的件留在 `scratch/permit-fixed-tools/permit-from-verdict.sh`，
+    **哪一天要修，照着它补那两个字段即可**（补完实测能过 flasher 的门禁）。
+- **整条 U-Boot 刷机链不在版本控制里**：现场独有的 `ubflash.sh`、
+  `permit-from-verdict.sh`、`permit-waiver.sh`、`netproof.sh`、
+  `ikcfg.py`、`dtprops.py`、`devtools/netverdict.py`、`devtools/profilecheck.py`
+  —— 仓库里**一份都没有**（仓库 `tools/` 只有 `gatecheck.sh` / `mkgate.sh` /
+  `flash-round.sh` / `gettrial.sh` / `tftpsrv.py` 等另一半）。
+  ⇒ 这就是为什么上面那处契约缺口**CI 永远看不见**：它不在 CI 里。
+
+---
+
+## 八之十七、实机那一轮：**照着做的顺序**，每一环的判据与它失败时停在哪
+
+> 这一节是「软件侧到此为止」与「实机对拍」之间的那座桥。
+> 命令都在**工作区根目录**下跑（现场工装区在那儿），脚本都在 `tools/` 里。
+> **这一节没有一步是本机跑过的** —— 板子那一头到今天还没接上（八之十五.6）。
+
+### 8之十七.1 判决
+
+**7.3 那一轮是两步走的**：先在 RAM 里把 7.3 的内核**跑起来**拿到判决，
+再用那个判决去换刷机的许可，最后才刷。
+**软件侧这两步的工具链都是现成的**（八之十六），
+缺的只有**板子那一头**：三件换件、两个夹具重建、两个载荷重建。
+
+⇒ 实机那一轮**要动的现场文件一共九个**（前四个来自八之十五.5）：
+
+| # | 现场位置 | 变成什么 | 谁写 |
+|---|---|---|---|
+| 1 | `staging/trial/flash-uImage` | 7.3 那份（5,813,531 B） | 复制；**旧件别删**（`.run313` 等是回滚件） |
+| 2 | `staging/trial/flash-dtb.bin` | 7.3 的 dtb（14,958 B） | 同上 |
+| 3 | `staging/trial/flash-rootfs.jffs2` | 7.3 的 rootfs（5,767,172 B） | 同上 |
+| 4 | `staging/ctl/gate-Image` / `gate-dtb` / `gate.src` | 按 7.3 那对重建 | `sh tools/mkgate.sh` |
+| 5 | `staging/ctl/ctl-initramfs.cpio.gz` | announce 载荷，骑 **7.3.4\*** | `tools/mkctlram.py --mode announce` |
+| 6 | `staging/ctl/ctl-flash.cpio.gz` | 刷机载荷，按 md5 钉死 7.3 那对 | `tools/flash-round.sh` 自己重建 |
+| 7 | `staging/ctl/flash.permit` | 多一行 `proven=gate-K73` | `sh tools/gatewatch.sh`（板上判决后） |
+| 8 | `staging/ctl/reports.log` | 判决报告的落点 | `python tools/ncsrv.py` |
+| 9 | `staging/ctl/serial.log` | 板子说过的话 | 继电器开着时自己长 |
+
+⇒ 第 1~3 步的字节在 `staging/trial73d/flash/` 里已经备好（本轮从 #53 的产物取）；
+第 5 步的载荷在 `staging/trial73d/ctl/` 里已经备好（骑 `7.3.4*`）。
+**其余的都要在板子旁边做。**
+
+**那三件备好的字节，就是最新那一绿轮产出的字节**：
+run **#57**（整轮 Success，1 h 20 m 46 s）的 flash job 里
+`ls -l` 与 `sha256sum -c` 的输出是
+
+| 文件 | #57 产出 | 本机 `staging/trial73d/flash/` |
+|---|---|---|
+| `flash-uImage` | 5,813,531 B | 5,813,531 B |
+| `flash-dtb.bin` | 14,958 B | 14,958 B |
+| `flash-rootfs.jffs2` | 5,767,172 B | 5,767,172 B |
+
+且该轮的 `sha256sum -c` **五个文件全 OK**（含 `flash-sysupgrade.bin` 与
+`sysupgrade-report.json`）⇒ manifest 自洽。
+⇒ **大小三重一致 + 同一内核源 ⇒ 这就是那一轮的字节**；
+md5 级的那一锤要取回 artifact 才能补（见 8之十七.4）。
+
+### 8之十七.2 顺序
+
+| 步 | 做什么 | 命令 | 这一步的判据 |
+|---|---|---|---|
+| **0** | **物理**：插 CH340、插网线、确认智能插座供电 | `sh tools/bench-keep.ps1` | 继电器与冷启动看门狗起来；`staging/ctl/serial.log` 开始长 |
+| **1** | **换件**：把 7.3 的三件放进 `staging/trial/` | 复制 `staging/trial73d/flash/flash-uImage`、`flash-dtb.bin`、`flash-rootfs.jffs2` | `md5sum` 对上 `4b5189792c4f1c3dcaef7e28b5dec258` / `ff6914d007b9b21895e1a6b3f67d5ea5` / `1dc238cc75ac97a56251a79cb97e5c45` |
+| **2** | **重建门禁夹具** | `sh tools/mkgate.sh` | 打印 `the gate kernel IS the flash kernel`；`gate.src` 里的 `uimage_md5` = 第 1 步那对 |
+| **3** | **重建 announce 载荷** | `python tools/mkctlram.py --mode announce --tag K73 …` | 载荷里钉的 md5 = 第 1 步那对 |
+| **4** | **判决轮**：把 7.3 的内核 kexec 进 RAM | `python tools/ncsrv.py &` → `CTLTAG=K73 IMAGE_LOCAL=staging/ctl/gate-Image REMOTE_IMAGE=gate-Image DTB_LOCAL=staging/ctl/gate-dtb REMOTE_DTB=gate-dtb INITRD=ctl-initramfs.cpio.gz sh tools/pushctl.sh` → `sh tools/catchctl.sh` → ssh 点火 | 板子**跳走了**（`gone=1`），且 `staging/ctl/reports.log` 里出现 **CTLALIVE** 且 `kver=7.3.4` |
+| **5** | **打分 + 换许可** | `sh tools/gatewatch.sh 600` | `staging/ctl/flash.permit` 多了一行 `proven=gate-K73`，且 `kver=7.3.4`、`root_index=5`、`root_read=IDENTICAL`、`jffs2_ro=OK` |
+| **6** | **刷** | `sh tools/flash-round.sh dry`（干跑）→ `sh tools/flash-round.sh write`（要连 root 就 `write-root`） | `gatecheck: ALLOWED (gate-K73)`；擦除前后 `mtd read` 回读一致 |
+| **7** | **验收** | 冷启动后跑对拍清单（八之十五.5） | 那份清单 |
+
+⇒ 第 4 步的**点火**要在板子上单独执行：
+`ssh root@192.168.9.1 'DELAY=150 CTLTAG=K73 setsid sh /tmp/ctl/ctl-exec.sh &'`
+（`pushctl.sh` 结尾会把这句原样打出来）。
+
+### 8之十七.3 每一步失败时**停在哪**
+
+| 步 | 看到的现象 | 它意味着 | 怎么办 |
+|---|---|---|---|
+| 0 | 继电器不起来 / `serial.log` 不长 | CH340 没枚举 | 换口、装驱动；**不要**往板子上发任何命令 |
+| 1 | `sha256sum -c` 不过 | 拷贝被截断 | 重拷；**别**往下走 |
+| 2 | `mkgate.sh` 报 `not a legacy uImage` | `staging/trial/flash-uImage` 换错了 | 重换第 1 步 |
+| 3 | 载荷钉的 md5 不是 7.3 那对 | 载荷用了旧件 | 重生成 |
+| 4 | `pushctl.sh` 报 `md5 mismatch on the staged payload` | 往板上拷的那一份不完整 | 重推 |
+| 4 | `catchctl.sh` 说 `no jump observed` | 点火没发生 | 重新 ssh 点火 |
+| 4 | `gone=1` 但 `reports.log` 是空的 | 载荷没到 userspace（**不是**判定失败） | 看 `serial.log`；**不要**当判决通过 |
+| 5 | `permit NOT granted: … uimage_md5=… changed after the payload was built` | 第 1 步之后又换了件 | 重做第 2~4 步 |
+| 5 | `root read: DIFFERENT` | 7.3 的 ECC/OOB 布局与 4.19 不一致 | **不要刷**；这是门禁在替你挡一次开不了机的板子 |
+| 5 | `root mount: FAILED` | 7.3 能读 root 的字节但挂不上 | 同上，**不要刷** |
+| 6 | `gatecheck: REFUSE - no record proves these bytes boot` | permit 里没有那对字节的记录 | 回第 5 步 |
+
+### 8之十七.4 这一节没做到的
+
+- **没有一步在真板子上走过**。这一节是把八之十五与八之十六的结论
+  按**工具自己写的顺序**排成一条线，每一步的判据都引自脚本自身的输出，
+  但**排练只到沙箱为止**（第十节 101、102、106 号命令）。
+- **第 1 步那三个 md5 是 #53 那轮的**。若 CI 之后又出了新镜像，
+  以那一轮的产物为准 —— 门禁认的是**字节**，不是轮次。
+- **第 6 步只刷 dtb+kernel 还是连 root 一起刷，是板子的选择**：
+  `write` 只写前两段，板上还留着 6.18 的 rootfs；
+  `write-root` 才三段都写，而 root 是单向门（刷错就没有回退，
+  除非 `backups/preflash-20261101/mtd5-root.bin.gz` 那份备份还在）。
+- **实机对拍清单本身**（八之十五.5）里的那些判据 —— `lan-cpu0` 的 RX 计数、
+  `rx_dropped` 不动、四个 DSA 口 link、2.5G 插孔看 `lan1` 的 `rx_packets`、
+  LOS 灯、`pon_state`、`omci_transport` —— **一件都没验过**。
+  本节只保证「刷进去的那道门是通的」，不保证「刷进去之后板子好用」。
 
 ---
 
@@ -6088,6 +6487,18 @@ CI 那一轮构建出来的 **`vmlinux`**（带符号表），而 `vmlinux` 与
    * **反向验证**：改坏机器码（顺序反了 / 去掉 restore / 去掉 hardware 检查 /
      去掉行号信息 / 镜像里改一个字节）必须**转红在指定的那条检查上**，
      而且控制跑在**同一个内核、同一个镜像**上。
+
+10. **实机那一轮的许可链**（把 7.3 三件刷进板子的前置）—— **已查清，见八之十六**。
+    * **7.3 走 RAM 通道**（`flash-round.sh` → `gatecheck.sh`），
+      证据由 `tools/gatewatch.sh` 写（`proven=gate-K73`），
+      **不经过**现场那支 `permit-from-verdict.sh`。
+    * **本机实测**：那一行的字段凑齐时 `gatecheck.sh` 会 `ALLOWED (gate-K73)`，
+      五个负控逐条咬住（八之十六.4）。
+    * **U-Boot 那条备用通道上有一处真断链**：`permit-from-verdict.sh` 写的行
+      因为缺 `stages=` 被 `ubflash.sh` 拒（八之十六.3）。
+      修好的件备在 `scratch/permit-fixed-tools/`，**未落地**。
+    * ⇒ 7.3 那一轮的**软件侧前置已经没有缺口**；剩下的全是
+      **板上的判决**与**物理条件**。
 
 验收口径与 6.18 线一致：**CI 绿 + 门禁脚本全过 + 实机启动后
 `/proc/net/dev` 有预期网口、`ethtool -S` 计数在涨**。
@@ -6507,6 +6918,39 @@ python3 ci-build-repo/tools/mkctlram.py --mode flash --stage net --tag K73F \
         --payload p/flash-dtb.bin=staging/trial73d/flash/flash-dtb.bin \
         --payload p/flash-rootfs.jffs2=staging/trial73d/flash/flash-rootfs.jffs2 \
         --out staging/trial73d/ctl/ctl-flash.cpio.gz
+
+# 101) 刷机载荷的取件契约排练（不碰板子）：载荷钉的 md5 == fileserve 送出来的
+#      字节 == 磁盘上的字节；旧载荷钉的是 6.18 那一对 ⇒ 板子会拒写
+python3 scratch/sim_flash_stage.py staging/trial73d/ctl/ctl-flash.cpio.gz
+
+# 102) 换件之前先验现场那套分区表门禁：7.3 的 dtb 必须过它
+#      （实测 TABLE OK，且 root 落在 /dev/mtdblock5）
+python3 ci-build-repo/tools/dtbparts.py staging/trial73d/flash/flash-dtb.bin \
+        layout=native241 root=0xf00000,0xf100000
+
+# 103~105 这三个在**工作区根**的 scratch/ 里（不在仓库里）：它们测的是现场/仓库
+#      里现成的脚本，跑在一次性的沙箱树上，不碰板子、不擦任何东西。
+
+# 103) 刷机授权链的断链：四种 permit 行喂给**真的** flasher（用的是现场那份
+#      tools/ubflash.sh）。A=证据行原样（缺 stages=，被拒），B=豁免行（过），
+#      C=证据行补两个字段（过），D=证据行但 md5 写错（被 md5 闸拒）
+python3 scratch/permit_chain_probe.py
+
+# 104) 端到端：现场那份 writer vs 修好的 writer（两支判决器换成桩，
+#      写手自己的检查与 flasher 的门禁全是真代码）
+python3 scratch/permit_fixed_probe.py
+
+# 105) 7.3 那对字节过 RAM 通道的门禁：正例 ALLOWED + 五个负控逐条咬住
+python3 scratch/gate73_check.py
+
+# 106) 同一件事的**仓库版**：这一轮真产出的那对字节过不可逆刷机前那道门
+#      （正例 + 四个负控），以及它自己的三个变异（转红在指定的那条检查上）
+python3 ci-build-repo/tests/test_sk_flash_permit.py \
+        --uimage staging/trial73d/flash/flash-uImage \
+        --dtb staging/trial73d/flash/flash-dtb.bin
+python3 ci-build-repo/tests/test_sk_flash_permit_control.py \
+        --uimage staging/trial73d/flash/flash-uImage \
+        --dtb staging/trial73d/flash/flash-dtb.bin
 ```
 
 第十节的 18~24 号命令里，`cfg73_sim.py` 与 `kdeps73.py` 是**一对**：
@@ -6590,3 +7034,9 @@ uapi 头都过一遍 `scripts/headers_install.sh`，而它的 sed（第 34 行�
 - 100 号是**重建载荷**：`announce` 骑 `7.3.4*`（判决里的 `kver` 靠它报），
   `flash` 把那一对按 md5 钉死（钉错了板子自己会打 `STAGE_FAIL` 拒写 ——
   这个拒绝是对的：载荷只允许写它被构建时的那对字节）。
+- 101 号排练的是**取件契约**：载荷钉的 md5、服务器送出的字节、磁盘上的文件
+  三者必须逐位相同；负控是现场那份旧载荷 —— 它钉的是 6.18 那一对，
+  ⇒ 板子若跑它，对这 7.3 的字节只会拒写。
+- 102 号是**换件前的先验**：现场那套分区表门禁（`dtbparts.py`）对 7.3 的 dtb
+  必须过（实测 `TABLE OK`）—— 7.25 修的就是「旧参数拒绝正确的件」那个坑，
+  换 7.3 的 dtb 之前要再验一遍。
