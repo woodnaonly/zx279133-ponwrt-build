@@ -40,6 +40,11 @@ on:
   push:
     paths:
       - .github/workflows/build-sk-d840n-73.yml
+      # The checkout rules decide the bytes of every file below, so a change
+      # to them is a change to what the build reads - and it has to start a
+      # build, or the image is built from a checkout a fresh clone would not
+      # reproduce.
+      - .gitattributes
       - kernel-patches/**
       - tools/prepare-sk-kernel-73.py
       - tools/apply-sk-overlay-73.sh
@@ -54,6 +59,8 @@ on:
       # checks.
       - tools/check-sk-mcode.py
       - tests/test_sk_mcode.py
+      - tools/check-sk-mcode-image.py
+      - tests/test_sk_mcode_image.py
       - tools/check-conduit-netdev-name.py
       - tools/kcheck.py
       - tools/kshadow.py
@@ -394,22 +401,6 @@ jobs:
           python3 tools/check-sk-board-api.py post \
             --tree "$KERNEL_TREE" --report sk-board-api.json
 
-      # The PPU microcode is a *built-in* firmware: config-7.3 sets
-      # CONFIG_EXTRA_FIRMWARE="zte/zx279133/mcode_intel.bin" with
-      # CONFIG_EXTRA_FIRMWARE_DIR="firmware", so the blob the board gets is
-      # the one in the kernel tree - and the rootfs carries none (measured:
-      # the jffs2 image has no /lib/firmware at all, and neither name is in
-      # it).  Two blobs have that name and that size (103,456 B) and
-      # different bytes, and the 7.3 driver compares the blob it gets
-      # against one crc32 and refuses any other one when vlan offload is on
-      # - so a tree carrying the 6.18 line's copy leaves the PPU without
-      # its firmware and the data path never comes up.  The expected crc32
-      # is read out of the driver, not written down here.
-      - name: 'Gate: the NPU microcode is the one this driver will take'
-        run: |
-          python3 tools/check-sk-mcode.py --tree "$KERNEL_TREE"
-          python3 tests/test_sk_mcode.py --tree "$KERNEL_TREE"
-
       # The 9132 LAN switch driver is this repository's own code in the 7.3
       # tree, and it cannot be compiled on the machine that pushes this
       # repository either.  So the things a compiler would say about it are
@@ -516,6 +507,34 @@ jobs:
             echo "::error::$LIBBPF_PATCH does not define __u128"; exit 1; }
           grep -qx '+#define __attribute_const__ __attribute__((__const__))' "$LIBBPF_PATCH" || {
             echo "::error::$LIBBPF_PATCH does not define __attribute_const__"; exit 1; }
+
+      # The PPU microcode is a *built-in* firmware: config-7.3 names it with
+      # CONFIG_EXTRA_FIRMWARE="zte/zx279133/mcode_intel.bin", and the kernel
+      # build embeds the file that CONFIG_EXTRA_FIRMWARE_DIR points at.  That
+      # value is rewritten before the build - scripts/configure-sk-d840n.sh
+      # pins it to this checkout's own target/linux/zte/zx279133/firmware,
+      # because the one in the target config points at a directory layout
+      # that only exists on the machine the config was written on, and it
+      # refuses to go on at all if the blob is not there.  So the file that
+      # reaches the image is the one in the OpenWrt tree, not the one in the
+      # kernel tree, and that is why this gate sits after the overlays are
+      # copied: it asks about the file the kernel will read.
+      #
+      # Two blobs have that name and that size (103,456 B) and different
+      # bytes: the 6.18 line's copy and the one the 7.3 driver was written
+      # against.  The driver compares the blob it gets against one crc32 and
+      # refuses any other one when vlan offload is on, and the rootfs carries
+      # no firmware at all (measured: the jffs2 image has no /lib/firmware,
+      # and neither name is in it) - so the wrong copy here leaves the PPU
+      # without its firmware and the data path never comes up.
+      #
+      # The expected crc32 is read out of the tree's own driver, not written
+      # down here, so the gate cannot agree with itself by accident.
+      - name: 'Gate: the NPU microcode is the one this driver will take'
+        run: |
+          python3 tools/check-sk-mcode.py --tree "$KERNEL_TREE" \
+            --blob openwrt/target/linux/zte/zx279133/firmware/zte/zx279133/mcode_intel.bin
+          python3 tests/test_sk_mcode.py --tree "$KERNEL_TREE"
 
       # The 7.3 fragments are named config-7.3, not config-6.18.  This is the
       # same edit the 6.18 line makes, with the other file names: a fragment
@@ -1423,6 +1442,29 @@ jobs:
             --image flash-uImage \
             --tree "$KT" \
             --objdump "$OBJDUMP"
+
+      # The gate above is about the machine code.  This one is about what the
+      # board is handed: the PPU microcode is embedded in the kernel image, so
+      # the image that is about to be flashed is asked whether it carries the
+      # blob the driver will take - not the tree, and not the configuration.
+      # A tree can carry the right file and still produce an image that does
+      # not have it, and only the artifact can tell.
+      #
+      # The microcode is stored uncompressed - the kernel's own Kconfig says
+      # "Compressed files are not supported in EXTRA_FIRMWARE" - so the blob
+      # can be looked for as plain bytes in the inflated image.
+      #
+      # Only the flash mode has such an artifact: the initramfs mode builds a
+      # RAM rescue image and no kernel image of its own.
+      - name: 'Gate: the image carries the PPU microcode this driver will take'
+        if: matrix.mode == 'flash'
+        run: |
+          set -e
+          python3 tools/check-sk-mcode-image.py \
+            --image flash-uImage \
+            --tree "$KERNEL_TREE" \
+            --blob openwrt/target/linux/zte/zx279133/firmware/zte/zx279133/mcode_intel.bin
+          python3 tests/test_sk_mcode_image.py
 
       # The flash gate is the one-way door in front of an irreversible flash:
       # it lets a pair of bytes through only when a gate round already booted

@@ -139,6 +139,24 @@ overlays/target/linux/zte/zx279133/firmware/** -text -diff
 overlays-73/** text eol=lf
 configs/** text eol=lf
 
+# The 7.3 line's own PPU microcode, at the path the kernel's
+# CONFIG_EXTRA_FIRMWARE names.  Same reasoning as the 6.18 line's rule above,
+# and for the same reason it has to be a separate rule: the directory-wide
+# `overlays-73/** text eol=lf` would rewrite this blob's CR bytes as line
+# endings on a Windows checkout, and those CRs are part of the microcode
+# rather than line endings.
+#
+# This copy is the one the 7.3 driver accepts (crc32 0xef1d7647); the 6.18
+# line's copy carries 98 CR bytes, this one carries none, so today a
+# renormalise would be a no-op.  That is exactly why the rule is here: the
+# file that must not be rewritten is the one that happens to be harmless
+# today, and the damage it would do is a board that receives no frames
+# rather than a build that fails.
+#
+# It has to come after the `overlays-73/**` rule because the last matching
+# rule wins.
+overlays-73/target/linux/zte/zx279133/firmware/** -text -diff
+
 # kernel-overlays-73/ is the 7.3 line's own driver tree, and it is copied
 # straight into the kernel tree by tools/apply-sk-overlay-73.sh, exactly like
 # kernel-overlays/ is.  The same reasoning applies: with core.autocrlf=true a
