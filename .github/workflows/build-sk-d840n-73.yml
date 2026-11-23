@@ -69,6 +69,11 @@ on:
       # whether it still refuses a report that names the wrong kernel.
       - tools/check-release-kernel-version.py
       - tests/test_release_kernel_version.py
+      # The gate that says a TX ring with an untrusted completion counter is
+      # quarantined, and the controls that say whether it still notices when
+      # the quarantine is taken out.
+      - tools/check-sk-tx-isolation.py
+      - tests/test_sk_tx_isolation.py
       # The flash gate: it decides which bytes may be written to a board, so a
       # change to it - or to the controls that say whether it still refuses
       # what it used to - changes what the build checks.
@@ -528,6 +533,23 @@ jobs:
             --file drivers/net/ethernet/zte/zx279133-switch.c \
             --file drivers/net/ethernet/zte/zxpon.c \
             --gen "$RUNNER_TEMP/kcheck-73"
+
+      # The 7.3 tree's driver believed the TX completion counter.  When the
+      # counter reported more completions than the ring had frames in it, it
+      # clamped the delta and released the slots - and a counter that cannot
+      # be trusted cannot prove that the DMA has given the buffers back.
+      # The 6.18 generation quarantines the ring instead; the 160 patch moves
+      # that model into this tree, and this gate says the move really
+      # happened - in the tree that is about to be compiled, not in a
+      # synthetic copy of it.
+      #
+      # The controls run on the same tree: a synthetic driver would only
+      # prove that the gate reads a synthetic driver.
+      - name: 'Gate: a TX ring with an untrusted counter is quarantined'
+        run: |
+          set -e
+          python3 tools/check-sk-tx-isolation.py --tree "$KERNEL_TREE"
+          python3 tests/test_sk_tx_isolation.py --tree "$KERNEL_TREE"
 
       - name: Check the overlay for what a compiler would have caught
         run: |
@@ -1143,7 +1165,14 @@ jobs:
       # in one of our own sources and has to exist in the inflated kernel.
       # Both halves are checked, and a probe whose source no longer carries
       # the string is reported as stale rather than passed.
+      #
+      # Only the flash mode has such an artifact.  The initramfs mode builds
+      # a RAM rescue image and no kernel image of its own - run #43 said so
+      # ("no kernel image under openwrt/bin/targets/zte/zx279133 - the image
+      # profile did not make one") - so there is nothing here to ask about,
+      # and a gate that asks anyway fails a build that did nothing wrong.
       - name: 'Gate: the image carries the board drivers'
+        if: matrix.mode == 'flash'
         run: |
           set -e
           python3 tools/check-sk-image-drivers.py \

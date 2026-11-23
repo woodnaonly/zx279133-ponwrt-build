@@ -43,6 +43,12 @@
       "sha256": "d7d6cc44d1f265bfaae9d842e17c7c1af98a2e5f53c13eb12634ac2fee8a206e",
       "bytes": 71010,
       "what": "The 9132 switch chip's own programming, moved from the 6.18 generation's np.c word for word: the per-port words, the flood groups, the CPU path, the outport map, the isolation matrix, the protocol action table and the PHY enable. The 7.3 tree had the chip's DSA front end and none of this, so the four jacks and the 2.5G port were registered and never configured. The patch also adds the ERAM table bookkeeping the switch tables need - the SE allocator hands the blocks out in order, so a table's base is not a constant - and records the descriptors where the allocation happens. The IDM's source port is the 9132's PPU number, so the PPU is mapped onto the transport VID range, and the transmit drain reclaims the OMCI management queue that shares the ring."
+    },
+    {
+      "file": "160-sk-tx-fault-isolation.patch",
+      "sha256": "254174b3169bc14dd438339bec018e858c827cd86b856191bb5d9bc24dfa32fc",
+      "bytes": 24508,
+      "what": "The TX fault isolation model of the 6.18 generation, moved into the 7.3 tree. The tree believed the TX completion counter: an impossible delta was clamped to the number of pending frames and the slots were freed, which releases a buffer the DMA may still own. The ring is now quarantined instead, both logical TX devices are stopped, and a recovery worker flushes the ring, reclaims it and restarts the shared datapath at most once per real completion - a watchdog that keeps firing must not become a reset loop. A datapath that cannot be brought back up is marked failed and the next user restores it."
     }
   ]
 }

@@ -188,6 +188,27 @@
     `preflash.py` 改成三态（新报告说这镜像没有 banner ⇒ **红灯**；
     旧报告没有这个字段 ⇒ 降级为只做厂商检查并说明）。
     见 7.33。
+23. **第 7 片（TX 故障隔离与恢复）落地了；顺带查出上一轮自己加的门禁有一处缺陷。**
+    7.3 树的驱动**相信** TX 完成计数器：计数器报的完成数超过环里待发帧数时，
+    它把增量**钳位**成待发数然后继续 —— 释放 slot、**卸载 DMA 映射**、
+    并把 `done` 设成硬件那个不可信的原始值。
+    **不可信的计数器不能证明 DMA 已经交还了缓冲区**；
+    释放一个 DMA 可能还持有的缓冲区是 use-after-free。
+    6.18 世代不信这个计数器：隔离该环、停掉两个逻辑 TX 设备、
+    交给恢复工作（flush + reclaim，必要时**至多一次**重启共享 datapath）。
+    `160-sk-tx-fault-isolation.patch` 把这半搬进 7.3 树
+    （**旧结论「7.3 树没有这个模型」已被推翻**：树里本来就有
+    `datapath_suspend`/`resume` 与 `lan_datapath_get`/`put`，
+    缺的只是故障隔离那半）。
+    新门禁**按位置**判（36 条）：故障分支里不能有任何释放语句，
+    且函数里所有释放都必须在该分支之后 —— 比「某个串在不在」强得多。
+    本机用仓库自带的「编译预言机」过了 9 个文件。
+    顺带查出：**7.3 #43 的 initramfs job 红了，是我上一轮加的产物门禁** ——
+    initramfs 模式**根本不产出内核镜像**（run 注解原话：
+    "no kernel image ... the image profile did not make one"），
+    而门禁硬要去问那个不存在的镜像（同一个 run 的 flash job 是绿的）。
+    已限定在 flash 模式，并给这个限定加了门禁。
+    见 7.34。
 
 ---
 
@@ -429,6 +450,9 @@ CONFIG_EXTERNAL_KERNEL_TREE=<树>   OpenWrt 把这棵树当自己的内核目录
 | `tests/test_release_kernel_version.py` | 上面那道门禁的**负控**（25 项）：不只验「拒绝」，还验**拒绝的理由**；也验旧格式报告仍然被接受 |
 | `tools/check_sysupgrade.py` | 改了：读不到 banner **不再硬失败**，版本记 `null` 并加 `version_known` 标志 —— 「旧报告没这个字段」与「新报告说这镜像没有 banner」要能分开（见 7.33） |
 | `tools/preflash.py` | 改了：报告的版本读成**三态**（`version` / `no-banner` / `absent`）。新报告说没有 banner ⇒ 红灯；旧报告没有这个字段 ⇒ 降级为只做厂商检查并说明（见 7.33） |
+| `kernel-patches/7.3-local/160-sk-tx-fault-isolation.patch` | **第 7 片**：把 6.18 世代的 TX 故障隔离与恢复模型搬进 7.3 树（四个文件、405 行新增）。不可信的完成计数器**不再被钳位后照单释放**：环被隔离、两个逻辑 TX 设备被停、恢复工作 flush + reclaim 并**至多一次**重启共享 datapath（见 7.34） |
+| `tools/check-sk-tx-isolation.py` | **第 7 片的门禁**：按**位置**判 36 条不变量 —— 故障分支里不能有任何释放语句、函数里所有释放都必须在该分支之后、隔离守卫在读计数器之前、两个逻辑设备都被停、恢复不等 RTNL、重启由真实完成增量重新武装（见 7.34） |
+| `tests/test_sk_tx_isolation.py` | 上面那道门禁的**负控**（14 项）：突变跑在**真树**的副本上，不在合成树上 —— 合成树只能证明门禁读得懂合成树（见 7.34） |
 | `tools/func-surface-diff.py` | 两代驱动的函数面对照，输出「只在我们这边」与「只在 7.3 那边」两张工作清单 |
 | `tools/func-port-coverage.py` | **按能力对账**：171 个函数逐条必须有归属（同名 / 账本写明搬到哪 / 有处置记录），未记账即非零退出；账本指着的目标函数必须真在 7.3 树里（见八之七） |
 | `tools/kcheck.py` + `tools/kshadow.py` | **编译预言机**：用宿主 clang 对 7.3 树做 `-fsyntax-only`，生成树自己的头文件与影子头文件；7.3 线在 Compile 之前先跑它（见 7.17） |
@@ -3468,6 +3492,143 @@ raw = b"self-contained ARM64 kernel" * 32      # ← 里面没有 banner
 
 ---
 
+### 7.34 第 7 片：TX 故障隔离与恢复模型，搬进 7.3 树
+
+#### 7.34.1 6.18 世代的模型是什么
+
+6.18 世代（`kernel-overlays/drivers/net/ethernet/zte/`）的隔离机制是
+**13 个函数 + 14 个结构体字段**：
+
+| 角色 | 函数 |
+|---|---|
+| 生命周期 | `zx279133_tx_recovery_init()`、`zx279133_tx_recovery_cancel()` |
+| 请求 | `zx279133_tx_recovery_queue_locked()`、`zx279133_tx_recovery_request_locked()` |
+| 判据 | `zx279133_tx_available_locked()`、`zx279133_datapath_attach()` |
+| 失败态 | `zx279133_datapath_suspend()`、`zx279133_datapath_resume()`、`zx279133_datapath_restore_failed_locked()` |
+| 工作 | `zx279133_tx_recovery_work()` |
+| LAN 侧 | `zx279133_lan_datapath_get()`、`zx279133_lan_datapath_set_ready()`、`zx279133_lan_datapath_quiesce()`、`zx279133_lan_datapath_put()` |
+
+字段：`tx_fault_queues`、`tx_recovery_queues/epoch/done[]/baseline[]/disabled/active/attempted/requests/restarts/failures`、
+`datapath_users`、`datapath_failed`、`lan_datapath_ready`，外加一个 mutex 与一个 delayed_work。
+
+#### 7.34.2 7.3 树原来是什么：**相信**完成计数器
+
+7.3 树的 `zx279133_idm_tx_reclaim_queue_locked()`（打补丁前）：
+
+```c
+	eth->tx_reclaim_polls++;
+	if (completed > tx->pending) {
+		if (net_ratelimit())
+			netdev_warn(...);
+		completed = tx->pending;          /* ← 钳位 */
+	}
+	tx->done = done;                        /* ← 取硬件的原始值 */
+	reclaimed = completed;
+	... dma_unmap_single() / dev_consume_skb_any() / tx->pending-- ...
+```
+
+⇒ **不可信的计数器被当成真的**：增量被钳位成待发数，slot 被释放、**DMA 映射被卸载**，
+而 `done` 被设成硬件那个**不可信的**值（等于把唯一的「还有什么在外头」的基准扔掉）。
+
+**不可信的计数器不能证明 DMA 已经交还了缓冲区**；
+释放一个 DMA 可能还持有的缓冲区是 use-after-free。
+
+#### 7.34.3 树里已经有的骨架（这一条推翻了旧结论）
+
+旧结论说「7.3 树没有这个模型」。**那是错的**。7.3 树里本来就有：
+
+* `zx279133_datapath_suspend()` / `zx279133_datapath_resume()`（netdev.c）；
+* `zx279133_lan_datapath_get()` / `zx279133_lan_datapath_set_ready()` /
+  `zx279133_lan_datapath_quiesce()` / `zx279133_lan_datapath_put()`；
+* `datapath_users`、`datapath_lock`、`lan_datapath_ready`。
+
+**缺的只是故障隔离那半**：`tx_fault_queues` 的隔离、`datapath_failed`、
+以及恢复工作。⇒ 这一片是「在一套几乎同构的骨架上加一层」，不是从零造。
+
+#### 7.34.4 补丁做了什么（`160-sk-tx-fault-isolation.patch`）
+
+四个文件，**405 行新增**：
+
+* `zx279133.h`：**14 个字段**（隔离位、恢复状态、四个计数器）+ `datapath_failed` +
+  `struct delayed_work tx_recovery_work` + 三个函数声明；
+* `zx279133-idm.c`：`zx279133_idm_tx_reclaim_queue_locked()` 改成
+  **入口先排除被隔离的环**，遇到不可信增量时**不再钳位**，
+  而是 `zx279133_tx_recovery_request_locked(eth, queue, true)` 并 `return 0`
+  —— 映射与旧基准都留着，直到硬件被停；
+* `zx279133-netdev.c`：恢复机制本体（隔离、判据、attach、失败态、恢复工作），
+  以及 `open` / `lan_datapath_get` 的「先把失败的 datapath 拉回来」、
+  `lan_datapath_quiesce` 的「不 quiesce 时把暂停的共享 datapath 交给恢复工作」；
+* `zx279133-main.c`：probe 里 `zx279133_tx_recovery_init()`、
+  devm action `zx279133_tx_recovery_cancel()`、shutdown 里再取消一次。
+
+**有节制的恢复**：恢复工作用 `rtnl_trylock()`（不与 teardown 死锁），
+重启共享 datapath **至多一次** —— 只有「上一轮重启之后真有 TX 完成过」才允许再重启，
+否则 watchdog 一次次触发就变成复位循环。
+
+#### 7.34.5 门禁：**按位置**判的不变量（36 条）
+
+`tools/check-sk-tx-isolation.py` 问的是**位置**，不是「某个串在不在」：
+
+* 故障分支（`if (completed > tx->pending)`）**里没有任何释放语句**
+  （`dma_unmap_single`、`dev_consume_skb_any`、`xdp_return_frame`、`xsk_buff_free`、
+  `xsk_tx_completed`、`netdev_tx_completed_queue`、`tx->done =`、`tx->completed +=`、
+  `tx->pending--`、`tx->consumer =`），**并且函数里所有释放都发生在这个分支之后**；
+* 故障分支把环交出去、并说明「这个完成是无效的」；
+* 被隔离的环在**读计数器之前**就被排除；
+* 隔离动作停掉 **WAN 与 LAN 两个逻辑设备**（它们共用一个物理环）；
+* 恢复由 delayed work 驱动，且**不等 RTNL**；
+* 恢复的重启由「真实完成增量」重新武装；
+* 拉不回来的 datapath 被标记 `datapath_failed`，下一个用户**先恢复再使用**；
+* 四个计数器都在。
+
+**它自己的一个漏洞是被负控逼出来的**：第一版的「隔离守卫在读计数器之前」
+拿 `done_reg` 的**声明**当参照点，而 `done_reg` 是在函数开头声明的 ——
+于是这条检查恒红。改成「读计数器的那一行」之后才对。
+
+#### 7.34.6 负控与反向验证
+
+* `tests/test_sk_tx_isolation.py`：**14 项**（1 正向 + 13 突变）。
+  突变跑在**真树**的副本上，不在合成树上 ——
+  合成树只能证明门禁读得懂合成树。
+* `scratch/reverse_check_tx_isolation.py`：**11 处突变**，全部**转红在指定的那条检查上**（实测 11/11）。
+  它问的是**两个方向**：树变坏 ⇒ 门禁在指定检查上红；
+  **门禁变弱 ⇒ 负控自己发现「该红的检查不红了」并指名它**。
+  后者是更重要的方向：门禁被悄悄削弱是正向测试看不见的。
+
+#### 7.34.7 顺带修掉的：产物门禁在 initramfs 模式
+
+7.3 的 **#43**（head `ace0eb7`）的 **initramfs** job 红了，红在
+「Gate: the image carries the board drivers」——**上一轮（`ace0eb79`）我自己加的门禁**。
+
+run 的注解把原因说得很清楚：
+
+```
+no sysupgrade image under openwrt/bin/targets/zte/zx279133 - nothing to validate or export
+no kernel image under openwrt/bin/targets/zte/zx279133 - the image profile did not make one
+```
+
+⇒ **initramfs 模式根本不产出内核镜像**，而门禁硬要去问那个不存在的镜像。
+（同一个 run 的 **flash** job 是 **success** —— 同一道门禁在有镜像的模式下是绿的。）
+
+⇒ 门禁限定在 `matrix.mode == 'flash'`，并在 `tests/test_sk_workflows.py` 里
+加了一条「这道门禁只能在有产物的那个模式里问」的门禁。
+
+#### 7.34.8 未做
+
+1. **本机不能编译**：仓库自带的「编译预言机」（宿主 clang `-fsyntax-only`，
+   `tools/kcheck.py`）在改后的树上过了 **9 个文件、0 错**，
+   但那不是编译 —— 真编译只能由 CI 证明。
+2. **没有实机证据**：隔离、恢复、复位循环这三件事都要真的撞上不可信计数器才看得到。
+   板子回来之前，第 7 片只有「树里的形状对」这一层证据。
+3. **`tx_invalid_completions` 之外没有暴露到 sysfs**：计数器在 `struct zx279133_eth` 里，
+   还没有各自的 sysfs 入口 ⇒ 实机上只能靠 `dmesg` 看。
+4. **7.3 树里 `datapath_failed` 只在两个用户入口复位**：XDP/AF_XSK 的池切换
+   （`zx279133_xsk_pool_cycle()`）走的是另一条 suspend/resume 路径，
+   它失败时也会置 `datapath_failed`，但**没有**对应的恢复入口 ——
+   那一处是已知的缺口，本轮没补。
+
+---
+
 ## 八、BP 池：逐槽位对照（第 1 片剩余部分的结论）
 
 **判决**：**BP 池布局在 7.3 上不需要移植。** 我们 6.18 世代那套写法是
@@ -4428,9 +4589,13 @@ sh tools/trialsurvey.sh 10
 6. **RGMII 调试**（8 个函数）：**判为取舍，不搬**——它只是 `0x15900000` 窗口的
    debugfs 端点，该块在本机全零、厂商 Linux 从不 bring up（见八之五.9）。
 7. **netdev/main/mac 的健壮性修正**（约 28 个函数）：核心是 **TX 故障隔离与恢复
-   机制**，**判为不整体移植**——它建立在 6.18 世代的 `datapath_attach`/`datapath_failed`
-   模型上，7.3 树没有这个模型，且 7.3 的 `tx_reclaim_queue_locked()` 对非法完成增量
-   是钳位而非隔离（见八之五.9）。这一条要单独成片，且要连模型一起搬。
+   机制**，**第 7 片已落地**（见 7.34）。这一条原来是「判为不整体移植」，
+   理由写的是「7.3 树没有这个模型」——**那条结论已被推翻**：
+   7.3 树**有** `zx279133_datapath_suspend()`/`zx279133_datapath_resume()`
+   与 `zx279133_lan_datapath_get()`/`put()`，缺的只是**故障隔离那半**
+   （`tx_fault_queues` 隔离 + `datapath_failed` + 恢复工作）。
+   `160-sk-tx-fault-isolation.patch` 把那半搬了过去，
+   并配了一道**按位置判**的门禁（36 条）。
 
 验收口径与 6.18 线一致：**CI 绿 + 门禁脚本全过 + 实机启动后
 `/proc/net/dev` 有预期网口、`ethtool -S` 计数在涨**。
@@ -4665,6 +4830,18 @@ python3 scratch/reverse_check_release_kver.py
 
 # 56) #394 的失败在本机复现（那一步跑的就是它）
 python3 ci-build-repo/tests/test_sysupgrade.py
+
+# 57) 第 7 片：隔离门禁、它的负控、以及反向验证
+python3 ci-build-repo/tools/check-sk-tx-isolation.py --tree scratch/linux-73-base
+python3 ci-build-repo/tests/test_sk_tx_isolation.py --tree scratch/linux-73-base
+python3 scratch/reverse_check_tx_isolation.py
+
+# 58) 编译预言机：宿主 clang 对改后的 7.3 树做 -fsyntax-only（9 个文件）
+python3 scratch/run_kcheck_73.py
+
+# 59) 补丁本身：生成、登记、再验一次能干净应用
+python3 scratch/make_txiso_patch.py
+python3 scratch/add_txiso_manifest.py
 ```
 
 第十节的 18~24 号命令里，`cfg73_sim.py` 与 `kdeps73.py` 是**一对**：

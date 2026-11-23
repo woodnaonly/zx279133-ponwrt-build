@@ -130,6 +130,11 @@ BRINGUP_TRIGGERS = [
     # still refuses a report that names the wrong kernel.
     "tools/check-release-kernel-version.py",
     "tests/test_release_kernel_version.py",
+    # The gate that says a TX ring with an untrusted completion counter is
+    # quarantined, and the controls that say whether it still notices when
+    # the quarantine is taken out.
+    "tools/check-sk-tx-isolation.py",
+    "tests/test_sk_tx_isolation.py",
     "scripts/configure-sk-d840n.sh",
     "configs/sk-d840n-73.json",
 ]
@@ -694,6 +699,40 @@ def main():
             failures.check(fragment in body,
                            f"the check reads the configuration {fragment}")
 
+    # A TX ring whose completion counter cannot be trusted must be
+    # quarantined, not reclaimed.  The gate that asks that runs on the tree
+    # the build uses, and it runs before the Compile step - a quarantine that
+    # is only there after seventy minutes is a quarantine that costs an hour
+    # every time it is wrong.
+    print("\nthe 7.3 line quarantines a TX ring with an untrusted counter")
+    failures.check((ROOT / "tools" / "check-sk-tx-isolation.py").is_file(),
+                   "the quarantine gate is in the repository")
+    failures.check((ROOT / "tests" / "test_sk_tx_isolation.py").is_file(),
+                   "the quarantine gate's controls are in the repository")
+    iso_steps = [step for step in steps_of(bringup, "build")
+                 if "tools/check-sk-tx-isolation.py" in str(step.get("run") or "")]
+    failures.check(bool(iso_steps),
+                   "the 7.3 line runs the quarantine gate")
+    if iso_steps:
+        names = step_names(bringup, "build")
+        failures.check(names.index(str(iso_steps[0].get("name") or "")) <
+                       names.index("Compile"),
+                       "the quarantine gate runs before the Compile step")
+        body = str(iso_steps[0].get("run") or "")
+        # The question is asked of the line that runs the gate, not of the
+        # step: a step that runs the gate on some other tree and the
+        # controls on the build's tree is not a step that checks the build.
+        gate_line = [line for line in body.splitlines()
+                     if "tools/check-sk-tx-isolation.py" in line]
+        failures.check(bool(gate_line) and
+                       '--tree "$KERNEL_TREE"' in gate_line[0],
+                       "the quarantine gate runs on the tree the build uses")
+        control_line = [line for line in body.splitlines()
+                        if "tests/test_sk_tx_isolation.py" in line]
+        failures.check(bool(control_line) and
+                       '--tree "$KERNEL_TREE"' in control_line[0],
+                       "the quarantine gate's controls run on the same tree")
+
     # A failed build has to say why.  OpenWrt throws every sub-make's
     # stdout and stderr away unless V=s is set (include/verbose.mk), so the
     # parallel pass alone cannot: the diagnostic is a second pass, serial
@@ -1102,6 +1141,13 @@ def main():
             re.search(r"--board-layer[ \t]+\S*kernel-overlays-73", commands)
             is not None,
             "the image driver gate reads the board layer")
+        # The artifact this gate asks about only exists in the flash mode.
+        # The initramfs mode builds a RAM rescue image and no kernel image
+        # of its own, so a gate that asks there fails a build that did
+        # nothing wrong - which is what run #43's initramfs job did.
+        failures.check(
+            str(image_gate[0].get("if") or "").strip() == "matrix.mode == 'flash'",
+            "the image driver gate only asks in the mode that has the artifact")
     if manifest_path.exists():
         probes = json.loads(manifest_path.read_text(encoding="utf-8")).get("probes")
         failures.check(bool(probes), "the probe list is not empty")

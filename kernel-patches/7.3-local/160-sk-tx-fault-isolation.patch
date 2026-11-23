@@ -1,0 +1,688 @@
+From: the SK-D840N 7.3 line
+Subject: [PATCH] net: zx279133: quarantine a TX ring whose completion counter
+ cannot be trusted
+
+The 7.3 tree's driver took a TX completion counter at its word.  When the
+counter reported more completions than the ring had frames in it, the
+driver clamped the delta to the number of pending frames and carried on:
+the slots were released, the DMA mappings were unmapped, and the ring's
+done counter was set to the hardware's own value.
+
+An untrusted counter cannot prove that the DMA has given the buffers back.
+Releasing a buffer the DMA may still own is a use-after-free that no
+counter can rule out, and setting done to the hardware's value throws away
+the only baseline that says what was outstanding.
+
+The 6.18 generation of this driver does not believe the counter either.  It
+quarantines the ring, stops both logical TX devices, and hands the ring to
+a recovery worker that flushes it, reclaims it, and - once - restarts the
+shared datapath.  That is what this patch moves to the 7.3 tree.
+
+The model is unchanged in shape and the tree's own datapath skeleton
+already has the pieces it needs: zx279133_datapath_suspend() and
+zx279133_datapath_resume() exist, and the LAN service already has
+zx279133_lan_datapath_get() and zx279133_lan_datapath_put().  What the
+tree had was the datapath, not the quarantine.
+
+Four things change:
+
+  * a ring whose counter cannot be trusted is not reclaimed at all, and it
+    is not reclaimed again until the datapath has been restarted;
+  * the fault stops both logical TX devices, because they share the ring;
+  * the recovery worker runs outside RTNL and restarts the datapath at
+    most once per real completion - a watchdog that keeps firing must not
+    turn into a reset loop;
+  * a datapath that could not be brought back up is marked failed, and the
+    next user that opens an interface restores it before using it.
+
+The counters are new too: requests, restarts, failures and the invalid
+completions themselves.
+
+diff --git a/drivers/net/ethernet/zte/zx279133-idm.c b/drivers/net/ethernet/zte/zx279133-idm.c
+index e1eb0ca..2b33e0f 100644
+--- a/drivers/net/ethernet/zte/zx279133-idm.c
++++ b/drivers/net/ethernet/zte/zx279133-idm.c
+@@ -1281,20 +1281,38 @@ unsigned int zx279133_idm_tx_reclaim_queue_locked(struct zx279133_eth *eth,
+ {
+ 	struct zx279133_tx_ring *tx = &eth->tx[queue];
+ 	u32 done_reg = zx279133_idm_tx_done_reg(ZX279133_IDM_CPU_TX_FIRST + queue);
+-	u16 done = readl(eth->base + ZX279133_IDM_BASE + done_reg) & 0xffff;
+-	u16 completed = done - tx->done;
++	u16 done;
++	u16 completed;
+ 	u16 reclaimed;
+ 	u32 bytes[2] = {};
+ 	u16 packets[2] = {};
+ 	u16 xsk_completed = 0;
+ 
++	/*
++	 * A queue whose completion counter cannot be trusted is not
++	 * reclaimed at all.  Its mappings stay where they are until the
++	 * hardware is stopped: freeing a buffer that the DMA may still own
++	 * is a use-after-free that no counter can rule out.
++	 */
++	if (!READ_ONCE(eth->tx_prepared) ||
++	    !READ_ONCE(eth->hardware_prepared) ||
++	    test_bit(queue, &eth->tx_fault_queues))
++		return 0;
++
++	done = readl(eth->base + ZX279133_IDM_BASE + done_reg) & 0xffff;
++	completed = done - tx->done;
+ 	eth->tx_reclaim_polls++;
+ 	if (completed > tx->pending) {
+ 		if (net_ratelimit())
+ 			netdev_warn(eth->ndev,
+ 				    "TX queue %u: invalid completion delta %u (pending %u)\n",
+ 				    queue, completed, tx->pending);
+-		completed = tx->pending;
++		/* An untrusted counter cannot prove DMA ownership has returned.
++		 * Keep the mappings and the old baseline until the hardware is
++		 * stopped, and quarantine the queue.
++		 */
++		zx279133_tx_recovery_request_locked(eth, queue, true);
++		return 0;
+ 	}
+ 	tx->done = done;
+ 	reclaimed = completed;
+diff --git a/drivers/net/ethernet/zte/zx279133-main.c b/drivers/net/ethernet/zte/zx279133-main.c
+index 767ef6b..5bba195 100644
+--- a/drivers/net/ethernet/zte/zx279133-main.c
++++ b/drivers/net/ethernet/zte/zx279133-main.c
+@@ -360,6 +360,7 @@ static int zx279133_eth_probe(struct platform_device *pdev)
+ 	mutex_init(&eth->datapath_lock);
+ 	mutex_init(&eth->np_ind_lock);
+ 	mutex_init(&eth->wanid_lock);
++	zx279133_tx_recovery_init(eth);
+ 	for (i = 0; i < ARRAY_SIZE(eth->clocks); i++)
+ 		eth->clocks[i].id = zx279133_clock_names[i];
+ 
+@@ -788,6 +789,10 @@ static int zx279133_eth_probe(struct platform_device *pdev)
+ 		return ret;
+ 	ret = devm_add_action_or_reset(dev, zx279133_xmac_stats_work_cancel,
+ 				       eth);
++	if (ret)
++		return ret;
++	/* Runs after the netdev is unregistered, when nothing queues it. */
++	ret = devm_add_action_or_reset(dev, zx279133_tx_recovery_cancel, eth);
+ 	if (ret)
+ 		return ret;
+ 	ret = devm_register_netdev(dev, ndev);
+@@ -817,9 +822,11 @@ static int zx279133_eth_probe(struct platform_device *pdev)
+ static void zx279133_eth_shutdown(struct platform_device *pdev)
+ {
+ 	struct zx279133_lan_service *service = platform_get_drvdata(pdev);
++	struct zx279133_eth *eth = container_of(service, struct zx279133_eth,
++					       lan_service);
+ 
+-	zx279133_shutdown(container_of(service, struct zx279133_eth,
+-				       lan_service));
++	zx279133_tx_recovery_cancel(eth);
++	zx279133_shutdown(eth);
+ }
+ 
+ static const struct of_device_id zx279133_eth_of_match[] = {
+diff --git a/drivers/net/ethernet/zte/zx279133-netdev.c b/drivers/net/ethernet/zte/zx279133-netdev.c
+index 51ed5ce..e367ad5 100644
+--- a/drivers/net/ethernet/zte/zx279133-netdev.c
++++ b/drivers/net/ethernet/zte/zx279133-netdev.c
+@@ -23,14 +23,39 @@
+ #include "zx279133.h"
+ #include "zx279133-lan.h"
+ 
++static void zx279133_tx_recovery_work(struct work_struct *work);
++static void zx279133_datapath_attach(struct zx279133_eth *eth);
++static int zx279133_datapath_restore_failed_locked(struct zx279133_eth *eth);
++
++void zx279133_tx_recovery_init(struct zx279133_eth *eth)
++{
++	INIT_DELAYED_WORK(&eth->tx_recovery_work, zx279133_tx_recovery_work);
++	/* Nothing may be sent before the datapath has been prepared. */
++	eth->tx_stopping = true;
++}
++
++void zx279133_tx_recovery_cancel(void *data)
++{
++	struct zx279133_eth *eth = data;
++
++	spin_lock_bh(&eth->tx_lock);
++	eth->tx_recovery_disabled = true;
++	eth->tx_recovery_queues = 0;
++	spin_unlock_bh(&eth->tx_lock);
++	/* Synchronous cancellation is reserved for devm cleanup and shutdown,
++	 * outside datapath_lock. ndo_stop must not cancel this work under RTNL.
++	 */
++	cancel_delayed_work_sync(&eth->tx_recovery_work);
++}
++
+ static int zx279133_shared_idm_prepare(struct zx279133_eth *eth)
+ {
++	unsigned int i;
+ 	int ret;
+ 
+ 	ret = zx279133_idm_tx_prepare(eth);
+ 	if (ret)
+ 		return ret;
+-	eth->tx_stopping = false;
+ 
+ 	ret = zx279133_idm_rx_prepare(eth);
+ 	if (ret) {
+@@ -44,9 +69,95 @@ static int zx279133_shared_idm_prepare(struct zx279133_eth *eth)
+ 	napi_enable(&eth->napi);
+ 	WRITE_ONCE(eth->napi_enabled, true);
+ 
++	/*
++	 * A new datapath is a new epoch.  A recovery that was asked for
++	 * against the old one is not asked for against this one, and the
++	 * baseline is the number of frames the ring had completed when the
++	 * epoch started: only a real completion rearms a restart.
++	 */
++	spin_lock_bh(&eth->tx_lock);
++	eth->tx_epoch++;
++	eth->tx_recovery_queues = 0;
++	eth->tx_fault_queues = 0;
++	for (i = 0; i < ZX279133_CPU_TX_QUEUES; i++)
++		eth->tx_recovery_baseline[i] = eth->tx[i].completed;
++	WRITE_ONCE(eth->tx_stopping, false);
++	spin_unlock_bh(&eth->tx_lock);
++
+ 	return 0;
+ }
+ 
++/*
++ * Ask for a recovery of the given CPU TX queues.  Caller holds tx_lock.
++ */
++static void zx279133_tx_recovery_queue_locked(struct zx279133_eth *eth,
++					     unsigned long queues)
++{
++	unsigned int i;
++
++	if (!queues)
++		return;
++	if (!eth->tx_recovery_queues) {
++		eth->tx_recovery_requests++;
++		eth->tx_recovery_epoch = eth->tx_epoch;
++	}
++	for (i = 0; i < ZX279133_CPU_TX_QUEUES; i++)
++		if ((queues & BIT(i)) && !(eth->tx_recovery_queues & BIT(i)))
++			eth->tx_recovery_done[i] = eth->tx[i].done;
++	eth->tx_recovery_queues |= queues;
++	mod_delayed_work(system_wq, &eth->tx_recovery_work, 0);
++}
++
++/*
++ * A TX queue reported a completion the hardware cannot account for, or the
++ * watchdog found the ring stuck.  An invalid completion quarantines both
++ * logical TX devices: the ring they share cannot be trusted any more, and
++ * a counter that cannot be trusted must not be used to free a buffer the
++ * DMA may still own.
++ *
++ * Caller holds tx_lock.
++ */
++void zx279133_tx_recovery_request_locked(struct zx279133_eth *eth,
++					 unsigned int queue,
++					 bool invalid_completion)
++{
++	bool stopping = READ_ONCE(eth->tx_stopping);
++	unsigned int i;
++
++	if (queue >= ZX279133_CPU_TX_QUEUES)
++		return;
++	if (invalid_completion) {
++		if (!(eth->tx_fault_queues & BIT(queue)))
++			eth->tx_invalid_completions++;
++		eth->tx_fault_queues |= BIT(queue);
++		WRITE_ONCE(eth->tx_stopping, true);
++		netif_tx_stop_all_queues(eth->ndev);
++		if (eth->lan_ndev)
++			netif_tx_stop_all_queues(eth->lan_ndev);
++	}
++	/* An invalid completion observed by drain belongs to that teardown. */
++	if (stopping || eth->tx_recovery_disabled || eth->tx_recovery_active ||
++	    !eth->tx_prepared || !READ_ONCE(eth->hardware_prepared) ||
++	    READ_ONCE(eth->datapath_failed))
++		return;
++	/* A restart is rearmed only by genuine, successfully reclaimed TX. */
++	if (eth->tx_recovery_attempted)
++		for (i = 0; i < ZX279133_CPU_TX_QUEUES; i++)
++			if (eth->tx[i].completed != eth->tx_recovery_baseline[i]) {
++				eth->tx_recovery_attempted = false;
++				break;
++			}
++	zx279133_tx_recovery_queue_locked(eth, BIT(queue));
++}
++
++/* Caller holds tx_lock. */
++static bool zx279133_tx_available_locked(struct zx279133_eth *eth)
++{
++	return eth->tx_prepared && READ_ONCE(eth->hardware_prepared) &&
++		!READ_ONCE(eth->tx_stopping) && !eth->tx_fault_queues &&
++		!eth->tx_recovery_disabled && !READ_ONCE(eth->datapath_failed);
++}
++
+ static void zx279133_shared_idm_abort(struct zx279133_eth *eth)
+ {
+ 	napi_disable(&eth->lan_napi);
+@@ -121,10 +232,22 @@ static void zx279133_shared_tx_resume(struct zx279133_eth *eth)
+ {
+ 	bool rearm;
+ 
+-	WRITE_ONCE(eth->tx_stopping, false);
+ 	spin_lock_bh(&eth->tx_lock);
++	if (eth->tx_fault_queues || eth->tx_recovery_disabled ||
++	    READ_ONCE(eth->datapath_failed) || !eth->tx_prepared ||
++	    !READ_ONCE(eth->hardware_prepared)) {
++		/* A partial logical stop may discover a fault while draining.
++		 * Its teardown is complete now; the remaining user needs recovery.
++		 */
++		if (eth->tx_fault_queues && !eth->tx_recovery_disabled &&
++		    !eth->tx_recovery_active && !eth->datapath_failed &&
++		    eth->tx_prepared && eth->hardware_prepared)
++			zx279133_tx_recovery_queue_locked(eth, eth->tx_fault_queues);
++		spin_unlock_bh(&eth->tx_lock);
++		return;
++	}
++	WRITE_ONCE(eth->tx_stopping, false);
+ 	rearm = zx279133_idm_tx_pending(eth);
+-	spin_unlock_bh(&eth->tx_lock);
+ 	if (rearm)
+ 		mod_delayed_work(system_wq, &eth->tx_reclaim_work,
+ 				 msecs_to_jiffies(ZX279133_TX_RECLAIM_DELAY_MS));
+@@ -135,6 +258,7 @@ static void zx279133_shared_tx_resume(struct zx279133_eth *eth)
+ 	    eth->lan_datapath_ready && eth->lan_ndev &&
+ 	    netif_running(eth->lan_ndev))
+ 		netif_tx_wake_all_queues(eth->lan_ndev);
++	spin_unlock_bh(&eth->tx_lock);
+ }
+ 
+ static void zx279133_shared_idm_release(struct zx279133_eth *eth,
+@@ -172,6 +296,14 @@ static int zx279133_open(struct net_device *ndev)
+ 		goto out_unlock;
+ 	}
+ 	first_user = !eth->datapath_users;
++	if (!first_user) {
++		/* The datapath failed while the other user had it.  Bring it
++		 * back before this user starts to use it.
++		 */
++		ret = zx279133_datapath_restore_failed_locked(eth);
++		if (ret)
++			goto out_unlock;
++	}
+ 
+ 	if (first_user) {
+ 		ret = zx279133_hardware_prepare(eth);
+@@ -200,7 +332,15 @@ static int zx279133_open(struct net_device *ndev)
+ 	if (first_user)
+ 		zx279133_shared_rx_start(eth);
+ 	eth->datapath_users |= ZX279133_DATAPATH_USER_WAN;
+-	netif_tx_start_all_queues(ndev);
++	WRITE_ONCE(eth->datapath_failed, false);
++	spin_lock_bh(&eth->tx_lock);
++	eth->tx_recovery_attempted = false;
++	/* A quarantined ring is not started again here: the recovery work owns
++	 * it until it has made progress or given up.
++	 */
++	if (zx279133_tx_available_locked(eth))
++		netif_tx_start_all_queues(ndev);
++	spin_unlock_bh(&eth->tx_lock);
+ 	mutex_unlock(&eth->datapath_lock);
+ 
+ 	return 0;
+@@ -721,6 +861,7 @@ static void zx279133_datapath_suspend(struct zx279133_eth *eth)
+ 	if (eth->datapath_users & ZX279133_DATAPATH_USER_WAN)
+ 		phylink_stop(eth->phylink);
+ 	zx279133_shared_idm_release(eth, eth->ndev, tx_quiesced);
++	WRITE_ONCE(eth->datapath_failed, true);
+ }
+ 
+ static int zx279133_datapath_resume(struct zx279133_eth *eth, bool require_hash)
+@@ -735,18 +876,157 @@ static int zx279133_datapath_resume(struct zx279133_eth *eth, bool require_hash)
+ 	if (ret) {
+ 		if (READ_ONCE(eth->hardware_prepared))
+ 			zx279133_hardware_unprepare(eth);
++		WRITE_ONCE(eth->datapath_failed, true);
++		spin_lock_bh(&eth->tx_lock);
++		WRITE_ONCE(eth->tx_stopping, true);
++		spin_unlock_bh(&eth->tx_lock);
+ 		return ret;
+ 	}
++	WRITE_ONCE(eth->datapath_failed, false);
+ 	if (eth->datapath_users & ZX279133_DATAPATH_USER_WAN)
+ 		phylink_start(eth->phylink);
+ 	zx279133_shared_rx_start(eth);
+ 	zx279133_shared_tx_resume(eth);
+-	netif_device_attach(eth->ndev);
+-	if (eth->lan_ndev)
+-		netif_device_attach(eth->lan_ndev);
++	zx279133_datapath_attach(eth);
+ 	return 0;
+ }
+ 
++/* Caller holds datapath_lock; never attach a quarantined ring. */
++static void zx279133_datapath_attach(struct zx279133_eth *eth)
++{
++	spin_lock_bh(&eth->tx_lock);
++	if (zx279133_tx_available_locked(eth)) {
++		netif_device_attach(eth->ndev);
++		if (eth->lan_ndev) {
++			netif_device_attach(eth->lan_ndev);
++			if (eth->lan_datapath_ready && netif_running(eth->lan_ndev))
++				netif_carrier_on(eth->lan_ndev);
++		}
++	}
++	spin_unlock_bh(&eth->tx_lock);
++}
++
++/*
++ * The datapath failed while somebody else was using it, and nobody has
++ * brought it back yet.  Caller holds datapath_lock.
++ */
++static int zx279133_datapath_restore_failed_locked(struct zx279133_eth *eth)
++{
++	int ret;
++
++	if (!eth->datapath_failed || !eth->datapath_users)
++		return 0;
++	ret = zx279133_datapath_resume(eth, false);
++	if (!ret) {
++		spin_lock_bh(&eth->tx_lock);
++		eth->tx_recovery_attempted = false;
++		spin_unlock_bh(&eth->tx_lock);
++	}
++	return ret;
++}
++
++/*
++ * The recovery work.  It runs when a queue has been quarantined or the
++ * watchdog found a ring stuck, and it does two things: it tries to reclaim
++ * the ring, and - if that is not enough - it restarts the shared datapath
++ * once.  It does not restart it twice: a watchdog that keeps firing must
++ * not turn into a reset loop, so a restart is rearmed only by a genuine
++ * completion since the last one.
++ */
++static void zx279133_tx_recovery_work(struct work_struct *work)
++{
++	struct zx279133_eth *eth =
++		container_of(to_delayed_work(work), struct zx279133_eth,
++			     tx_recovery_work);
++	unsigned long queues;
++	bool restart, needed = false;
++	unsigned int i;
++	int ret;
++
++	/* ndo_stop and unregister may hold RTNL while cancelling other work.
++	 * Never wait for RTNL here, including during device teardown.
++	 */
++	if (!rtnl_trylock()) {
++		spin_lock_bh(&eth->tx_lock);
++		if (!eth->tx_recovery_disabled && eth->tx_recovery_queues)
++			mod_delayed_work(system_wq, &eth->tx_recovery_work,
++					 msecs_to_jiffies(100));
++		spin_unlock_bh(&eth->tx_lock);
++		return;
++	}
++	mutex_lock(&eth->datapath_lock);
++	spin_lock_bh(&eth->tx_lock);
++	queues = eth->tx_recovery_queues;
++	if (eth->tx_recovery_disabled || !queues ||
++	    eth->tx_recovery_epoch != eth->tx_epoch ||
++	    !eth->datapath_users || !eth->hardware_prepared ||
++	    !eth->tx_prepared || eth->datapath_failed) {
++		eth->tx_recovery_queues = 0;
++		goto out_tx_unlock;
++	}
++	eth->tx_recovery_active = true;
++	for (i = 0; i < ZX279133_CPU_TX_QUEUES; i++) {
++		if (!(queues & BIT(i)))
++			continue;
++		if (!(eth->tx_fault_queues & BIT(i))) {
++			zx279133_idm_tx_flush_queue_locked(eth, i);
++			zx279133_idm_tx_reclaim_queue_locked(eth, i);
++		}
++		if ((eth->tx_fault_queues & BIT(i)) ||
++		    (eth->tx[i].pending &&
++		     eth->tx[i].done == eth->tx_recovery_done[i]))
++			needed = true;
++	}
++	eth->tx_recovery_queues = 0;
++	if (!needed) {
++		eth->tx_recovery_active = false;
++		spin_unlock_bh(&eth->tx_lock);
++		/* A failed LAN quiesce may have requested recovery while paused.
++		 * Progress can make a restart unnecessary, but WAN still needs TX.
++		 */
++		zx279133_shared_tx_resume(eth);
++		goto out_unlock;
++	}
++	if (eth->tx_recovery_attempted)
++		for (i = 0; i < ZX279133_CPU_TX_QUEUES; i++)
++			if (eth->tx[i].completed != eth->tx_recovery_baseline[i]) {
++				eth->tx_recovery_attempted = false;
++				break;
++			}
++	restart = !eth->tx_recovery_attempted;
++	eth->tx_recovery_attempted = true;
++	spin_unlock_bh(&eth->tx_lock);
++
++	zx279133_datapath_suspend(eth);
++	/* Without a valid completion since the previous restart, stop safely
++	 * instead of turning repeated watchdog notifications into a reset loop.
++	 */
++	ret = restart ? zx279133_datapath_resume(eth, false) : -EIO;
++	spin_lock_bh(&eth->tx_lock);
++	if (ret)
++		eth->tx_recovery_failures++;
++	else
++		eth->tx_recovery_restarts++;
++	eth->tx_recovery_active = false;
++	/* A new fault may have arrived after resume enabled NAPI again. */
++	if (!ret && eth->tx_fault_queues && !eth->tx_recovery_disabled)
++		zx279133_tx_recovery_queue_locked(eth, eth->tx_fault_queues);
++	spin_unlock_bh(&eth->tx_lock);
++	if (ret)
++		netdev_err(eth->ndev,
++			   "shared TX recovery failed (%d); datapath detached until down/up\n",
++			   ret);
++	else
++		netdev_warn(eth->ndev, "shared TX datapath restarted\n");
++	goto out_unlock;
++
++out_tx_unlock:
++	spin_unlock_bh(&eth->tx_lock);
++out_unlock:
++	mutex_unlock(&eth->datapath_lock);
++	rtnl_unlock();
++}
++
+ static int zx279133_xsk_pool_cycle(struct zx279133_eth *eth,
+ 				   struct xsk_buff_pool *pool)
+ {
+@@ -887,8 +1167,14 @@ static void zx279133_tx_timeout_common(struct zx279133_eth *eth,
+ 		pending_after = tx->pending;
+ 		if (reclaimed)
+ 			eth->tx_timeout_recoveries++;
+-		else if (pending_after)
++		else if (pending_after) {
+ 			eth->tx_timeout_stalls++;
++			/* The ring is stuck.  Ask for a recovery of it: the
++			 * completion counter cannot be trusted, so the ring is
++			 * not simply reclaimed and forgotten.
++			 */
++			zx279133_tx_recovery_request_locked(eth, txqueue, false);
++		}
+ 	}
+ 	spin_unlock_bh(&eth->tx_lock);
+ 
+@@ -1946,6 +2232,14 @@ static int zx279133_lan_datapath_get(struct zx279133_lan_service *service)
+ 		goto out_unlock;
+ 	}
+ 	first_user = !eth->datapath_users;
++	if (!first_user) {
++		/* The datapath failed while the other user had it.  Bring it
++		 * back before this user starts to use it.
++		 */
++		ret = zx279133_datapath_restore_failed_locked(eth);
++		if (ret)
++			goto out_unlock;
++	}
+ 	if (first_user) {
+ 		ret = zx279133_hardware_prepare(eth);
+ 		if (ret)
+@@ -1962,6 +2256,10 @@ static int zx279133_lan_datapath_get(struct zx279133_lan_service *service)
+ 		zx279133_shared_rx_start(eth);
+ 	}
+ 	eth->datapath_users |= ZX279133_DATAPATH_USER_LAN;
++	WRITE_ONCE(eth->datapath_failed, false);
++	spin_lock_bh(&eth->tx_lock);
++	eth->tx_recovery_attempted = false;
++	spin_unlock_bh(&eth->tx_lock);
+ 	mutex_unlock(&eth->datapath_lock);
+ 
+ 	return 0;
+@@ -1991,8 +2289,12 @@ zx279133_lan_datapath_set_ready(struct zx279133_lan_service *service,
+ 			netif_carrier_off(eth->lan_ndev);
+ 		} else if ((eth->datapath_users & ZX279133_DATAPATH_USER_LAN) &&
+ 			   eth->hardware_prepared) {
+-			netif_carrier_on(eth->lan_ndev);
+-			netif_tx_wake_all_queues(eth->lan_ndev);
++			spin_lock_bh(&eth->tx_lock);
++			if (zx279133_tx_available_locked(eth)) {
++				netif_carrier_on(eth->lan_ndev);
++				netif_tx_wake_all_queues(eth->lan_ndev);
++			}
++			spin_unlock_bh(&eth->tx_lock);
+ 		}
+ 	}
+ 	mutex_unlock(&eth->datapath_lock);
+@@ -2002,6 +2304,8 @@ static int
+ zx279133_lan_datapath_quiesce(struct zx279133_lan_service *service)
+ {
+ 	struct zx279133_eth *eth = zx279133_lan_service_to_eth(service);
++	unsigned long queues;
++	unsigned int i;
+ 	bool tx_quiesced;
+ 	int ret = 0;
+ 
+@@ -2015,6 +2319,24 @@ zx279133_lan_datapath_quiesce(struct zx279133_lan_service *service)
+ 	if (!tx_quiesced) {
+ 		netdev_err(eth->lan_ndev,
+ 			   "shared TX did not quiesce before LAN teardown\n");
++		/* Teardown may abort here while WAN remains open. Keep the DMA
++		 * owners intact and hand the paused shared datapath to the
++		 * recovery work.
++		 */
++		if (eth->datapath_users & ZX279133_DATAPATH_USER_WAN) {
++			queues = 0;
++			spin_lock_bh(&eth->tx_lock);
++			if (!eth->tx_recovery_disabled && !eth->tx_recovery_active) {
++				queues = eth->tx_fault_queues;
++				for (i = 0; i < ZX279133_CPU_TX_QUEUES; i++)
++					if (eth->tx[i].pending)
++						queues |= BIT(i);
++				zx279133_tx_recovery_queue_locked(eth, queues);
++			}
++			spin_unlock_bh(&eth->tx_lock);
++			if (!queues)
++				zx279133_shared_tx_resume(eth);
++		}
+ 		ret = -ETIMEDOUT;
+ 		goto out_unlock;
+ 	}
+@@ -2035,16 +2357,18 @@ static void zx279133_lan_datapath_put(struct zx279133_lan_service *service)
+ 	if (!(eth->datapath_users & ZX279133_DATAPATH_USER_LAN))
+ 		goto out_unlock;
+ 	last_user = eth->datapath_users == ZX279133_DATAPATH_USER_LAN;
++	eth->lan_datapath_ready = false;
++	if (eth->datapath_failed || !eth->hardware_prepared) {
++		/* The datapath is not there to be torn down. */
++		eth->datapath_users &= ~ZX279133_DATAPATH_USER_LAN;
++		goto put_runtime;
++	}
+ 	if (last_user)
+ 		zx279133_shared_rx_stop(eth);
+ 	tx_quiesced = zx279133_shared_tx_pause(eth);
+ 	eth->datapath_users &= ~ZX279133_DATAPATH_USER_LAN;
+ 	if (last_user) {
+ 		zx279133_shared_idm_release(eth, eth->lan_ndev, tx_quiesced);
+-		if (eth->xpcs_runtime_held) {
+-			pm_runtime_put(eth->xpcs_mdiodev->bus->parent);
+-			eth->xpcs_runtime_held = false;
+-		}
+ 	} else {
+ 		if (!tx_quiesced)
+ 			netdev_warn(eth->lan_ndev,
+@@ -2052,6 +2376,11 @@ static void zx279133_lan_datapath_put(struct zx279133_lan_service *service)
+ 		zx279133_shared_tx_resume(eth);
+ 	}
+ 
++put_runtime:
++	if (last_user && eth->xpcs_runtime_held) {
++		pm_runtime_put(eth->xpcs_mdiodev->bus->parent);
++		eth->xpcs_runtime_held = false;
++	}
+ out_unlock:
+ 	mutex_unlock(&eth->datapath_lock);
+ }
+diff --git a/drivers/net/ethernet/zte/zx279133.h b/drivers/net/ethernet/zte/zx279133.h
+index a854efc..bea2b64 100644
+--- a/drivers/net/ethernet/zte/zx279133.h
++++ b/drivers/net/ethernet/zte/zx279133.h
+@@ -763,6 +763,27 @@ struct zx279133_eth {
+ 	u64 tx_timeouts;
+ 	u64 tx_timeout_recoveries;
+ 	u64 tx_timeout_stalls;
++	/*
++	 * Recovery state and counters are protected by tx_lock.
++	 *
++	 * tx_fault_queues holds the CPU TX queues whose completion counter
++	 * cannot be trusted.  A queue in it is not reclaimed any more, and the
++	 * whole shared datapath stops sending until the recovery work has
++	 * either made progress or given up.
++	 */
++	unsigned long tx_fault_queues;
++	unsigned long tx_recovery_queues;
++	u64 tx_epoch;
++	u64 tx_recovery_epoch;
++	u16 tx_recovery_done[ZX279133_CPU_TX_QUEUES];
++	u64 tx_recovery_baseline[ZX279133_CPU_TX_QUEUES];
++	bool tx_recovery_disabled;
++	bool tx_recovery_active;
++	bool tx_recovery_attempted;
++	u64 tx_recovery_requests;
++	u64 tx_recovery_restarts;
++	u64 tx_recovery_failures;
++	u64 tx_invalid_completions;
+ 	u64 tx_hw_csum_packets;
+ 	u64 tx_sw_csum_packets;
+ 	atomic64_t rx_irq_count;
+@@ -790,6 +811,7 @@ struct zx279133_eth {
+ 	struct napi_struct napi;
+ 	struct napi_struct lan_napi;
+ 	struct delayed_work tx_reclaim_work;
++	struct delayed_work tx_recovery_work;
+ 	struct delayed_work rx_refill_work;
+ 	/* Copies the WAN unicast list (macvlans) into the SPA ONU MAC slots. */
+ 	struct work_struct rx_mode_work;
+@@ -810,6 +832,11 @@ struct zx279133_eth {
+ 	struct mutex ptp_cmd_lock;
+ 	unsigned long datapath_users;
+ 	bool hardware_prepared;
++	/*
++	 * Set when the datapath could not be brought back up.  The next user
++	 * that opens an interface tries to restore it before it is used.
++	 */
++	bool datapath_failed;
+ 	bool rx_hash_active;
+ 	bool rx_hash_ipv6_active;
+ 	u32 rx_hash_loads;
+@@ -958,6 +985,11 @@ void zx279133_idm_tx_flush_queue_locked(struct zx279133_eth *eth,
+ 					unsigned int queue);
+ unsigned int zx279133_idm_tx_reclaim_queue_locked(struct zx279133_eth *eth,
+ 						  unsigned int queue);
++void zx279133_tx_recovery_init(struct zx279133_eth *eth);
++void zx279133_tx_recovery_cancel(void *data);
++void zx279133_tx_recovery_request_locked(struct zx279133_eth *eth,
++					 unsigned int queue,
++					 bool invalid_completion);
+ 
+ static inline unsigned int zx279133_idm_tx_pending(struct zx279133_eth *eth)
+ {
