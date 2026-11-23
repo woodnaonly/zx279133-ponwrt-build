@@ -6341,6 +6341,50 @@ mailbox 报告」的自检开关；报告里写下的 `kver=$(uname -r)` 才是�
 （banner 里的版本串与 `uname -r` 是同一个 `UTS_RELEASE`，
 所以带不带 localversion 后缀，两边会同时带 ⇒ 它们必然相等。）
 
+⚠️ **本轮补上的一个限定条件：这条链的「闭合」有一个前提，文档原来没写。**
+
+`tools/gatewatch.sh:23` 是 `TAG=${CTLTAG:-K5}`，而 `:47` 只给
+**tag 与它自己那个 `CTLTAG` 相同**的报告打分
+（`*"tag=$TAG"*) : ;;`，否则它 `continue`。
+报告里的 tag 是**载荷烘进去的那个**：`mkctlram.py --tag K73` ⇒ `/init` 里
+`TAG=K73` ⇒ 报告写的是 `CTLALIVE tag=K73`。
+⇒ **载荷是 `K73` 而打分器用的是默认的 `K5` 时，它不会给这轮打分，
+permit 那一行根本不会写** ⇒ 第 6 步必然被门禁拒
+（`gatecheck: REFUSE - no record proves these bytes boot on this board`）。
+方向是安全的（拒写，不是误写），但白跑一轮，而且看不出原因。
+
+**实测**（本机，用 **#62 的真三件**在沙箱里跑**真脚本**，
+报告是合成的、打分与写许可的都是 `gatewatch.sh` 本人）：
+
+| 问法 | 结果 |
+|---|---|
+| `CTLTAG=K73 sh tools/gatewatch.sh` + 合成 CTLALIVE 报告 | **写出** `proven=gate-K73` 那一行；`gatecheck: ALLOWED (gate-K73)` |
+| **不带** `CTLTAG`（默认 `K5`）+ 同一份报告 | **一行 permit 都不写**；`gatecheck: REFUSE - no record proves these bytes boot on this board` |
+
+⇒ 文档里第 5 步与「要动的现场文件」那张表的第 7 项**都补上了 `CTLTAG=K73`**。
+（`tools/runround.sh:94` 本来就是对的：
+`CTLTAG="$CTLTAG" … sh tools/gatewatch.sh 600`。
+**错的只是文档里那条手敲的命令**，脚本没错。）
+
+**顺带把整条链在真件上走了一遍**（沙箱，`#62` 的三件）：
+
+```
+mkgate.sh   → uImage 5816299 B  name='ARM64 ImmortalWrt Linux-7.3.4'
+              Image  14051336 B  md5=04227bee4e4d9351cef10b7b49e48df5
+              the gate kernel IS the flash kernel
+              gate.src: uimage_md5=3664b8cb… image_md5=04227bee… dtb_md5=ff6914d0…
+gatewatch   → VERDICT: this round's payload is alive
+              root read: IDENTICAL to the vendor 4.19
+              kver=7.3.4 root=/dev/mtdblock5
+              root mount: mainline mounted the installed jffs2 read-only
+gatecheck   → gatecheck: ALLOWED (gate-K73)
+```
+
+⇒ `mkgate.sh` 从 `staging/trial/` 读件，所以**第 1 步换件必须先于第 2 步**；
+而且 `gate.src` 里那个 `uimage_md5` 与 `gatewatch` 现算的 `uimage_md5` 会被比对
+（`:104`）—— **换件之后不重跑 `mkgate.sh`，许可就发不出来**
+（`permit NOT granted: … flash-uImage changed after the payload was built`）。
+
 ### 8之十六.5 这条链现在有一道门禁
 
 `tests/test_gatecheck.py`（CI 的 gates job 一直在跑）用**自己造的** uImage
@@ -6429,7 +6473,7 @@ mailbox 报告」的自检开关；报告里写下的 `kver=$(uname -r)` 才是�
 | 4 | `staging/ctl/gate-Image` / `gate-dtb` / `gate.src` | 按 7.3 那对重建 | `sh tools/mkgate.sh` |
 | 5 | `staging/ctl/ctl-initramfs.cpio.gz` | announce 载荷，骑 **7.3.4\*** | `tools/mkctlram.py --mode announce` |
 | 6 | `staging/ctl/ctl-flash.cpio.gz` | 刷机载荷，按 md5 钉死 7.3 那对 | `tools/flash-round.sh` 自己重建（**预置那份是干跑变体 `TAG=K73F`，换件后要重建**，八之十九.5） |
-| 7 | `staging/ctl/flash.permit` | 多一行 `proven=gate-K73` | `sh tools/gatewatch.sh`（板上判决后） |
+| 7 | `staging/ctl/flash.permit` | 多一行 `proven=gate-K73` | `CTLTAG=K73 sh tools/gatewatch.sh`（板上判决后；**`CTLTAG` 必须与载荷里烘进去的 tag 一致**） |
 | 8 | `staging/ctl/reports.log` | 判决报告的落点 | `python tools/ncsrv.py` |
 | 9 | `staging/ctl/serial.log` | 板子说过的话 | 继电器开着时自己长 |
 
@@ -6496,7 +6540,7 @@ run **#57**（整轮 Success，1 h 20 m 46 s）的 flash job 里
 | **2** | **重建门禁夹具** | `sh tools/mkgate.sh` | 打印 `the gate kernel IS the flash kernel`；`gate.src` 里的 `uimage_md5` = 第 1 步那对 |
 | **3** | **announce 载荷**：**直接用预置的那份** `staging/trial73d/ctl/ctl-initramfs.cpio.gz`（它已经骑 `7.3.4*`，而且一个 md5 都不钉 ⇒ 不随三件变化）。**要重建只能用 `ci-build-repo/tools/mkctlram.py`** —— 现场那份 `tools/mkctlram.py` 比仓库那份旧 41 行，重建会**丢掉** sysfs / netdevs / eth_bound_driver 那几项诊断（八之十九.5） | `python3 ci-build-repo/tools/mkctlram.py --mode announce --tag K73 --kver 7.3.4* ...` | 载荷里的 `/init` 是 **19,117 B**（仓库那份产的）；`grep -c eth_bound_driver` ≥ 1 |
 | **4** | **判决轮**：把 7.3 的内核 kexec 进 RAM | `python tools/ncsrv.py &` → `CTLTAG=K73 IMAGE_LOCAL=staging/ctl/gate-Image REMOTE_IMAGE=gate-Image DTB_LOCAL=staging/ctl/gate-dtb REMOTE_DTB=gate-dtb INITRD=ctl-initramfs.cpio.gz sh tools/pushctl.sh` → `sh tools/catchctl.sh` → ssh 点火 | 板子**跳走了**（`gone=1`），且 `staging/ctl/reports.log` 里出现 **CTLALIVE** 且 `kver=7.3.4` |
-| **5** | **打分 + 换许可** | `sh tools/gatewatch.sh 600` | `staging/ctl/flash.permit` 多了一行 `proven=gate-K73`，且 `kver=7.3.4`、`root_index=5`、`root_read=IDENTICAL`、`jffs2_ro=OK` |
+| **5** | **打分 + 换许可** | **`CTLTAG=K73 sh tools/gatewatch.sh 600`**（`CTLTAG` **必须**是载荷里烘进去的那个 tag，见下面那条注） | `staging/ctl/flash.permit` 多了一行 `proven=gate-K73`，且 `kver=7.3.4`、`root_index=5`、`root_read=IDENTICAL`、`jffs2_ro=OK` |
 | **6** | **刷** | `sh tools/flash-round.sh dry`（干跑）→ `sh tools/flash-round.sh write`（要连 root 就 `write-root`） | `gatecheck: ALLOWED (gate-K73)`；擦除前后 `mtd read` 回读一致 |
 | **7** | **验收** | 冷启动后跑对拍清单（八之十五.5） | 那份清单 |
 
