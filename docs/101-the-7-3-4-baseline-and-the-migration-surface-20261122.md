@@ -6481,6 +6481,13 @@ gatecheck   → gatecheck: ALLOWED (gate-K73)
 第 5 步的载荷在 `staging/trial73d/ctl/` 里已经备好（骑 `7.3.4*`）。
 **其余的都要在板子旁边做。**
 
+> 📌 **这张表只列 `staging/` 下的文件。** 它**不含** `tools/` ——
+> 那一轮**不需要改现场任何一个 `tools/` 脚本**
+> （逐个结论见 8之二十二.1；唯一要留神的是 announce 载荷要用**仓库那份** `mkctlram.py` 产）。
+> ⚠️ 第 4 步会**覆盖别人的夹具**（现场 `staging/ctl/gate.src` 现在还是 6.18 时代那一行，
+> `flash.permit` 的 25 行里**没有一行 `proven=gate-K73`**）⇒ **等 bench 空出来再做这一步**。
+> 🚫 **不要跑 `preflight.sh`**（它会破坏第 1 步），三条理由见 8之十七.2 下面的注。
+
 **那三件备好的字节，就是最新那一绿轮产出的字节**：
 run **#57**（整轮 Success，1 h 20 m 46 s）的 flash job 里
 `ls -l` 与 `sha256sum -c` 的输出是
@@ -6547,6 +6554,22 @@ run **#57**（整轮 Success，1 h 20 m 46 s）的 flash job 里
 ⇒ 第 4 步的**点火**要在板子上单独执行：
 `ssh root@192.168.9.1 'DELAY=150 CTLTAG=K73 setsid sh /tmp/ctl/ctl-exec.sh &'`
 （`pushctl.sh` 结尾会把这句原样打出来）。
+
+> 🚫 **这一步表里没有 `preflight.sh`，而且那一轮不要去跑它。**
+> 三条各自独立的理由（实测见 8之二十二.3）：
+> ① 它在表外，不该跑；
+> ② **跑它会破坏第 1 步** —— 现场那份 `preflight.sh` 的 `RUN` 默认是硬编码的 `38243906799`
+>    （该 run `completed success`），第 2 步会把那一轮的三件拉下来**盖掉**刚换好的 7.3 三件
+>    （`45d8a140…` 取代 `3664b8cb…`）⇒ 载荷钉的 md5 立刻对不上，板子 `STAGE_FAIL` 拒写；
+> ③ **只把它同步过来也不成立** —— 仓库那份依赖三个现场没有的工具
+>    （`check-imagelineage.sh` / `checkrollback.sh` / `payload-id.sh`）
+>    ⇒ 要同步就同步这四个，不跑就一个都别动。
+>
+> 🚫 **同样不要在仓库根 `ci-build-repo/` 下跑这些脚本。**
+> 两边的脚本都写着 `cd "$(dirname "$0")/.."` ⇒ 仓库那份的根是 `ci-build-repo/`，
+> 那里放的是**另一对 6.18 字节**（`45d8a140…`），而 `ci-build-repo/staging/ctl/` 里
+> **连 `rootfs/` 都没有**（`mkctlram.py --extra sbin/mtd=…` 会找不到文件）⇒ 载荷都建不出来。
+> **命令一律在工作区根 `C:\UGit\openwrt\SK-D840N\` 下跑。**
 
 ### 8之十七.3 每一步失败时**停在哪**
 
@@ -6875,6 +6898,14 @@ doc 100 第 281 行原写：「`overlays/…/mcode_intel.bin` **保留** —— 
 （`flash-round.sh` 就是现算的，`MD5=$(md5sum staging/ctl/ctl-flash.cpio.gz …)` 打印出来跟板子上那份比）。
 ⇒ **要比两轮载荷，比膨胀后的内容，别比那个 .gz 的 md5。**
 
+> ⚠️ **上面这句关于「zlib 版本差异」与「md5 不可复现」的判断，后来被实测推翻了** ——
+> 差 4 B 的真正来源是 **gzip 头里的 `FNAME` 字段（输出文件名）**，
+> 不是 zlib 版本；**同名重建的载荷是逐位可复现的**。
+> 见 8之二十二.5（那里有完整的对照测量与订正）。
+> **仍然成立的那部分**：要比两轮载荷，比膨胀后的内容，别比 `.gz` 的 md5 ——
+> 但理由现在更硬：**`.gz` 的差异只在 10 字节头里**，
+> 而头里存着输出文件名 ⇒ **文件名不同就必然不等**，哪怕正文一模一样。
+
 **顺带认出一件本轮之前没人说清的事**：预置那份
 `staging/trial73d/ctl/ctl-flash.cpio.gz` 是**干跑变体**
 （`/init` 里 `TAG=K73F`、`DO_WRITE=0`、`DO_ROOT=0`，8,615 B），
@@ -7172,12 +7203,240 @@ tag=FD1  /init is the 8142-byte script inside it
 实机那一轮第 6 步跑的是 `flash-round.sh` 自己建的那支；
 `staging/trial73d/ctl/` 里那支的作用是「钉住这一对字节、随时可查」。
 
+> 📌 **本轮补的一条**：「谁产的」这一列现在有更细的答案 ——
+> **刷机载荷（`--mode flash`）用现场那份 `mkctlram.py` 产也一样**，
+> 因为两份的 `FLASH_INIT` 模板与随后的代码**逐位相同**
+> （实测：两份各跑一遍 `--mode flash`，**cpio 逐位相同**，1,297,008 B，sha256 `429e4bd3…`）。
+> **只有 announce 载荷（`--mode announce`）有差别** ——
+> 那份用仓库那份产，因为 `INIT_TMPL` 里多五项诊断
+> （`SYSFS_STATE` / `NETDEV_SYS` / `NETDEV_PROC` / `DTMODEL` / `ETHBOUND`）。
+> 见 8之二十二.2 与 8之二十二.3。
+
 ### 8之二十一.5 这一节没做到的
 
 - **还是静态的**：rootfs 的内容读出来了，但**没有挂到板子上看过它跑起来**。
 - **`/etc/config/network` 是「首次启动会生成成什么样」，不是「现在是什么」** ——
   它在产物里**不存在**，这正是第 2 条的由来（地址由 `02_network` 决定）。
 - **本机解不了 squashfs**（这台板子也没有 squashfs 分区，所以这一次不影响）。
+
+## 八之二十二、现场工装区与仓库的分叉：对 7.3 那一轮各自意味着什么
+
+### 8之二十二.1 判决
+
+1. **现场工装区与仓库的 `tools/` 是双向分叉，不是「现场较旧」。**
+   实测（`sha256` 逐文件比，去掉 `__pycache__`）：
+
+   | | 现场 `C:\UGit\openwrt\SK-D840N\tools\` | 仓库 `ci-build-repo/tools/` |
+   |---|---|---|
+   | 文件数（不含 `__pycache__`） | **268** | **157** |
+   | 两边同名 | 79 | 79 |
+   | 同名且**逐位相同** | 62 | 62 |
+   | 同名但**不同** | 17 | 17 |
+   | 只在这一边有 | **189** | **78** |
+
+   ⇒ **现场多 111 个文件，仓库多 78 个**，两个方向都有。
+   现场独有的多半是一次性探针（`e1*.sh`、`e9*.sh`、`ub*.sh`、`lan1*.sh`、`w*.sh` 之类）；
+   仓库独有的多半是门禁与 7.3 线的检查器（`check-sk-*.py`、`check-*.sh`、`mcp/sk-d840n-bench/`）。
+   ⇒ **「把现场的 `tools/` 整包拷进仓库」和「把仓库的 `tools/` 整包盖到现场」都是错的**，
+   两个方向都会删掉对方独有的东西。
+
+2. **7.3 那一轮真正要用到的那几个脚本，逐个结论如下**（判据是**这一轮会不会用到它**，
+   不是「谁更新」）：
+
+   | 脚本 | 现场 | 仓库 | 对 7.3 那一轮意味着什么 |
+   |---|---|---|---|
+   | `gatewatch.sh` | 7,927 B | 7,927 B | **逐位相同** ⇒ 直接用现场的 |
+   | `flash-round.sh` | 8,091 B | 8,091 B | **逐位相同** ⇒ 直接用现场的 |
+   | `trialsurvey.sh` | 11,239 B | 11,239 B | **逐位相同** ⇒ 直接用现场的 |
+   | `pushctl.sh` / `catchctl.sh` / `ctl-exec.sh` / `ctl-kexec.sh` / `ncsrv.py` / `fileserve.py` / `dtbparts.py` / `backwatch.sh` / `bench-keep.ps1` | 同 | 同 | **逐位相同** ⇒ 直接用现场的 |
+   | `mkgate.sh` | 3,162 B | 3,720 B | **只差一行 `mkdir -p staging/ctl`**（其余是注释）⇒ 现场的也能跑；仓库那份只是更耐造 |
+   | `gatecheck.sh` | 5,730 B | 6,072 B | **diff 只有 5 行注释，逻辑逐字相同** ⇒ 现场那份的判决与预演出来的**一致** |
+   | `mkctlram.py` | 37,850 B | 40,633 B | **实质差异在 announce 载荷的诊断**（`SYSFS_STATE`、`NETDEV_SYS`/`NETDEV_PROC`、`DTMODEL`、`ETHBOUND`）⇒ **刷机载荷用哪份都一样，announce 载荷必须用仓库那份**（八之十七.2 第 3 步） |
+   | `runround.sh` | 9,490 B | 10,763 B | 差的是 `HOSTS` 默认多一个 `192.168.1.1` 与注释 ⇒ **不影响 7.3 那一轮**（那一轮不走 `runround.sh`） |
+   | `preflight.sh` | 7,495 B | 12,988 B | **现场那份更旧且缺安全网 ⇒ 7.3 那一轮不要跑它**（下面 8之二十二.4） |
+
+3. **最要紧的一条不是「谁较旧」，是「两棵树的根不是同一个」。**
+   两边的脚本都写着 `cd "$(dirname "$0")/.."` ⇒
+   **现场那份 `tools/` 的根是工作区根 `C:\UGit\openwrt\SK-D840N\`，
+   仓库那份 `tools/` 的根是 `C:\UGit\openwrt\SK-D840N\ci-build-repo\`。**
+   ⇒ 仓库那份脚本**在它自己的根下读到的是 `ci-build-repo/staging/`**，
+   而那里放的是**另一对字节**（实测 `ci-build-repo/staging/trial/` 三件是
+   `flash-uImage` md5 `45d8a140b41294e84186f7ee33e5e014`、dtb `2b2855f98718397635ec99c0b8ff4476`、
+   rootfs `af68f503d993a51e6d10ca8238d4fe40`，与工作区根 `staging/trial/` 的
+   `35685e15…` / `ee287b5c…` / `d3aef45b…` **全都不同**）。
+   ⇒ **在仓库根下跑 `sh tools/flash-round.sh` 会拿 6.18 的字节去刷**，
+   而且 `ci-build-repo/staging/ctl/` 里**没有 `rootfs/`**（`mkctlram.py --extra sbin/mtd=…` 找不到文件）
+   ⇒ 它连载荷都建不出来。**这一条是「命令必须在工作区根下跑」的原因，不只是习惯问题。**
+
+4. ⇒ **7.3 那一轮的 8 步表（八之十七.2 的 0~7 步）里没有 `preflight.sh`**，
+   这是对的：跑它会破坏第 1 步换好的三件。
+
+### 8之二十二.2 三支「差在注释」和「差在诊断」的脚本，差在哪
+
+**`mkgate.sh`（现场 3,162 B / 仓库 3,720 B）**
+
+唯一的实质差异是仓库那份多了一行：
+
+```sh
+mkdir -p staging/ctl
+```
+
+`staging/` 是 gitignore 的（`.gitignore` 里写明「staging/ 是 PC 侧脚本要找东西的地方，
+把它建出来是读的人第一件要做的事，不是克隆仓库要做的事」），
+所以在**一份新克隆**上 `staging/ctl` 根本不存在 ⇒ 仓库那份的 `mkdir -p` 是防这个。
+**现场那份没有这一行**，而现场的 `staging/ctl/` **是存在的** ⇒ **现场那份能跑**。
+⇒ 这一行**不构成「必须同步」的理由**。
+
+**`gatecheck.sh`（现场 5,730 B / 仓库 6,072 B）**
+
+`diff` 只有 5 行，**全是注释**，逻辑（`set -eu` 之后到文件末尾）**逐字相同**：
+
+```diff
++# A gate record also says which kernel the round booted (kver=), and that has to be the
++# kernel that is about to be written. The expected version is therefore read out of the
++# uImage itself, not written down here: a record from one line must not vouch for the
++# other line's kernel, and naming a series instead of a version would let it.
+ set -eu
+```
+
+⇒ **八之十六.4 那次全链预演（`gatecheck: ALLOWED (gate-K73)`）对现场那份同样成立** ——
+它判的是同一段逻辑。
+
+**`mkctlram.py`（现场 37,850 B / 仓库 40,633 B）**
+
+差异**全部落在 announce 那个 init 模板**（`INIT_TMPL`）里：
+
+| 模板 | 现场 | 仓库 | 谁用 |
+|---|---|---|---|
+| `INIT_TMPL`（announce 载荷的 `/init`） | 16,350 B | 19,133 B | `--mode announce` |
+| `FLASH_INIT`（刷机载荷的 `/init`） | 7,110 B | 7,110 B | `--mode flash` |
+
+**`FLASH_INIT` 两份逐位相同**（实测：`block()` 取出来比，7,110 B 对 7,110 B，`IDENTICAL`），
+`FLASH_INIT` 之后那一整段代码（`def makedev` 到文件末尾）也**逐位相同**
+⇒ **两份产出的刷机载荷（`--mode flash`）内容一致** ⇒ **刷机载荷用哪一份都一样**。
+⇒ 而 announce 那一侧，仓库那份多出来的是**诊断项**：
+`SYSFS_STATE`（sysfs 到底挂上没）、`NETDEV_SYS`/`NETDEV_PROC`（两份网口清单）、
+`DTMODEL`（devtree 的 model）、`ETHBOUND`（哪个平台驱动绑到了 `ethernet@*`）。
+**这四项正是实机对拍要读的东西** ⇒ **announce 载荷只能用仓库那份**。
+⇒ 实测确认：现场预置的那份 `staging/trial73d/ctl/ctl-initramfs.cpio.gz`
+（1,206,452 B 解开后）里 `eth_bound_driver` / `sysfs:` / `devtree_model` / `netdevs_proc` /
+`SYSFS_STATE` **五项都在**，且带 `TAG=K73` ⇒ **它就是仓库那份产的，可以直接用**。
+
+⇒ 顺带把「两支干跑载荷不是同一份」这件事钉死（八之二十一.4 的那张表）：
+
+| 载荷 | `TAG` | `/init` | 钉几个 md5 | 谁产的 |
+|---|---|---|---|---|
+| `staging/trial73d/ctl/ctl-initramfs.cpio.gz`（583,486 B） | `K73` | announce 模板（带那五项诊断） | 0（announce 不钉 md5） | **仓库那份** `mkctlram.py` |
+| `staging/trial73d/ctl/ctl-flash.cpio.gz`（595,403 B） | `K73F` | `FLASH_INIT` | 3（uImage + dtb + rootfs） | **两份都一样**（`FLASH_INIT` 逐位相同） |
+| `flash-round.sh dry` 自己建的那支 | `FD1` | `FLASH_INIT` | 2（uImage + dtb） | 同上 |
+
+### 8之二十二.3 `preflight.sh`：现场那份更旧，而且**缺安全网**
+
+现场 7,495 B / 仓库 12,988 B，**6 个 hunk**。三处是实质差异：
+
+| # | 仓库那份有 | 现场那份 | 缺了会怎样 |
+|---|---|---|---|
+| 1 | `RUN_EXPLICIT` 守卫：**调用方没有点名 `RUN`** 且暂存区已经带着当前树 ⇒ **不拉** | 无 | 现场的 `RUN` 默认是硬编码的 `38243906799`（实测该 run `completed success`）⇒ 第 1 步里 `PULL` 保持为 1 ⇒ **第 2 步把那一轮的三件拉到 `staging/trial/`，盖掉第 1 步刚换好的 7.3 三件** |
+| 2 | 第 4d 步 `sh tools/check-imagelineage.sh staging/trial/flash-rootfs.jffs2`（先问「暂存的 rootfs 比它出自的那棵树新吗」） | 无 | 少一道**离线**的拦阻（不需要板子） |
+| 3 | 第 6c 步 `sh tools/checkrollback.sh`（回滚对是不是这块板真在启动的那一对） | 无 | 少一道回滚侧的核对 |
+
+另两处是回滚对的复演（`SRC=staging/rollback sh tools/simwrite.sh`）与第 9b 步的
+「拒绝是关于内核的，还是只关于构建时间戳的」。
+
+⇒ **2026-10-15 那次事故正是第 1 条**：那一轮把 **release 21** 拉到了**已验证的 release 25** 之上，
+第 1 步照样匹配、`PULL` 变成 1、八天前的镜像换掉了当前的，
+第 4d 步拦住了它——**但那已经是第四步了，好的一套已经被换掉**，
+`staging/trial` 于是留在「trial 文件来自一轮、flash 文件来自另一轮」的混合状态。
+
+⇒ **7.3 那一轮不要跑 `preflight.sh`**，有三条各自独立的理由：
+
+1. **它在 8 步表之外**（八之十七.2 的 0~7 步没有它）⇒ 不该跑。
+2. **跑它会破坏第 1 步**：现场那份第 2 步会拉 `38243906799` 的三件覆盖 `staging/trial/`，
+   而那三件的 md5 与 7.3 那对**完全不同**（实测 `45d8a140…` vs `3664b8cb…`）
+   ⇒ 刷机载荷钉的三个 md5 立刻对不上，板子会 `STAGE_FAIL` 拒写。
+3. **只同步它一个文件不成立**：仓库那份 `preflight.sh` 依赖三个**现场没有**的工具 ——
+   `check-imagelineage.sh`（13,311 B）、`checkrollback.sh`（6,449 B）、`payload-id.sh`（5,045 B）
+   ⇒ 单独同步 `preflight.sh` 会得到一个**调用不存在的脚本**的版本。
+   ⇒ **要同步就同步这四个；不跑就一个都别动。**
+
+⇒ **本轮的决定：不动现场的 `tools/`。**
+7.3 那一轮用到的脚本，除了 `mkctlram.py`（announce 那一侧）之外，
+**全部用现场那份**（它们逐位相同或只差注释）；
+announce 载荷用**仓库那份**的 `mkctlram.py` 重建，或者直接用**已经备好的那份**
+（实测它带全部五项诊断、`TAG=K73`）。
+
+### 8之二十二.4 「根不是同一个」这件事，实测到的四组字节
+
+| 位置 | `flash-uImage` | `flash-dtb.bin` | `flash-rootfs.jffs2` | `gate.src` 记的那对 |
+|---|---|---|---|---|
+| 工作区根 `staging/trial/` | 8,333,349 B `35685e15e79c27bb30ca6fdb3b0af1d5` | 13,381 B `ee287b5c1bc47c26c35cdaa2a462176d` | 4,849,668 B `d3aef45b39bcfbcf4c798bfe037aebbe` | `80dade59…` / `ee287b5c…`（2026-11-01） |
+| 仓库 `ci-build-repo/staging/trial/` | 8,131,590 B `45d8a140b41294e84186f7ee33e5e014` | 13,357 B `2b2855f98718397635ec99c0b8ff4476` | 4,718,596 B `af68f503d993a51e6d10ca8238d4fe40` | `45d8a140…` / `2b2855f9…`（2026-10-31） |
+| **7.3 那对（本轮要刷的）** | 5,816,299 B `3664b8cb1bb091db891126cf33b355c6` | 14,958 B `ff6914d007b9b21895e1a6b3f67d5ea5` | 5,767,172 B `6a9840f5fe7e0f27812788cf0d69a3df` | — |
+| 7.3 那对现在放在 | `staging/trial73d/flash/`（另存 `flash-run53/`、`flash-run60/`、`flash-run62/` 三套旧件） | | | |
+
+⇒ **三处 `staging/` 三套互不相同的字节**；7.3 那对**只在 `staging/trial73d/flash/`**，
+**还没进 `staging/trial/`**（这是有意的：不预先覆盖，免得打断 6.18 线与别人占用的 bench）。
+⇒ 现场 `staging/ctl/` 的 `gate.src` 仍是 **6.18 时代**那一行
+（`uimage_md5=80dade59… dtb_md5=ee287b5c…`，2026-11-01），
+`flash.permit` 25 行里**没有一行 `proven=gate-K73`** ⇒ **第 2 步必须重建夹具**，而重建会覆盖别人的夹具
+⇒ **这一步要等 bench 空出来**。
+
+### 8之二十二.5 顺带订正一处旧判断：载荷的 `.gz` **是可复现的**
+
+八之十九.6 写过一句：
+
+> 但**压缩后的字节差 4 B**（595,404 vs 595,400 —— zlib 版本差异，
+> gzip 头里的 mtime 字段两边都是 0）⇒ **载荷的 md5 不可复现**，只能**现算**
+
+**这句话是错的**，本轮把它钉死了。差 4 B 的真正来源是
+**gzip 头里的 `FNAME` 字段 —— 也就是输出文件名的长度**：
+
+| 输出文件名 | gzip 头里的名字 | `.gz` 尺寸 | 相对最短那个 |
+|---|---|---|---|
+| `a.cpio.gz` | `a.cpio` | 595,397 B | +0 |
+| `ab.cpio.gz` | `ab.cpio` | 595,398 B | +1 |
+| `abc.cpio.gz` | `abc.cpio` | 595,399 B | +2 |
+| `abcd.cpio.gz` | `abcd.cpio` | 595,400 B | +3 |
+| `out-site.cpio.gz` | `out-site.cpio` | 595,404 B | +7 |
+
+⇒ **尺寸正好等于头里那个名字的长度**；把头剥掉之后，
+**deflate 流与 trailer 在每一个名字下都逐位相同**，
+**cpio 也逐位相同**（1,297,008 B，sha256 `429e4bd3…`）。
+⇒ `mtime` 确实是 0（`gzip.GzipFile(..., mtime=0)`），**不是 zlib 版本差异**。
+
+**三个直接后果**：
+
+1. **同名 ⇒ 逐位可复现。** 实测：同一份脚本、同一个 `--out` 名字、跑两次
+   ⇒ `.gz` 逐位相同（md5 `4a493875…` 两遍一样）；
+   换一个目录但**同名** ⇒ 也逐位相同（md5 `a8c51e18…` 两遍一样）。
+2. **预置那份载荷可以按原样重建出来。** 实测：用仓库那份 `mkctlram.py`、
+   `--mode flash --tag K73F --stage net`、同样三件、同样的输出名
+   `ctl-flash.cpio.gz` 重建 ⇒ **595,403 B，md5 `8f6148ac3f70ce26e2f7248c91d3369b`**，
+   与磁盘上那份**逐位相同**（cpio sha256 `fa1b90f4…` 两边一样）。
+   ⇒ 之前记的「载荷 md5 不可复现」是**被文件名长度掩盖的假象**：
+   那次比较的两份载荷**文件名不一样**。
+3. **要比两轮载荷，比膨胀后的内容**（这条结论仍然对，而且理由更硬了）：
+   现在知道 **`.gz` 的差异只在 10 字节头里**，正文（deflate + trailer）才 1.29 MB
+   ⇒ 比 `.gz` 的 md5 时，**只要文件名不同就必然不等**，哪怕内容一模一样。
+
+⇒ **操作上的含义**：重建载荷时**沿用原来的输出文件名**
+（`staging/ctl/ctl-flash.cpio.gz`），产物的 md5 就能与之前那一轮对上；
+`flash-round.sh` 自己建的那支叫 `ctl-flash.cpio.gz`（同一个名字），
+而手工重建的那支若叫别的名字（`ctl-flash.cpio.gz.old53` 之类）
+⇒ **md5 必然对不上**，那不是内容变了，是头变了。
+
+### 8之二十二.6 这一节没做到的
+
+- **没有同步任何文件**：这一节只把「差在哪、对 7.3 那一轮各自意味着什么」量清楚，
+  **现场 `tools/` 一个字节都没动**。
+- **没有跑现场的 `preflight.sh`**（一次也没有）—— 上面三条理由。
+- **没有在真板子上验证过现场那份 `gatecheck.sh` 的判决**：
+  「逻辑逐字相同」是**逐行 diff** 的结论，不是实机结论。
+- **189 / 78 个独有文件没有逐个审**：只知道它们两个方向都有，
+  **不知道现场那 189 个里有没有「仓库缺了就会坏」的东西**。
+- **`mkctlram.py` 那 40 行差异只在 announce 侧成立**：已从「模板字节相同」**升级为**
+  「两份 `--mode flash` 各跑一遍，**cpio 逐位相同**（1,297,008 B，sha256 `429e4bd3…`）」，
+  但**没有把两份 `--mode announce` 各跑一遍再比**（announce 侧只有模板比对了字节）。
 
 ---
 
