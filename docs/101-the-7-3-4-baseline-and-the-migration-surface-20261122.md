@@ -7148,7 +7148,8 @@ OK: the image carries the microcode this driver will take
    - `lib/modules/7.3.4/` 里只有 `modules.builtin`、`modules.builtin.modinfo`
      与 `mtd-rw.ko` ⇒ **驱动是编进内核的**，
      而 `modules.builtin` 里**点名**了 `npu.ko`、`zx279133-lan-conduit.ko`、
-     `zx279133-switch.ko`。
+     `zx279133-switch.ko`、**`fnoffload.ko`**（四个都在，
+     本轮 2026-11-25 重新量过；先前这行只写了三个，漏了第四个）。
 3. **`flash-round.sh` 的 PC 侧在 7.3 真件上跑通了**（沙箱）：
    几何检查 `TABLE OK`、三件 sha256 现算、载荷按 `staging/trial/` 重建。
 4. **一条链上的脚本从没有在 7.3 真件上被整条走过**，走一遍就逮到一处文档缺陷
@@ -7174,7 +7175,7 @@ OK: the image carries the microcode this driver will take
 | 1 | `/etc/board.d/02_network` | **与我们 overlay 那份逐位相同**（10,738 B，md5 `aac909156c8a2f3724337e9df59b0d31`），第 178/185 行 `ipaddr "192.168.9.1"` | 本项目每一个工具都等在 `192.168.9.1`；若这份文件不是我们的，板子会起来但没人看得见它 |
 | 2 | `/etc/config/network` | **不存在** | 它由 `config_generate` 首次启动现生成 ⇒ **地址只能由 `02_network` 决定**（6.18 世代那份注释里的判断，在这张 7.3 产物上重新成立） |
 | 3 | `/etc/config/dropbear` | 310 B，`option Interface 'lan'` | dropbear 绑的是 **lan 上的 IP**（`network_get_ipaddrs_all`），不是网口名 ⇒ 桥上有 192.168.9.1 就有 ssh |
-| 4 | `lib/modules/7.3.4/` | 只有 `modules.builtin`（234 行）、`modules.builtin.modinfo`（85,187 B）、`mtd-rw.ko`（5,216 B） | ⇒ **没有可加载的驱动模块**，因为驱动**编进内核**了；`modules.builtin` 里点名 `npu.ko`、`zx279133-lan-conduit.ko`、`zx279133-switch.ko`（另有 `mdio-zx279133.ko`、`zx279133-pvt.ko`、`phy-zx279133-*-serdes.ko` 等 16 个 zte 相关条目） |
+| 4 | `lib/modules/7.3.4/` | 只有 `modules.builtin`（234 行）、`modules.builtin.modinfo`（85,187 B）、`mtd-rw.ko`（5,216 B） | ⇒ **没有可加载的驱动模块**，因为驱动**编进内核**了；`modules.builtin` 里点名 `npu.ko`、`zx279133-lan-conduit.ko`、`zx279133-switch.ko`、**`fnoffload.ko`**（四个都在；另有 `mdio-zx279133.ko`、`zx279133-pvt.ko`、`phy-zx279133-*-serdes.ko` 等 16 个 zte 相关条目） |
 
 第 4 条是这一轮最值钱的一句：**7.3 线「四个符号钉成 `=y`」这件事，
 在产物里验到了**，而且是在 rootfs 的 `modules.builtin` 上 ——
@@ -7787,6 +7788,38 @@ line=$(grep -E "\[ *${1} *\]|\(gpio ?${1}\)" "$DEBUG/gpio" 2>/dev/null | head -n
    **取过地址的函数不会被内联掉** ——
    装着那个地址的表需要这个函数真的存在。
    ⇒ 四个符号**全部取过地址**（下面那张表）。
+
+### 8之二十五.1.5 产物级：四个 object **确实**在核心里
+
+判据要问的是「**这些符号会不会在**」，所以除了树里的源码，还得问**产物**：
+
+⇒ 7.3 真产物的 rootfs 里 `lib/modules/7.3.4/modules.builtin`（3,219 B，234 条）
+**点名了四个 object**：
+
+```
+npu.ko                    <- CONFIG_ZTE_ZX279133_ETH
+zx279133-lan-conduit.ko   <- CONFIG_ZTE_ZX279133_LAN_CONDUIT
+zx279133-switch.ko        <- CONFIG_ZTE_ZX279133_SWITCH
+fnoffload.ko              <- CONFIG_ZTE_ZX279133_FNOFFLOAD
+```
+
+⇒ `modules.builtin` 是**内核构建时**从**真的链进去的 object** 写出来的
+⇒ 四个 object 在核心里
+⇒ 四个符号（取过地址 ⇒ 不会被内联掉）在核心里
+⇒ **真机上的 `/proc/kallsyms` 里会有这四个名字**
+⇒ **C7 在真板上会 PASS** —— 这一条**不用等板子**就已经有产物级证据了。
+
+⇒ 这道检查也进了 7.3 工作流：合并后的 `.config` 说「编进去了」，
+`modules.builtin` 说「**真的链进去了**」，两件事都要对。
+
+⇒ **路径要注意**：7.3 线走的是「**外部树**」模式
+（`CONFIG_EXTERNAL_KERNEL_TREE`）⇒ 内核**就地**在 `$KERNEL_TREE` 里编译 ——
+`include/config/kernel.release` 与 `arch/arm64/boot/Image` 都在那儿
+（「the built kernel is 7.3.4」那道门禁读的就是它们）
+⇒ `modules.builtin` **也在那儿**，**不在** `build_dir` 里。
+（第一版把路径写成了 `build_dir/target-*/linux-*/linux-7.3.4/`
+⇒ 在这条线上根本不存在；已改成先找 `$KERNEL_TREE/modules.builtin`，
+再回落 `build_dir`。）
 
 ### 8之二十五.2 四个符号，和它们为什么不会消失
 
