@@ -516,18 +516,21 @@ def main():
         failures.check(bringup_with.get("key") == release_with.get("key"),
                        "both lines use the same cache key, so they share it")
 
-    # The Compile step has to say which package failed and has to look for
-    # a failed download: a package that never got as far as being compiled
-    # has no log of its own, and the words it uses are not the compiler's.
-    print("\nthe 7.3 line's Compile step says which package failed and why")
+    # The Compile step has to say which package failed.  It used to look for
+    # the package's own log under logs/ and for the words a failed download
+    # uses, and both of those were wrong: OpenWrt writes logs/<pkg>.txt only
+    # when CONFIG_BUILD_LOG=y, which this build does not set, and the
+    # compiler's own words are not in the top level log at all - OpenWrt
+    # throws them away unless V=s is set.
+    print("\nthe 7.3 line's Compile step says which package failed")
     compile_text = step_run_text(bringup, "build", "Compile")
     failures.check(compile_text != "", "the Compile step has a body")
-    failures.check('logs/$(basename' in compile_text,
-                   "the Compile step reads the failing package's own log")
-    failures.check("could not resolve" in compile_text,
-                   "the Compile step looks for a failed download or clone")
     failures.check("failed to build" in compile_text,
                    "the Compile step names the package that failed")
+    failures.check("logs/$(basename" not in compile_text,
+                   "the Compile step does not read a log that is never written")
+    failures.check("could not resolve" not in compile_text,
+                   "the Compile step does not look for download words in a log that has none")
 
     # The board trial needs the three partition files, and the only honest
     # way to get them is to take them out of the image the build produced:
@@ -591,6 +594,63 @@ def main():
                          "openwrt/target/linux/zte/zx279133/config-7.3"):
             failures.check(fragment in body,
                            f"the check reads the configuration {fragment}")
+
+    # A failed build has to say why.  OpenWrt throws every sub-make's
+    # stdout and stderr away unless V=s is set (include/verbose.mk), so the
+    # parallel pass alone cannot: the diagnostic is a second pass, serial
+    # and verbose, over the target that failed.  The 7.3 line's run #25
+    # (45040260008) is the run that made this necessary - it died in
+    # package/libs/libbpf and the only thing that could be said about it
+    # was "exit code 2".
+    print("\na failed build says why it failed")
+    compile_steps = [step for step in steps_of(bringup, "build")
+                     if str(step.get("name") or "") == "Compile"]
+    failures.check(bool(compile_steps), "the 7.3 line still has a Compile step")
+    if compile_steps:
+        body = str(compile_steps[0].get("run") or "")
+        failures.check("make -j1 V=s" in body,
+                       "the Compile step runs a serial verbose pass")
+        failures.check("${FAILED}/compile" in body,
+                       "the verbose pass is aimed at the package that failed")
+        # The compiler says "error:" and make says "Error 1", and OpenWrt
+        # says "build failed"; a pattern that knows only the lower case
+        # misses the other two.
+        patterns = " ".join(re.findall(r'grep\s+-[a-zA-Z]*E[a-zA-Z]*\s+"([^"]+)"',
+                                       body))
+        failures.check("Error [0-9]+" in patterns,
+                       "the error pattern knows make's own wording")
+        failures.check("build failed" in patterns,
+                       "the error pattern knows OpenWrt's own wording")
+        failures.check("::error::" in body,
+                       "the failure is re-emitted as an annotation")
+        failures.check("GITHUB_STEP_SUMMARY" in body,
+                       "the diagnostic also goes into the step summary")
+        # The old step said "the package has no log of its own: it never got
+        # as far as being compiled".  That was our own sentence and it was
+        # wrong: OpenWrt writes logs/<pkg>.txt only when
+        # CONFIG_BUILD_LOG=y, and this build does not set it, so the
+        # absence of that file says nothing about the package.
+        failures.check("never got as far as being compiled" not in body,
+                       "the step does not claim a package was never compiled")
+        failures.check("logs/$(basename" not in body,
+                       "the step does not read a log that is never written")
+
+    # The two lines clone the same repository but not the same commit, so the
+    # shared dl/ cache is a cache and not a copy of one build's downloads.
+    # The check is on the two commits themselves and not on a phrase in a
+    # comment.
+    print("\nthe two lines build different trees")
+    release_env = (release or {}).get("env") or {}
+    bringup_env = (bringup or {}).get("env") or {}
+    failures.check(bool(release_env.get("IW_URL")) and
+                   release_env.get("IW_URL") == bringup_env.get("IW_URL"),
+                   "both lines clone the same repository")
+    failures.check(bool(release_env.get("IW_SHA")) and
+                   release_env.get("IW_SHA") != bringup_env.get("IW_SHA"),
+                   "the two lines build different trees")
+    failures.check("the same IW_URL and IW_SHA" not in
+                   (WORKFLOWS / BRINGUP).read_text(encoding="utf-8"),
+                   "the 7.3 workflow does not claim the two lines share a commit")
 
     # The migration note's increment table is the measured one, and the
     # workflow contract test parses that table and adds the numbers up.

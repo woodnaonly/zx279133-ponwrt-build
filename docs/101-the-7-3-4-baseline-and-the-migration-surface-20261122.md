@@ -1272,6 +1272,9 @@ firewall4 自己的规则生成器测试套件——那三项问的是**发布�
    ```
 5. **两条线克隆的是同一个 OpenWrt 树**（同样的 `IW_URL` / `IW_SHA`）
    ⇒ 需要的包完全相同。
+   —— **本条已被 7.18.5 更正**：两条线克隆的是**同一个仓库的不同 commit**
+   （6.18 线 `sr1010-zx279133` @ `1b50aaf4`，7.3 线 `master` @ `31e2ac4d`），
+   并不是同一棵树。需要的包**大体**相同，但这句话本身当时是错的。
 6. **6.18 线有 `dl/` 下载缓存，7.3 线没有。**
    6.18 线的缓存里早就躺着 libbpf，每轮直接复用；
    7.3 线每轮都重新克隆，而且**没有缓存兜底**。
@@ -1299,6 +1302,12 @@ firewall4 自己的规则生成器测试套件——那三项问的是**发布�
 （顺带：7.3 线每轮都在重新下载整个 feed，加了缓存之后到 Compile 的等待也短得多。）
 
 #### 7.16.3 ⇒ 修复二：让下一次失败能说出原因
+
+> **本节已被 7.18.7 取代**：这里描述的取证顺序（读包自己的日志、
+> 搜下载失败措辞、退回编译错误模式）**结构上取不到原因**——
+> `logs/<pkg>.txt` 只在 `CONFIG_BUILD_LOG=y` 时才写（7.18.3），
+> 而非 verbose 模式下编译器的话被 OpenWrt 丢进 `/dev/null`（7.18.2）。
+> 现在的做法是：**失败后再串行跑一遍 `make -j1 V=s`**。
 
 Compile 步现在按这个顺序取证：
 
@@ -1403,6 +1412,173 @@ syscall 头、`kernel/bounds.c`、影子头），
 - 本机那一版还带 `--objdir`（编出目标码、按 modpost 的规则查符号闭合），
   **CI 里没有开**：那 11 条疑似缺符号全是宏生成导出造成的误报，
   在逐条核实之前不适合当门禁。
+
+---
+
+### 7.18 run #25：下载不再是原因，而**失败的原因我们一直看不见**
+
+**判决**：run #25（head `cb0f627`，run id `45040260008`）**第一次带着 `dl/` 缓存**
+跑完整条链路：**22 个编译前步全部 success**（含 `Download packages`），
+两个作业仍然死在 **Compile**，仍然是 `package/libs/libbpf`。
+⇒ **7.16 的修复一（加缓存）是对的，但 7.16 的结论「libbpf 能编出来、
+只是下载失败」是错的**：下载成功了，libbpf 照样编不出来。
+
+**而且这一轮暴露了一件更基础的事**：**我们从头到尾就没有看见过失败的原因。**
+不是「这次没取到」，是**结构上取不到**。
+
+#### 7.18.1 证据一：run #25 的 annotation 原文
+
+两个作业（`initramfs` / `flash`）的失败 annotation 只有这些：
+
+```
+[warning] Node.js 20 is deprecated. ...
+[failure] Process completed with exit code 2.
+[failure] cc: 146:make: *** [/home/runner/work/.../openwrt/include/toplevel.mk:233: world] Error 1
+[failure] cc: 144:    ERROR: package/libs/libbpf failed to build.
+[failure] cc: --- libs/libbpf has no log of its own: it never got as far as being compiled ---
+```
+
+注意两件事：
+
+- `144:` / `146:` 是行号 ⇒ **整个 `compile.log` 只有 146 行**。
+  一次完整构建不可能只有 146 行输出 ⇒ **绝大多数输出根本没写下来**。
+- 最后那句「包没有自己的日志，它根本没开始编译」是**我们自己写的话**
+  （旧诊断里的 `--- $FAILED has no log of its own: ... ---`），
+  **不是 OpenWrt 说的**，而且**是错的**。
+
+#### 7.18.2 证据二：OpenWrt 把子 make 的输出丢掉了
+
+cnjn master `31e2ac4` 的 `include/verbose.mk`：
+
+```make
+  SILENT:=>/dev/null $(if $(findstring w,$(OPENWRT_VERBOSE)),,2>&1)
+  SUBMAKE=cmd() { $(SILENT) $(MAKE) -s "$$@" < /dev/null || { echo "make $$*: build failed. Please re-run make with -j1 V=s or V=sc for a higher verbosity level to see what's going on"; false; } } 8>&1 9>&2; cmd
+```
+
+**非 verbose 模式下，每个子 make 的 stdout 与 stderr 全部进 `/dev/null`。**
+所以 `compile.log` 里只有 make 调用链，**编译器的话一个字都没有**。
+这条规则 6.18 线早就踩过（run 88/89/91/92 只回来一句
+`make[11]: *** [.../zx279133-switch.o] Error 1`），
+**那边的解法是：失败之后再串行跑一遍 `make -j1 V=s`**。
+**7.3 线没有抄这一步**，所以它一直在对着空气做诊断。
+
+#### 7.18.3 证据三：`logs/` 里本来也不会有包日志
+
+`include/rules.mk`：
+
+```make
+ifeq ($(CONFIG_BUILD_LOG),y)
+  BUILD_LOG:=1
+endif
+```
+
+`include/subdir.mk` 的 `log_make` 只有在 `$(BUILD_LOG)` 非空时才会
+`tee` 到 `$(BUILD_LOG_DIR)/...txt`。
+⇒ **`logs/<pkg>.txt` 只在 `CONFIG_BUILD_LOG=y` 时才存在**，
+而本仓库**从来没有设过这个开关**。
+⇒ 旧诊断去读 `logs/libbpf.txt`，读不到是**必然**的，
+它说明不了关于 libbpf 的任何事。
+
+#### 7.18.4 证据四：旧诊断连 OpenWrt 留下的那一句都没抓住
+
+OpenWrt 在静默模式下**只留一句**：`make <target>: build failed. Please re-run make with -j1 V=s ...`。
+旧诊断的模式是 `failed to build`（**语序相反**），
+所以这句唯一的线索也没进 annotation。
+⇒ 旧诊断的模式是 `\*\*\*|failed to build|No rule to make|\berror:`，
+**四个模式一个都不匹配那句**。
+
+#### 7.18.5 证据五：两条线其实**不是**同一棵 OpenWrt 树
+
+7.16.1 第 5 条写的是「两条线克隆的是同一个 OpenWrt 树（同样的 `IW_URL` / `IW_SHA`）」——
+**这句话是错的**，本轮更正：
+
+| 线 | 仓库 | 分支 | commit |
+| --- | --- | --- | --- |
+| 6.18 发布线 | `cnjn/ImmortalWrt` | `sr1010-zx279133` | `1b50aaf4ed9cf042df6207564555b244d6ced517` |
+| 7.3 线 | `cnjn/ImmortalWrt` | `master` | `31e2ac4ded9c8896c7aefd3dcb9a46ef77440fbd` |
+
+用 GitHub 的 tree API 把两棵树各取一次递归清单（blob SHA 是内容寻址的，
+所以可以直接比）：**10696 vs 10580 个 blob**，
+差 **140 个只在 master、24 个只在 sr1010、32 个内容不同**，合计 **196 个文件**。
+
+**`package/libs/libbpf/Makefile` 在两棵树里逐字节相同**（1.6.2、同一个
+`PKG_MIRROR_HASH`）⇒ **共享的 `dl/` 缓存对 libbpf 是对的**。
+两棵树真正不同的、与本问题相关的文件里，有
+`include/kernel.mk`、`include/kernel-defaults.mk`、`include/image.mk`、
+`include/bpf.mk` 与 `package/kernel/linux/modules/*.mk`。
+
+**推论（只到这一步）**：共享缓存的前提是「两棵树需要同样的包」，
+这个前提现在**被核对过**了，而不是像 7.16 那样靠一句错的注释撑着。
+
+#### 7.18.6 证据六：libbpf 是被谁拉进来的（两条线一样）
+
+- 7.3 线：`overlays-73/target/linux/zte/zx279133/target.mk` 的
+  `DEFAULT_PACKAGES` 里有 **`ip-full`**；
+- 6.18 线：cnjn `sr1010-zx279133` 的 `target.mk` 里**也有 `ip-full`**；
+- `Package/ip-full` 的 `DEPENDS:=+libnl-tiny +libbpf ...`
+  （本仓库自己的 `overlays/package/network/utils/iproute2/Makefile` 同向）。
+
+⇒ **两条线都会编 libbpf**，6.18 线编得过、7.3 线编不过，
+**差别只能在内核侧或工具链侧**。
+
+一条**线索**（不是判决）：libbpf 1.6.2 的 `src/libbpf.c` 无条件
+`#include <linux/bpf.h>` / `<linux/btf.h>` / `<linux/filter.h>` /
+`<linux/kernel.h>` / `<linux/perf_event.h>` / `<linux/bpf_perf_event.h>` /
+`<linux/ring_buffer.h>` / `<linux/netdev.h>` / `<linux/pkt_cls.h>`，
+还有 `src/libbpf_probes.c` 的 `<linux/version.h>`——**都是内核的 uapi 头**。
+在 7.3.4 树里：`include/uapi/linux/ring_buffer.h` **不存在**
+（只有内核内部的 `include/linux/ring_buffer.h`），
+`linux/version.h` 则只在**构建期生成**（`include/generated/uapi/linux/version.h`）。
+**头是从哪来的、缺不缺，只有真编译一次才知道** ⇒ 这正是下面那道诊断要回答的。
+
+#### 7.18.7 ⇒ 修复：Compile 步加一道**串行 verbose** 的诊断 pass
+
+照 6.18 线 run 88 以来的做法（**不是新发明，是把发布线的做法搬过来**）：
+
+1. 并行构建照旧（`make -j$(nproc)`，输出进 `compile.log`）；
+2. 失败时先从顶层日志里读出**失败的是哪个包**
+   （`ERROR: package/<cat>/<pkg> failed to build.` 这行是顶层 make 打的，
+   **静默模式下也在**）；
+3. 对着**那一个目标**再跑一遍**串行 + verbose**：
+   `make -j1 V=s package/libs/libbpf/compile`（20 分钟上限）；
+4. 这一遍里子 make 的输出**不再进 `/dev/null`** ⇒ 编译器的话被 `tee` 下来；
+5. 把错误行发成 `::error::diag:`，并把诊断日志写进 **step summary**；
+6. 若这一遍**没有说出任何错误**，再退回整棵树跑一遍 `make -j1 V=s`（20 分钟上限）。
+
+错误模式同时补齐三种措辞：
+编译器说 `error:`、make 说 `Error 1`、OpenWrt 说 `build failed`
+——**旧的模式只认得第一种**。
+
+同时**删掉**那句错误断言（「包没有日志 ⇒ 它根本没开始编译」），
+以及去读 `logs/<pkg>.txt` 的两行（那个文件从来不会被写）。
+
+#### 7.18.8 本机验证
+
+- 契约测试（`tests/test_sk_workflows.py`）新增 13 条断言，全绿；
+- 反向验证新增 9 处（`scratch/reverse_check_workflow.py`），
+  逐个转红在**指定**的那条检查上：
+  - 去掉串行 verbose pass ⇒ 红在「the Compile step runs a serial verbose pass」；
+  - verbose pass 不再指向失败的那个包 ⇒ 红在「the verbose pass is aimed at the package that failed」；
+  - 模式里去掉 `Error [0-9]+` ⇒ 红在「the error pattern knows make's own wording」；
+  - 模式里去掉 `build failed` ⇒ 红在「the error pattern knows OpenWrt's own wording」；
+  - 把那句错误断言加回去 ⇒ 红在「the step does not claim a package was never compiled」；
+  - 把读 `logs/$(basename ...)` 加回去 ⇒ 红在「the Compile step does not read a log that is never written」；
+  - 把 7.3 线的 `IW_SHA` 改成 6.18 线的 ⇒ 红在「the two lines build different trees」；
+  - 把 7.3 线的 `IW_URL` 改掉 ⇒ 红在「both lines clone the same repository」；
+  - 把那句错的注释写回去 ⇒ 红在「the 7.3 workflow does not claim the two lines share a commit」。
+- 那 9 条里有一条**第一次没有转红**：变异只改掉了
+  `make -j1 V=s` 的**一处**出现，而另一处（整棵树的兜底 pass）还在
+  ⇒ 检查只问「有没有 verbose 的串行 pass」，所以它本来就应该还是绿的
+  ⇒ **把变异改成两处一起改**才符合这条断言的语义。
+
+#### 7.18.9 未做
+
+- **libbpf 到底为什么编不过，仍然不知道**。这一轮只把「看不见」变成「看得见」，
+  下一轮才会拿到编译器的那句话。**在拿到那句话之前不动 libbpf**：
+  改包定义、换版本、砍掉 `ip-full` 都是猜。
+- 没有动 6.18 发布线（它编得过 libbpf，本轮的诊断改动也不需要它）。
+- 没有改 `CONFIG_BUILD_LOG`：串行 verbose pass 已经够，
+  再开它会让每个子 make 都额外写一份日志，**收益不抵磁盘与时间**。
 
 ---
 

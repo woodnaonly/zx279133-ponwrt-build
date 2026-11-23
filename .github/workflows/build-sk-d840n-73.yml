@@ -466,10 +466,9 @@ jobs:
       # question: it is a correctness one.
       #
       # The release line has had this cache for weeks, and the two lines
-      # clone the same OpenWrt tree (the same IW_URL and IW_SHA), so they
-      # need the same packages.  The 6.18 line's cache therefore holds
-      # packages the 7.3 line needs as well - and one of them is libbpf,
-      # whose source is a GIT clone:
+      # need the same packages - so the 6.18 line's cache holds packages the
+      # 7.3 line needs as well.  One of them is libbpf, whose source is a
+      # GIT clone:
       #
       #   package/libs/libbpf/Makefile
       #     PKG_SOURCE_PROTO:=git
@@ -477,10 +476,32 @@ jobs:
       #
       # libbpf is in the image because this repository's own iproute2
       # overlay puts "DEPENDS:=+libbpf" on the ip and tc packages - and
-      # that overlay is used by both lines.  Run #14 (head 0af2270) failed
-      # with "ERROR: package/libs/libbpf failed to build", while the 6.18
-      # line's run #364 at the very same commit succeeded - so the package
-      # builds here, and what failed was fetching it.
+      # that overlay is used by both lines.
+      #
+      # The two lines do NOT build the same tree, and an earlier version of
+      # this comment said they did.  They clone the same repository, but
+      # different commits of it:
+      #
+      #   6.18 line  cnjn/ImmortalWrt  sr1010-zx279133  1b50aaf4
+      #   7.3  line  cnjn/ImmortalWrt  master          31e2ac4d
+      #
+      # The difference is small - the two trees differ in 196 files - and
+      # libbpf's own package definition is byte for byte the same in both
+      # (package/libs/libbpf/Makefile: 1.6.2, the same PKG_MIRROR_HASH).
+      # So the cached tarball is the right one for both.  The comment that
+      # claimed the two lines share one commit was simply wrong, and it was
+      # wrong in a way that mattered: it made the cache look like a copy of
+      # one build's downloads when it is really a cache shared by two
+      # different trees.
+      #
+      # What the cache does NOT fix is the build.  Run #14 (head 0af2270)
+      # failed with "ERROR: package/libs/libbpf failed to build" while the
+      # 6.18 line's run #364 at the very same commit succeeded, and the
+      # conclusion drawn then was that the package builds here and only the
+      # fetching failed.  Run #25 (head cb0f627) refuted that: with the
+      # download working - the "Download packages" step passed - libbpf
+      # still failed to build.  What it fails at is now the question the
+      # Compile step asks, with a serial verbose pass over the package.
       #
       # With the cache, the 7.3 line restores the package instead of
       # cloning it from github on every run.  The cache is keyed the same
@@ -560,75 +581,98 @@ jobs:
 
       - name: Compile
         working-directory: openwrt
+        # A build that fails has to say why, and the parallel pass cannot.
+        #
+        # OpenWrt's include/verbose.mk throws every sub-make's stdout AND
+        # stderr away unless V=s is set:
+        #
+        #   SILENT:=>/dev/null $(if $(findstring w,$(OPENWRT_VERBOSE)),,2>&1)
+        #   SUBMAKE=cmd() { $(SILENT) $(MAKE) -s "$$@" < /dev/null || { echo
+        #     "make $$*: build failed. Please re-run make with -j1 V=s or V=sc
+        #     for a higher verbosity level to see what's going on"; false; } }
+        #
+        # So compile.log holds the make chain and nothing else: the
+        # compiler's words are never written down anywhere.  The 7.3 line's
+        # run #25 (45040260008) is that case - it died in
+        # package/libs/libbpf and the only thing that could be said about
+        # it was "exit code 2".
+        #
+        # There is a second blindness next to it, and it is worse: OpenWrt
+        # writes a per-package log under logs/ only when
+        # CONFIG_BUILD_LOG=y, and this build does not set it.  So "there is
+        # no logs/libbpf.txt" says nothing whatsoever about libbpf, and an
+        # earlier version of this step reported it as if it did - as "the
+        # package has no log of its own: it never got as far as being
+        # compiled".  That sentence was ours, not OpenWrt's, and it was
+        # wrong: the package was compiled and failed, and the reason was in
+        # a stream that had been discarded.
+        #
+        # So the diagnostic is a second pass, over the one target that
+        # failed, run serially and verbosely.  The 6.18 line has done this
+        # since run 88, and it is what turns "exit code 2" into the
+        # compiler's own sentence.
         run: |
           set -o pipefail
+          rc=0
           timeout --kill-after=60s 280m bash -c 'make -j"$(nproc)"' 2>&1 | tee ../compile.log || rc=$?
           rc=${rc:-0}
           echo "::group::the tail of the build log"
           tail -n 200 ../compile.log
           echo "::endgroup::"
           if [ "$rc" != 0 ]; then
-            # The job log of a run is not readable without a GitHub login, but
-            # an annotation is: the annotations of a run are public.  So the
-            # reason the build failed has to go into one, or the only thing
-            # that can be said about a failed run is "exit code 2".
+            # The job log of a run is not readable without a GitHub login,
+            # but an annotation is: the annotations of a run are public.  So
+            # the reason the build failed has to go into one.
             #
-            # Two places have to be read.  OpenWrt keeps each package's own
-            # build output under logs/, and the top level log only says which
-            # package failed - so the compiler's message is in the package's
-            # log, not in compile.log.  And the top level log's own failure
-            # line is "ERROR: failed to build package ..." in upper case, so
-            # the search has to be case insensitive or that line is missed
-            # too.
+            # Which package failed is the first question, and OpenWrt
+            # answers it itself:
             #
-            # The package logs come first: they carry the reason.  The top
-            # level lines say which package, which is the second question.
+            #   ERROR: package/libs/libbpf failed to build.
             #
-            # But there is a third question, and run #14 (head 0af2270) is
-            # why it is here: which package failed.  Without it the
-            # annotation says "something failed" and the failing package's
-            # own log cannot be found, because its name is only in the top
-            # level log.
-            #
-            # And there is a fourth case: a package that never got as far
-            # as being compiled has no log of its own at all.  That is what
-            # a failed download looks like, and the words it uses are "could
-            # not resolve", "unable to access", "fatal:" - none of which
-            # the compiler-error pattern below matches.  So the search for
-            # it is a separate one, and it runs whether or not the package
-            # has a log.
+            # That line is in compile.log even in the silent mode, because
+            # it is printed by the top level make and not by a sub-make.
             FAILED=$(sed -n 's/^[[:space:]]*ERROR:[[:space:]]*package\/\([^[:space:]]*\) failed to build\..*/\1/p' ../compile.log | head -n 1)
             echo "the package that failed: ${FAILED:-unknown}"
+            DIAG=../compile-diag.log
+            : > "$DIAG"
+            # The diagnostic pass: the failed package alone, serially, with
+            # the sub-makes' output switched back on.  The objects of the
+            # parallel pass are still on the disk, so this goes straight to
+            # the file that broke and prints what the compiler said about
+            # it.
+            if [ -n "$FAILED" ]; then
+              timeout --kill-after=60s 20m bash -c "make -j1 V=s ${FAILED}/compile" 2>&1 | tee "$DIAG" || true
+            fi
+            # A pass that named no error has not found one: the failure was
+            # somewhere else, and the whole tree gets the same treatment,
+            # with the ceiling it always had.
+            if ! grep -qaE "fatal error:|\berror:|Error [0-9]+|undefined symbol|implicit declaration|No such file|build failed" "$DIAG"; then
+              echo "::notice::the package pass named no error - looking at the whole tree"
+              timeout --kill-after=60s 20m bash -c "make -j1 V=s" 2>&1 | tee -a "$DIAG" || true
+            fi
             {
-              if [ -n "$FAILED" ]; then
-                PKGLOG="logs/$(basename "$FAILED").txt"
-                if [ -f "$PKGLOG" ]; then
-                  echo "--- the failing package's own log: $PKGLOG ---"
-                  tail -n 5 "$PKGLOG"
-                else
-                  echo "--- $FAILED has no log of its own: it never got as far as being compiled ---"
-                fi
-              fi
-              grep -naEi "Download of|failed to download|could not resolve|unable to access|RPC failed|error: unable to|fatal:" ../compile.log 2>/dev/null | head -n 6 || true
-              grep -rnaEi "fatal error:|error:|error\[|undefined reference|undefined symbol|implicit declaration|No such file|command not found|not found|failed to resolve|cannot find" logs 2>/dev/null | head -n 4 || true
-              grep -naEi "\*\*\*|failed to build|No rule to make|\berror:" ../compile.log 2>/dev/null | head -n 4 || true
-            } | head -n 10 | while IFS= read -r line; do
-              echo "::error::cc: $(printf '%s' "$line" | sed -e 's/%/%25/g' -e 's/#/%23/g' | tr -d '\r')"
+              # The compiler's own message comes FIRST in the log and the
+              # make chain comes LAST, so a tail keeps the chain and throws
+              # the reason away.  The pattern carries the capital "Error"
+              # too: the compiler says "error:" and make says "Error 1",
+              # and a pattern that only knows the lower case misses half of
+              # what is in there.  "build failed" is OpenWrt's own hint,
+              # and it is the one line the silent mode does leave behind.
+              grep -naE "fatal error:|\berror:|Error [0-9]+|No such file|undefined reference|undefined symbol|not defined|implicit declaration|build failed" "$DIAG" | head -n 12 || true
+              echo "--- and the make chain ---"
+              grep -naE "Error [0-9]+$|make.*\*\*\*" "$DIAG" | tail -n 8 || true
+            } | while IFS= read -r line; do
+              echo "::error::diag: $(printf '%s' "$line" | sed -e 's/%/%25/g' -e 's/#/%23/g' | tr -d '\r')"
             done
             {
               echo "### the compiler's own message"
               echo
               echo '```'
               echo "the package that failed: ${FAILED:-unknown}"
-              if [ -n "$FAILED" ] && [ -f "logs/$(basename "$FAILED").txt" ]; then
-                tail -n 30 "logs/$(basename "$FAILED").txt"
-              fi
-              grep -naEi "Download of|failed to download|could not resolve|unable to access|RPC failed|error: unable to|fatal:" ../compile.log 2>/dev/null | head -n 20 || true
-              grep -rnaEi "fatal error:|error:|error\[|undefined reference|undefined symbol|implicit declaration|No such file|command not found|not found|failed to resolve|cannot find" logs 2>/dev/null | head -n 30 || true
-              grep -naEi "\*\*\*|failed to build|No rule to make|\berror:" ../compile.log 2>/dev/null | head -n 20 || true
+              head -n 200 "$DIAG"
               echo '```'
               echo
-              echo "### the tail of the top level build log"
+              echo "### the tail of the parallel pass's log"
               echo
               echo '```'
               tail -n 40 ../compile.log
