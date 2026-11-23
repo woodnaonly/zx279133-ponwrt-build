@@ -628,10 +628,42 @@ def main():
         # the absence of a rule instead of the reason.  The check reads
         # the target out of the command and compares it, so the target
         # written in a comment cannot pass for the target of the command.
+        #
+        # It is aimed at the kernel as well, and the kernel is not a
+        # package: it is built by target/linux/compile, and when it fails
+        # the top level says "ERROR: target/linux failed to build." - a
+        # line the package pattern does not match.  Without the kernel
+        # branch the pass falls through to the whole tree, which walks the
+        # package order again from the top and whose ceiling expires long
+        # before the kernel - the 6.18 line's runs 88, 89, 91 and 92 are
+        # exactly that failure.  There are exactly two targets, and the
+        # check compares the whole list, so a third one turns it red too.
+        raw = flat.splitlines()
         targets = re.findall(r"make[ \t]+(?:[^\s\"]+[ \t]+)*?([^\s\"]+)/compile",
                              commands)
-        failures.check(targets == ["package/${FAILED}"],
-                       "the verbose pass is aimed at package/${FAILED}/compile")
+        failures.check(sorted(targets) == ["package/${FAILED}", "target/linux"],
+                       "the verbose passes are aimed at the failed package and at the kernel")
+        # The line that says the kernel failed is matched as a fixed string,
+        # and the check runs that string against the line OpenWrt actually
+        # prints: a pattern that mentions the kernel but does not match the
+        # line would pass a string comparison and still never fire.
+        kernel_line = "   ERROR: target/linux failed to build."
+        fixed = re.findall(r"grep[ \t]+-qaF[ \t]+'([^']*)'", commands)
+        failures.check(any(k in kernel_line and "target/linux" in k for k in fixed),
+                       "the Compile step recognises the kernel's own failure line")
+        # The kernel is asked for first.  If the package branch came first
+        # it would spend the whole ceiling on a consequence of the kernel
+        # failing, and the kernel would never be diagnosed.  This says
+        # something only when both branches are there; whether the kernel
+        # branch is there at all is the list check above.
+        kernel_branch = [i for i, ln in enumerate(raw)
+                         if '"$KERNEL_FAILED" = yes' in ln]
+        package_branch = [i for i, ln in enumerate(raw)
+                          if '-n "$FAILED"' in ln]
+        failures.check(
+            not (kernel_branch and package_branch)
+            or kernel_branch[0] < package_branch[0],
+            "the kernel is diagnosed before the package")
         # The patterns that name an error are in two places and they are
         # not the same list: the condition that decides whether the
         # package pass found the reason, and the pattern that picks the

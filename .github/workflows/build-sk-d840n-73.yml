@@ -654,15 +654,44 @@ jobs:
             # That line is in compile.log even in the silent mode, because
             # it is printed by the top level make and not by a sub-make.
             FAILED=$(sed -n 's/^[[:space:]]*ERROR:[[:space:]]*package\/\([^[:space:]]*\) failed to build\..*/\1/p' ../compile.log | head -n 1)
+            # The kernel is not a package.  It is built by target/linux/compile
+            # (include/target.mk pulls in kernel-build.mk when TARGET_BUILD=1,
+            # and kernel-build.mk's compile target is what runs the kernel's
+            # own make), so when it fails the top level says
+            #
+            #   ERROR: target/linux failed to build.
+            #
+            # The pattern above only knows package/<path>, so it does not
+            # match that, and the pass would fall through to the whole tree.
+            # The whole tree is a bad way to reach the kernel: it walks the
+            # package order again from the top, and its ceiling expires long
+            # before the kernel - the 6.18 line's runs 88, 89, 91 and 92 are
+            # exactly that failure.  The 6.18 line asks for
+            # target/linux/compile by name for the same reason.
+            #
+            # The line is matched as a fixed string, because OpenWrt prints it
+            # with three leading spaces (the ERROR macro in include/subdir.mk
+            # is called with the message indented) and a fixed string does not
+            # care where in the line it sits.
+            KERNEL_FAILED=no
+            if grep -qaF 'ERROR: target/linux failed to build' ../compile.log; then
+              KERNEL_FAILED=yes
+            fi
             echo "the package that failed: ${FAILED:-unknown}"
+            echo "the kernel that failed: ${KERNEL_FAILED}"
             DIAG=../compile-diag.log
             : > "$DIAG"
-            # The diagnostic pass: the failed package alone, serially, with
+            # The diagnostic pass: the failed thing alone, serially, with
             # the sub-makes' output switched back on.  The objects of the
             # parallel pass are still on the disk, so this goes straight to
             # the file that broke and prints what the compiler said about
             # it.
-            if [ -n "$FAILED" ]; then
+            # The kernel is asked for first.  If the kernel is what broke,
+            # the package that failed is a consequence of it, and a package
+            # pass would spend its whole ceiling on the consequence.
+            if [ "$KERNEL_FAILED" = yes ]; then
+              timeout --kill-after=60s 25m bash -c "make -j1 V=s target/linux/compile" 2>&1 | tee "$DIAG" || true
+            elif [ -n "$FAILED" ]; then
               # The target is package/<path>/compile, and the "package/" is not
               # optional.  The top level has no rule for <path>/compile: it
               # falls into toplevel.mk's catch-all (%::), whose sub-make then

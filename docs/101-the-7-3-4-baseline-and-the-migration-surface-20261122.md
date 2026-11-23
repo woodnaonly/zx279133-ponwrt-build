@@ -60,6 +60,14 @@
     **行号一样，只有拼写不同**。修法是一个只落 `overlays-73/` 的补丁，
     本机两道门禁（最小 + 整包 22 个 `.c`）全绿，9 处突变的反向验证全绿。
     **但这一轮 CI 的结果还没出**，见 7.21。
+11. **7.3 线的诊断 pass 够不到内核。** 它只认
+    `ERROR: package/<path> failed to build.`，而内核编不过时报的是
+    `ERROR: target/linux failed to build.` —— 内核不是包，它由
+    `target/linux/compile` 编。⇒ 内核失败时诊断 pass 直接落到整树兜底，
+    而整树兜底**到不了内核**（6.18 线 run 88/89/91/92 的失败）。
+    已加内核分支（内核优先于包），三条断言 + 三处突变反向验证。
+    **五片驱动补丁从未被真正的编译器编过，内核是最可能的下一个失败面**，
+    见 7.22。
 
 ---
 
@@ -1773,7 +1781,7 @@ OpenWrt 在静默模式下**只留一句**：`make <target>: build failed. Pleas
    拼法）。补丁**只**落 `overlays-73/`，6.18 发布线一行不碰。
 4. **第二处缺口必须一起补**：同一个遮蔽还让 `__attribute_const__` 没了。
    不补它，报错只是从 `asm/ptrace.h:96` 挪到 `linux/swab.h:48` ——
-   **同一个文件、同一个原因**。只补 `__u128` 是把错误往后推一行。
+   **同一个原因，只是报错的位置往后挪了一处**。只补 `__u128` 是把错误往后推一行。
 5. **6.18 侧为什么没有 `__attribute_const__` 这一类错，本机没查实**（见「未做」）。
 
 **证据**
@@ -1977,11 +1985,26 @@ typedef unsigned __int128 __u128 __attribute__((aligned(16)));
   `linux/swab.h`（7010 B，含 `__attribute_const__`）**逐字相同**，两棵树的
   导出 uapi 头里都**没有** `__attribute_const__` 的定义；musl 1.2.5 tarball 里
   `__uint128_t`/`__attribute_const__` **只有使用、没有定义**。
-  ⇒ 6.18 的真实构建里一定还有本机没有的东西（或者链根本没走到 `swab.h`），
-  **机制未查实，不编机制**。本机同跑一次
+  **本机把这一条查到的地方都查了，结论是「本机看不到的地方一定还有东西」**：
+  - 整棵 7.3.4 内核树里 `__attribute_const__` 的**定义只有两处**：
+    `include/linux/compiler_attributes.h:83` 与 `tools/include/linux/compiler.h:121`
+    —— **两个都不导出**（`scripts/Makefile.headersinst` 只导出 `include/uapi/`、
+    `include/generated/uapi/`、`arch/<arch>/include/uapi/`、
+    `arch/<arch>/include/generated/uapi/`）。
+  - 整棵 OpenWrt 树里 `__attribute_const__` 只有两处命中：
+    `package/devel/binutils/patches/001-replace-attribute_const.patch`（改的是
+    binutils 自己的 gprofng 源码，**不是**用户态头）和
+    `package/boot/uboot-lantiq/patches/0028-gcc-compat.patch`（u-boot 自己）。
+    **两个都不进目标机的 include 目录。**
+  - 唯一在用户态提供这个宏的是 **glibc 的 `sys/cdefs.h`**，而 OpenWrt 用的是 musl。
+  ⇒ 所以 6.18 的真实构建里，要么根本没走到 `swab.h`（链断在别处），
+  要么有本机看不到的东西提供了它。
+  **机制未查实，不编机制。** 本机同跑一次
   （`python scratch/libbpf_pkg_gate.py 618`）的结果是：
   `linux/ptrace.h` 链**编过**（无 `__u128`），但 `libbpf.c` **仍**报
   `__attribute_const__` ⇒ 这条差异**本机复现不出来**。
+  **但它不影响 7.3 线的修法**：本补丁把 `__attribute_const__` 也补上了，
+  补法与内核自己的拼法一致，且带 `#ifndef` 守卫 —— 真有别的来源也不会打架。
 - elfutils 0.192 的 `libelf.h`/`gelf.h` 本机拿不到（sourceware 404、buildroot 极慢、
   sources.debian.org 返回 HTML 假页）⇒ 整包门禁里 20/22 个文件**在本机判不了**，
   只能由 CI 判。
@@ -1989,6 +2012,105 @@ typedef unsigned __int128 __u128 __attribute__((aligned(16)));
   （`-target aarch64-linux-musl -fsyntax-only`）⇒ 能证明「报不报错」，
   不能证明「CI 里一定编得过」。
 - 这一轮 CI 的结果还没出：**补丁在真实 CI 里能不能一次编过，尚未验证。**
+
+---
+
+### 7.22 诊断 pass 够不到内核：下一块失败面，正好是它看不见的那一面
+
+**判决**
+
+1. **7.3 线的诊断 pass 只认包，不认内核。** 它从 `compile.log` 里找的是
+   `ERROR: package/<path> failed to build.`，而内核编不过时顶层报的是
+   **`ERROR: target/linux failed to build.`** —— 模式对不上，`FAILED` 是空的。
+2. **内核不是包。** 它由 `target/linux/compile` 编：
+   `include/target.mk:398-401` 在 `TARGET_BUILD=1` 时拉进 `kernel-build.mk`，
+   而 `include/kernel-build.mk:156-157` 的 `compile:` 目标才是真正跑内核
+   make 的地方。`package/kernel/linux/Makefile:44-45` 的 `Build/Compile` 是
+   **空的**，所以 `package/kernel/linux/compile` 什么也编不出来。
+3. ⇒ 内核失败时，诊断 pass **直接落到整树兜底**；而整树兜底是从头再走一遍
+   包顺序，20 分钟的上限**到不了内核** —— 这正是 6.18 线 run 88/89/91/92
+   的失败（`build-sk-d840n.yml:1106-1109` 写得很清楚）。
+4. **修法**：诊断 pass 增加一条内核分支，**先**问 `target/linux/compile`
+   （6.18 线早就在用这个目标），内核优先于包。
+5. **为什么现在做**：7.3 线的五片驱动补丁**从未被真正的编译器编过**
+   （本机没有 arm64 交叉工具链），**内核是最可能的下一个失败面**，
+   而诊断 pass 恰好在这一面是瞎的。
+
+**证据**
+
+证据一：内核的失败行长什么样
+
+- `include/subdir.mk:79`：
+  `|| $(call ERROR,$(1),   ERROR: $(1)/$(bd) failed to build...)`
+- `include/subdir.mk:25-27` 的 `ERROR` 宏把这条消息**缩进三格**后打印：
+  `($(call MESSAGE, $(2)); ... exit 1;)`
+- `target/Makefile:10`：`$(curdir)/builddirs:=linux sdk imagebuilder toolchain llvm-bpf`
+  ⇒ `$(1)` = `target`、`$(bd)` = `linux`
+  ⇒ 那行就是 **`   ERROR: target/linux failed to build.`**
+
+⇒ 所以工作流里用的是 **固定字符串**匹配（`grep -qaF`）：缩进几格不影响，
+固定字符串也不受正则元字符干扰。
+
+证据二：6.18 线早就在用 `target/linux/compile`
+
+`build-sk-d840n.yml:1115`：
+
+```sh
+timeout --kill-after=60s 25m bash -c 'echo $$ > ../compile-make.pid; exec make -j1 V=s target/linux/compile' 2>&1 | tee ../compile-v1.log || DIAG_RC=$?
+```
+
+6.18 线能看见内核的编译错误，用的就是这个目标。7.3 线没有。
+
+**修法**
+
+7.3 线的 Compile 步现在多一段：
+
+```bash
+KERNEL_FAILED=no
+if grep -qaF 'ERROR: target/linux failed to build' ../compile.log; then
+  KERNEL_FAILED=yes
+fi
+...
+if [ "$KERNEL_FAILED" = yes ]; then
+  timeout --kill-after=60s 25m bash -c "make -j1 V=s target/linux/compile" 2>&1 | tee "$DIAG" || true
+elif [ -n "$FAILED" ]; then
+  timeout --kill-after=60s 20m bash -c "make -j1 V=s package/${FAILED}/compile" 2>&1 | tee "$DIAG" || true
+fi
+```
+
+- **内核优先**：内核坏掉时，报错的那个包只是它的后果，
+  拿包去问会把 20 分钟的上限花在后果上。
+- 时间预算：并行编译 280m + 内核诊断 25m + 整树兜底 20m = 325m，
+  作业上限 400m，装得下。
+
+**门禁**
+
+`tests/test_sk_workflows.py` 多三条断言：
+
+1. **verbose pass 的目标清单精确等于** `package/${FAILED}` 与 `target/linux`
+   两个（排序后比列表，所以多出第三个目标也会转红）；
+2. **工作流用的固定字符串真的能匹配 OpenWrt 打印的那一行** ——
+   把模式抽出来，拿 `"   ERROR: target/linux failed to build."` 去跑；
+   只比对「模式里出现了 target/linux」是不够的，那样的模式一行都不会 fire；
+3. **内核分支在包分支之前**（两个分支都在时）。
+
+`scratch/reverse_check_workflow.py` 多三处突变，
+每一处都只转红在**指定**的那条检查上：
+
+| 突变 | 转红在 |
+|---|---|
+| 把内核分支整段删掉 | 「verbose pass 的目标是失败包与内核」 |
+| 把固定字符串改成一个匹配不上的 | 「工作流认得内核自己的失败行」 |
+| 把包分支挪到内核分支前面 | 「内核先于包被诊断」 |
+
+**未做**
+
+- 这一条只修了「诊断 pass 够不到内核」。**内核第一次被真正的编译器编，
+  会不会过，仍然不知道** —— 本机没有交叉工具链，编译只能走 CI。
+- 内核分支的 25 分钟上限是照抄 6.18 线的；7.3 线的内核更大，
+  如果一次重编到不了出错的那个文件，可能还要再调。
+- 整树兜底那条路（`make -j1 V=s`）**仍然是到不了内核的**，
+  这次只是给它前面加了一条更直接的路；兜底本身没有改。
 
 ---
 
