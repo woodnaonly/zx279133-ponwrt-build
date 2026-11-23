@@ -144,6 +144,22 @@
     `staging/trial/flash-uImage` 的 banner），烤成 `7.3.4*) PAYLOAD=1`；
     厂商 4.19 仍然不匹配，真正的安全网（保留窗口必须在 `/proc/iomem` 里）一个字没动。
     见 7.30。
+20. **第 3/4/5 片的代码已经在 CI 产出的 7.3 镜像里了，而且现在有门禁管着。**
+    第九节原来写这三片「未编译验证——等 CI 的 Compile」，那是 run #36 之前的话；
+    现在是**实测结论**：run #39 的 `Compile` 用了 **46 分钟**并成功，
+    紧接着四道门禁全绿（内建、合并配置、dtb compatible、面板 LED）。
+    更硬的一层是**字节级**：把 7.3 那个 uImage inflate 之后，
+    三片各自的特征串**都**在里面 —— switch 驱动的 of_match 名、
+    9132 内部 PHY 的注册名、面板 LED 的 cdev 名、PON netdev 的名字、
+    OMCI 传输计数的 sysfs 属性名、9132 芯片编程的每口 PHY 打印串、
+    PPU 字名表、conduit 的格式串。
+    但**「在树里」「能编」「配成内建」「在要刷的镜像里」是四句话**，
+    前三句都有门禁管，**第四句没有** ⇒ 新增一道门禁，**直接问产物**：
+    每个探针同时要求「这个串还在它声称的源文件里」与「这个串在 inflate 后的内核里」，
+    两半分开判，少一半都转红。
+    顺带查明：**bench 的硬件链路早就断了**（CH340 不在枚举里、网口无载波、
+    本机有个 TUN 代理在应答 `192.168.9.0/24` 的 ARP），所以第 6 片推不动
+    **不是代码问题**。见 7.31。
 
 ---
 
@@ -375,7 +391,9 @@ CONFIG_EXTERNAL_KERNEL_TREE=<树>   OpenWrt 把这棵树当自己的内核目录
 | `tests/test_gatecheck.py` | 闸门的**负控**：6.18 凭证配 7.3 镜像、厂商 4.19 凭证、读不出版本的镜像、缺 `root_read`/`root_index`/`jffs2_ro` 的凭证、空标签 —— 每一种都必须转红（见 7.29） |
 | `tools/mkctlram.py` | 门禁轮 payload 的生成器：**新增 `--kver`**（默认从 `staging/trial/flash-uImage` 的 banner 推导），payload 只为「它被造出来要骑的那个内核」写 RAM mailbox —— 厂商 4.19 控制轮照旧一个字不写（见 7.30） |
 | `tests/test_ctl_payload.py` | 上面那条的**负控**：版本必须来自镜像、显式指定优先、模板里不能再有 `6.*`、厂商内核仍不匹配 |
-| `overlays-73/target/linux/zte/zx279133/target.mk` | 7.3 线的 subtarget 默认包：**清空 OpenWrt 的 `DEFAULT_PACKAGES.tweak`**，否则其中的 `luci` 元包会拉进 `luci-theme-bootstrap`（见 7.8） |
+| `tools/check-sk-image-drivers.py` | **产物级门禁**：问**要刷进板子的那个 uImage** 里有没有我们自己的驱动。每个探针两半分开判 —— 串还在它声称的源文件里（不是过期探针）**且**串在 inflate 后的内核里（代码真被编进去了）。「在树里 / 能编 / 配成内建 / 在镜像里」是四句话，前三句有门禁管，第四句原来没有（见 7.31） |
+| `configs/sk-d840n-73-image-drivers.json` | 上面那道门禁的**探针清单**（7 条，覆盖第 3/4/5 片与 conduit）。清单**不在工具里**：发布线的内核里是另一批驱动，得有另一份；清单本身也进了 path filter，改了它就要重跑构建 |
+| `tests/test_sk_image_drivers.py` | 上面那道门禁的**负控**：针不在像里、针不在源里（=过期探针）、源文件不存在、不是 uImage、载荷不是 gzip、清单没有探针、**针在第二个 gzip 成员里** —— 每一种都必须转红（见 7.31） || `overlays-73/target/linux/zte/zx279133/target.mk` | 7.3 线的 subtarget 默认包：**清空 OpenWrt 的 `DEFAULT_PACKAGES.tweak`**，否则其中的 `luci` 元包会拉进 `luci-theme-bootstrap`（见 7.8） |
 | `tools/func-surface-diff.py` | 两代驱动的函数面对照，输出「只在我们这边」与「只在 7.3 那边」两张工作清单 |
 | `tools/func-port-coverage.py` | **按能力对账**：171 个函数逐条必须有归属（同名 / 账本写明搬到哪 / 有处置记录），未记账即非零退出；账本指着的目标函数必须真在 7.3 树里（见八之七） |
 | `tools/kcheck.py` + `tools/kshadow.py` | **编译预言机**：用宿主 clang 对 7.3 树做 `-fsyntax-only`，生成树自己的头文件与影子头文件；7.3 线在 Compile 之前先跑它（见 7.17） |
@@ -3038,6 +3056,160 @@ PASS: the gate payload rides the kernel it was built for
 
 ---
 
+### 7.31 三片（第 3/4/5）的代码确实进了那个 7.3 镜像；以及 bench 的硬件链路早就断了
+
+#### 7.31.1 判决
+
+1. **第 3/4/5 片的代码在 CI 产出的 7.3 镜像里**——不是「应该在里面」，是**在**，
+   而且是**按字节**核对的。
+2. **这件事原来没有门禁管**，现在有了：新增 `tools/check-sk-image-drivers.py`
+   与 `configs/sk-d840n-73-image-drivers.json`，直接问**产物**。
+3. **第 6 片（实机对拍）推不动的原因是硬件，不是代码**：板子的两条链路
+   （串口与网口）**从 2026-10-28 起就没有载波 / 没有枚举**，
+   而本机还有个 TUN 代理**在应答 `192.168.9.0/24` 的 ARP**，
+   所以「ping 得通」这件事**一直是假阳性**。
+
+#### 7.31.2 证据一：run #39 的逐步结论（不是「最近几轮是绿的」）
+
+```
+$ python scratch/ci_runs_73.py 8ad7484
+run #39 id=45123469622 status=completed conclusion=success head=8ad74843
+    job 137522341139  repository gates  completed/success
+    job 137522497484  initramfs  completed/success
+    job 137522497513  flash  completed/success
+
+$ python scratch/job_steps.py 137522497513
+job 137522497513  flash  completed/success
+   12  completed/success  Check the 9132 switch driver against the 7.3 tree
+   13  completed/success  Check the PON / OMCI stack against the 7.3 tree
+   14  completed/success  Check the 9132 switch programming against the 7.3 tree
+   25  completed/success  Compile  [2026-11-23T06:28:30Z -> 2026-11-23T07:14:49Z]
+   26  completed/success  Gate: the zte drivers are built into the kernel
+   27  completed/success  Gate: the merged kernel config carries the board requirements
+   28  completed/success  Gate: every compatible the device tree names has a driver
+   31  completed/success  Validate and export the partitions
+```
+
+`Compile` 用了 **46 分 19 秒**并成功 —— 这意味着三片的 `.c` **被编过**：
+Kbuild 里少一个目标文件，整棵树就编不出来。
+
+**但「编过」还不是「在镜像里」**，所以有第二层证据。
+
+#### 7.31.3 证据二：字节级 —— 三片的特征串都在那个 uImage 里
+
+```
+$ python scratch/image_has_drivers.py staging/trial73/flash/flash-uImage
+=== staging/trial73/flash/flash-uImage (5811995 bytes on disk) ===
+    inflated payload: 14051336 bytes
+    FOUND  slice 3: switch driver       x3   (zx279133-switch.c 的 of_match 名)
+    FOUND  slice 3: 9132 internal PHY   x1   (9132 内部 PHY 的注册名)
+    FOUND  slice 3: lan1 LED cdev       x1   (面板 LED 拓扑)
+    FOUND  slice 4: pon device          x7   (PON netdev)
+    FOUND  slice 4: omci counters       x2   (OMCI 传输计数)
+    FOUND  slice 5: np.c                x5   (9132 芯片编程)
+    FOUND  slice 5: eram tables         x1   (PPU 字名表)
+    FOUND  conduit                      x1   (conduit 格式串)
+```
+
+**一个坑，记在这里**：uImage 的头部是 **64 字节**，载荷在 `0x40`；
+第一版探针脚本按 raw Image 的 `ARMd` 魔数（`0x38`）去判，于是**根本没解压**，
+八个探针全部 MISS —— 看起来像「三片都没进镜像」。
+**这是「测的是自己的假设」的又一例**：判据错了，结论就会整片反过来。
+
+#### 7.31.4 证据三：负控 —— 用 7.3 的清单去查 6.18 的镜像
+
+同一份探针清单查 6.18 那个 uImage：
+
+```
+$ python tools/check-sk-image-drivers.py --image staging/trial/flash-uImage \
+        --manifest configs/sk-d840n-73-image-drivers.json --board-layer kernel-overlays-73
+  inflated: 21256200 bytes, kernel 6.18.38+
+  slice 3: the panel LED topology: the image does not carry 'skyworth:green:lan1'
+  slice 4: the OMCI transport counter: the image does not carry 'omci_transport'
+FAIL: 2 of 7 probe(s) failed - the image is not this board's kernel
+exit=1
+```
+
+**恰好红在那两条不一样的探针上**，其余五条两边都有 ⇒ 这道门禁**有分辨力**，
+不是恒绿。
+
+#### 7.31.5 ⇒ 新增的门禁
+
+`tools/check-sk-image-drivers.py` 的判据是**两半分开**：
+
+| 半 | 判据 | 转红意味着 |
+|---|---|---|
+| 源 | 探针的串**还在它声称的源文件里** | 源被改名或改写 ⇒ 探针过期，**不是**放行 |
+| 像 | 探针的串**在 inflate 后的内核里** | 这段代码**没有被编进**要刷的镜像 |
+
+探针清单**不在工具里**，在 `configs/sk-d840n-73-image-drivers.json` ——
+发布线的内核里是**另一批驱动**，清单必须分开；清单本身也进了 path filter，
+改了它就要重跑构建。
+
+工作流里新增一步（`Gate: the image carries the board drivers`），
+位置在 **`Validate and export the partitions` 之后** —— 那一步才产出
+`flash-uImage`，也就是**真正要刷进板子的那对字节**。
+
+#### 7.31.6 门禁自己的负控与反向验证
+
+* `tests/test_sk_image_drivers.py`：**9 项负控**（针在像里/不在像里、
+  针不在源里=过期、源文件不存在、不是 uImage、载荷不是 gzip、
+  清单没有探针、**针在第二个 gzip 成员里**、两个探针错一个）。
+  「第二个 gzip 成员」那项是故意的：`gzip.decompress()` 只读第一个成员，
+  读法一变就少半个内核，而那**不会报错**。
+* `scratch/reverse_check_image_gate.py`：**16 处突变**，
+  每一处都必须**转红在指定的那条检查上**（工具 7 处、工作流步 4 处、
+  path filter 2 处、清单 3 处）。实测 16/16。
+
+#### 7.31.7 实机那一侧：bench 的两条链路都断了（且「ping 通」是假象）
+
+**证据（本机实测，2026-11-23）**：
+
+```
+$ [System.IO.Ports.SerialPort]::GetPortNames()
+（空）
+
+$ Get-PnpDevice -PresentOnly | Where-Object { $_.InstanceId -like 'USB\VID_1A86*' }
+（空）          # CH340 连「在不在」都查不到，只剩一个 Status=Unknown 的幽灵 COM3
+
+$ Get-NetAdapter -Name '以太网'
+Status=Disconnected  LinkSpeed=0 bps   ifIndex=19      # 连续 24 秒不跳变
+
+$ Get-NetRoute -AddressFamily IPv4 | ? { $_.DestinationPrefix -eq '0.0.0.0/0' }
+ifIndex 13  0.0.0.0/0  0.0.0.0  RouteMetric 0   # xray_tun（Wintun）
+ifIndex  8  0.0.0.0/0  192.168.10.1  RouteMetric 10
+
+$ Get-NetNeighbor -AddressFamily IPv4 | ? { $_.IPAddress -like '192.168.9.*' }
+ifIndex 13  192.168.9.25  Reachable
+ifIndex 13  192.168.9.2   Stale
+ifIndex 13  192.168.9.1   Probe
+```
+
+**这四条合起来是一句话**：`192.168.9.0/24` 的邻居解析**全落在 TUN 适配器上**
+⇒ **是 `xray_tun` 在应答 ARP**，不是板子。旁证：连**本机自己的** `192.168.9.25`
+都能「连上」22/23/80/443/8080/2323/5555/9 **全部端口**却**一个 banner 都读不到**
+（`Connection timed out during banner exchange`）—— 真机不会这样。
+
+⇒ **「ping 得通」是假阳性**，这一轮之前的任何一次「板子可达」结论都要重新看。
+
+另外两条证据说明 bench 的守护进程早就没了：
+`relayloop.log` 最后一行是 `2026-11-02 10:32 instance 4 starting`，
+`bench-keep.log` 最后一行是 `2026-11-01 09:06 relay=1 watch=1`，
+`plugphase.log` 最后一条是 `2026-10-28 00:35`（相位监视器停了 26 天）。
+
+#### 7.31.8 未做
+
+1. **第 6 片（实机对拍）没有推进**：板子要重新插上 CH340、插上网线、
+   确认智能插座供电，然后 `tools/bench-keep.ps1` 把继电器与冷启动看门狗拉起来。
+   **本机做不了这三件事**，需要人在现场。
+2. **TUN 代理的绕行没做**：板子回来以后，`192.168.9.0/24` 要么走以太网
+   （更具体的路由会赢过 `0.0.0.0/0`），要么把这一段从 `xray` 的路由里排除。
+   本轮**没有动代理的配置**（不在仓库里，也不在授权范围内）。
+3. **发布线没有接这道门禁**：它的内核里是另一批驱动，
+   要接得先量它自己的特征串 —— 那是另一件事，不该混在 7.3 线里做。
+
+---
+
 ## 八、BP 池：逐槽位对照（第 1 片剩余部分的结论）
 
 **判决**：**BP 池布局在 7.3 上不需要移植。** 我们 6.18 世代那套写法是
@@ -3973,13 +4145,17 @@ sh tools/trialsurvey.sh 10
 3. **9132 交换表 / switch.c**（76 个函数，4150 行）。这是 SK-D840N 四个 GE 口能不能活的问题。
    **第 3 片已落地**（见八之三）：`kernel-overlays-73/` 带驱动本体与两个私有头，
    `kernel-patches/7.3-local/130` 给 7.3 的 LAN 服务补上控制事务并接好
-   Kconfig/Makefile。**未编译验证**——等 CI 的 Compile。
-   接下来这一片剩下的是**实机对拍**：驱动能在 7.3 上编译不等于 LAN 口能通，
+   Kconfig/Makefile。**已编译验证**——run #36~#39 连续四轮全绿，
+   `Compile` 用了 46 分钟并成功；而且**按字节核对过**：那个 7.3 镜像里
+   有 switch 驱动的 of_match 名、9132 内部 PHY 的注册名、面板 LED 的 cdev 名
+   （见 7.31）。这一片剩下的是**实机对拍**：驱动能在 7.3 上编译不等于 LAN 口能通，
    判据是 conduit netdev 的 RX 计数在涨、四个 DSA 用户口的 link 状态正确。
 4. **PON / OMCI**（约 56 个函数）。**第 4 片已落地**（见八之四）：协议核心与两个
    内核文件逐字节搬进 `kernel-overlays-73/`，
    `kernel-patches/7.3-local/140` 给 7.3 的树补上四个钩子、一次 `opsd` GPIO 轮询
-   与 LOS 触发器。**未编译验证**——等 CI 的 Compile。
+   与 LOS 触发器。**已编译验证**——run #36~#39 连续四轮全绿；
+   按字节核对过：那个 7.3 镜像里有 PON netdev 的名字与
+   `omci_transport` 这个 sysfs 属性名（见 7.31）。
    这一片剩下的还是**实机对拍**：LOS 灯随 `opsd` 翻、`pon_state` 走 O1→O5、
    `omci_transport` 的 `submitted`/`completed` 在涨。
    和第 5 条「cnjn 会不会公开 npu-pon.ko」的强相关仍然存在：我们的栈只做
@@ -3987,7 +4163,9 @@ sh tools/trialsurvey.sh 10
 5. **9132 芯片本身的编程**（26 个函数 + 6 张表）。**第 5 片已落地**（见八之五）：
    从 6.18 的 `np.c` 逐字搬进 7.3 的 `np.c`，并把 ERAM 表描述符的记录点补上；
    `kernel-patches/7.3-local/150` 一个补丁改 2 个文件。
-   **未编译验证**——等 CI 的 Compile。这一片上板后的判据是
+   **已编译验证**——run #36~#39 连续四轮全绿；按字节核对过：
+   那个 7.3 镜像里有 9132 芯片编程的每口 PHY 打印串与 PPU 字名表（见 7.31）。
+   这一片上板后的判据是
    **四个 DSA 用户口的 link 状态正确、conduit 的 RX 计数在涨**。
 6. **RGMII 调试**（8 个函数）：**判为取舍，不搬**——它只是 `0x15900000` 窗口的
    debugfs 端点，该块在本机全零、厂商 Linux 从不 bring up（见八之五.9）。
@@ -4193,6 +4371,24 @@ sh scratch/sim73_rehearsal.sh
 
 # 48) payload 门禁自己的负控
 python3 ci-build-repo/tests/test_ctl_payload.py
+
+# 49) 第 3/4/5 片的代码到底在不在 7.3 镜像里（按字节，不是按编译日志）
+python3 scratch/image_has_drivers.py staging/trial73/flash/flash-uImage
+
+# 50) 产物级门禁：7.3 的清单查 7.3 的像（应过）；
+#     同一份清单查 6.18 的像（必须红，且恰好红在那两条不一样的探针上）
+python3 ci-build-repo/tools/check-sk-image-drivers.py \
+        --image staging/trial73/flash/flash-uImage \
+        --manifest ci-build-repo/configs/sk-d840n-73-image-drivers.json \
+        --board-layer ci-build-repo/kernel-overlays-73
+python3 ci-build-repo/tools/check-sk-image-drivers.py \
+        --image staging/trial/flash-uImage \
+        --manifest ci-build-repo/configs/sk-d840n-73-image-drivers.json \
+        --board-layer ci-build-repo/kernel-overlays-73
+
+# 51) 上面那道门禁自己的负控与反向验证
+python3 ci-build-repo/tests/test_sk_image_drivers.py
+python3 scratch/reverse_check_image_gate.py
 ```
 
 第十节的 18~24 号命令里，`cfg73_sim.py` 与 `kdeps73.py` 是**一对**：

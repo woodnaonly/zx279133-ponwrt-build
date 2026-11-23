@@ -52,6 +52,12 @@ on:
       - tools/kshadow.py
       - tests/test_sk_kcheck.py
       - tests/test_conduit_netdev_name.py
+      # The image gate: it asks the artifact that is about to be flashed whether
+      # it carries the drivers this line owns, so a change to the gate, to its
+      # probe list or to its negative controls changes what the build checks.
+      - tools/check-sk-image-drivers.py
+      - configs/sk-d840n-73-image-drivers.json
+      - tests/test_sk_image_drivers.py
       # The flash gate: it decides which bytes may be written to a board, so a
       # change to it - or to the controls that say whether it still refuses
       # what it used to - changes what the build checks.
@@ -106,6 +112,7 @@ jobs:
           python3 tests/test_conduit_netdev_name.py
           python3 tests/test_gatecheck.py
           python3 tests/test_ctl_payload.py
+          python3 tests/test_sk_image_drivers.py
 
   build:
     name: ${{ matrix.mode }}
@@ -1095,6 +1102,31 @@ jobs:
                 flash-sysupgrade.bin immortalwrt-sk-d840n-sysupgrade.bin \
                 sysupgrade-report.json > sha256sums )
           ( cd images && sha256sum -c sha256sums )
+
+      # The gates above say that the drivers are configured as built-in, that
+      # clang can parse them, that the Kbuild wires them in and that the
+      # device tree names a driver for every compatible it mentions.  All four
+      # are statements about the tree and the configuration.  None of them
+      # looked at the bytes that go on the board, and "in the tree", "compiles",
+      # "configured as built-in" and "in the flashed image" are four different
+      # claims - a driver that is never compiled, or that is compiled into a
+      # module the RAM image does not load, produces an image that builds
+      # cleanly and comes up with no network port at all.
+      #
+      # So the artifact itself is asked: each probe names a string that exists
+      # in one of our own sources and has to exist in the inflated kernel.
+      # Both halves are checked, and a probe whose source no longer carries
+      # the string is reported as stale rather than passed.
+      - name: 'Gate: the image carries the board drivers'
+        run: |
+          set -e
+          python3 tools/check-sk-image-drivers.py \
+            --image flash-uImage \
+            --manifest configs/sk-d840n-73-image-drivers.json \
+            --tree "$KERNEL_TREE" \
+            --board-layer kernel-overlays-73 \
+            --report sk-image-drivers.json
+          cat sk-image-drivers.json
 
       - name: Upload the images
         uses: actions/upload-artifact@v4

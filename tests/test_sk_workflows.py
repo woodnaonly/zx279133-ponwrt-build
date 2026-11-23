@@ -26,6 +26,7 @@ filter, so a patch series that lands outside the filter builds nothing and the
 green run says nothing about it.
 """
 import importlib.util
+import json
 import re
 import sys
 from pathlib import Path
@@ -76,6 +77,7 @@ BRINGUP_STEPS = [
     "Collect the images",
     "Gate: the image carries the packages the board needs",
     "Validate and export the partitions",
+    "Gate: the image carries the board drivers",
     "Upload the images",
 ]
 
@@ -112,6 +114,12 @@ BRINGUP_TRIGGERS = [
     "tools/kcheck.py",
     "tools/kshadow.py",
     "tests/test_sk_kcheck.py",
+    # The image gate: it asks the artifact that is about to be flashed whether
+    # it carries the drivers this line owns, so a change to the gate, to its
+    # probe list or to its negative controls changes what the build checks.
+    "tools/check-sk-image-drivers.py",
+    "configs/sk-d840n-73-image-drivers.json",
+    "tests/test_sk_image_drivers.py",
     "scripts/configure-sk-d840n.sh",
     "configs/sk-d840n-73.json",
 ]
@@ -998,6 +1006,72 @@ def main():
                            "the table adds up to the measured total of 171")
             failures.check("tools/func-port-coverage.py" in note_text,
                            "the note names the tool that accounts for the functions")
+
+    # The image gate asks the artifact that is about to be flashed whether it
+    # carries the drivers this line owns.  The gate itself is only as good as
+    # its probe list, so the list is checked here against the files it claims
+    # to read: a probe whose needle is not in the source it names would pass
+    # on a string that now means something else, and a probe whose source
+    # does not exist would ask about a file that is not there.
+    print("\nthe 7.3 line asks the image whether it carries the board's drivers")
+    image_gate = [step for step in steps_of(bringup, "build")
+                  if str(step.get("name") or "") ==
+                  "Gate: the image carries the board drivers"]
+    failures.check(bool(image_gate),
+                   "the 7.3 line has the image driver gate")
+    tool = ROOT / "tools" / "check-sk-image-drivers.py"
+    manifest_path = ROOT / "configs" / "sk-d840n-73-image-drivers.json"
+    failures.check(tool.exists(),
+                   "the image driver gate is in the repository")
+    failures.check(manifest_path.exists(),
+                   "the probe list of the image driver gate is in the repository")
+    if image_gate:
+        commands = run_body(image_gate[0])
+        failures.check(
+            re.search(r"tools/check-sk-image-drivers\.py", commands) is not None,
+            "the image driver gate runs the repository's own tool")
+        failures.check(
+            re.search(r"--image[ \t]+\S*flash-uImage", commands) is not None,
+            "the image driver gate reads the artifact that is about to be flashed")
+        failures.check(
+            re.search(r"--manifest[ \t]+\S*sk-d840n-73-image-drivers\.json",
+                      commands) is not None,
+            "the image driver gate reads the probe list of this line")
+        failures.check(
+            re.search(r"--tree[ \t]+\"\$KERNEL_TREE\"", commands) is not None,
+            "the image driver gate reads the tree the image was built from")
+        failures.check(
+            re.search(r"--board-layer[ \t]+\S*kernel-overlays-73", commands)
+            is not None,
+            "the image driver gate reads the board layer")
+    if manifest_path.exists():
+        probes = json.loads(manifest_path.read_text(encoding="utf-8")).get("probes")
+        failures.check(bool(probes), "the probe list is not empty")
+        labels = [str(p.get("label", "")) for p in probes or []]
+        slices = set(re.findall(r"slice (\d)", " ".join(labels)))
+        failures.check(slices == {"3", "4", "5"},
+                       "the probe list covers the three slices")
+        failures.check(any("conduit" in label for label in labels),
+                       "the probe list covers the LAN conduit")
+        for probe in probes or []:
+            needle = probe.get("needle", "")
+            label = probe.get("label", needle)
+            sources = probe.get("sources") or []
+            failures.check(bool(needle), f"the probe {label!r} names a needle")
+            failures.check(bool(sources),
+                           f"the probe {label!r} names a source")
+            # The repository's own copies are the ones that can be read here;
+            # the tree is only there while a build is running.
+            readable = [s for s in sources
+                        if s.get("root") in ("repo", "board")
+                        and (ROOT / s.get("path", "")).is_file()]
+            failures.check(bool(readable),
+                           f"the probe {label!r} names a source that exists")
+            if readable:
+                text = (ROOT / readable[0]["path"]).read_text(
+                    encoding="utf-8", errors="replace")
+                failures.check(needle in text,
+                               f"the probe {label!r} is really in its source")
 
     return failures.report("workflows")
 

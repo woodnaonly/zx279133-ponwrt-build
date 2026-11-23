@@ -1,0 +1,74 @@
+{
+  "_comment": "The probes the 7.3 line's image gate asks about. Each one names a string that exists in one of our own sources and has to exist in the kernel image that is about to be flashed. The gate checks both halves separately: a needle that is no longer in the source it is attributed to is a stale probe, and a needle that is missing from the image means the code was not built into the kernel that goes on the board. The release line carries a different list - its kernel has different drivers in it - so the list lives in a manifest of its own rather than inside the tool.",
+  "_sources_comment": "Every probe lists its sources in the order they should be looked for: the tree that is about to be built comes first, the patch that creates the file second, and the board layer of this repository last. The tree is the authoritative source in the build; the others are what the same claim can be checked against when there is no tree at hand, and they carry the same strings because the tree is made of them.",
+  "line": "7.3",
+  "probes": [
+    {
+      "label": "slice 3: the 9132 switch driver",
+      "needle": "ZX279133 9132 internal PHY",
+      "why": "the DSA switch driver this line owns; without it the four LAN ports have no driver at all",
+      "sources": [
+        { "root": "tree", "path": "drivers/net/ethernet/zte/zx279133-switch.c" },
+        { "root": "board", "path": "drivers/net/ethernet/zte/zx279133-switch.c" },
+        { "root": "repo", "path": "kernel-overlays-73/drivers/net/ethernet/zte/zx279133-switch.c" }
+      ]
+    },
+    {
+      "label": "slice 3: the panel LED topology",
+      "needle": "skyworth:green:lan1",
+      "why": "the LAN1 LED the switch driver claims - the one the bench watches during the cross-check",
+      "sources": [
+        { "root": "tree", "path": "drivers/net/ethernet/zte/zx279133-switch.c" },
+        { "root": "board", "path": "drivers/net/ethernet/zte/zx279133-switch.c" },
+        { "root": "repo", "path": "kernel-overlays-73/drivers/net/ethernet/zte/zx279133-switch.c" }
+      ]
+    },
+    {
+      "label": "slice 4: the PON netdev",
+      "needle": "zxpon",
+      "why": "the PON netdev the PON stack registers",
+      "sources": [
+        { "root": "tree", "path": "drivers/net/ethernet/zte/zx279133-pon.c" },
+        { "root": "board", "path": "drivers/net/ethernet/zte/zx279133-pon.c" },
+        { "root": "repo", "path": "kernel-overlays-73/drivers/net/ethernet/zte/zx279133-pon.c" }
+      ]
+    },
+    {
+      "label": "slice 4: the OMCI transport counter",
+      "needle": "omci_transport",
+      "why": "the sysfs attribute the PON stack exposes - the bench reads it to see that OMCI frames go out and come back",
+      "sources": [
+        { "root": "tree", "path": "drivers/net/ethernet/zte/zx279133-pon.c" },
+        { "root": "board", "path": "drivers/net/ethernet/zte/zx279133-pon.c" },
+        { "root": "repo", "path": "kernel-overlays-73/drivers/net/ethernet/zte/zx279133-pon.c" }
+      ]
+    },
+    {
+      "label": "slice 5: the 9132 chip programming",
+      "needle": "9132 UNI PHY",
+      "why": "the per-port PHY programming the fifth slice moved; without it the switch's ports stay dark",
+      "sources": [
+        { "root": "tree", "path": "drivers/net/ethernet/zte/zx279133-np.c" },
+        { "root": "repo", "path": "kernel-patches/7.3-local/150-sk-9132-switch-programming.patch" }
+      ]
+    },
+    {
+      "label": "slice 5: the PPU word names",
+      "needle": "entry-pc",
+      "why": "the ERAM table record points the fifth slice adds to np.c",
+      "sources": [
+        { "root": "tree", "path": "drivers/net/ethernet/zte/zx279133-np.c" },
+        { "root": "repo", "path": "kernel-patches/7.3-local/150-sk-9132-switch-programming.patch" }
+      ]
+    },
+    {
+      "label": "the LAN conduit netdev",
+      "needle": "lan-cpu%d",
+      "why": "the conduit the four DSA user ports hang off; the kernel formats this name when the netdev is registered",
+      "sources": [
+        { "root": "tree", "path": "drivers/net/ethernet/zte/zx279133-lan-conduit.c" },
+        { "root": "repo", "path": "kernel-patches/7.3/390-net-zx279133-lan-conduit.patch" }
+      ]
+    }
+  ]
+}
