@@ -618,8 +618,9 @@ CONFIG_EXTERNAL_KERNEL_TREE=<树>   OpenWrt 把这棵树当自己的内核目录
    LOS 灯会跟着 `opsd` 翻，carrier 停在 O1，OMCI 队列空转。
 2. **没有编译验证。** 本机无 arm64 交叉工具链，编译只能走 CI；`build-sk-d840n-73.yml`
    是**第一次**运行，结果未知。
-3. **DTS 没有在本地编译过。** 本机没有 `dtc`，只能用「label 可解析 + 属性存在」
-   做静态核对。CI 里有 dtc 门禁，第一次跑就知道结果。
+3. ~~**DTS 没有在本地编译过。**~~ **本轮补上了**：本机现在有与 CI 同版本的
+   dtc 1.6.1（见八之十三），DTS 门禁在本机**真的跑过**（`tests/test_sk_led_dts_gate.py` 绿），
+   不再只是「label 可解析 + 属性存在」的静态核对。
 4. ~~**驱动是模块而非内置。**~~ **已在本轮判明并修掉**，见 7.12：
    7.3 的 `config-7.3` 里 `CONFIG_ZTE_ZX279133_ETH=m`，而 6.18 线是内置；
    模块化不只是「要重新确认 kmod 依赖链」，而是**镜像里根本不会有驱动**——
@@ -628,6 +629,16 @@ CONFIG_EXTERNAL_KERNEL_TREE=<树>   OpenWrt 把这棵树当自己的内核目录
    **剩下的**：`ZTE_ZX279133_RGMII` 在 7.3 树里**没有 Kconfig**，
    配置脚本钉的符号会被 defconfig 静默丢掉（6.18 线上的 RGMII 只读探针
    在 7.3 上不存在）。
+   **但 MAC 本身在内建驱动里**（本轮实测，基线树
+   `drivers/net/ethernet/zte/Makefile:11-13`）：7.3 的 MAC 是
+   `zx279133-mac.o`，**在 `npu.o` 里面**，随 `ZTE_ZX279133_ETH=y` 一起进内核；
+   7.3 原版 Kconfig 里也没有 `ZTE_ZX279133_SWITCH`，
+   它是 vendored 补丁加进来的（基线树 Kconfig 第 79 行），
+   而 `kernel-overlays-73/` 只提供 `zx279133-switch.c` 的源码、**不带 Kconfig**，
+   所以树里那个 Kconfig 不会被覆盖掉。
+   ⇒ 缺的只是「一个独立符号的探针」，不是「MAC」；
+   四个符号（`_ETH`/`_LAN_CONDUIT`/`_SWITCH`/`_FNOFFLOAD`）在**我们真编的那棵树**里都在，
+   合并配置门禁要求它们 `=y`，这一步会在 CI 里判。
 5. **目标固件的 PON 模块仍未公开。** 我们逆向出的 30 个 PON 钩子导出只在二进制里；
    等 cnjn 公开 `npu-pon.ko` 源码，我们自研的 PON/OMCI 栈要么对齐、要么让位——
    这个决策应该在 7.3 的 NPU 驱动跑通之后再做。
@@ -1281,11 +1292,24 @@ cnjn 的 7.3 树把 offload 从 NPU 驱动里拆成独立的 `fnoffload.o`
    `config-7.3` 里写一个**不存在的符号**，defconfig 静默丢掉。
    ⇒ 6.18 线上那个「RGMII MAC 寄存器块只读探针」在 7.3 上不存在。
    这是取舍还是缺口，等对拍时看能不能读寄存器再判。
-2. **内核体积。** NPU（加上 flow offload）进 `vmlinux` 之后要放进固定的
-   8 MiB `kernel` 分区。`-Os` 已经由 `skd840n_pin_kernel_size` 钉住，
-   但 7.3 的底子比 6.18 大，**flash 那一路可能撑不下**；
-   撑不下的话是 `Image too big` 报错，不是静默失败。
-   7.3 线的「Collect the images」步会把内核镜像的字节数打进 annotation。
+2. ~~**内核体积。**~~ **已查实：7.3 装得下，而且余量比 6.18 线大得多。**
+   分区是固定的 8 MiB（8,388,608 B），装的是**压缩后**的内核
+   （uImage 头 64 B 之后那段 gzip 流，zopfli 压的）。
+   本机实测（`scratch/kernel_fit.py`：**逐个 gzip 成员量**，
+   不拿 uImage 头的 size 字段当压缩后的大小）：
+
+   | 镜像 | 压缩载荷 | 8 MiB 余量 | 解压后的 Image |
+   |---|---|---|---|
+   | **7.3**（`staging/trial73/flash/`，run #36/#37 那一批的） | 5,811,931 B | **+2,576,677 B（2.46 MiB）** | 14,051,336 B |
+   | 6.18 发布线（live `staging/trial/`） | 8,333,285 B | +55,323 B（54 KiB） | 21,256,200 B |
+   | 6.18 回滚件（厂商 4.19） | 4,814,713 B | +3,573,895 B | 10,676,232 B |
+
+   ⇒ 初稿那句「7.3 的底子比 6.18 大 ⇒ **flash 那一路可能撑不下**」
+   **不成立**：**7.3 的内核比 6.18 的小 2.5 MB（压缩后）**。
+   本轮后加的四片补丁（160/170/180/190，加起来几万字节源码）
+   编译后只是几 KB 量级 ⇒ 离 8 MiB 还差得远。
+   **仍然是 CI 说了算**：7.3 线的「Collect the images」步会把内核镜像的
+   字节数打进 annotation，而装不下时是 `Image too big` 报错，不是静默失败。
 3. **`ZTE_ZX279133_RTL8372N` 仍是 `=m`。** 它是 SR1010 那块外挂 RTL8372N 的驱动，
    这块板子上没有对应节点，模块不加载即可，没有副作用。
 
@@ -3613,8 +3637,10 @@ raw = b"self-contained ARM64 kernel" * 32      # ← 里面没有 banner
    这是有意的（见上），但它意味着**旧 release 的刷机没有版本这一层检查**。
 2. **initramfs 模式的 release 没有报告**：那一步只跑 flash 模式，
    而 initramfs 镜像本来就不是刷进 flash 的东西。
-3. **本机 `tests/test_sysupgrade.py` 仍有 1 个 error**：本机缺 `libfdt`
-   （`cc -lfdt` 找不到库），CI 上有。这是**环境**，不是代码。
+3. ~~**本机 `tests/test_sysupgrade.py` 仍有 1 个 error**：本机缺 `libfdt`
+   （`cc -lfdt` 找不到库），CI 上有。这是**环境**，不是代码。~~
+   ⇒ **已补齐**：本机现在有与 CI 同版本的 libfdt 1.6.1，
+   这条 error 没有了（见八之十三）。
 4. **这轮只修了报告链，没有碰 live 工装区**：live 的四个脚本不在仓库里（7.32.7），
    `preflash.py` 是仓库里的那一份，live 用的可能不是它 —— **这一条没查**。
 
@@ -4895,8 +4921,38 @@ sh tools/trialsurvey.sh 10
 **不要**因为对拍不过就去整体移植 TX 故障隔离/恢复（**判为不整体移植**，见八之五.9），
 也不要顺手去动 RGMII（**取舍不是缺口**）。
 
-**未做**：这一节是**清单**，不是结论——它一行都还没有在 7.3 的镜像上跑过，
-因为镜像还没出来（见 7.16 与 7.17 的 CI 轮次）。
+#### 八之八.7 现场那套工装：清单里的仪器**不在清单所在的目录里**
+
+**判决**：照着这份清单在现场做，**第一条命令就会失败**。
+
+`sh tools/trialsurvey.sh 10` 是在**工作区根目录**跑的（现场站的地方），
+那里的 `tools/` 是**现场工装区**，不是仓库的 `ci-build-repo/tools/` ——
+而 `trialsurvey.sh`（含第 10 片加的 `rx_dropped`）**只在仓库里**，
+现场那份**没有** ⇒ 「文件不存在」。
+
+**已定向同步**（不整包覆盖）：仓库那份**逐字节**复制到现场
+（sha256 `33fb8a1d…`，`sh -n` 过）。
+
+**顺带体检了整条刷机链**（`scratch/live_flash_tools_check.py`）：
+`gatecheck.sh` / `flash-round.sh` / `flash-direct.sh` / `preflight.sh` /
+`flashverify.sh` / `flashverify-test.sh` / `lan1roundcheck.sh` /
+`gettrial.sh` / `round.sh` / `onewindow.sh` / `mkctlram.py` /
+`dtbparts.py` / `uimage-kver.py`
+—— **十三个全部在、全部能解析**；
+`bench-keep.ps1` 在现场与仓库**逐字节相同**，里面**没有**写死的
+内核版本或分区大小。布局方面，`flash-round.sh`、`flash-direct.sh`、
+`preflight.sh`、`lan1roundcheck.sh`、`gettrial.sh`
+问的都是 **native241 + root=0xf00000,0xf100000**，不是旧的 240 MiB。
+
+**未做**：现场工装区里有 **189 个文件**在仓库里没有对应物
+（`e1xxx.sh` 那些一次性实验脚本、`accept*.sh`、`arm*.sh` 等等），
+**CI 看不见它们**（不在仓库里 ⇒ 不在 `paths:` 里 ⇒ 没有 lint 覆盖）。
+本轮只查了上面这十三个**刷机链上**的脚本能解析，
+**没有把它们收进版本控制** —— 收进来的取舍见「下一步」。
+
+**未做**：这一节是**清单**，不是结论——它一行都还没有在**板子**上跑过：
+镜像早出来了（run #36/#37，见 7.28），但**板子还没跑过 7.3**
+（`staging/ctl/flash.permit` 里没有 7.3 那对字节的凭证，见 7.28）。
 
 ---
 
@@ -5472,6 +5528,97 @@ open 会在**任何恢复还没跑到**之前就被拒掉。
 
 ---
 
+## 八之十三、本机补齐 host 工具链：本地门禁从 16/18 到 18/18
+
+### 8之十三.1 判决
+
+CI 的「repository gates」那一步里有两道门禁**在本机跑不了**：
+
+| 门禁 | 缺什么 | 症状 |
+|---|---|---|
+| `tests/test_sk_led_dts_gate.py` | `dtc` | `dtc: command not found` |
+| `tests/test_sk_layout.py` | `cc -lfdt` | `fatal error: 'libfdt.h' file not found` |
+
+⇒ 本机那份命令清单（`scratch/run_ci_gates_local.py`）**16/18**，
+缺的两项是**环境**缺口，不是代码缺口。
+
+现在三件 host 工具在本机补齐了 ⇒ **18/18 全绿**。
+
+### 8之十三.2 为什么值得补
+
+CI 的 gates job 几分钟就出结果，但**推送会连带起一轮 90 分钟的构建**
+（两条线各一轮）。本机能在推送前把门禁本身跑完，
+等于把「**门禁写错了**」与「**树写错了**」这两件事分开 ——
+这正是「门禁红时先问树对不对、再问门禁对不对」那条规矩的前提（见 7.19、8之十二）。
+
+### 8之十三.3 版本必须对齐 CI，不能拿「手边有的」凑
+
+CI 的 gates job 装的是：
+
+```
+sudo apt-get -qq install --no-install-recommends device-tree-compiler libfdt-dev python3-yaml
+```
+
+Ubuntu 22.04 上这两样**都是 1.6.1**。⇒ 本机也编 1.6.1。
+
+两个具体的坑：
+
+1. **内核树里的 `scripts/dtc/libfdt` 是上游 libfdt 的裁剪版**：
+   它**没有 `fdt_check.c`**，因而**没有 `fdt_check_full`** ——
+   `sk-layout-check.c` 正好调用它 ⇒ **链不上**。
+   这不是本机环境的问题，是那份裁剪的真实内容（先拿内核树的 libfdt 编，结果是
+   `undefined symbol: fdt_check_full`）。
+2. **dtc 的发行 tarball 与内核 tarball 都不带生成好的 lexer/parser**
+   ⇒ 必须有 flex 与 bison。本机没有，于是用 **winflexbison**（免安装包，
+   `win_flex.exe` / `win_bison.exe`）现生成。
+   ⇒ 顺带一个 win_flex 的怪癖：**它不认 `-oFILE`，只认 `-o FILE`**。
+
+### 8之十三.4 三件东西的来历
+
+| 工具 | 版本 | 来源 | 备注 |
+|---|---|---|---|
+| `dtc` | 1.6.1 | `mirrors.edge.kernel.org/pub/software/utils/dtc/dtc-1.6.1.tar.gz` | win_bison 生成 parser、win_flex 生成 lexer、clang 编译 |
+| `libfdt` | 1.6.1 | 同一份 tarball 的 `libfdt/` | 编成 `libfdt.a` + 三个头（`libfdt.h`、`libfdt_env.h`、`fdt.h`），与 Ubuntu `libfdt-dev` 装的一致 |
+| `cpp` | 垫片 | 本机写的 30 行 C | 见 8之十三.5 |
+
+### 8之十三.5 垫片要补的那一个差别（不是「随便找个 cpp」）
+
+GNU cpp 在 Linux 目标上**把 `linux` 预定义成 1**；clang 不预定义它。
+
+门禁里有一条**对照分支**正是靠这个内建宏才能复现原始故障：
+去掉 `-undef` 之后，`linux,default-trigger` 会被改名成 `1,default-trigger`，
+而 dtc **照单全收**（这正是当初那类故障的形状）。
+⇒ 垫片转发给 `clang -E`，并且**只在调用方没有给 `-undef` 时**加 `-Dlinux=1` ——
+而 `-undef` 恰恰就是用来消掉那个宏的，所以这两条规则合起来
+**与 GNU cpp 的行为等价**。
+
+实测（`cpp -dM`）：
+
+```
+$ cpp -dM -x assembler-with-cpp -        # 没有 -undef
+#define linux 1
+$ cpp -dM -x assembler-with-cpp -undef - # 有 -undef
+（没有 #define linux）
+```
+
+⇒ 本机跑这条门禁时，那条对照分支**真的跑了**，不是被跳过。
+
+### 8之十三.6 边界（未做 / 不成立）
+
+1. **本机 dtc 没有 YAML 输入**（按上游 Makefile 的 `NO_YAML=1` 去掉 `yamltree.c`）。
+   门禁只喂 `.dts`，所以不影响门禁结论；**但 `dtc -I yaml` 在本机不可用**。
+2. **本机 `cpp` 是 clang 的，不是 GNU cpp**。除了 8之十三.5 那一条内建宏，
+   其余行为一致；但**不能**用它证明「GNU cpp 会怎么报」。
+3. **这些工具在 `scratch/toolchain/`，不在仓库里** ——
+   它们是本机的工装，不是出货物。⇒ CI 不会因为它们变红，也不需要它们。
+4. **版本对齐是「当前」事实**：CI 的 apt 版本一换，本机就得跟着换
+   （换 `device-tree-compiler` 的版本要重编 dtc，换 `libfdt-dev` 要重编 libfdt）。
+5. **门禁本身没动**：本轮**一行仓库门禁代码都没改**，
+   改的只是本机环境。⇒ 这也顺带证明那两道门禁在 CI 上是真的绿的
+   （CI 从头到尾都是绿的，本机是第一次能自己跑它们）。
+
+---
+
 ## 九、下一步（按片重打，每片一次 CI）
 
 **没搬的，按片来：**
@@ -5947,6 +6094,29 @@ python3 ci-build-repo/tests/test_sk_workflow_paths.py
 
 # 81) 本机跑 CI「repository gates」那一步的命令清单（含上面这两道）
 python3 scratch/run_ci_gates_local.py
+
+# 82) 内核塞不塞得进 8 MiB 分区：逐个 gzip 成员量压缩载荷
+python3 scratch/kernel_fit.py staging/trial73/flash/flash-uImage \
+        staging/trial/flash-uImage staging/rollback/flash-uImage
+
+# 83) 现场刷机链的体检：十三个脚本在不在、能不能解析、问的是哪个布局；
+#     以及现场有多少文件在仓库里没有对应物（CI 看不见的那些）
+python3 scratch/live_flash_tools_check.py
+
+# 84) 造本机那三件 host 工具（dtc 1.6.1、libfdt 1.6.1、cpp 垫片）
+#     需要先备好：dtc-1.6.1.tar.gz 与 win_flex_bison-2.5.25.zip
+pwsh -NoProfile -File scratch/toolchain/build-host-tools.ps1
+
+# 85) 本机跑 CI「repository gates」那一步的命令清单 —— 补齐工具后 18/18 全绿
+python3 scratch/run_ci_gates_local.py
+
+# 86) 查这三件工具的版本与那个内建宏的行为（`linux` 该在的时候在、不该在的时候不在）
+scratch/toolchain/bin/dtc.exe --version
+scratch/toolchain/bin/cpp.exe -dM -x assembler-with-cpp - | grep '^#define linux '
+scratch/toolchain/bin/cpp.exe -dM -x assembler-with-cpp -undef - | grep -c '^#define linux '
+
+# 87) 产物到手之后的一条命令：自证 + 9 条产物探针 + 8 MiB 体积余量
+python3 scratch/verify_73_artifact.py staging/trial73b/flash
 ```
 
 第十节的 18~24 号命令里，`cfg73_sim.py` 与 `kdeps73.py` 是**一对**：
