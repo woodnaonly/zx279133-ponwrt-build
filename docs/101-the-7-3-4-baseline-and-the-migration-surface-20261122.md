@@ -1521,15 +1521,18 @@ OpenWrt 在静默模式下**只留一句**：`make <target>: build failed. Pleas
 ⇒ **两条线都会编 libbpf**，6.18 线编得过、7.3 线编不过，
 **差别只能在内核侧或工具链侧**。
 
-一条**线索**（不是判决）：libbpf 1.6.2 的 `src/libbpf.c` 无条件
-`#include <linux/bpf.h>` / `<linux/btf.h>` / `<linux/filter.h>` /
-`<linux/kernel.h>` / `<linux/perf_event.h>` / `<linux/bpf_perf_event.h>` /
-`<linux/ring_buffer.h>` / `<linux/netdev.h>` / `<linux/pkt_cls.h>`，
-还有 `src/libbpf_probes.c` 的 `<linux/version.h>`——**都是内核的 uapi 头**。
-在 7.3.4 树里：`include/uapi/linux/ring_buffer.h` **不存在**
-（只有内核内部的 `include/linux/ring_buffer.h`），
-`linux/version.h` 则只在**构建期生成**（`include/generated/uapi/linux/version.h`）。
-**头是从哪来的、缺不缺，只有真编译一次才知道** ⇒ 这正是下面那道诊断要回答的。
+一条**线索**（不是判决）：libbpf 1.6.2 把大部分内核 uapi 头**vendored 进了自己的仓库**
+（`include/uapi/linux/{bpf,bpf_common,btf,if_link,if_xdp,netdev,netlink,perf_event,pkt_cls,pkt_sched}.h`
+与 `include/linux/{compiler,err,filter,kernel,list,overflow,ring_buffer,types}.h`），
+所以它**大体上不依赖目标内核的头**；但它仍然无条件 include 了两个**没有 vendored** 的头：
+`src/libbpf.c` 的 `<linux/bpf_perf_event.h>` 与 `src/libbpf_probes.c` 的 `<linux/version.h>`
+——后者在 Linux 里是**构建期生成**的头（`include/generated/uapi/linux/version.h`）。
+**这两个头从哪来、够不够，只有真编译一次才知道** ⇒ 这正是下面那道诊断要回答的。
+
+（顺带排除一个假设：libbpf 的 `CFLAGS ?= -g -O2 -Werror -Wall -std=gnu89` 里那个
+`-Werror` **在 OpenWrt 的构建里不生效**——OpenWrt 用
+`+$(MAKE_VARS) $(MAKE) ...` 把 `CFLAGS="..."` 作为**命令行变量**传进去，
+命令行变量压过 `?=`。⇒ 「新工具链多一条警告就编不过」这条路也不成立。）
 
 #### 7.18.7 ⇒ 修复：Compile 步加一道**串行 verbose** 的诊断 pass
 
