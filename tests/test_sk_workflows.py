@@ -753,10 +753,13 @@ def main():
         failures.check(
             "+#ifdef __SIZEOF_INT128__" in added and "+#endif" in added,
             "the libbpf fix guards the 128-bit types the way the uapi header does")
-        # The same shadowing hides __attribute_const__, which the exported uapi
-        # linux/swab.h uses and the kernel defines in a header it does not
-        # export.  Without it the build moves one error further down the same
-        # file.
+        # __attribute_const__ is a guarded fallback, not the thing the CI
+        # failed on.  The kernel strips that macro out of every header it
+        # exports (scripts/headers_install.sh:34), so the headers libbpf
+        # really compiles against do not carry it - the CI's diagnostic pass
+        # reported only the six __u128 errors.  It is still worth carrying,
+        # because the shadowing belongs to libbpf and must not depend on the
+        # kernel continuing to strip the macro.
         failures.check(
             "+#define __attribute_const__ __attribute__((__const__))" in added,
             "the libbpf fix defines __attribute_const__ the way the kernel does")

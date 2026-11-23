@@ -74,6 +74,15 @@
     本机 `staging/trial/` 里那个 dtb 恰好就是旧布局（`current240`），
     刷错的后果不用猜。已补两道（编出来的 blob + 要刷进去的件），
     两条断言 + 两处突变反向验证。见 7.23。
+13. **7.21 里关于 `__attribute_const__` 的结论被推翻了。**
+    初稿说「遮蔽还让 `__attribute_const__` 没了，不补它报错只是往后挪一处」——
+    **错在拿「导出前」的头推「导出后」的编译**。内核导出每个 uapi 头时，
+    `scripts/headers_install.sh:34` 的 sed **就把这个宏剥掉了**，
+    所以 libbpf 真正编译的那批头里**本来就没有它**；
+    CI 的注解是旁证：**6 条 `__u128`，0 条 `__attribute_const__`**。
+    ⇒ 补丁里那一行降级为**防御性定义**（`#ifndef` 守卫），**不补它不会失败**；
+    顺带解开了 6.18 侧「为什么没有这一类错」的悬案：**同一个机制**，
+    6.18 线**整份补丁都不需要**。见 7.24。
 
 ---
 
@@ -304,7 +313,7 @@ CONFIG_EXTERNAL_KERNEL_TREE=<树>   OpenWrt 把这棵树当自己的内核目录
 | `tools/kcheck.py` + `tools/kshadow.py` | **编译预言机**：用宿主 clang 对 7.3 树做 `-fsyntax-only`，生成树自己的头文件与影子头文件；7.3 线在 Compile 之前先跑它（见 7.17） |
 | `tests/test_sk_kcheck.py` | 上面那道检查的**判决规则**的单元测试：哪些错误算我们的、哪些算编译器读不动树 |
 | `tools/idm-register-diff.py` | 以 `writel(...)` 语句为单位逐条对比两代的寄存器写入 |
-| `overlays-73/package/libs/libbpf/patches/110-arm64-u128-types.patch` | **7.3 线 libbpf 的唯一一处补丁**：给 libbpf 自己那份 `include/linux/types.h` 补 `__u128`/`__s128` 与 `__attribute_const__`（7.3.4 的 `asm/ptrace.h` 用 `__u128`，而 uapi 那份定义被 libbpf 自带的头遮蔽了）。**只落 7.3 线**，`overlays/` 一行未改（见 7.21） |
+| `overlays-73/package/libs/libbpf/patches/110-arm64-u128-types.patch` | **7.3 线 libbpf 的唯一一处补丁**：给 libbpf 自己那份 `include/linux/types.h` 补 `__u128`/`__s128`（7.3.4 的 `asm/ptrace.h` 用 `__u128`，而 uapi 那份定义被 libbpf 自带的头遮蔽了），外加一条带 `#ifndef` 守卫的 `__attribute_const__`（**防御性定义，真实构建用不到** —— 装头时就被内核剥掉了）。**只落 7.3 线**，`overlays/` 一行未改（见 7.21） |
 | `pon/npu-reverse/` | 逆向产物留档：99 个 API、rodata、函数表、initrd 清单、目标 DTS |
 
 **没有动的东西**：`kernel-overlays/`（6.18 世代驱动，一行未改）、`overlays/`（OpenWrt 侧，
@@ -1783,12 +1792,17 @@ OpenWrt 在静默模式下**只留一句**：`make <target>: build failed. Pleas
    `__uint128_t` —— 那是**编译器内建名**，用户态看得见，所以 6.18 线编得过。
    **行号一模一样，只有拼写不同。**
 3. **修法**：给 libbpf 自己那份 `include/linux/types.h` 补上 `__u128`/`__s128`
-   （逐字取自内核 uapi `linux/types.h`）和 `__attribute_const__`（内核自己的
-   拼法）。补丁**只**落 `overlays-73/`，6.18 发布线一行不碰。
-4. **第二处缺口必须一起补**：同一个遮蔽还让 `__attribute_const__` 没了。
-   不补它，报错只是从 `asm/ptrace.h:96` 挪到 `linux/swab.h:48` ——
-   **同一个原因，只是报错的位置往后挪了一处**。只补 `__u128` 是把错误往后推一行。
-5. **6.18 侧为什么没有 `__attribute_const__` 这一类错，本机没查实**（见「未做」）。
+   （逐字取自内核 uapi `linux/types.h`）。补丁**只**落 `overlays-73/`，
+   6.18 发布线一行不碰。
+4. **`__attribute_const__` 不是真实构建的缺口** —— **本节初稿的这条写错了，
+   现更正**（见「证据四」）：内核导出 uapi 头时，`scripts/headers_install.sh:34`
+   的 sed 就把这个宏**剥掉了**，所以 libbpf 真正编译的那批头里**本来就没有它**，
+   CI 的诊断 pass **一条 `__attribute_const__` 错都没报**。
+   补丁里仍然带着它，但只是**带 `#ifndef` 守卫的防御性定义**：遮蔽是 libbpf
+   自己的事，不该依赖内核继续剥掉这个宏。**不补它不会导致 CI 失败。**
+5. **6.18 侧为什么没有 `__attribute_const__` 这一类错，已经查实**：
+   与 7.3 线**同一个机制** —— 装头时就被剥掉了，压根没进过编译。
+   ⇒ **6.18 线连 `__u128` 都不需要，这个补丁整份都不需要。**
 
 **证据**
 
@@ -1870,7 +1884,21 @@ uapi 定义就看得见它。
 **逐字相同**，arm64 的 `asm/byteorder.h`（887 B）也逐字相同 ——
 **差别只有 `asm/ptrace.h` 和 `asm/sigcontext.h` 这两处的拼写**。
 
-证据四：第二处缺口 `__attribute_const__`
+证据四：`__attribute_const__` —— **初稿这条结论错了，此处更正**
+
+初稿说：「遮蔽还让 `__attribute_const__` 没了，不补它报错只是从
+`asm/ptrace.h:96` 挪到 `linux/swab.h:48`」。**错在把「导出前」的头当成了
+「导出后」的头。**
+
+**导出前**，uapi `linux/swab.h` 里确实用了这个宏（5 处）：
+
+```
+include/uapi/linux/swab.h:48   static inline __attribute_const__ __u16 __fswab16(__u16 val)
+include/uapi/linux/swab.h:57   static inline __attribute_const__ __u32 __fswab32(__u32 val)
+include/uapi/linux/swab.h:66   static inline __attribute_const__ __u64 __fswab64(__u64 val)
+include/uapi/linux/swab.h:79   static inline __attribute_const__ __u32 __fswahw32(__u32 val)
+include/uapi/linux/swab.h:88   static inline __attribute_const__ __u32 __fswahb32(__u32 val)
+```
 
 包含链（本机逐个打开确认）：
 
@@ -1878,7 +1906,6 @@ uapi 定义就看得见它。
 libbpf 自带 include/uapi/linux/perf_event.h:20   #include <asm/byteorder.h>
   arm64 的 asm/byteorder.h:23                    #include <linux/byteorder/little_endian.h>
     linux/byteorder/little_endian.h:14          #include <linux/swab.h>
-      linux/swab.h:48   static inline __attribute_const__ __u16 __fswab16(__u16 val)
 ```
 
 内核把这个宏定义在 `include/linux/compiler_attributes.h:83`：
@@ -1890,7 +1917,50 @@ libbpf 自带 include/uapi/linux/perf_event.h:20   #include <asm/byteorder.h>
 而 `scripts/Makefile.headersinst` 第 5-6 行写死了只导出
 `include/uapi`、`include/generated/uapi`、`arch/<arch>/include/uapi`、
 `arch/<arch>/include/generated/uapi` —— **`include/linux/` 里的头一个都不导出**。
-所以用户态看到的是「用了这个宏，但没人定义它」。
+
+**但这只是导出前的状态。** 内核导出**每一个** uapi 头时，都要过一遍
+`scripts/headers_install.sh`（`scripts/Makefile.headersinst:60,62,65`：
+
+```
+60:  cmd_install = $(CONFIG_SHELL) $(srctree)/scripts/headers_install.sh $< $@
+62:  $(src-headers): $(dst)/%.h: $(src)/%.h $(srctree)/scripts/headers_install.sh FORCE
+65:  $(gen-headers): $(dst)/%.h: $(gen)/%.h $(srctree)/scripts/headers_install.sh FORCE
+```
+
+），而那个脚本的 sed 里有一条：
+
+```
+scripts/headers_install.sh:33   s/([[:space:](])(__user|__force|__iomem)[[:space:]]/\1/g
+scripts/headers_install.sh:34   s/__attribute_const__([[:space:]]|$)/\1/g
+```
+
+—— **`__attribute_const__` 在导出时就被剥掉了**。
+（同一条 sed 的第 37 行还把 `inline`/`asm`/`volatile` 改成 `__inline__` 之类；
+第 42 行的 `scripts/unifdef -U__KERNEL__ -D__EXPORTED_HEADERS__` 负责砍掉
+`#ifdef __KERNEL__` 块。`__u128` 不受影响 —— 它不在 `__KERNEL__` 块里，
+sed 也不碰它。）
+
+**OpenWrt 侧装的就是这批「剥过的头」**（本机 `scratch/iwmaster/immortalwrt-31e2ac4.../`）：
+
+```
+toolchain/kernel-headers/Makefile:64-65   INSTALL_HDR_PATH="$(BUILD_DIR_TOOLCHAIN)/linux-dev/" headers_install
+toolchain/kernel-headers/Makefile:106     $(CP) $(BUILD_DIR_TOOLCHAIN)/linux-dev/* $(TOOLCHAIN_DIR)/
+```
+
+⇒ CI 报错路径里的
+`staging_dir/toolchain-aarch64_cortex-a53_gcc-14.3.0_musl/include/asm/ptrace.h`
+就是这个目录里的头，**是剥过的**。
+
+**决定性旁证**：run #35 的诊断 pass 单独重编 libbpf，**报了 6 条 `__u128`，
+一条 `__attribute_const__` 都没有**（证据一的 11 条注解里没有任何一条提到它）。
+若那真是缺口，编译器必然会报 —— 它在 `linux/swab.h:48` 用着。
+
+⇒ **判决：`__u128` 缺失是真错；`__attribute_const__` 缺失不是错。**
+初稿「不补它报错就挪到 `linux/swab.h:48`」是**照着导出前的头推的**，
+而 CI 照着的是**导出后的头**。
+
+（顺带解开了 6.18 侧「为什么没有这一类错」的悬案：**不是没走到 `swab.h`，
+是那个宏在装头时就没了**，跟 7.3 线完全一样。）
 
 证据五：两棵 OpenWrt 树**不是**原因（blob 级）
 
@@ -1954,7 +2024,9 @@ typedef unsigned __int128 __u128 __attribute__((aligned(16)));
 ```
 
 - `__u128`/`__s128` 两行**逐字取自**内核 uapi `linux/types.h:17-18`；
-- `__attribute_const__` 用**内核自己的拼法**（`include/linux/compiler_attributes.h:83`）；
+- `__attribute_const__` 用**内核自己的拼法**（`include/linux/compiler_attributes.h:83`），
+  带 `#ifndef` 守卫 —— **它是防御性定义，不是真实构建需要的**（证据四）：
+  遮蔽是 libbpf 自己的事，不该依赖内核继续在装头时剥掉这个宏；
 - **只加不删**（测试里有一条断言专门盯 `-` 行）；
 - 不改 `package/libs/libbpf/Makefile`：OpenWrt 自己会应用 `patches/*.patch`。
 
@@ -1967,9 +2039,17 @@ typedef unsigned __int128 __u128 __attribute__((aligned(16)));
    ⇒ `GATE OK`。
 2. **本机整包门禁** `scratch/libbpf_pkg_gate.py`（22 个 `.c`）：门禁直接
    `git apply` **仓库里那个补丁**（不在脚本里另抄一份修法文本，避免门禁与出货物漂移）。
-   修前：`linux/ptrace.h` 链报 `__u128`、`libbpf.c` 报 `__attribute_const__`；
-   修后：`linux/ptrace.h` 链**编过**，「因别的原因失败的文件」**为空**
-   （20 个文件只卡在缺 elfutils 头）。⇒ `GATE OK`。
+   门禁**复刻内核装头的预处理**（`headers_install.sh` 的两条 sed），并跑**两轮**：
+   - **主门禁用「装头后」的头**（真实构建用的就是这批）：修前**只有** `__u128`、
+     **没有** `__attribute_const__`、因别的原因失败的文件**为空**
+     ⇒ **精确复现 CI 报告的错误集**；修后编过。
+   - 再跑一轮**原始 uapi 头**（更严）：修前多一条 `__attribute_const__`
+     （`libbpf.c`），修后也编过。
+   ⇒ 7.3.4 两轮 `GATE OK`。
+   **同跑 6.18.56**（`python scratch/libbpf_pkg_gate.py 618`）：装头那轮
+   **一个错都没有**（无 `__u128`、无 `__attribute_const__`、无别的失败）
+   ⇒ **6.18 线整份补丁都不需要**；原始头那轮只剩 `__attribute_const__`
+   这一条 —— 正好说明原始头轮次不是空转。
 3. **仓库静态断言** `tests/test_sk_workflows.py` 新增一段（11 条）：补丁在
    `overlays-73/`、目标文件精确为 `+++ b/include/linux/types.h`、含 `__u128`
    typedef、含 `#ifdef __SIZEOF_INT128__`/`#endif` 守卫、含 `__attribute_const__`、
@@ -1986,31 +2066,32 @@ typedef unsigned __int128 __u128 __attribute__((aligned(16)));
 
 **未做**
 
-- **6.18 侧为什么没有 `__attribute_const__` 这一类错，本机没查实。**
-  两棵树的 uapi `linux/types.h`（2035 B）、`asm/byteorder.h`（887 B）、
-  `linux/swab.h`（7010 B，含 `__attribute_const__`）**逐字相同**，两棵树的
-  导出 uapi 头里都**没有** `__attribute_const__` 的定义；musl 1.2.5 tarball 里
-  `__uint128_t`/`__attribute_const__` **只有使用、没有定义**。
-  **本机把这一条查到的地方都查了，结论是「本机看不到的地方一定还有东西」**：
+- ~~**6.18 侧为什么没有 `__attribute_const__` 这一类错，本机没查实。**~~
+  **已查实**（见证据四）：内核导出 uapi 头时 `scripts/headers_install.sh:34`
+  就把这个宏剥掉了，**两条线是同一个机制**；6.18 的真实构建里那个宏
+  **压根没进过编译**。
+  保留原来那串排查的记录，是因为它正是本节初稿走偏的地方 ——
+  **那一条查的都是「导出前」的头**：
+  - 两棵树的 uapi `linux/types.h`（2035 B）、`asm/byteorder.h`（887 B）、
+    `linux/swab.h`（7010 B，含 `__attribute_const__`）**逐字相同**；
+  - musl 1.2.5 tarball 里 `__uint128_t`/`__attribute_const__`
+    **只有使用、没有定义**；
   - 整棵 7.3.4 内核树里 `__attribute_const__` 的**定义只有两处**：
     `include/linux/compiler_attributes.h:83` 与 `tools/include/linux/compiler.h:121`
     —— **两个都不导出**（`scripts/Makefile.headersinst` 只导出 `include/uapi/`、
     `include/generated/uapi/`、`arch/<arch>/include/uapi/`、
-    `arch/<arch>/include/generated/uapi/`）。
+    `arch/<arch>/include/generated/uapi/`）；
   - 整棵 OpenWrt 树里 `__attribute_const__` 只有两处命中：
     `package/devel/binutils/patches/001-replace-attribute_const.patch`（改的是
     binutils 自己的 gprofng 源码，**不是**用户态头）和
-    `package/boot/uboot-lantiq/patches/0028-gcc-compat.patch`（u-boot 自己）。
-    **两个都不进目标机的 include 目录。**
+    `package/boot/uboot-lantiq/patches/0028-gcc-compat.patch`（u-boot 自己）；
   - 唯一在用户态提供这个宏的是 **glibc 的 `sys/cdefs.h`**，而 OpenWrt 用的是 musl。
-  ⇒ 所以 6.18 的真实构建里，要么根本没走到 `swab.h`（链断在别处），
-  要么有本机看不到的东西提供了它。
-  **机制未查实，不编机制。** 本机同跑一次
-  （`python scratch/libbpf_pkg_gate.py 618`）的结果是：
-  `linux/ptrace.h` 链**编过**（无 `__u128`），但 `libbpf.c` **仍**报
-  `__attribute_const__` ⇒ 这条差异**本机复现不出来**。
-  **但它不影响 7.3 线的修法**：本补丁把 `__attribute_const__` 也补上了，
-  补法与内核自己的拼法一致，且带 `#ifndef` 守卫 —— 真有别的来源也不会打架。
+  ⇒ 这些全都指向「用户态没人定义它」，但**没有一条回答「编译时它还在不在」** ——
+  而答案在装头那一步：`headers_install.sh` 的 sed 早就把它剥了。
+- **补丁里 `__attribute_const__` 那一行是防御性的，真实构建用不到**
+  ⇒ 它的正确性只由「与内核自己的拼法逐字一致 + `#ifndef` 守卫」保证，
+  **没有 CI 证据**（CI 不报这个错，也就不会因为它而失败）。
+  本机门禁能证明的只有：加了它不影响别的头，删了它在**原始头**那轮会多一条错。
 - elfutils 0.192 的 `libelf.h`/`gelf.h` 本机拿不到（sourceware 404、buildroot 极慢、
   sources.debian.org 返回 HTML 假页）⇒ 整包门禁里 20/22 个文件**在本机判不了**，
   只能由 CI 判。
@@ -2194,6 +2275,8 @@ python3 tools/dtbparts.py flash-dtb.bin layout=native241 root=0xf00000,0xf100000
 `scratch/reverse_check_workflow.py` 多两处突变：
 把 dtb 步的那行换成 `echo`、把导出步的那行换成 `echo`，
 各自只转红在**指定**的那条检查上。
+⇒ 连同之前各节的突变，反向验证累计 **50 处**（工作流 48 + 工具 2），
+每处只红在指定的那条检查上；脚本自己的结语行会把计数打出来。
 
 **未做**
 
@@ -2202,6 +2285,75 @@ python3 tools/dtbparts.py flash-dtb.bin layout=native241 root=0xf00000,0xf100000
 - 这道门禁只管**布局**；容量、别名、各段偏移都由 `tools/dtbparts.py` 自己查。
 - 暂存的 `staging/trial/` 那三件是 **6.18 旧布局**，
   实机对拍前必须换成 CI 导出的那三件，并先 `sha256sum -c sha256sums`。
+
+---
+
+### 7.24 更正 7.21 的 `__attribute_const__` 结论：**它不是真实构建的缺口**
+
+**判决**
+
+1. **7.21 初稿的判决 4 是错的，本节更正。**
+   初稿说「同一个遮蔽还让 `__attribute_const__` 没了，不补它报错只是从
+   `asm/ptrace.h:96` 挪到 `linux/swab.h:48`」——
+   **错在把「导出前」的头当成了「导出后」的头。**
+2. **`__attribute_const__` 缺失不是错。** 内核导出每一个 uapi 头时都过一遍
+   `scripts/headers_install.sh`，而它的 sed **第 34 行就把这个宏剥掉了**。
+   ⇒ **libbpf 真正编译的那批头里本来就没有它。**
+3. **CI 的注解是决定性旁证**：run #35 的诊断 pass 单独重编 libbpf，
+   **报了 6 条 `__u128`，一条 `__attribute_const__` 都没有**。
+   若那真是缺口，编译器必然会报 —— 它在 `linux/swab.h:48` 用着。
+4. **顺带解开了 6.18 侧的悬案**：「为什么 6.18 没有这一类错」的答案是
+   **同一个机制** —— 装头时就被剥掉了，压根没进过编译。
+   ⇒ **6.18 线连 `__u128` 都不需要，这个补丁整份都不需要。**
+5. **补丁里那一行保留，但降级为防御性定义**：`#ifndef` 守卫 + 内核自己的拼法。
+   理由是**遮蔽是 libbpf 自己的事**，不该依赖内核继续剥掉这个宏。
+   **不补它不会导致 CI 失败。**
+
+**证据**
+
+```
+# 内核侧：每个 uapi 头都过一遍 headers_install.sh
+scripts/Makefile.headersinst:60   cmd_install = $(CONFIG_SHELL) $(srctree)/scripts/headers_install.sh $< $@
+scripts/Makefile.headersinst:62   $(src-headers): $(dst)/%.h: $(src)/%.h $(srctree)/scripts/headers_install.sh FORCE
+scripts/Makefile.headersinst:65   $(gen-headers): $(dst)/%.h: $(gen)/%.h $(srctree)/scripts/headers_install.sh FORCE
+
+# 剥掉它的那一条 sed
+scripts/headers_install.sh:33   s/([[:space:](])(__user|__force|__iomem)[[:space:]]/\1/g
+scripts/headers_install.sh:34   s/__attribute_const__([[:space:]]|$)/\1/g
+
+# OpenWrt 侧装进 toolchain 的就是这批剥过的头
+toolchain/kernel-headers/Makefile:64-65   INSTALL_HDR_PATH="$(BUILD_DIR_TOOLCHAIN)/linux-dev/" headers_install
+toolchain/kernel-headers/Makefile:106     $(CP) $(BUILD_DIR_TOOLCHAIN)/linux-dev/* $(TOOLCHAIN_DIR)/
+```
+
+⇒ CI 报错路径里的
+`staging_dir/toolchain-aarch64_cortex-a53_gcc-14.3.0_musl/include/asm/ptrace.h`
+就是这批头。复现命令：`python3 scratch/headers_install_chain.py` 与
+`python3 scratch/openwrt_headers_chain.py`。
+
+**门禁也跟着改了**
+
+整包门禁 `scratch/libbpf_pkg_gate.py` 现在**复刻内核装头的预处理**
+（`headers_install.sh` 的两条 sed），并跑两轮：
+
+| 树 | 头 | 修前 | 修后 |
+|---|---|---|---|
+| 7.3.4 | 装头后 | **只有** `__u128`（6 条），**无** `__attribute_const__` | 编过 |
+| 7.3.4 | 原始头 | `__u128` + `__attribute_const__`（`libbpf.c`） | 编过 |
+| 6.18.56 | 装头后 | **一个错都没有** | — |
+| 6.18.56 | 原始头 | 只有 `__attribute_const__` | — |
+
+⇒ 7.3.4 的「装头后」那轮**精确复现 CI 报告的错误集**；
+6.18.56 的「装头后」那轮**完全干净** ⇒ 6.18 线不需要这个补丁；
+两棵树的「原始头」那轮都只剩 `__attribute_const__` ⇒ 原始头轮次**不是空转**。
+
+**未做**
+
+- 补丁里 `__attribute_const__` 那一行**没有 CI 证据**（CI 不报这个错，
+  也就不会因为它而失败）。本机门禁能证明的只有两件事：
+  加了它不影响别的头；删了它在**原始头**那轮会多一条错。
+- 本节只更正了**结论**；`overlays-73/` 里那个补丁**正文一个字没改**
+  （只改了它的说明文字），所以 7.3 线的构建面不变。
 
 ---
 
@@ -3246,7 +3398,7 @@ python3 scratch/cpio_pick.py scratch/re_other_fw/fit/initrd-1.bin \
 # 15) 在本机跑工作流里那一步的 shell（从 YAML 原样取出，不复制）
 python3 scratch/pin_step_check.py
 
-# 16) 门禁的反向验证：四十五处变异逐个转红
+# 16) 门禁的反向验证：五十处变异逐个转红
 python3 scratch/reverse_check_workflow.py
 
 # 17) 四个驱动并进同一个内核会不会撞名（用本机编出的目标码）
@@ -3305,6 +3457,13 @@ python3 scratch/reverse_check_libbpf.py
 
 # 32) 两棵 OpenWrt 树的 blob 级对比（7.3 线编 master，6.18 线编 sr1010）
 python3 scratch/libbpf_blob_cmp.py
+
+# 33) 装头链：内核导出 uapi 头时把 __attribute_const__ 剥掉了（7.21 的更正依据）
+python3 scratch/headers_install_chain.py    # 内核侧：Makefile.headersinst + headers_install.sh
+python3 scratch/openwrt_headers_chain.py     # OpenWrt 侧：toolchain/kernel-headers/Makefile
+
+# 34) 重新生成 libbpf 补丁，并校验它能干净 apply 到上游 libbpf 1.6.2
+python3 scratch/make_libbpf_patch.py
 ```
 
 第十节的 18~24 号命令里，`cfg73_sim.py` 与 `kdeps73.py` 是**一对**：
@@ -3324,3 +3483,13 @@ python3 scratch/libbpf_blob_cmp.py
 不在脚本里另抄一份修法文本 —— 否则门禁绿了而出货的补丁是坏的，两边会漂移。
 32 号是排除用的：证明两棵 OpenWrt 树在「libbpf 怎么被编」这件事上
 **逐字相同**，把嫌疑指回内核导出的那批 uapi 头。
+
+**33 号是本节的一处更正**：初稿说「遮蔽还让 `__attribute_const__` 没了，
+不补它报错只是往后挪一处」，那是**照着导出前的头**推的。
+33 号把导出链原样打出来 —— `scripts/Makefile.headersinst:60,62,65` 让每个
+uapi 头都过一遍 `scripts/headers_install.sh`，而它的 sed（第 34 行）把
+`__attribute_const__` 剥掉了；OpenWrt 侧 `toolchain/kernel-headers/Makefile:64-65,106`
+装进 toolchain 的正是这批**剥过的**头。
+⇒ CI 报的 6 条 `__u128` 是真错，`__attribute_const__` 不是；
+补丁里那条 `__attribute_const__` 降级为**防御性定义**。
+34 号保证补丁是**生成**出来的、且能干净 apply —— 改说明文字不会把手改坏。

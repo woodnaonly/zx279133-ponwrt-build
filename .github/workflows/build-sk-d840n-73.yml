@@ -312,6 +312,13 @@ jobs:
           # -I../include comes first - does not define it.  The 6.18 line
           # spells the same fields __uint128_t and needs no such fix.
           #
+          # The __attribute_const__ line in that patch is a guarded fallback,
+          # not what the CI failed on: the kernel strips that macro out of
+          # every header it exports (scripts/headers_install.sh:34), so the
+          # diagnostic pass reported only the six __u128 errors.  It is
+          # checked anyway because the shadowing is libbpf's, and it must
+          # not depend on the kernel continuing to strip the macro.
+          #
           # The three checks read the patch itself, not a phrase about it.
           LIBBPF_PATCH=openwrt/package/libs/libbpf/patches/110-arm64-u128-types.patch
           test -f "$LIBBPF_PATCH" || {

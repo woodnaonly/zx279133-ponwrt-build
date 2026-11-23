@@ -1,4 +1,4 @@
-arm64: give libbpf the 128-bit types and the attribute macro it lacks
+arm64: give libbpf the 128-bit types the shadowing hides
 
 The 7.3 line builds libbpf 1.6.2 against the kernel's exported uapi
 headers, and that fails:
@@ -21,15 +21,22 @@ Why it fails, and why 6.18 does not:
     (Its published initramfs carries usr/lib/libbpf.so.1 and libbpf.so.1.6.2,
     so the 6.18 line really does build it.)
 
-The same shadowing hides one more thing: the exported uapi linux/swab.h uses
-__attribute_const__, which the kernel defines in its own compiler attributes
-header - a header it does not export.  libbpf's include/uapi/linux/perf_event.h
-pulls in <asm/byteorder.h>, and that pulls in linux/byteorder/little_endian.h,
-and that pulls in linux/swab.h, so the macro is needed too.
+One more thing rides on the same shadowing, but it is not a build error:
+the exported uapi linux/swab.h uses __attribute_const__, which the kernel
+defines in its own compiler attributes header - a header it does not export.
+The kernel's scripts/headers_install.sh strips the macro out of every header
+it exports (scripts/headers_install.sh:34), so the headers libbpf really
+compiles against do not carry it either - and the CI's diagnostic pass did not
+report a single __attribute_const__ error, only the six __u128 ones.
 
-So the two definitions go into the copy of linux/types.h that libbpf actually
+So __attribute_const__ is defined here only as a guarded fallback: it is the
+kernel's own spelling, wrapped in #ifndef, so it costs nothing when the macro
+is already there and saves the build if a header ever stops being stripped.
+The build does not need it.
+
+So the definitions go into the copy of linux/types.h that libbpf actually
 compiles against: __u128 and __s128 are copied verbatim from the kernel's uapi
-linux/types.h, and __attribute_const__ is the kernel's own spelling.
+linux/types.h, and __attribute_const__ is the kernel's own spelling, guarded.
 
 This patch lives in overlays-73/ only: the 6.18 release line does not get
 it, and does not need it.
