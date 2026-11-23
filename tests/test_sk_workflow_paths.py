@@ -22,6 +22,7 @@ changed, and would prove nothing about the gate that runs.
 """
 import argparse
 import importlib.util
+import os
 import re
 import subprocess
 import sys
@@ -49,11 +50,21 @@ GATE_MODULE = load_gate()
 
 
 def failed_checks(workflow, root):
-    """The checks the gate reported as failed."""
+    """The checks the gate reported as failed.
+
+    The gate publishes its verdict to GITHUB_STEP_SUMMARY, and it writes that
+    file rather than appending to it.  A control runs the gate on a
+    deliberately broken copy, so it must not publish: with the summary file in
+    place, the broken copy's verdict replaces the real one on the run page and
+    a green job reads as red.  The run that the control drives therefore gets
+    no summary file at all.
+    """
+    env = dict(os.environ)
+    env.pop("GITHUB_STEP_SUMMARY", None)
     result = subprocess.run(
         [sys.executable, str(GATE), "--workflow", str(workflow),
          "--root", str(root)],
-        capture_output=True, text=True)
+        capture_output=True, text=True, env=env)
     names = set()
     for line in (result.stdout + result.stderr).splitlines():
         match = re.match(r"^\s*\[FAIL\]\s+(.+?)(?:\s+-\s+.*)?$", line)
@@ -266,6 +277,28 @@ def main():
                       "%s: dropping the entry for the named %s -> red on %r"
                       % (name, named_only, expected),
                       ", ".join(sorted(names)[:3]))
+
+            # 7. A control must not publish a verdict.  The gate writes its
+            #    report to GITHUB_STEP_SUMMARY, and a control runs the gate on
+            #    a broken copy: if that run publishes, the broken copy's
+            #    verdict is the one the run page shows, and a green job reads
+            #    as red.  This control runs the gate with a summary file in
+            #    place and requires that the file stays empty.
+            with tempfile.TemporaryDirectory(prefix="sk-wf-summary-") as tmp:
+                summary = Path(tmp) / "summary.md"
+                previous = os.environ.get("GITHUB_STEP_SUMMARY")
+                os.environ["GITHUB_STEP_SUMMARY"] = str(summary)
+                try:
+                    failed_checks(source, ROOT)
+                finally:
+                    if previous is None:
+                        os.environ.pop("GITHUB_STEP_SUMMARY", None)
+                    else:
+                        os.environ["GITHUB_STEP_SUMMARY"] = previous
+                check(not summary.exists(),
+                      "%s: a control does not publish a verdict to the run "
+                      "page" % name,
+                      "the control's gate run wrote %s" % summary)
 
     print("%d checks, %d failed" % (checks, len(failures)))
     return 1 if failures else 0
