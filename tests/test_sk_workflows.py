@@ -145,6 +145,11 @@ BRINGUP_TRIGGERS = [
     # the quarantine is taken out.
     "tools/check-sk-tx-isolation.py",
     "tests/test_sk_tx_isolation.py",
+    # The gate that says the isolation's counters are published where the
+    # board can read them, and the controls that say whether it still
+    # notices when they are taken out.
+    "tools/check-sk-tx-isolation-stats.py",
+    "tests/test_sk_tx_isolation_stats.py",
     # The gate that says the receive path proves what it hands over, and the
     # controls that say whether it still notices when the proof is taken out.
     "tools/check-sk-rx-delivery.py",

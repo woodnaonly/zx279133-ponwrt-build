@@ -256,6 +256,28 @@
     **#49 的结果**：prepare 绿、36 条 TX 门禁与 39 条 RX 门禁**第一次同时绿**
     ⇒ 7.3 线此前产出的每一个镜像，编的都是少了这两片的驱动。
     见 7.39 与 7.40。
+26. **第 10 片：TX 隔离的四个计数器接到了 `ethtool -S` 上；这是最后一块软件侧的活。**
+    第 7 片（补丁 160）在 `struct zx279133_eth` 里留了四个计数器
+    （`tx_invalid_completions` / `tx_recovery_requests` /
+    `tx_recovery_restarts` / `tx_recovery_failures`），
+    递增点在 `zx279133-netdev.c`（`:101`、`:131`、`:1007`、`:1009`），
+    **树里没有任何地方读它们**
+    ⇒ 一个被隔离过的环和一个从没出过问题的环，在板子上长得一模一样 ——
+    而这正是隔离模型要回答的那个问题。
+    7.3 驱动**本来就有** `ethtool` 统计表（三张位置表：
+    `enum zx279133_ethtool_stat`、`zx279133_gstrings_stats`、
+    `zx279133_get_ethtool_stats()` 里的赋值），
+    补丁 180 把四个计数器接上去（2995 B，+19 -0，只改 `zx279133-netdev.c`）：
+    **加在末尾**，所以已有统计项的索引一个都不动；
+    名字与枚举项**同序**，并且**在同一把锁里读**。
+    新门禁 `tools/check-sk-tx-isolation-stats.py`（33 条）**按位置**判：
+    两张表同长、四个计数器在两张表里是**同一个索引**、赋值在锁内、
+    读的是它自己那个计数器、那个计数器确实在被累加。
+    负控 `tests/test_sk_tx_isolation_stats.py`（11 项）
+    **每一项都必须转红在指定的那条检查上**。
+    端到端（`scratch/verify_180_in_checkout.py`，16 项）在**CI 的布局**里验过：
+    48 个补丁全落地、四个驱动文件逐个同哈希、拿掉 180 门禁就红。
+    见八之十。
 
 ---
 
@@ -474,7 +496,7 @@ CONFIG_EXTERNAL_KERNEL_TREE=<树>   OpenWrt 把这棵树当自己的内核目录
 | `.github/workflows/build-sk-d840n-73.yml` | 7.3 通道：手动触发 + 7.3 相关路径推送触发；只出镜像，不发布 |
 | `scripts/configure-sk-d840n.sh` | 一处改动：把硬编码的 `target/linux/zte/zx279133/config-6.18` 换成版本无关的 `$KCFG` |
 | `kernel-patches/7.3/` | cnjn 的 39 个补丁的 vendored 副本 + `MANIFEST.json`（上游 repo/branch/commit/date + 每补丁 sha256/bytes） |
-| `kernel-patches/7.3-local/` | **我们自己的**补丁，applied 在 vendored 系列之后；当前是 IDM 实测修正三片（`100` 寄存器值、`110` RX 帧落点、`120` BP 投递协议）**加第 3 片的 `130` LAN 控制事务**、**第 4 片的 `140` PON/OMCI 接线**与**第 5 片的 `150` 9132 芯片编程** |
+| `kernel-patches/7.3-local/` | **我们自己的**补丁，applied 在 vendored 系列之后；当前是 IDM 实测修正三片（`100` 寄存器值、`110` RX 帧落点、`120` BP 投递协议）**加第 3 片的 `130` LAN 控制事务**、**第 4 片的 `140` PON/OMCI 接线**、**第 5 片的 `150` 9132 芯片编程**、**第 7 片的 `160` TX 故障隔离**、**第 8 片的 `170` RX 交付安全**与**第 10 片的 `180` TX 隔离计数器发布**（共 9 个） |
 | `kernel-overlays-73/drivers/net/ethernet/zte/` | **7.3 线专有的驱动树**：9132 交换表驱动本体 + `zx279133-9132.h`（9132 自己的寄存器图**与 4 个 PPU 号**）+ `zx279133-lan1-led.h`，**加第 4 片的 PON/OMCI 五个文件**（`zxpon.c`/`zxpon.h`/`zx279133-pon.c`/`zx279133-omci.c`/`zx279133-omci-wire.h`）。与 6.18 世代的 `kernel-overlays/` 并存，互不覆盖（见八之三、八之四、八之五） |
 | `tools/check-sk-switch-api.py` | 第 3 片的编译前门禁：驱动用到的名字、内核 API、**LAN 服务契约**、构建接线，四项逐条核对（见八之三.3） |
 | `tools/check-sk-pon-api.py` | 第 4 片的编译前门禁：协议核心闭合、**内核名字在包含闭包里可见**、树侧契约、四个钩子、构建接线、LED 依赖（见八之四.5） |
@@ -506,6 +528,9 @@ CONFIG_EXTERNAL_KERNEL_TREE=<树>   OpenWrt 把这棵树当自己的内核目录
 | `tests/test_sk_prepare_content.py` | **prepare 步内容校验的负控**（16 项）：一个补丁加了行而树里没有，就必须被拒；空行不算缺失；自包含，不需要内核树 |
 | `tests/test_sk_prepare_apply_context.py` | **apply 上下文的负控**（12 项）：自建一个 checkout 加一个树在里面，断言**带 `diff --git` 头的补丁也落地**、**纯 diff 的补丁落地**、**context 挡住了 checkout**；反向三项：**git 确实会默默丢掉补丁**（退出 0、零写入、stderr 里有 `Skipped patch`）、**被丢掉的补丁被拒绝**、**被拒绝的树没有那行内容**（见 7.39） |
 | `tests/test_sk_text_hygiene.py` | 文档的**文本卫生**门禁：查 **U+FFFD、NUL 与其它控制字符**。一个 NUL 就足以让 ripgrep 把整个文件当成二进制，**所有针对该文档的搜索都静默返回空**（见 7.39） |
+| `kernel-patches/7.3-local/180-sk-tx-isolation-stats.patch` | **第 10 片**：把 TX 故障隔离的四个计数器接到驱动**本来就有**的 `ethtool` 统计表上（+19 -0，只改 `zx279133-netdev.c`）。**加在枚举与名字表的末尾**，已有统计项的索引一个都不动；四个计数器**同序**、**在同一把锁里读**（见八之十） |
+| `tools/check-sk-tx-isolation-stats.py` | **第 10 片的门禁**（33 条）：按**位置**判 —— 两张表同长、四个计数器在两张表里是**同一个索引**、赋值在 TX 锁内、读的是它自己那个计数器、那个计数器真的在被累加。**编译器抓不到「名字在错位」**，所以门禁必须自己抓 |
+| `tests/test_sk_tx_isolation_stats.py` | 上面那道门禁的**负控**（11 项）：每一项改坏树的一个地方，门禁必须**转红在指定的那条检查上**，而不只是在某处变红 |
 | `tools/func-surface-diff.py` | 两代驱动的函数面对照，输出「只在我们这边」与「只在 7.3 那边」两张工作清单 |
 | `tools/func-port-coverage.py` | **按能力对账**：171 个函数逐条必须有归属（同名 / 账本写明搬到哪 / 有处置记录），未记账即非零退出；账本指着的目标函数必须真在 7.3 树里（见八之七） |
 | `tools/kcheck.py` + `tools/kshadow.py` | **编译预言机**：用宿主 clang 对 7.3 树做 `-fsyntax-only`，生成树自己的头文件与影子头文件；7.3 线在 Compile 之前先跑它（见 7.17） |
@@ -4975,6 +5000,139 @@ ours 那两个计数器回答的是两个问题：
 
 ---
 
+## 八之十、第 10 片：把 TX 隔离的四个计数器接到 `ethtool -S` 上
+
+**判决**：第 7 片（补丁 160）搬进来的隔离模型带四个计数器，
+在 7.3 树里**只写不读**。补丁 180 把它们接到驱动**本来就有**的统计表上，
+`ethtool -S` 就能读到。
+这是第 10 片，也是**软件侧最后一块活**：其余的都要等实机对拍。
+
+### 8之十.1 树里的四个计数器：只写不读
+
+补丁 160 在 `struct zx279133_eth` 里留了四个计数器：
+
+| 计数器 | 声明 | 递增点 | 含义 |
+|---|---|---|---|
+| `tx_recovery_requests` | `zx279133.h:783` | `zx279133-netdev.c:101` | 第一次请求恢复 |
+| `tx_recovery_restarts` | `zx279133.h:784` | `zx279133-netdev.c:1009` | 共享 datapath 被重启 |
+| `tx_recovery_failures` | `zx279133.h:785` | `zx279133-netdev.c:1007` | 恢复失败 |
+| `tx_invalid_completions` | `zx279133.h:786` | `zx279133-netdev.c:131` | 完成计数器不可信 |
+
+**证据（实测）**：整个 `drivers/net/ethernet/zte/` 里这四个名字**只出现在这 8 行** ——
+4 个声明 + 4 个递增点。**没有任何一处读它们。**
+
+⇒ 在板子上，一个**被隔离过的环**和一个**从来没出过问题的环**长得一模一样。
+而「这个环到底有没有出过事」正是隔离模型存在的理由。
+
+### 8之十.2 7.3 驱动本来就有统计表
+
+7.3 的驱动已经有 `ethtool` 统计表，它是**三张必须同长同序的位置表**
+（行号是打补丁**前**的）：
+
+1. `enum zx279133_ethtool_stat`（`zx279133-netdev.c:1419`，哨兵 `ZX279133_STAT_COUNT` 在 `:1487`）；
+2. `static const char zx279133_gstrings_stats[ZX279133_STAT_COUNT][ETH_GSTRING_LEN]`（`:1490`）；
+3. `zx279133_get_ethtool_stats()`（`:1597`）里的 `data[...] = ...`。
+
+`ethtool -S` 打印的就是第 2 张表里的名字；
+`zx279133_get_sset_count()`（`:1567`）返回
+`ZX279133_STAT_COUNT + ZX279133_IDM_CPU_RX_QUEUES + 16`。
+
+⇒ **不用新建任何机制**，把四个计数器加进这三张表就行。
+
+### 8之十.3 补丁 180 做了什么
+
+`180-sk-tx-isolation-stats.patch`：2995 B，**+19 -0**，**只改**
+`drivers/net/ethernet/zte/zx279133-netdev.c` 一个文件。三处：
+
+1. **枚举末尾**（在哨兵 `ZX279133_STAT_COUNT` **之前**）追加四项；
+2. **名字表末尾**追加四个**同序**标签；
+3. 在 `zx279133_get_ethtool_stats()` 的
+   `spin_lock_bh(&eth->tx_lock)`（`:1637`）与 `spin_unlock_bh(&eth->tx_lock)`（`:1660`）
+   **之间**填四个 `data[...]`。
+
+**为什么加在末尾**：`data[]` 的下标由 `ZX279133_STAT_*` 决定，
+插在中间会把**后面所有统计项的下标**挪一位 ——
+那些下标被 `memset(data + ZX279133_STAT_RX_NAPI_POLLS, 0, ...)` 这类代码用着。
+
+**为什么必须在锁内读**：这四个计数器是在 `tx_lock` 下递增的
+（`zx279133_tx_recovery_request_locked()` 的注释就写着「Caller holds tx_lock.」），
+锁外读是一次撕裂读。
+
+### 8之十.4 门禁：33 条，**按位置**判
+
+`tools/check-sk-tx-isolation-stats.py`。
+
+门禁问的是**位置**，不是「某个串在不在」，因为
+**编译器抓不到「名字在错位」**：数组长度错了是编译错误，名字放错了不是。
+它问的是：
+
+* 枚举有哨兵、名字表与枚举**同长**；
+* 四个计数器是枚举的**最后几项**、也是名字表的**最后几个**；
+* 四个计数器在两张表里是**同一个索引**（这三条才是「位置」）；
+* 每个计数器在 `zx279133_get_ethtool_stats()` 里**有值**；
+* 那个赋值**在 TX 锁内**（参照点是**加解锁那一对**，不是某个变量的声明处）；
+* 那个赋值**读的是它自己那个计数器**；
+* 那个计数器**在树里存在**，并且**真的在被累加**
+  （否则发出去的计数器永远是 0）。
+
+门禁把自己读到的两个文件的 sha256 写进 `GITHUB_STEP_SUMMARY`，
+和另两道树门禁一个做法：**门禁读的是哪棵树，要能在 job 页上看得到**。
+
+### 8之十.5 负控：11 项，每一项都必须**转红在指定的那条检查上**
+
+`tests/test_sk_tx_isolation_stats.py`。
+
+| 改坏的地方 | 门禁必须转红的检查 |
+|---|---|
+| 枚举里两个计数器换位 | 「四个计数器是枚举的最后几项」+「同一个索引」 |
+| 名字表里两个计数器换位 | 「四个计数器是名字表的最后几个」+「同一个索引」 |
+| 名字表多一个名字 | 「枚举与名字表同长」 |
+| 枚举多一项 | 「枚举与名字表同长」 |
+| 四个赋值挪到解锁之后 | 「在 TX 锁内读」 |
+| 读成别人的计数器 | 「读的是它自己那个计数器」 |
+| 删掉一处递增 | 「那个计数器真的在被累加」 |
+| 删掉头文件里的字段 | 「树里有那个计数器」 |
+| 去掉统计函数里的锁 | 「统计函数拿了 TX 锁」 |
+| 删掉一个赋值 | 「那个计数器在统计函数里有值」 |
+
+另外还有第一条：**树原样必须通过**（否则门禁就是在测自己）。
+
+### 8之十.6 端到端：180 在 **CI 的布局**里真的落地
+
+`scratch/verify_180_in_checkout.py`（16 项，全绿）。
+
+这一片特意**不在抽象的目录里**验补丁，因为第 7.39 节那个坑就是这么来的：
+`git apply` 在仓库子目录里会默默丢掉带 `diff --git` 头的补丁。
+所以这个脚本：
+
+1. 在一个 **checkout 里**建树（CI 的形状）跑**真的** prepare；
+2. 报告里 **48 个补丁全部 applied**（39 个 vendored + 9 个 local，含 180）；
+3. 四个驱动文件的 sha256 与本地树**逐个相同**；
+4. 门禁 33/33 绿、负控 11/11 绿；
+5. **反向**：把 180 从树里拿掉 ⇒ 门禁转红，
+   且**转红在**「四个计数器是枚举的最后几项」与「`tx_invalid_completions` 有值」
+   这两条**指定的**检查上。
+
+### 8之十.7 未做
+
+1. **没有实机证据**：本节每一句都是**读树**读出来的。
+   板子回来之后，`ethtool -S` 的输出里应当出现这四个名字，
+   隔离真发生过的时候 `tx_invalid_completions` / `tx_recovery_requests` 应当**大于 0**。
+2. **`ethtool` 包本身没有在本机验过它在 7.3 镜像里**：
+   `overlays-73/target/linux/zte/zx279133/target.mk` 的 `DEFAULT_PACKAGES` 里有 `ethtool`
+   （与 6.18 线同一份清单），但**镜像里到底有没有那个二进制**，要等实机。
+3. **第 7 片留下的缺口本片没有动**：
+   `zx279133_xsk_pool_cycle()` 里数据面挂起/恢复失败会把 `datapath_failed` 置上
+   （`zx279133_datapath_suspend()` `:864`、`zx279133_datapath_resume()` `:879`），
+   而把失败的数据面拉回来的入口只有 **WAN/LAN 的 open 路径**
+   （`:303`、`:2258`），且**只在已经有第二个使用者**时才会走；
+   恢复工作自己遇到 `datapath_failed` 是**直接放弃**的（`:963`）。
+   这一条需要一个单独的补丁，不在第 10 片里。
+4. **没有改 6.18 线一个字**：`kernel-overlays/` 一行没动，
+   6.18 线自己的 `staging/trial/flash-uImage` md5 仍是 `35685e15e79c27bb30ca6fdb3b0af1d5`。
+
+---
+
 ## 九、下一步（按片重打，每片一次 CI）
 
 **没搬的，按片来：**
@@ -5089,6 +5247,18 @@ ours 那两个计数器回答的是两个问题：
    （`tx_fault_queues` 隔离 + `datapath_failed` + 恢复工作）。
    `160-sk-tx-fault-isolation.patch` 把那半搬了过去，
    并配了一道**按位置判**的门禁（36 条）。
+8. **第 8/9/10 片**（软件侧最后三片）：
+   * **第 8 片已落地**（见八之八）：`170-sk-rx-delivery-safety.patch`
+     （6 处纯软件正确性修复）+ 39 条门禁 + 24 项负控。
+     **run #49 是它第一次真的编进镜像** —— 此前三轮它从未进过树（见 7.39）。
+   * **第 9 片是否定结论**（见八之九）：`cpu_dp->rcv()` 直调**不搬**
+     （7.3 走标准 DSA 路径，硬搬会被 tagger 处理两次）、
+     jack 两个计数器**不搬**（7.3 已由 DSA 用户口 `lan1` 的 `rx_packets`
+     与 conduit 的 `rx_dropped` 回答得更准）。
+   * **第 10 片已落地**（见八之十）：`180-sk-tx-isolation-stats.patch`
+     把 TX 隔离的四个计数器接到 `ethtool -S` 上（+19 -0）
+     + 33 条门禁 + 11 项负控 + 16 项端到端。
+   ⇒ **软件侧到此为止**：剩下的全是**实机对拍**。
 
 验收口径与 6.18 线一致：**CI 绿 + 门禁脚本全过 + 实机启动后
 `/proc/net/dev` 有预期网口、`ethtool -S` 计数在涨**。
@@ -5379,6 +5549,18 @@ python3 scratch/run_prepare_in_checkout.py
 
 # 70) 文档里的控制字符（NUL 与其它控制字符也会让 ripgrep 把文件当二进制）
 python3 scratch/fix_control_chars.py ci-build-repo/docs/101-*.md
+
+# 71) 第 10 片：TX 隔离计数器的门禁与它的负控（11 项负控每一项都转红在指定的检查上）
+python3 ci-build-repo/tools/check-sk-tx-isolation-stats.py --tree scratch/linux-73-base
+python3 ci-build-repo/tests/test_sk_tx_isolation_stats.py --tree scratch/linux-73-base
+
+# 72) 补丁 180 本身：生成、登记、再验一次能干净应用
+python3 scratch/make_patch180.py
+python3 scratch/check_patch180_applies.py
+
+# 73) 端到端：48 个补丁在 CI 的布局（checkout 里的树）里全落地，四个驱动文件
+#     逐个同哈希；拿掉 180 门禁就红，且红在指定的那两条检查上
+python3 scratch/verify_180_in_checkout.py
 ```
 
 第十节的 18~24 号命令里，`cfg73_sim.py` 与 `kdeps73.py` 是**一对**：
@@ -5427,3 +5609,12 @@ uapi 头都过一遍 `scripts/headers_install.sh`，而它的 sed（第 34 行�
 会切出全零**，那扇闸就会永远拒绝 —— 它会「安全地」拒绝一切，而这比放行错误更费时间。
 ⇒ 47 号那句 `SIM OK` 是本轮对 7.3 刷机路径**唯一**的正面证据：
 从 payload 到许可到闸门，全在真的字节上跑过一遍。
+
+71~73 号命令是**第五对**，而且它回答的是第 25 号那个结论**直接逼出来**的问题：
+71 号回答「TX 隔离的四个计数器是不是真的发出来了」，
+72 号保证这个补丁是**生成**出来的（改说明文字不会把手改坏），
+73 号证明它**在 CI 的布局里**真的落地。
+⇒ 「补丁能 apply」这件事**必须**在 CI 的形状里验一次：
+`git apply` 对带 `diff --git` 头的补丁按**仓库根**解析路径，
+树是 checkout 里的一个目录，于是 git 把整个补丁**默默丢掉** ——
+退出码 0、一个字节都不写、默认什么都不说（见 7.39）。

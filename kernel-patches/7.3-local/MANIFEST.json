@@ -55,6 +55,12 @@
       "sha256": "58772d4cd557c7d9697e20f4a38d2f3580f52b79156193cd1784795b0ec0a35e",
       "bytes": 12173,
       "what": "The RX delivery path of the 6.18 generation, moved into the 7.3 tree. The tree rewrote the L2 header on every frame of the CPU's LAN queues, including the frames that carry an Ethernet type field: that shifts the IP header four bytes to the right and drops every IPv4 and IPv6 frame for a total length of 0x0800. The rewrite is now guarded by a test for the type field. Three places that read past the end of what they had are fixed as well - the ARP branch of the rewrite, the delivery path's read of the frame as an Ethernet header, and the frame an XDP program may have moved. A frame is no longer handed up as CHECKSUM_UNNECESSARY on the strength of the PPU's parsed flag, which says the packet was taken apart and not that its checksum was verified. And a buffer is now handed back to the hardware with the whole window it writes into synchronised, because the IDM is not coherent with the CPU's cache. The 6.18 generation's own page pool layout is left alone: each tree's CPU-side synchronisation is written for its own offset, and moving one without the other would offset the frame twice."
+    },
+    {
+      "file": "180-sk-tx-isolation-stats.patch",
+      "sha256": "f09f0503fc0fb8db9659bec72e9e4171e5b34b7e46a2390b2eb9b8eee38d1e19",
+      "bytes": 2995,
+      "what": "The TX fault isolation's four counters - how often a completion counter could not be trusted, how often a recovery was asked for, how often the shared datapath was restarted and how often the recovery failed - are published through the driver's ethtool statistics table, so 'ethtool -S' prints them. The 160 patch counts them and the tree reads them nowhere: a board whose ring was quarantined looks exactly like a board that never had a problem. The four are added at the end of the enum and at the end of the name table, in the same order, so the indices of the existing statistics do not move, and they are read under the lock that increments them."
     }
   ]
 }

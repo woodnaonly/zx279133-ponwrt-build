@@ -74,6 +74,11 @@ on:
       # the quarantine is taken out.
       - tools/check-sk-tx-isolation.py
       - tests/test_sk_tx_isolation.py
+      # The gate that says the isolation's counters are published where the
+      # board can read them, and the controls that say whether it still
+      # notices when they are taken out.
+      - tools/check-sk-tx-isolation-stats.py
+      - tests/test_sk_tx_isolation_stats.py
       # The gate that says the receive path proves what it hands over, and the
       # controls that say whether it still notices when the proof is taken out.
       - tools/check-sk-rx-delivery.py
@@ -577,6 +582,25 @@ jobs:
           set -e
           python3 tools/check-sk-tx-isolation.py --tree "$KERNEL_TREE"
           python3 tests/test_sk_tx_isolation.py --tree "$KERNEL_TREE"
+
+      # The 160 patch counts what the isolation did - how often a completion
+      # counter could not be trusted, how often a recovery was asked for, how
+      # often the shared datapath was restarted, how often the recovery
+      # failed - and the tree reads none of it.  A board whose ring was
+      # quarantined then looks exactly like a board that never had a
+      # problem, which is the question the isolation exists to answer.  The
+      # 180 patch publishes the four through the ethtool statistics table,
+      # and this gate says they really are there: the enum, the name table
+      # and the assignments have to agree on where each counter is, and
+      # nothing in the build notices when they do not.
+      #
+      # The controls run on the same tree, and each of them has to turn the
+      # gate red on the check that names the list it broke.
+      - name: 'Gate: the TX isolation counters are published'
+        run: |
+          set -e
+          python3 tools/check-sk-tx-isolation-stats.py --tree "$KERNEL_TREE"
+          python3 tests/test_sk_tx_isolation_stats.py --tree "$KERNEL_TREE"
 
       # The 7.3 tree's receive path handed frames to the stack on the
       # strength of what the descriptor said.  The L2 rewrite ran on frames

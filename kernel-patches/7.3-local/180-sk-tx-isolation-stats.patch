@@ -1,0 +1,66 @@
+From: the SK-D840N 7.3 line
+Subject: [PATCH] net: zx279133: publish the TX fault isolation's counters
+
+The TX fault isolation keeps four counters: how often a completion
+counter could not be trusted, how often a recovery was asked for, how
+often the shared datapath was restarted, and how often the recovery
+failed.  Nothing reads them.  They are written under the TX lock and
+never looked at, so on the board there is no way to tell a ring whose
+counter was untrusted from a ring that never had a problem - which is
+exactly the question the isolation exists to answer.
+
+The 7.3 tree already has the place to publish them: the driver has an
+ethtool statistics table, and the names in it are what "ethtool -S"
+prints.  This patch adds the four counters to that table, at the end of
+it so that the indices of the existing ones do not move, and reads them
+under the same lock that protects them.
+
+The names are the counters' own names, and they are added to the enum
+and to the table in the same order: a name that is in one and not the
+other would print a counter under the wrong label, and nothing in the
+build would say so.
+
+diff --git a/drivers/net/ethernet/zte/zx279133-netdev.c b/drivers/net/ethernet/zte/zx279133-netdev.c
+index e367ad5..3e9f861 100644
+--- a/drivers/net/ethernet/zte/zx279133-netdev.c
++++ b/drivers/net/ethernet/zte/zx279133-netdev.c
+@@ -1484,6 +1484,10 @@ enum zx279133_ethtool_stat {
+ 	ZX279133_STAT_XDP_TX,
+ 	ZX279133_STAT_XDP_REDIRECT,
+ 	ZX279133_STAT_XDP_ABORTED,
++	ZX279133_STAT_TX_INVALID_COMPLETIONS,
++	ZX279133_STAT_TX_RECOVERY_REQUESTS,
++	ZX279133_STAT_TX_RECOVERY_RESTARTS,
++	ZX279133_STAT_TX_RECOVERY_FAILURES,
+ 	ZX279133_STAT_COUNT,
+ };
+ 
+@@ -1555,6 +1559,10 @@ static const char zx279133_gstrings_stats[ZX279133_STAT_COUNT][ETH_GSTRING_LEN]
+ 	"xdp_tx",
+ 	"xdp_redirect",
+ 	"xdp_aborted",
++	"tx_invalid_completions",
++	"tx_recovery_requests",
++	"tx_recovery_restarts",
++	"tx_recovery_failures",
+ };
+ 
+ static u32 zx279133_hw_stat(struct zx279133_eth *eth, unsigned int offset)
+@@ -1657,6 +1665,17 @@ static void zx279133_get_ethtool_stats(struct net_device *ndev,
+ 	data[ZX279133_STAT_TX1_COMPLETED] = eth->tx[1].completed;
+ 	data[ZX279133_STAT_TX_HW_CSUM_PACKETS] = eth->tx_hw_csum_packets;
+ 	data[ZX279133_STAT_TX_SW_CSUM_PACKETS] = eth->tx_sw_csum_packets;
++	/*
++	 * The TX fault isolation's own counters.  They say how often a
++	 * completion counter could not be trusted, and what the recovery
++	 * did about it.  They are read under the lock that protects them,
++	 * because they are incremented under it.
++	 */
++	data[ZX279133_STAT_TX_INVALID_COMPLETIONS] =
++		eth->tx_invalid_completions;
++	data[ZX279133_STAT_TX_RECOVERY_REQUESTS] = eth->tx_recovery_requests;
++	data[ZX279133_STAT_TX_RECOVERY_RESTARTS] = eth->tx_recovery_restarts;
++	data[ZX279133_STAT_TX_RECOVERY_FAILURES] = eth->tx_recovery_failures;
+ 	spin_unlock_bh(&eth->tx_lock);
+ 	data[ZX279133_STAT_RX_IRQ_COUNT] = atomic64_read(&eth->rx_irq_count);
+ 	data[ZX279133_STAT_IDM_LOCAL_IRQ_COUNT] =
