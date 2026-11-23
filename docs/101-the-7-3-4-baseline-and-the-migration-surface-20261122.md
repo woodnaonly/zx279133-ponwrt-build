@@ -6389,18 +6389,22 @@ run **#57**（整轮 Success，1 h 20 m 46 s）的 flash job 里
 `staging/trial73d/ctl/ctl-initramfs.cpio.gz` 骑的是 `7.3.4*`。
 
 ⇒ 第 1 步只要把 `staging/trial73d/flash/` 那三件拷进 `staging/trial/`，
-**第 2、3、6 步重建出来的夹具与载荷就会自动钉住同一对字节**
-（`mkgate.sh`、`mkctlram.py`、`flash-round.sh` 都是从 `staging/trial/` 现读现算），
+**第 2、6 步重建出来的夹具与载荷就会自动钉住同一对字节**
+（`mkgate.sh`、`flash-round.sh` 都是从 `staging/trial/` 现读现算，
+而 `flash-round.sh` 每次都重建刷机载荷，载荷钉的 md5 因此自动跟着换），
 **不需要手改任何 md5**。
+**但第 3 步不一样**：announce 载荷不钉 md5（实测：载荷里没有任何 32 位十六进制串），
+它只需要骑对内核版本 ⇒ **预置的那份直接可用，不要用现场那份旧 `mkctlram.py` 重建**
+（重建会把 sysfs / netdevs / eth_bound_driver 那几项诊断丢掉，八之十九.5）。
 
 ### 8之十七.2 顺序
 
 | 步 | 做什么 | 命令 | 这一步的判据 |
 |---|---|---|---|
 | **0** | **物理**：插 CH340、插网线、确认智能插座供电 | `sh tools/bench-keep.ps1` | 继电器与冷启动看门狗起来；`staging/ctl/serial.log` 开始长 |
-| **1** | **换件**：把 7.3 的三件放进 `staging/trial/` | 复制 `staging/trial73d/flash/flash-uImage`、`flash-dtb.bin`、`flash-rootfs.jffs2` | `md5sum` 对上 `4b5189792c4f1c3dcaef7e28b5dec258` / `ff6914d007b9b21895e1a6b3f67d5ea5` / `1dc238cc75ac97a56251a79cb97e5c45` |
+| **1** | **换件**：把 7.3 的三件放进 `staging/trial/`。**三件必须来自带微码修复的那一轮** —— 本机现在备的那三件是 #53 的，带的是驱动拒收的那份微码 ⇒ 换之前先刷新（八之十九.2） | 先把那一轮的 artifact 里的三件放进 `staging/trial73d/flash/`（旧件别删），再复制到 `staging/trial/` | `sha256sum -c` 过那一轮的 `sha256sums`；**且** `python3 ci-build-repo/tools/check-sk-mcode-image.py --image staging/trial/flash-uImage --tree <7.3 树> --blob <那份微码>` 过（镜像里那份是驱动收的那一份） |
 | **2** | **重建门禁夹具** | `sh tools/mkgate.sh` | 打印 `the gate kernel IS the flash kernel`；`gate.src` 里的 `uimage_md5` = 第 1 步那对 |
-| **3** | **重建 announce 载荷** | `python tools/mkctlram.py --mode announce --tag K73 …` | 载荷里钉的 md5 = 第 1 步那对 |
+| **3** | **announce 载荷**：**直接用预置的那份** `staging/trial73d/ctl/ctl-initramfs.cpio.gz`（它已经骑 `7.3.4*`，而且一个 md5 都不钉 ⇒ 不随三件变化）。**要重建只能用 `ci-build-repo/tools/mkctlram.py`** —— 现场那份 `tools/mkctlram.py` 比仓库那份旧 41 行，重建会**丢掉** sysfs / netdevs / eth_bound_driver 那几项诊断（八之十九.5） | `python3 ci-build-repo/tools/mkctlram.py --mode announce --tag K73 --kver 7.3.4* ...` | 载荷里的 `/init` 是 **19,117 B**（仓库那份产的）；`grep -c eth_bound_driver` ≥ 1 |
 | **4** | **判决轮**：把 7.3 的内核 kexec 进 RAM | `python tools/ncsrv.py &` → `CTLTAG=K73 IMAGE_LOCAL=staging/ctl/gate-Image REMOTE_IMAGE=gate-Image DTB_LOCAL=staging/ctl/gate-dtb REMOTE_DTB=gate-dtb INITRD=ctl-initramfs.cpio.gz sh tools/pushctl.sh` → `sh tools/catchctl.sh` → ssh 点火 | 板子**跳走了**（`gone=1`），且 `staging/ctl/reports.log` 里出现 **CTLALIVE** 且 `kver=7.3.4` |
 | **5** | **打分 + 换许可** | `sh tools/gatewatch.sh 600` | `staging/ctl/flash.permit` 多了一行 `proven=gate-K73`，且 `kver=7.3.4`、`root_index=5`、`root_read=IDENTICAL`、`jffs2_ro=OK` |
 | **6** | **刷** | `sh tools/flash-round.sh dry`（干跑）→ `sh tools/flash-round.sh write`（要连 root 就 `write-root`） | `gatecheck: ALLOWED (gate-K73)`；擦除前后 `mtd read` 回读一致 |
@@ -6418,6 +6422,7 @@ run **#57**（整轮 Success，1 h 20 m 46 s）的 flash job 里
 | 1 | `sha256sum -c` 不过 | 拷贝被截断 | 重拷；**别**往下走 |
 | 2 | `mkgate.sh` 报 `not a legacy uImage` | `staging/trial/flash-uImage` 换错了 | 重换第 1 步 |
 | 3 | 载荷钉的 md5 不是 7.3 那对 | 载荷用了旧件 | 重生成 |
+| 3b | 判决报告里 `model` / `netdevs` / `eth_bound_driver` 全是 `none` | announce 载荷是用**现场那份旧** `mkctlram.py` 重建的，诊断被丢掉了 | 改用预置的那份，或用 `ci-build-repo/tools/mkctlram.py` 重建（八之十九.5） |
 | 4 | `pushctl.sh` 报 `md5 mismatch on the staged payload` | 往板上拷的那一份不完整 | 重推 |
 | 4 | `catchctl.sh` 说 `no jump observed` | 点火没发生 | 重新 ssh 点火 |
 | 4 | `gone=1` 但 `reports.log` 是空的 | 载荷没到 userspace（**不是**判定失败） | 看 `serial.log`；**不要**当判决通过 |
@@ -6431,9 +6436,11 @@ run **#57**（整轮 Success，1 h 20 m 46 s）的 flash job 里
 - **没有一步在真板子上走过**。这一节是把八之十五与八之十六的结论
   按**工具自己写的顺序**排成一条线，每一步的判据都引自脚本自身的输出，
   但**排练只到沙箱为止**（第十节 101、102、106 号命令）。
-- **第 1 步那三个 md5 是 #53 那轮的**（本机现在备的就是这一轮；
+- **第 1 步那三件是 #53 那轮的**（本机现在备的就是这一轮；
   它的 uImage 与 dtb 与 #57 逐位相同、rootfs 不同，见 8之十七.1 的那张对照表）。
-  若 CI 之后又出了新镜像，以那一轮的产物为准 —— 门禁认的是**字节**，不是轮次。
+  **而且这一轮带的是驱动拒收的那份微码**（八之十八.1）⇒ 第 1 步之前**必须**先换件。
+  换哪一轮都行 —— 门禁认的是**字节**，不是轮次 —— 但那一轮必须**带微码修复**，
+  而且换完要用 `tools/check-sk-mcode-image.py` 验过（八之十九.3）。
 - **第 6 步只刷 dtb+kernel 还是连 root 一起刷，是板子的选择**：
   `write` 只写前两段，板上还留着 6.18 的 rootfs；
   `write-root` 才三段都写，而 root 是单向门（刷错就没有回退，
@@ -6475,20 +6482,30 @@ run **#57**（整轮 Success，1 h 20 m 46 s）的 flash job 里
 
 ### 8之十八.3 机制：为什么 7.3 装的是我们那一份
 
+> **本小节在八之十九里被订正过一次。** 初稿写的「内核按自己的源码树解析这份文件」
+> 是**错的**：那份文件确实在内核树里，但**不是被内核读的那一份**。
+> 下面写的是订正后的版本；订正的过程与证据在八之十九。
+
 三件事凑在一起：
 
 1. **微码是 built-in firmware**。`config-7.3` 里
    `CONFIG_EXTRA_FIRMWARE="zte/zx279133/mcode_intel.bin"` +
-   `CONFIG_EXTRA_FIRMWARE_DIR="firmware"` ⇒ 内核按**自己的源码树**解析这份文件。
-2. **谁放进去的**：`tools/apply-sk-overlay-73.sh` 从
-   `overlays/target/linux/zte/zx279133/firmware/…`（6.18 世代那份）拷进树。
-   上游 cnjn 是在他自己的 `target/linux/zte/Makefile` 的 `Kernel/Prepare` 里拷
-   `package/firmware/zte/flies/zx279133-npu.bin` 的 ——
-   **但我们用 `overlays-73/target/linux/zte/Makefile` 覆盖了那个 Makefile**
-   ⇒ 上游那一段**根本不存在**。
-3. **rootfs 里没有微码**：7.3 与 6.18 两份 jffs2 里都搜不到 `mcode_intel.bin`
+   `CONFIG_EXTRA_FIRMWARE_DIR="firmware"`。
+   内核把这几份文件**原样**嵌进镜像（内核自己的 Kconfig 写着
+   “NOTE: Compressed files are not supported in EXTRA_FIRMWARE”）
+   ⇒ 镜像里能按字节搜到它（实测：#53 的 uImage inflate 后 14,051,336 B，
+   offset 9,073,808 处就是那份 blob 的整体）。
+2. **但 `EXTRA_FIRMWARE_DIR` 在编译前被改写了**：
+   `scripts/configure-sk-d840n.sh`（**两条线共用的那个脚本**）把它钉成
+   `$(pwd)/target/linux/zte/zx279133/firmware` —— **OpenWrt 检出目录**，
+   不是内核树；钉完还**断言那份文件在**，不在就直接 `exit 1`。
+   ⇒ 真正被内核读的是 **OpenWrt 检出目录里那份**。
+3. **那份是谁**：工作流先 `cp -a overlays/. openwrt/`（**6.18 那份**，`0xc839b946`），
+   再 `cp -a overlays-73/. openwrt/`（**7.3 那份**，本次新增，`0xef1d7647`）
+   ⇒ **后一份覆盖前一份** ⇒ 修之前嵌进去的是 6.18 那份。
+4. **rootfs 里没有微码**：7.3 与 6.18 两份 jffs2 里都搜不到 `mcode_intel.bin`
    （jffs2 的文件名是明文，搜得到；两份都是 `-1`）⇒
-   `request_firmware()` **只能拿到内核内嵌的那一份** ⇒ 树里那份**就是**板上那份。
+   `request_firmware()` **只能拿到内核内嵌的那一份** ⇒ 镜像里那份**就是**板上那份。
 
 **产物级实测**（#57 的 `flash-uImage`）：inflate 后 14,051,336 B，
 在 offset **9,073,808** 找到**我们那份 blob 的整体**；上游那份的头尾都找不到。
@@ -6528,10 +6545,18 @@ if (vlan_offload &&
 | 3 | 新门禁：期望值**从树里驱动自己的代码读出来**（`fw_crc == 0x…` 字面量与 `ZX279133_MCODE_*_CRC` 常量），查 blob 的 crc32、尺寸、magic、指令数 | `tools/check-sk-mcode.py` |
 | 4 | 负控 8 项：错一个字节 ⇒ 红在 crc32 那条；尺寸不对 ⇒ 红在尺寸那条；**6.18 线那份 ⇒ 红在 crc32 那条** | `tests/test_sk_mcode.py` |
 | 5 | 接线：新步骤「Gate: the NPU microcode is the one this driver will take」+ 两条 `paths:` | `.github/workflows/build-sk-d840n-73.yml` |
+| 6 | **这道门禁挪到了 overlays 拷完之后**，并且查的是**被嵌进镜像的那一份**（OpenWrt 检出目录里那份），不是内核树里那份 | 同上 |
+| 7 | **产物级门禁**：把编译出来的 uImage 解开，按字节找那份 blob，找不到就红 | `tools/check-sk-mcode-image.py` |
+| 8 | 产物级门禁的负控 6 项，每一条都断言**红在哪一条检查上** | `tests/test_sk_mcode_image.py` |
+| 9 | `overlays-73` 下的微码加 `-text -diff`（二叉文件不得过文本过滤器） | `.gitattributes` |
+| 10 | `.gitattributes` 进两条线的 `paths:`（它决定 checkout 的字节 ⇒ 改它必须重建） | 两个工作流 |
 
 **自检这一步当场抓到了本轮自己的一个错**：脚本里写成
 `[ -f "$fw73" ] || fw="$fw"`（写反了：7.3 那份存在时仍然用 6.18 那份），
 门禁立刻红在 crc32 那条上 ⇒ 改成显式 `if`（`&&` 写法在 `set -e` 下还会误退出）。
+
+第 6~10 项是**八之十九**那一轮的产物：初稿的门禁查错了文件，
+补上产物级那道之后，这一条链上才第一次有「镜像里那份是对的」这种直接证据。
 
 ### 8之十八.6 没做到的
 
@@ -6555,6 +6580,160 @@ doc 100 第 281 行原写：「`overlays/…/mcode_intel.bin` **保留** —— 
 `0xef1d7647` 那份，我们 overlay 里的是 `0xc839b946` 那份 ——
 **同名同尺寸，字节不同**（doc 100 当时只核了「同名同尺寸」）。
 已改成「同名同尺寸但字节不同；7.3 线因此自带一份驱动认的那份」。
+
+---
+
+## 八之十九、微码那条链的第二轮：一道查错了文件的门禁，和两支不能重建的载荷
+
+### 8之十九.1 判决
+
+上一轮（八之十八）把微码这件事**修对了**，但**证明它的那道门禁查错了文件**，
+而且**载荷那一侧有两支东西不能用现场的脚本重建**。三件事：
+
+1. **树级门禁查的不是被嵌进镜像的那一份。**
+   初稿的门禁查 `$KERNEL_TREE/firmware/zte/zx279133/mcode_intel.bin`；
+   真正被内核读的是 **OpenWrt 检出目录**里那份（八之十九.2）。
+   ⇒ 两处当时是同一份字节，所以门禁是绿的；**但它绿得没有意义** ——
+   删掉拷贝那一步，它照样绿，而镜像照样坏。
+2. ⇒ 补了一道**产物级**门禁：把编译出来的 uImage 解开，
+   **按字节**找那份 blob，找不到就红。
+   这是这条链上第一次有「镜像里那份是对的」这种直接证据（八之十九.3）。
+3. **载荷那一侧**：刷机载荷能逐字节复现，**announce 载荷用现场那份脚本重建会把诊断丢掉**
+   （八之十九.5）。
+
+### 8之十九.2 微码进镜像的那条路（逐条实测）
+
+| 步 | 谁做的 | 结果 |
+|---|---|---|
+| 1 | cnjn 的 `config-7.3` | `CONFIG_EXTRA_FIRMWARE="zte/zx279133/mcode_intel.bin"`、`CONFIG_EXTRA_FIRMWARE_DIR="firmware"` |
+| 2 | `scripts/configure-sk-d840n.sh:24` | `cd "$IW_DIR"` ⇒ 脚本的工作目录是 **OpenWrt 检出目录** |
+| 3 | `scripts/configure-sk-d840n.sh:354` | `FWDIR=$(pwd)/target/linux/zte/zx279133/firmware` ⇒ **`EXTRA_FIRMWARE_DIR` 被改写成检出目录里的路径** |
+| 4 | `scripts/configure-sk-d840n.sh:355-357` | 断言那份文件在，**不在就 `exit 1`**（编译直接停） |
+| 5 | 工作流 `:464` | `cp -a overlays/. openwrt/` ⇒ 6.18 那份（`0xc839b946`）先进来 |
+| 6 | 工作流 `:468` | `cp -a overlays-73/. openwrt/` ⇒ 7.3 那份（`0xef1d7647`）**后**进来 ⇒ **覆盖** |
+| 7 | 工作流 `:397` | `sh tools/apply-sk-overlay-73.sh "$KERNEL_TREE"` ⇒ 内核树里也有一份（**不是被读的那份**） |
+| 8 | 工作流 `:864` | `sh scripts/configure-sk-d840n.sh …` ⇒ 第 3、4 步在这里发生 |
+
+**直接证据**：本机那份 7.3 模拟树的 `target/linux/zte/zx279133/config-7.3` 里，
+`CONFIG_EXTRA_FIRMWARE_DIR` 已经被改写成
+`/c/UGit/openwrt/SK-D840N/scratch/ow73run/target/linux/zte/zx279133/firmware`
+—— **检出目录**，不是内核树。
+
+⇒ **修之前**（overlays-73 里没有 firmware 目录）：检出目录里那份是第 5 步带进来的
+6.18 那份 ⇒ 镜像嵌的是 `0xc839b946` ⇒ 驱动拒收（八之十八.1）。
+⇒ **修之后**：第 6 步覆盖 ⇒ 镜像嵌的是 `0xef1d7647` ⇒ 驱动收。
+
+⇒ **内核树里那份（`apply-sk-overlay-73.sh` 拷的）从头到尾没被读过**：
+`EXTRA_FIRMWARE_DIR` 已经被钉到检出目录了。
+留着它是因为 cnjn 原始的 `config-7.3` 写的是 `firmware`（相对内核树），
+而改写那段是**条件执行**的（`configure-sk-d840n.sh:353` 看 `CONFIG_EXTRA_FIRMWARE` 在不在）；
+它同时是板级脚本拷完的自检对象。**但它不是证据**。
+
+### 8之十九.3 两道门禁，和真实产物上的双向证据
+
+| 门禁 | 问什么 | 位置 |
+|---|---|---|
+| `tools/check-sk-mcode.py` | 那份文件是不是驱动会收的那一份 | 工作流 `:535`，**在 overlays 拷完之后**，查检出目录里那份 |
+| `tools/check-sk-mcode-image.py` | **编译出来的镜像里**是不是有那份文件 | 工作流 `:1463`，只跑 flash 模式 |
+
+第二道是新的，第一道是**挪位置 + 改指向**的。
+
+**真实产物上的双向证据**（本机 #53 那份 uImage，inflate 后 14,051,336 B）：
+
+| 问法 | 判决 | 红在哪一条 |
+|---|---|---|
+| 查树里那份（`0xef1d7647`，驱动要的） | **红** | 「镜像里没有微码」 |
+| 查 6.18 那份（`0xc839b946`，镜像里真有的） | **红** | 「驱动不收这一份」（并且报出 offset **9,073,808**） |
+
+⇒ **两条各红一条，而且红的是不同那一条** ——
+这与早前那次独立测量（在同一份镜像的 offset 9,073,808 找到 6.18 那份的整体）吻合。
+
+**产物级门禁的负控 6 项**（`tests/test_sk_mcode_image.py`），每一条都断言**红在哪一条**：
+
+| # | 造出来的情形 | 必须红的那一条 |
+|---|---|---|
+| 1 | 镜像带的是驱动要的那份 | 不红 |
+| 2 | 树里放 6.18 那份、镜像里也是它 | 「驱动不收这一份」 |
+| 3 | 镜像里那份差一个字节 | 「镜像里没有微码」 |
+| 4 | 镜像里根本没有微码 | 「镜像里没有微码」 |
+| 5 | 把驱动的常量改掉 | 「驱动不收这一份」（证明期望值是**读出来的**，不是写死的） |
+| 6 | 把驱动的常量改回去 | 不红 |
+
+### 8之十九.4 `.gitattributes` 也在门禁面上
+
+`.gitattributes` 决定 **checkout 的字节** ⇒ 它决定构建读到什么。
+而 `paths:` 少收它 ⇒ **只改它不会重建** ⇒ 从那一刻起，
+「镜像是用哪套规则 checkout 出来的」这个问题就没有任何一轮构建会回答。
+
+⇒ 两个工作流的 `paths:` 都加了 `.gitattributes`。
+⇒ 门禁 `tools/check-sk-workflow-paths.py` 多了一条规则：
+有一类文件**每个构建都读**，工作流不必点名它，但 `paths:` 必须收它
+（`.gitattributes` 是目前唯一的一个）。
+⇒ 负控里多了一项：把那条 entry 拿掉，门禁必须红在
+`「<workflow>: .gitattributes is covered by paths」` 那一条上（两条线各一项）。
+
+顺带：`overlays-73/` 下那份微码是**二进制**，而 `overlays-73/** text eol=lf`
+会把它过文本过滤器（6.18 线早就为同一件事单开过一条 `-text`）⇒ 补上同款规则。
+今天它一个 CR 字节都没有，所以这条规则**今天什么也不改** ——
+它防的是「哪天有人换成另一份 blob，而那次改动不会重建」。
+
+### 8之十九.5 载荷：能重建的那支，和不能重建的那支
+
+实机那一轮要两支载荷（八之十七 第 3、6 步）。**实测两支的待遇不同**：
+
+| 载荷 | 现场那份 `tools/mkctlram.py` 能复现吗 | 结论 |
+|---|---|---|
+| `ctl-flash.cpio.gz`（刷机载荷） | **能，逐字节相同** | 用现场那份重建没问题 |
+| `ctl-initramfs.cpio.gz`（announce 载荷） | **不能，少 2,779 B** | 用现场那份重建会**丢掉诊断** |
+
+证据：
+
+| | 现场那份 | 仓库那份 |
+|---|---|---|
+| `tools/mkctlram.py` | 37,850 B（`D70F72AD…`） | 40,633 B（`D670E67D…`） |
+| announce 载荷的 `/init` | 16,338 B | **19,117 B** |
+
+多出来的那 2,779 B 里有：
+
+- **sysfs 到底挂上没有**（`SYSFS_STATE`，挂不上就**再挂一次并把错误打出来**）；
+- **网口读两遍**：`/sys/class/net` 与 `/proc/net/dev` 各一遍
+  （后者不碰 sysfs，所以它非空就证明接口存在 ——
+  「驱动没注册」与「我们没看见」必须能分开）；
+- **`devtree_model`**：读 `/sys/firmware/devicetree/base/model` 真实路径
+  （`/proc/device-tree` 是指向它的符号链接，sysfs 死了它也是死的）；
+- **`eth_bound_driver`**：**是哪个 platform driver 认领了 ethernet 节点**
+  —— 「有没有驱动认领」与「它会被叫成什么名字」是决定刷完能不能连上的两个事实。
+
+⇒ 这几项在注释里写得很清楚：**早期轮次的 `model`/`leds`/`netdevs` 全是空的，
+而 `/proc` 那几项是好的** —— 那**不是三个发现，是一个挂载失败**。
+⇒ 而这些诊断**只在仓库那份 `mkctlram.py` 里**。
+
+⇒ **八之十七 第 3 步因此改了**：announce 载荷**不要**用现场那份脚本重建；
+用预置的那份（它已经骑 `7.3.4*`），或者用**仓库那份**重建。
+
+**另外两件事（顺带查实的）**：
+
+- announce 载荷**一个 md5 都不钉**（实测：载荷里没有任何 32 位十六进制串）⇒
+  **它不随三件变化而变** ⇒ 预置那份直接可用。
+- 刷机载荷的三个 md5 是 `flash-round.sh` **每次现读现算**的
+  （`tools/flash-round.sh:109` 调 `mkctlram.py --payload …=staging/trial/…`）
+  ⇒ **换三件之后载荷自动跟着换**，**一个字都不用手改**
+  ⇒ 「手工重钉 md5」这件事在 7.3 这一轮**根本不需要做**
+  ⇒ 初稿为此写的那支「重新打 pin」的工具**因此删掉**（多余的工具就是多余的漂移源）。
+
+### 8之十九.6 这一节没做到的
+
+- **产物级门禁还没在 CI 里跑过**：本轮把它接进了工作流，但**判决要等下一轮**
+  （7.3 线 #61 起）。
+- **镜像里那份到底是不是 `0xef1d7647`，本机还没验过**：
+  本机手上只有 #53 那份镜像（带的是 6.18 那份），
+  新镜像要等 CI 出来才拿得到（八之十九.3 那两条红是**旧镜像**上的证据）。
+- **板子那一头依旧一次都没验过**：这一节全是**产物级**的结论。
+- **`EXTRA_FIRMWARE_DIR` 为什么会被钉到检出目录**：注释里写的是
+  cnjn 那个相对路径「只在他自己的机器上成立」；**那个改写本身是对的**
+  （不改的话编译直接死于 “No rule to make target”），
+  但**它顺带把「内核树里那份」变成了没人读的文件** ——
+  这是本轮才看出来的，初稿以为那就是生效路径。
 
 ---
 
@@ -7191,6 +7370,21 @@ python3 scratch/trio_payload_pins.py
 #      成员名按字节打印，别靠眼睛比对字母
 python3 scratch/zip_members.py scratch/artifact57-flash.zip
 python3 scratch/zip_compare.py scratch/artifact57-flash.zip staging/trial73d/flash
+
+# 109) 微码在**内核镜像**里是哪一份（镜像解开，按 built-in firmware 的头找）：
+#      实测 #53 那份的 offset 9,073,808 处是 6.18 那份的整体
+python3 scratch/microcode_in_image.py staging/trial73d/flash/flash-uImage
+
+# 110) 微码在**取回的 artifact** 里是哪一份（zip 成员级）
+python3 scratch/microcode_in_artifact.py scratch/artifact57-flash.zip
+
+# 111) 载荷的三个 md5 钉在**哪个条目**里（实测：cpio 的 init 条目，每个出现两次：
+#      一次判等、一次报错文案）
+python3 scratch/payload_pin_where.py staging/trial73d/ctl/ctl-flash.cpio.gz
+
+# 112) 按字节打印一个串的拼写与码位（**别靠眼睛比对字母**）：
+#      本轮据此排除了一个并不存在的「产物与仓库拼写不一致」的 bug
+python3 scratch/spell_bytes.py
 ```
 
 第十节的 18~24 号命令里，`cfg73_sim.py` 与 `kdeps73.py` 是**一对**：
@@ -7290,3 +7484,13 @@ uapi 头都过一遍 `scripts/headers_install.sh`，而它的 sed（第 34 行�
 （实测 uImage 与 dtb 逐位相同、rootfs 不同 —— jffs2 不可复现 ⇒ **三件必须同轮**）。
 ⇒ **换件之后这两条命令必须重跑**：载荷只允许写它被构建时的那对字节，
 而门禁认的是**字节**，不是轮次。
+
+**109~112 号命令是第十组**，它们回答的是「微码那份到底进到哪儿去了」：
+109 号在**内核镜像**里找那份 blob（内核把 built-in firmware **原样**嵌进去，
+所以能按字节搜到 —— 实测 #53 那份的 offset 9,073,808 处就是 6.18 那份的整体），
+110 号在**取回的 artifact** 里做同一件事，
+111 号指出载荷的三个 md5 钉在 cpio 的 `init` 条目里（每个出现两次：一次判等、一次报错文案）
+—— 这条事实把「手工重钉 md5」这件事整个消掉了：
+刷机载荷的 pin 是 `flash-round.sh` 每次现读现算的（八之十九.5）。
+112 号是本轮的一条教训：**字母相近的串不能靠眼睛比** ——
+它当场排除了一个并不存在的「产物与仓库拼写不一致」的 bug。
