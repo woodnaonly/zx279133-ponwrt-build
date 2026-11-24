@@ -1,0 +1,378 @@
+From: the SK-D840N 7.3 line
+Subject: [PATCH] net: zx279133: give the switch engine the vendor's table set
+
+The switch engine's microcode knows a fixed set of tables: for each one an
+id, the width of an entry and the number of entries.  The board loads
+np_133.ko, and that module's g_core_sdt_info - 53 entries, recovered in
+docs/29 and docs/31 - is that set.  The generic np.ko's set, which the 7.3
+tree's np.c declared, belongs to a module that is not on this board at all.
+
+Two things follow from declaring the wrong set, and the first one is fatal.
+The MF extension table - SDT 0x7d, the mirror of the SPA port attributes,
+64 entries of 128 bits - is not in the generic set at all, so the switch
+engine was never told about it and the driver had no base for it:
+zx279133_9132_port_init() -> zx279133_9132_mf_mirror() ->
+zx279133_eram_window_patch() returned -EINVAL, the switch driver's probe
+failed with -EINVAL, and the 7.3.4 image came up with no network interface
+at all.  The second one is that the tables the two sets share were declared
+with another width - 0x1f and 0x22 are statistics tables in the generic set
+and ERAM tables in the vendor's - so the hardware would have read them at
+another address.
+
+The 6.18 generation already has this right: it creates the vendor's list
+and it looks every base up by the table's id, because the base of a table
+is not a constant.  The ERAM allocator hands the blocks out in order, out
+of a pool that starts at block 12288, so a table's base is the sum of the
+depths of the tables before it.  With the vendor's list the pool ends at
+block 30273 and the thirteen tables this driver writes land on the
+addresses the vendor's own module gives them: 0x18 at 19624, 0x19 at
+19752, 0x1b at 19820, 0x22 at 19592, 0x27 at 24071 and 0x7d at 24737.
+
+So this patch takes the vendor's list, the three tables of the driver's own
+(0x00, 0x04 and 0x06, which the vendor's list does not have) after it, and
+the four hard-coded base blocks with it.  It also moves the MF extension
+entry's port attribute word from word 3 to word 0: the vendor's
+port_attr_def_*_set() helpers patch the byte at offset 3 of the entry and
+write the entry back, and the board's own ERAM dump (docs/31) shows the
+attribute word 0x96040001 in word 0 with the other three words empty.
+
+The one entry that belonged to a table the vendor does not have - the old
+sdt 0x10 - is gone, and the factory's port type entries now follow the
+port type table's base instead of a block number.
+
+diff --git a/drivers/net/ethernet/zte/zx279133-np.c b/drivers/net/ethernet/zte/zx279133-np.c
+index 7717452..95585c2 100644
+--- a/drivers/net/ethernet/zte/zx279133-np.c
++++ b/drivers/net/ethernet/zte/zx279133-np.c
+@@ -529,13 +529,11 @@ static int zx279133_smmu0_write(struct zx279133_eth *eth, u32 addr_ind,
+  * 0 (companion 14) at np_nppu_init, and mf_port_ppuinit_set() sets bit 2
+  * on the mem ids the vendor configures at np_init_done, including CPU
+  * injection memory 15 (companion 10 for mem_id 5). Every update is
+- * mirrored into the MF extension table, SE ERAM table 50: 64 entries of
+- * 128 bits keyed by SPA memory id, word 3
+- * carrying the port-attribute word the SPA multi-forward engine consults
+- * to accept CPU-originated frames for a port.
++ * mirrored into the MF extension table, SE ERAM table 0x7d: 64 entries of
++ * 128 bits keyed by SPA memory id, word 0 carrying the port-attribute word
++ * the SPA multi-forward engine consults to accept CPU-originated frames
++ * for a port.
+  */
+-#define ZX279133_MF_ERAM_BASE_BLOCK	17106
+-#define ZX279133_VLAN_ERAM_BASE_BLOCK	12288
+ 
+ /*
+  * Where the ERAM tables this driver uses actually are.
+@@ -1100,7 +1098,7 @@ int zx279133_vlan_runtime_prepare(struct zx279133_eth *eth)
+ 	 * port policy to VID 0 and to the switch's private service tags.
+ 	 */
+ 	ret = zx279133_smmu0_write(eth,
+-				  ZX279133_VLAN_ERAM_BASE_BLOCK << 7,
++				  zx279133_eram_base_of(ZX279133_VLAN_ERAM_SDT_ID) << 7,
+ 				  zx279133_vlan0_entry,
+ 				  ARRAY_SIZE(zx279133_vlan0_entry),
+ 				  ZX279133_SMMU0_CMD_WRITE);
+@@ -1110,7 +1108,7 @@ int zx279133_vlan_runtime_prepare(struct zx279133_eth *eth)
+ 	for (vid = ZX279133_LAN_TRANSPORT_VID_MIN;
+ 	     vid <= ZX279133_LAN_TRANSPORT_VID_MAX; vid++) {
+ 		ret = zx279133_smmu0_write(eth,
+-					  (ZX279133_VLAN_ERAM_BASE_BLOCK << 7) +
++					  (zx279133_eram_base_of(ZX279133_VLAN_ERAM_SDT_ID) << 7) +
+ 					  vid * 128,
+ 					  zx279133_vlan0_entry,
+ 					  ARRAY_SIZE(zx279133_vlan0_entry),
+@@ -1178,10 +1176,17 @@ static int zx279133_np_ppu_init_tail(struct zx279133_eth *eth)
+ static int zx279133_mf_eram_entry_write(struct zx279133_eth *eth, u32 mem_id,
+ 					const u32 *data)
+ {
+-	u32 addr_ind = (mem_id + ZX279133_MF_ERAM_BASE_BLOCK) << 7;
++	u32 base = zx279133_eram_base_of(ZX279133_MF_ERAM_SDT_ID);
++	u32 addr_ind = (base + mem_id) << 7;
+ 	u32 rd[ZX279133_SMMU0_WORDS];
+ 	int ret;
+ 
++	/* A table that was never created has no base, and block 0 is not
++	 * a place to write a port's attributes to.
++	 */
++	if (!base)
++		return -EINVAL;
++
+ 	ret = zx279133_smmu0_write(eth, addr_ind, data,
+ 				   ZX279133_SMMU0_WORDS,
+ 				   ZX279133_SMMU0_CMD_WRITE);
+@@ -1206,14 +1211,25 @@ static int zx279133_mf_eram_attr_set(struct zx279133_eth *eth, u32 mem_id,
+ 				     u32 attr)
+ {
+ 	u32 data[ZX279133_SMMU0_WORDS];
+-	u32 addr_ind = (mem_id + ZX279133_MF_ERAM_BASE_BLOCK) << 7;
++	u32 base = zx279133_eram_base_of(ZX279133_MF_ERAM_SDT_ID);
++	u32 addr_ind = (base + mem_id) << 7;
+ 	int ret;
+ 
++	if (!base)
++		return -EINVAL;
++
+ 	ret = zx279133_smmu0_read(eth, addr_ind, data, ARRAY_SIZE(data),
+ 				  ZX279133_SMMU0_CMD_READ);
+ 	if (ret)
+ 		return ret;
+-	data[3] = attr;
++	/*
++	 * The attribute word is the first word of the entry.  The vendor's
++	 * port_attr_def_*_set() helpers read the entry, patch one bit of
++	 * the byte at offset 3 - sa_lookup_learn_en is bit 7 of it - and
++	 * write the entry back, so the word the switch engine reads is
++	 * word 0, not the last one.
++	 */
++	data[0] = attr;
+ 
+ 	return zx279133_mf_eram_entry_write(eth, mem_id, data);
+ }
+@@ -1288,7 +1304,6 @@ static int zx279133_mf_port_startpc_copy(struct zx279133_eth *eth,
+ 	return zx279133_spa_indirect_write(eth, dst_mem, 0, dst);
+ }
+ 
+-#define ZX279133_PRO_ERAM_BASE_BLOCK	21266
+ #define ZX279133_PRO_BLOCKS_PER_PORT	16
+ #define ZX279133_LAN_INGRESS_PPU_PORT	0
+ #define ZX279133_LAN_PPU_PORT		5
+@@ -1342,7 +1357,7 @@ static int
+ zx279133_proto_table_write(struct zx279133_eth *eth, u32 port,
+ 			   const u32 table[][ZX279133_SMMU0_WORDS])
+ {
+-	u32 block = ZX279133_PRO_ERAM_BASE_BLOCK +
++	u32 block = zx279133_eram_base_of(ZX279133_PRO_ERAM_SDT_ID) +
+ 		    port * ZX279133_PRO_BLOCKS_PER_PORT;
+ 	int i;
+ 	int ret;
+@@ -1383,17 +1398,16 @@ static int zx279133_spa_pkt_type_runtime(struct zx279133_eth *eth)
+  * attributes (words 1..3 = attributes 69..71).
+  */
+ static const u32 zx279133_lan_vport_mf[][ZX279133_SMMU0_WORDS] = {
+-	{ 0, 0x2f235600, 0x00000a38, 0x1c8c2800 },	/* VID 59, lan4 */
+-	{ 0, 0x2fc36000, 0x00000a60, 0x1c8c2800 },	/* VID 60, lan3 */
+-	{ 0, 0x30636a00, 0x00000a88, 0x1c8c2800 },	/* VID 61, lan2 */
+-	{ 0, 0x31037400, 0x00000ab0, 0x1c8c2800 },	/* VID 62, lan1 */
++	{ 0x1c8c2800, 0x2f235600, 0x00000a38, 0 },	/* VID 59, lan4 */
++	{ 0x1c8c2800, 0x2fc36000, 0x00000a60, 0 },	/* VID 60, lan3 */
++	{ 0x1c8c2800, 0x30636a00, 0x00000a88, 0 },	/* VID 61, lan2 */
++	{ 0x1c8c2800, 0x31037400, 0x00000ab0, 0 },	/* VID 62, lan1 */
+ };
+ 
+ /* SDT 6: one entry per logical port; bit 31 of word 3 marks a LAN port. */
+-#define ZX279133_PORT_TYPE_ERAM_BASE_BLOCK	23026
+ #define ZX279133_PORT_TYPE_LAN			BIT(31)
+ /*
+- * MF extension word 3 of a WAN-type logical port, as the factory system sets
++ * MF extension word 0 of a WAN-type logical port, as the factory system sets
+  * it for VID 59 (lan4) when that port becomes its "WAN2": 0x1c8c2800 turns
+  * into 0x148e2000, the kind of value of the WAN port itself (0x148e0000).
+  * Measured for VID 59 only; the same flip for 60..62 is an inference.
+@@ -1412,7 +1426,7 @@ static int zx279133_lan_vport_mode_write(struct zx279133_eth *eth, u16 vport,
+ 					 bool wan)
+ {
+ 	u32 table[ZX279133_PRO_BLOCKS_PER_PORT][ZX279133_SMMU0_WORDS];
+-	u32 addr = (ZX279133_PORT_TYPE_ERAM_BASE_BLOCK + vport) << 7;
++	u32 addr = (zx279133_eram_base_of(ZX279133_PORT_TYPE_ERAM_SDT_ID) + vport) << 7;
+ 	u32 mf[ZX279133_SMMU0_WORDS], type[ZX279133_SMMU0_WORDS];
+ 	int ret;
+ 
+@@ -1432,7 +1446,7 @@ static int zx279133_lan_vport_mode_write(struct zx279133_eth *eth, u16 vport,
+ 	memcpy(mf, zx279133_lan_vport_mf[vport - ZX279133_LAN_VPORT_FIRST],
+ 	       sizeof(mf));
+ 	if (wan) {
+-		mf[3] ^= ZX279133_LAN_VPORT_MF_WAN_FLIP;
++		mf[0] ^= ZX279133_LAN_VPORT_MF_WAN_FLIP;
+ 		mf[2] |= BIT(0);
+ 	}
+ 	ret = zx279133_mf_eram_entry_write(eth, vport, mf);
+@@ -1694,58 +1708,65 @@ int zx279133_wan_port_bringup(struct zx279133_eth *eth)
+ }
+ 
+ /*
+- * SE core SDT creation recovered from np.ko se_sdt_core_sdt_init() over
+- * g_core_sdt_info_133. The ERAM pool starts at block 12288 (4096 age
+- * blocks plus 8192 blocks skipped for the QMG) and the allocator is
+- * strictly sequential. ERAM (type 1), hash (type 3), statistics (type 4),
+- * and WRAM (type 5) descriptors are created below. SDT14 keeps the
+- * factory's 512-bit fast-flow format but stores its response inline so
+- * PPPoE can retain the len_changed field omitted by compact SDT43.
++ * SE core SDT creation, recovered from np_133.ko - the module this board
++ * actually loads - out of its g_core_sdt_info (.data+0x11be0, 53 entries
++ * of 16 bytes: id, type, p3, num).
++ *
++ * The list is the vendor's, entry for entry and in the vendor's order,
++ * because the switch engine's microcode knows each table's id, its width
++ * and its number of entries.  A table declared with another width is
++ * looked up at another place: the vendor's se_eram_table_set_by_sdt_info()
++ * places an entry at (base << 7) + (width * index & ~0x7f) and merges the
++ * value into the 16-byte window bit by bit, so a table of the right size
++ * but the wrong width is read at the wrong address.
++ *
++ * type 1 is ERAM, 3 is hash, 4 is statistics.  Only ERAM takes a block
++ * from the ERAM pool, and the pool is filled strictly in this order, so
++ * every table's base follows from the list.  p3 selects the width of one
++ * entry out of {1, 32, 64, 128, 2, 4, 8, 16} bits.
++ *
++ * The three tables this driver has of its own - the VLAN action table,
++ * the NPPT's own 16-bit protocol table and the port type table - are not
++ * in the vendor's list (the ids 0, 4 and 6 are free there) and are
++ * appended after it.
+  */
+-/* Keep the configured statistics SDT and allocator geometry consistent.
+- * Flowtable rules share slots by accounting scope instead of enlarging SRAM.
++/* The statistics SDTs are the vendor's own; their ids are the ones the
++ * switch engine's microcode looks up.
+  */
+ static_assert(ZX279133_FAST_STAT_DEPTH <= 0xffff);
+ static_assert(ZX279133_FAST_STAT_COUNTERS % 2 == 0);
+ 
+ static const u32 zx279133_core_sdt_info[][4] = {
+-	{ 0x0,  1, 0x3, 0x1000 },  { 0x1,  1, 0x3, 0x1 },
+-	{ 0x37, 1, 0x3, 0x1 },     { 0x2,  1, 0x3, 0x20 },
+-	{ 0x14, 1, 0x3, 0x20 },    { 0x15, 1, 0x3, 0x20 },
+-	{ 0x19, 1, 0x2, 0x20 },    { 0x40, 1, 0x3, 0x20 },
+-	{ 0x41, 1, 0x3, 0x20 },    { 0x42, 1, 0x3, 0x20 },
+-	{ 0x2e, 5, 0x3, 0x100 },   { 0x2f, 5, 0x3, 0x100 },
+-	{ 0x32, 1, 0x3, 0x40 },    { 0x3,  1, 0x1, 0x4000 },
+-	{ 0x4,  1, 0x7, 0x2000 },  { 0x8,  1, 0x0, 0x10000 },
+-	{ 0x16, 1, 0x3, 0x20 },    { 0x18, 1, 0x3, 0x20 },
+-	{ 0xf,  1, 0x3, 0x20 },    { 0x10, 1, 0x3, 0x20 },
+-	{ 0x11, 1, 0x3, 0x20 },    { 0x27, 1, 0x6, 0x400 },
+-	{ 0x6,  1, 0x3, 0x40 },    { 0x28, 1, 0x2, 0x40 },
+-	{ 0x29, 1, 0x3, 0x20 },    { 0x2a, 1, 0x3, 0x20 },
+-	{ 0x2c, 1, 0x3, 0x1000 },  { 0x44, 1, 0x3, 0x20 },
+-	{ 0x45, 1, 0x3, 0x20 },    { 0x46, 1, 0x3, 0x20 },
+-	{ 0x9,  3, 0x8, 0x64 },    { 0xa,  3, 0xa, 0x94 },
+-	{ 0xb,  3, 0x22, 0xd4 },   { 0xd,  3, 0x30, 0xd8 },
+-	{ 0xe,  3, 0x10, 0xed },   { 0x2b, 3, 0x10, 0xb8 },
+-	{ 0x43, 3, 0x30, 0xd8 },   { 0x2d, 3, 0x2, 0x40 },
+-	{ 0x1e, 3, 0x6, 0x1000054 }, { 0x33, 3, 0x6, 0x54 },
+-	{ 0x21, 3, 0x4, 0x44 },    { 0x24, 3, 0x4, 0x40 },
+-	{ 0xc,  3, 0x8, 0x45 },    { 0x13, 3, 0x4, 0x41 },
+-	{ 0x1a, 4, 0x1, 0x60000000 }, { 0x1b, 4, 0xc0, 0x40000000 },
+-	{ 0x1c, 4, 0x40, 0x40000000 }, { 0x1d, 4, ZX279133_FAST_STAT_COUNTERS, 0x40000000 },
+-	{ 0x38, 4, 0x80, 0x40000000 }, { 0x3b, 4, 0x40, 0x40000000 },
+-	{ 0x3c, 4, 0x40, 0x40000000 }, { 0x3d, 4, 0x40, 0x40000000 },
+-	{ 0x3e, 4, 0x800, 0x40000000 }, { 0x3f, 4, 0x800, 0x40000000 },
+-	{ 0x1f, 4, 0xc, 0x20000000 }, { 0x20, 4, 0x2, 0x40000000 },
+-	{ 0x22, 4, 0x88, 0x20000000 }, { 0x23, 4, 0x22, 0x40000000 },
+-	{ 0x25, 4, 0x20, 0x40000000 }, { 0x26, 4, 0x10, 0x20000000 },
+-	{ 0x12, 4, 0x8, 0x20000000 }, { 0x31, 4, 0x8, 0x20000000 },
+-	{ 0x64, 1, 0x2, 0x1 },     { 0x65, 1, 0x3, 0x21 },
+-	{ 0x66, 1, 0x1, 0x40 },    { 0x67, 1, 0x2, 0x4b0 },
+-	{ 0x68, 1, 0x1, 0x40 },
+-	{ 0x6e, 3, 0x6, 0x88 },    { 0x6b, 3, 0x4, 0x45 },
+-	{ 0x6f, 3, 0x4, 0x44 },
+-	{ 0x69, 4, 0xa0, 0x40000000 },
++	{ 0x6f, 1, 0x3, 0x400 },	{ 0x70, 1, 0x3, 0x200 },
++	{ 0x71, 1, 0x3, 0x200 },	{ 0x72, 1, 0x3, 0x200 },
++	{ 0x74, 1, 0x2, 0x40 },		{ 0x75, 1, 0x3, 0x20 },
++	{ 0x76, 1, 0x3, 0x20 },		{ 0x77, 1, 0x3, 0x20 },
++	{ 0x78, 1, 0x1, 0x20 },		{ 0x79, 1, 0x3, 0x100 },
++	{ 0x7a, 1, 0x3, 0x100 },	{ 0xa4, 3, 0x0, 0x3d },
++	{ 0xa5, 3, 0x0, 0x39 },		{ 0x1c, 1, 0x4, 0x40000 },
++	{ 0x22, 1, 0x3, 0x20 },		{ 0x18, 1, 0x4, 0x2000 },
++	{ 0x19, 1, 0x1, 0x100 },	{ 0x1a, 1, 0x7, 0x20 },
++	{ 0x1b, 1, 0x0, 0x1000 },	{ 0x1d, 1, 0x7, 0x40 },
++	{ 0x23, 1, 0x0, 0x40 },		{ 0x24, 1, 0x0, 0x40 },
++	{ 0x20, 1, 0x0, 0x40 },		{ 0x15, 1, 0x7, 0x40 },
++	{ 0x16, 1, 0x7, 0x40 },		{ 0x17, 1, 0x7, 0x40 },
++	{ 0x0a, 1, 0x7, 0x40 },		{ 0x26, 1, 0x7, 0x40 },
++	{ 0x30, 4, 0x200, 0x20000000 },	{ 0x2e, 4, 0x10, 0x40000000 },
++	{ 0x2f, 4, 0x3, 0x20000000 },	{ 0x31, 4, 0xc18, 0x60000000 },
++	{ 0x25, 1, 0x7, 0x40 },		{ 0x1e, 1, 0x2, 0x40 },
++	{ 0x21, 1, 0x2, 0x40 },		{ 0x1f, 1, 0x1, 0x4000 },
++	{ 0x27, 1, 0x7, 0x40 },		{ 0x32, 3, 0x8, 0x64 },
++	{ 0x38, 3, 0x6, 0x64 },		{ 0x35, 3, 0x8, 0x40 },
++	{ 0x36, 3, 0x0, 0x10 },		{ 0x37, 3, 0x0, 0x10 },
++	{ 0xfc, 4, 0x1, 0x60000000 },	{ 0x7b, 1, 0x3, 0x40 },
++	{ 0x7c, 1, 0x3, 0x40 },		{ 0x29, 1, 0x6, 0x20 },
++	{ 0x2a, 1, 0x3, 0x210 },		{ 0x39, 3, 0x6, 0x44 },
++	{ 0x3a, 3, 0x2, 0x40 },		{ 0x3b, 3, 0x6, 0x40 },
++	{ 0x7d, 1, 0x3, 0x40 },		{ 0x28, 1, 0x5, 0x2000 },
++	{ 0x2b, 1, 0x2, 0x40 },
++	/* this driver's own tables */
++	{ 0x00, 1, 0x3, 0x1000 },	{ 0x04, 1, 0x7, 0x2000 },
++	{ 0x06, 1, 0x3, 0x40 },
+ };
+ 
+ static const u32 zx279133_se_sdt_bit_len[8] = {
+@@ -2087,31 +2108,37 @@ static int zx279133_se_sdt_create(struct zx279133_eth *eth)
+ 				     "SE fast multi-hash setup failed\n");
+ 
+ 	/*
+-	 * The factory's runtime SE table contents captured live: sdt 6 (the
+-	 * 64-entry port table) and sdt 0x10 entry 4. The patterns below are
+-	 * the app's P2P-mode values; the microcode reads these directly.
++	 * The factory's runtime port type table (SDT 6), captured live: one
++	 * 128-bit entry per logical port, the port attribute words the
++	 * switch engine reads directly.  The patterns below are the app's
++	 * P2P-mode values.
+ 	 */
+ 	{
+ 		static const struct {
+-			u32 blk, w0, w1, w2, w3;
++			u32 entry, w0, w1, w2, w3;
+ 		} tabs[] = {
+-			{ 22898 + 4, 0x54145414, 0x58185414, 0x581a4014, 0x581a581a },
+-			{ 23026 + 1, 0xffff0140, 0x7801ffff, 0, 0 },
+-			{ 23026 + 2, 0xffff0140, 0x7801ffff, 0, 0 },
+-			{ 23026 + 3, 0xffff0140, 0x7801ffff, 0, 0 },
+-			{ 23026 + 4, 0xffff0140, 0x7801ffff, 0, 0 },
+-			{ 23026 + 5, 0xffff0140, 0x7801ffff, 0, 0 },
+-			{ 23026 + 6, 0x00000040, 0, 0, 0 },
+-			{ 23026 + 7, 0xffff0140, 0x7801ffff, 0, 0 },
+-			{ 23026 + 8, 0, 0, 0, 0x80000000 },
++			{ 1, 0xffff0140, 0x7801ffff, 0, 0 },
++			{ 2, 0xffff0140, 0x7801ffff, 0, 0 },
++			{ 3, 0xffff0140, 0x7801ffff, 0, 0 },
++			{ 4, 0xffff0140, 0x7801ffff, 0, 0 },
++			{ 5, 0xffff0140, 0x7801ffff, 0, 0 },
++			{ 6, 0x00000040, 0, 0, 0 },
++			{ 7, 0xffff0140, 0x7801ffff, 0, 0 },
++			{ 8, 0, 0, 0, 0x80000000 },
+ 		};
++		u32 ptype_base = zx279133_eram_base_of(ZX279133_PORT_TYPE_ERAM_SDT_ID);
+ 		u32 idx;
+ 
++		if (!ptype_base)
++			return dev_err_probe(eth->dev, -EINVAL,
++					     "the port type table has no base\n");
++
+ 		for (idx = 0; idx < ARRAY_SIZE(tabs); idx++) {
+ 			u32 node[4] = { tabs[idx].w0, tabs[idx].w1,
+ 					tabs[idx].w2, tabs[idx].w3 };
+ 
+-			ret = zx279133_smmu0_write(eth, tabs[idx].blk << 7,
++			ret = zx279133_smmu0_write(eth,
++						   (ptype_base + tabs[idx].entry) << 7,
+ 						   node, 4,
+ 						   ZX279133_SMMU0_CMD_WRITE);
+ 			if (ret)
+@@ -2121,7 +2148,7 @@ static int zx279133_se_sdt_create(struct zx279133_eth *eth)
+ 			u32 node[4] = { 0x10000 << idx, 0, 0, 0 };
+ 
+ 			ret = zx279133_smmu0_write(eth,
+-						   (23026 + 16 + idx) << 7,
++						   (ptype_base + 16 + idx) << 7,
+ 						   node, 4,
+ 						   ZX279133_SMMU0_CMD_WRITE);
+ 			if (ret)
+@@ -2131,7 +2158,7 @@ static int zx279133_se_sdt_create(struct zx279133_eth *eth)
+ 			u32 node[4] = { 0, 1 << idx, 0, 0 };
+ 
+ 			ret = zx279133_smmu0_write(eth,
+-						   (23026 + 32 + idx) << 7,
++						   (ptype_base + 32 + idx) << 7,
+ 						   node, 4,
+ 						   ZX279133_SMMU0_CMD_WRITE);
+ 			if (ret)
+@@ -2141,7 +2168,7 @@ static int zx279133_se_sdt_create(struct zx279133_eth *eth)
+ 			u32 node[4] = { 0, 0, 0, 0x82000000 };
+ 
+ 			ret = zx279133_smmu0_write(eth,
+-						   (23026 + 59 + idx) << 7,
++						   (ptype_base + 59 + idx) << 7,
+ 						   node, 4,
+ 						   ZX279133_SMMU0_CMD_WRITE);
+ 			if (ret)

@@ -8008,6 +8008,174 @@ object 归属是从那个目录的 `Makefile` 解析出来的。）
   ⇒ **第 2 步仍要重建夹具，而重建会覆盖别人的夹具 ⇒ 要等 bench 空**。
 - **没有跑现场 `preflight.sh`**。
 
+## 八之二十七、第一次把 7.3 刷上板子，以及它带回来的那个真缺陷
+
+### 1. 判决
+
+1. **7.3.4 的三件已经刷进板子的 flash，三个分区全部逐位校验通过。**
+   走的是 **U-Boot 直刷通道**：每个阶段自带 crc 自校验（下载 crc → 擦除 →
+   读头尾验 0xFF → 写入 → 读回 crc），三阶段的读回 crc 与下载 crc 逐个相同。
+2. **kexec/RAM 通道在这块板上从未成功过。** 全日志 6 次 kexec 逐次核查：
+   每次之后出现的内核**全都是 flash 里的**，`ctltag=` 从未出现在任何 cmdline 里。
+   ⇒ 这块板的黑屏不能证明 7.3 内核不行，但刷写也**不能**走 RAM 通道；
+   6.18.38 / 6.18.60 当初都是 U-Boot 直刷写进去的。
+3. **7.3.4 内核从 flash 启动成功**，U-Boot 横幅是
+   `Image Name: ARM64 ImmortalWrt Linux-7.3.4`，
+   `Linux version 7.3.4 (runner@runnervmxfy6o) (OpenWrt GCC 14.3.0 r0-31e2ac4)`。
+4. **但交换机 probe 失败，板上没有网络。** 报的是
+   `zx279133-eth: NP init: 9132 port setup failed: -22` →
+   `zx279133-switch: error -EINVAL: failed to acquire shared NPPT/IDM datapath` →
+   `probe with driver zx279133-switch failed with error -22`，
+   板子停在 failsafe 等 `[f]`，ping 100% 丢。
+5. **根因：7.3 树声明的 ERAM 表清单是通用 `np.ko` 的 71 项，不是这块板装的
+   `np_133.ko` 的 53 项。** MF 扩展表（SDT **0x7d**）**根本不在那份清单里**，
+   于是它的几何从未被填（base = 0），`zx279133_eram_window_patch()` 直接返回
+   `-EINVAL`。
+6. **这个缺陷项目自己在 2026-10-21 就判过**（`docs/29` / `docs/31`），当时判的是
+   6.18 线：板子装的是 `np_133.ko`，它那 53 项才是芯片微码认识的表集，
+   通用 `np.ko`「根本不在这块板上」。**7.3 线是那份「修好之前」的驱动的移植**
+   （连注释里「这三个常量来自通用 np.ko 的清单」都逐字搬过来了），
+   所以清单**从来没换过** —— 第 5 片（`150-sk-9132-switch-programming.patch`）
+   换掉了硬编码基址的用法，却没换清单本身。
+7. **修复已落成 `kernel-patches/7.3-local/200-sk-9132-vendor-sdt-table-set.patch`**，
+   配了门禁 `tools/check-sk-9132-sdt-set.py` 与 17 项反控。
+8. **未做**：还没编译、还没刷第二遍、还没实机验证。
+
+### 2. 证据
+
+**2.1 刷写（U-Boot 直刷，三个分区）**
+
+| 阶段 | 下载 | crc | 擦除头尾 | 写入后读回 |
+|---|---|---|---|---|
+| dtb | 16,384 B（4000 hex） | `86d00d8c` | `f154670a`（全 0xFF） | `86d00d8c` ✓ |
+| kernel | — | `288134a1` | `f154670a` | `288134a1` ✓ |
+| root | 5,769,216 B @ 4.7 MiB/s | `daa57787` | `f154670a` | `daa57787` ✓ |
+
+终态是 `ubflash: stages written and read back verified: kernel root`，
+后面那句 `nothing was booted. Power-cycle and read the installed boot before
+anything else.` 是工具自己写的，它没有越权去启动。
+
+**2.2 刷前快照（板上现状完整落盘）**
+
+`backups/preflash-20261124/`：mtd1 boot、mtd2 kernel、mtd3 dtb、
+mtd4 parameter_tags、mtd5 root 五个分区，**device 与 local 的 md5 逐项一致**。
+板上装的是 **6.18.60 的另一个构建**：mtd2 的 md5 `80c073fb…` 与 CI 产物补 0xff
+后的 `fde12b09…` 不同，mtd3 与 CI 产物**逐位相同** ⇒ dtb 对得上、kernel 对不上。
+（`tools/preflashbackup.sh` 自带的安全规则在 root 是真 mtdblock 挂载时拒绝运行，
+所以改成 mtd5 分 4 MiB 块、每块单独 ssh 连接 —— 项目注释记载 11-01 整流 241 MiB
+曾把板子读垮。）
+
+**2.3 启动（7.3.4 从 flash 起来）**
+
+U-Boot 横幅 `Image Name: ARM64 ImmortalWrt Linux-7.3.4`、
+`Data Size: 5816235 Bytes`、Load/Entry `80200000`，与 staged uImage 头逐字一致；
+内核 `Linux version 7.3.4 (runner@runnervmxfy6o) (OpenWrt GCC 14.3.0 r0-31e2ac4)
+#0 SMP PREEMPT Mon Nov 9 23:57:33 2026`；
+cmdline `console=ttyAMA0,115200n8 root=/dev/mtdblock5 rootfstype=jffs2 ro rootwait
+clk_ignore_unused pd_ignore_unused`。
+
+**2.4 失败链（逐层）**
+
+```
+zx279133_np_prepare()
+  └─ zx279133_9132_port_init()
+       └─ zx279133_9132_mf_mirror()
+            └─ zx279133_mf_eram_attr_set()
+                 └─ zx279133_eram_window_patch()   ← 在 !base || !bit_len 时返回 -EINVAL
+```
+
+几何是在 `zx279133_se_sdt_create()` 遍历 `zx279133_core_sdt_info[]` 时填的
+（`zx279133_eram[sdt_no].base` / `.bit_len`）。**0x7d 不在 7.3 那份清单里** ⇒
+base 与 bit_len 都是 0 ⇒ `-EINVAL` ⇒ probe 失败 ⇒ 没有任何网卡。
+
+**2.5 两份清单的逐表对照（13 张是 7.3 代码真正要写的）**
+
+复算用的是厂商自己的分配器：`eram_base` 从块 0x3000 起，严格按清单顺序，
+`depth = (bit_len * num + 127) >> 7`，`bit_len` 由 p3 选自 `{1,32,64,128,2,4,8,16}`。
+
+| 表 | 6.18（厂商 53 项 + 自有 3 项） | 7.3 旧清单（通用 np.ko 71 项） | 7.3 代码要的 |
+|---|---|---|---|
+| 0x7d MF 扩展表 | type1 @24737，128 bit × 64 | **清单里没有** | 需要 type1 |
+| 0x1f 泛洪组表 | type1 @19975，32 bit × 16384 | **type4 统计表** | 需要 type1 |
+| 0x22 全局配置表 | type1 @19592，128 bit × 32 | **type4 统计表** | 需要 type1 |
+| 0x1b 隔离矩阵 | type1 @19820，1 bit × 4096 | **type4 统计表** | 需要 type1 |
+| 0x23 出向 VLAN 检查 | type1 @19860，1 bit × 64 | **type4 统计表** | 需要 type1 |
+| 0x24 port bind | type1 @19861，1 bit × 64 | **type3 hash** | 需要 type1 |
+| 0x25 port PVID | type1 @19903，16 bit × 64 | **type4 统计表** | 需要 type1 |
+| 0x18 协议动作表 | type1 @19624，2 bit × 8192 | type1 @22834，128 bit × 32 | 宽度错 |
+| 0x19 reason map | type1 @19752，32 bit × 256 | type1 @16482，64 bit × 32 | 宽度错 |
+| 0x27 outport map | type1 @24071，16 bit × 64 | type1 @22962，8 bit × 1024 | 宽度错 |
+| 0x00 VLAN 动作表 | type1 @25089，128 bit × 4096 | type1 @12288 | 几何同、基址不同 |
+| 0x04 NPPT 协议表 | type1 @29185，16 bit × 8192 | type1 @21266 | 几何同、基址不同 |
+| 0x06 端口类型表 | type1 @30209，128 bit × 64 | type1 @23026 | 几何同、基址不同 |
+
+**2.6 复算模型的可信度**
+
+- 厂商清单复算出来的 ERAM 结束块是 **30273**，与 `docs/31` 记的
+  「56 张表取 17985 块、停在 30273」相同；
+- 复算出来的 0x18@19624、0x19@19752、0x27@24071 与 **6.18 那轮开机日志打印的
+  基址逐个相同** ⇒ 模型可信；
+- 7.3 旧清单的 ERAM 结束块是 **28044**，与厂商的 30273 不同 ⇒ 两套芯片配置。
+
+**2.7 MF 属性字在第几个 word（两棵树不一样）**
+
+7.3 树把端口属性字写进 entry 的 **word 3**，6.18 写 **word 0**。
+判据是**实机 dump**，不是注释：`docs/31` 记的厂商活板 ERAM 是
+
+```
+eram block 16545 = 00060000 00000000 00000000 00000000   <- 0x7d entry 0
+eram block 16546 = 96040001 00000000 00000000 00000000   <- 0x7d entry 1：一个 UNI 口
+eram block 16550 = 96040001 00000000 00000000 00000000   <- 0x7d entry 5：CPU 口
+```
+
+⇒ 属性字 `0x96040001` 在 **word 0**，另外三个 word 是空的。
+`docs/28` 末尾那句「属性字在 word0 与本驱动实测的 word3 不符，以驱动实测为准」
+是 **run113 修正之前**的账，已被 `docs/31` 这份 dump 推翻。
+厂商自己的 `port_attr_def_*_set()` 也只 patch entry 里偏移 3 的那个字节，
+而偏移 3 的字节落在 **word 0**。
+
+### 3. 改动
+
+1. **补丁**：`kernel-patches/7.3-local/200-sk-9132-vendor-sdt-table-set.patch`
+   （17,483 B，sha256 `d443ba59…`），已登记进 `kernel-patches/7.3-local/MANIFEST.json`
+   （`prepare-sk-kernel-73.py` 按该清单的 sha256 与字节数逐条校验）。
+   - 表清单换成**厂商那 53 项 + 驱动自己的 3 项**（0x00 / 0x04 / 0x06 追加在末尾）；
+   - 四处硬编码基址（`ZX279133_MF_ERAM_BASE_BLOCK` 17106、
+     `ZX279133_PRO_ERAM_BASE_BLOCK` 21266、
+     `ZX279133_PORT_TYPE_ERAM_BASE_BLOCK` 23026、
+     `ZX279133_VLAN_ERAM_BASE_BLOCK` 12288）**全部删掉**，改成
+     `zx279133_eram_base_of(<表 id>)`，并补上「表没建出来就没有基址」的
+     `-EINVAL` 守卫；
+   - 工厂那份端口类型表内容改成**跟着表的基址**写，不再写死块号；
+     属于厂商没有的那张旧 sdt 0x10 的一条**删掉**；
+   - MF 扩展项的端口属性字 **word 3 → word 0**，LAN vport 那张 MF 表与翻转位
+     同步换到 word 0。
+2. **门禁**：`tools/check-sk-9132-sdt-set.py`
+   - 把树里的清单与**6.18 世代那份**（在本板上跑得通的那份）**逐项逐位**比，
+     并与 `docs/31` 记的**板上实测基址**比；
+   - 13 张表逐张断言「在清单里 / 是 ERAM 表 / 基址是那个数」；
+   - 断言树里**没有任何 ERAM 基址常量**、四张表**都按 id 查**、
+     SE 分配器**不按字面块号写表**、属性字**不在 word 3**。
+3. **反控**：`tests/test_sk_9132_sdt_set.py`，17 项，
+   每一项把一种缺陷放回去并要求门禁**转红且点名那一个**：
+   0x7d 不在清单里 / 0x22 换了类型 / 0x1f 换了宽度 / 两张表换了顺序 /
+   属性字回到 word 3 / 基址常量回来 / 分配器写字面块号 /
+   **两棵树一起漂**（这时靠板上实测基址兜住）。
+4. **接进 CI**：`build-sk-d840n-73.yml` 的 `paths:` 过滤器（两个文件都在里面）、
+   `check-gates` 作业（跑反控）、`build` 作业（对树跑门禁）。
+
+### 4. 未做
+
+1. **还没编译。** 本机没有 arm64 交叉工具链，CI 是唯一编译通道。
+2. **还没刷第二遍**，还没实机验证交换机 probe 成功、四个 UNI 口与 2.5G 口起来。
+3. **7.3 树里还有两个属于通用清单那边的固定块号**：
+   `ZX279133_FAST_IKEY_BASE_BLOCK`（23186）与 `ZX279133_FAST_STAT_BASE_BLOCK`
+   （0x9081）。**两棵树都有，且都没有调用者**（只是导出出来的 API），
+   所以它们在厂商布局里落在别的表里（分别是泛洪表 0x1f 与统计表 0x2e），
+   目前无害。**但如果将来要用每流计数，这两处必须重做** —— 这一点记在这里，
+   不要等到有人用它的时候才发现。
+4. 7.3 线其余的片没动。
+
 ## 九、下一步（按片重打，每片一次 CI）
 
 **没搬的，按片来：**

@@ -57,6 +57,12 @@ on:
       - tools/check-sk-switch-api.py
       - tools/check-sk-pon-api.py
       - tools/check-sk-9132-api.py
+      # The gate that says the switch engine is given the vendor's table set
+      # and that no table base is written down as a constant.  It reads the
+      # tree's np.c and the 6.18 generation's, and the controls say whether
+      # it still notices when a table goes missing or a base comes back.
+      - tools/check-sk-9132-sdt-set.py
+      - tests/test_sk_9132_sdt_set.py
       # The PPU microcode gate: it asks the tree's own driver which blob it
       # will take and checks the blob the tree carries against it.  Two blobs
       # have the same name and the same size and different bytes, so a change
@@ -250,6 +256,11 @@ jobs:
           python3 tests/test_gatecheck.py
           python3 tests/test_ctl_payload.py
           python3 tests/test_sk_image_drivers.py
+          # The switch engine's table set: the controls say whether the gate
+          # still notices when a table goes missing, when a table is declared
+          # with another width, or when a base is written down again.  It
+          # builds the tree it works on, so it needs no kernel and no board.
+          python3 tests/test_sk_9132_sdt_set.py
           # No script of this repository may decide something with a kernel
           # version written into it: a version in a decision is right for one
           # line and wrong for every other one, and three gates once refused
@@ -467,6 +478,18 @@ jobs:
       - name: Check the 9132 switch programming against the 7.3 tree
         run: |
           python3 tools/check-sk-9132-api.py \
+            --tree "$KERNEL_TREE" --repo "$GITHUB_WORKSPACE"
+
+      # The switch engine's table set: the vendor's, item for item, and the
+      # bases that go with it.  The 7.3 tree declared the generic np.ko's set
+      # - a module that is not on this board - and the MF extension table was
+      # not in it at all, so the 9132's port init failed with -EINVAL and the
+      # board came up with no network interface.  The gate compares the tree
+      # with the 6.18 generation, which boots on this board, and with the
+      # bases the board's own ERAM dump shows.
+      - name: Check the 9132's table set against the 7.3 tree
+        run: |
+          python3 tools/check-sk-9132-sdt-set.py \
             --tree "$KERNEL_TREE" --repo "$GITHUB_WORKSPACE"
 
       # The conduit netdev is the DSA CPU port: it is the interface every RX
