@@ -8134,6 +8134,34 @@ eram block 16550 = 96040001 00000000 00000000 00000000   <- 0x7d entry 5：CPU �
 厂商自己的 `port_attr_def_*_set()` 也只 patch entry 里偏移 3 的那个字节，
 而偏移 3 的字节落在 **word 0**。
 
+**2.8 这道门禁对**真正刷出坏镜像的那棵树**是红的（不只是对合成夹具红）**
+
+17 项反控证明的是「门禁能抓住人造的缺陷」。更硬的一条是把门禁喂给
+**当初刷进板子的那棵树本身**（`340` + `150`，没有 `200`）：
+
+```
+$ python ci-build-repo/tools/check-sk-9132-sdt-set.py --tree <那棵树> --repo ci-build-repo
+FAILED: 30
+  - the table set has 71 entries, the vendor's has 56
+  - the ERAM pool ends at block 28044, the vendor's at 30273
+  - the ERAM pool ends at block 28044, the board measured 30273
+  - table 0x00 (the VLAN action table) is at 12288 ... the board measured 25089
+  - table 0x1b (the port isolation matrix) is type 4, an ERAM table is 1
+  - the table set has 0x7d (the MF extension table (the SPA port attributes))
+  - np.c defines no ERAM base constant (it defines ['ZX279133_MF_ERAM_BASE_BLOCK',
+    'ZX279133_PORT_TYPE_ERAM_BASE_BLOCK', 'ZX279133_PRO_ERAM_BASE_BLOCK',
+    'ZX279133_VLAN_ERAM_BASE_BLOCK'])
+  - the SE allocator writes no table at a literal block (it writes ['23026'])
+  - the MF extension entry's port attribute word is word 0
+  ...（共 30 条）
+exit=1
+```
+
+同一份门禁喂给修好的那棵树（`340` + `150` + `200`）**全绿**（exit 0）。
+⇒ 这道门禁不是「给这次修复配的注释」：它对**刷出这块板现状的那棵树**同样会转红，
+点的还正是这次缺陷的每一处（缺 0x7d、四个硬编码基址、字面块号 23026、属性字 word 3）。
+也就是说，**它本来就能拦下这个缺陷**，只是这条线当时还没有这道门禁。
+
 ### 3. 改动
 
 1. **补丁**：`kernel-patches/7.3-local/200-sk-9132-vendor-sdt-table-set.patch`
@@ -8175,6 +8203,225 @@ eram block 16550 = 96040001 00000000 00000000 00000000   <- 0x7d entry 5：CPU �
    目前无害。**但如果将来要用每流计数，这两处必须重做** —— 这一点记在这里，
    不要等到有人用它的时候才发现。
 4. 7.3 线其余的片没动。
+
+## 八之二十八、LAN 帧到不了 CPU 口：**不是驱动，是首启生成的那座桥退化**
+
+### 1. 判决
+
+1. **LAN 不通的根因不是 9132 的表集，也不是 PPU 5 的字。** 是镜像**首次启动时生成**的 `/etc/config/network`：那条 LAN 桥里**只有 conduit（`lan-cpu0`）一个成员**，四个面板口一个都不在里面。桥里没有面板口 ⇒ 插在面板口上的帧永远到不了路由器。
+2. **「保留 PPU 5 工厂字」这个方向是错的，已经被两条独立证据否掉。**
+   - 7.3 内核的 dmesg 自己写着 `9132 PPU 5 (the 2.5G jack's lane) entry program 0000a6a5` —— 厂商那套字**已经写进去了**，而 6.18 世代已知可用的 `kernel-overlays` 里**有同一个 `zx279133_9132_ppu5_words()`**（3905 行，`want = 0x0000a6a5`，6378 行调用）。7.3 在这一段与 6.18 结构相同。
+   - 树里那段注释把「字不对 ⇒ 9132 永不把帧交给 IDM」的机理写得很死：**`nppt+0x280180` 的 receive-cpu-pkt 计数恒为 0，十六个收包队列头全空**。这正是我们量到的现象，所以「保留工厂字」恰好是**制造**这个症状的那一侧。
+3. **交换芯片侧的编程，两代内核逐行一致。** 6.18 与 7.3 的 dmesg 都打印同样五行（protocol action table / outport map / reason map / **CPU path: base queue 403, outport 15 -> real port 15 queue 403, reason 0 -> queue 7** / isolation matrix）。⇒ 断点不在表集。
+4. **修复落在 rootfs，不在内核。** 7.3 线自带一份 `sk-bridge`（`overlays-73/.../etc/init.d/sk-bridge`），在首启把桥补成六个成员；配门禁 `tools/check-sk-lan-bridge-members.py`（行为式：沙箱里真跑 shipped 脚本，读回它留下的桥）与 14 项反控。
+5. **未做（重要）：活体 A/B 没做成。** 板子 14:48 之后零回显（relay 健康、COM3 可写、无读写错），15:32 那次冷启动又停在 U-Boot 的 `ddr init ok` 之后 ⇒ 需要再断电一次。**「六成员桥 ⇒ LAN 通」这件事目前只有推理和证据链，没有实机确认。**
+
+### 2. 证据
+
+#### 2.1 同一根线、同一端口，两代内核的 conduit 计数
+
+`staging/ctl/serial.log` 里 `/proc/net/dev` 的 `lan-cpu0` 行（格式：rx 字节 / rx 包 / … / tx 字节 / tx 包）：
+
+| 内核 | lan-cpu0 rx | lan-cpu0 tx |
+|---|---|---|
+| 6.18.38 / 6.18.60 | **21,547,499,790 B / 17,633,801 包** | 3,533,616,222 B / 2,439,695 包 |
+| 7.3.4（本轮在跑的） | **0 B / 0 包** | 2,100 B / 18 包 |
+
+⇒ 这是一条**硬回归**，不是「板子本来就这样」。6.18 的桥有六个成员（`lan2 lan3 lan4 lan0 lan1 lan-cpu0`，dmesg 里 `br-lan: port 1(lan2) … port 6(lan-cpu0)`），7.3 的桥只有一个。
+
+#### 2.2 交换芯片侧的编程，两代一致
+
+6.18.60（10:58 那次启动）与 7.3.4（13:26 那次）各打印：
+
+```
+9132 switch ports 0..7 have the protocol action table at ERAM block 19624 (ARP trapped to the CPU)
+9132 outport map: ERAM table 0x27 at block 24071 holds the vendor's 64 entries
+9132 reason map: ERAM table 0x19 at block 19752 holds the vendor's 254 entries (reasons 0 and 1)
+9132 CPU path: base queue 403, outport 15 -> real port 15 queue 403, reason 0 -> queue 7
+9132 isolation matrix written: the diagonal only, 64 ports
+```
+
+⇒ 收包路径的**表**在 7.3 上是建好的。断点不在这里。
+
+#### 2.3 PPU 5 的厂商字确实生效（这条否掉「保留工厂字」）
+
+7.3.4 启动的 dmesg：
+
+```
+[ 0.499651] 9132 PPU 5 word 0 (entry-pc) = 00008015     ← probe 时的出厂值
+[ 0.500678] 9132 PPU 5 (the 2.5G jack's lane) entry program 0000a6a5   ← 驱动写完并读回
+[ 1.531159] 9132 PPU 5 enable word 0000a6a5
+```
+
+树里的 `zx279133_9132_ppu5_words()`（7.3 打补丁树 3677 行起）调的正是 `zx279133_9132_port_words_vendor()`，写的就是厂商那套（a0=0xa6a5、a1=0x88f、a10=0x0fa0000e、a13=0x8008、a17/a18=第五组 flood、a19=0x96040001）。
+
+而 6.18 世代的 `kernel-overlays/drivers/net/ethernet/zte/zx279133-np.c` 里**有同一个函数、同一个 `want`**（3905 行；`zx279133_9132_vendor_words[]` 3522 行、`zx279133_9132_vendor_flood[6][2]` 3584 行、`zx279133_9132_mf_mirror()` 3646 行、`zx279133_9132_flood_cpu_port()` 3757 行），并在 6378 行调用。⇒ **7.3 与 6.18 在这一段是同一份逻辑**，改它就是改 6.18 已知可用的那份。
+
+顺带订正一处：dmesg 里的 `9132 PPU 15 (the CPU trap) attribute word 00000000` **不是缺陷** —— conduit 的属性字按设计就是 0（`zx279133_9132_cpu_words[]` 的第 19 项就是 0，6.18 参照实现里同一处也是 0）。
+
+#### 2.4 桥成员：6.18 六个，7.3 一个
+
+7.3.4 上 13:47 的 `ip -o addr show` 前后那段 netdev 表：
+
+```
+4: lan-cpu0: … master br-lan state UP
+5: lan0@lan-cpu0: … state DOWN
+6: lan2@lan-cpu0: … state DOWN
+7: lan3@lan-cpu0: … state DOWN
+8: lan4@lan-cpu0: … state DOWN
+9: lan1@lan-cpu0: … state DOWN
+10: br-lan: inet 192.168.9.1/24
+```
+
+⇒ `br-lan` 的成员只有 `lan-cpu0`；五个用户口存在，但**不在桥里**。
+
+13:57 从板上读出的 `/etc/config/network` 原文：
+
+```
+config device
+	option name 'br-lan'
+	list ports 'lan-cpu0'
+
+config interface 'lan'
+	option device 'br-lan'
+```
+
+6.18.60 的同一次启动里，桥是六成员（`br-lan: port 1(lan2) … port 5(lan1) … port 6(lan-cpu0)`）。
+
+#### 2.5 上一轮的命令史：**六成员那个状态从来没被测过**
+
+日志里每一条发出去的命令都记着：
+
+```
+13:57:03  读 /etc/config/network  ⇒  已经是 list ports 'lan-cpu0'（退化）
+13:58:26  cp /etc/config/network /etc/config/network.bak-7.3
+          for p in lan0 lan1 lan2 lan3 lan4; do uci add_list network.@device[0].ports="$p"; done
+          ⇒ ports='lan-cpu0' 'lan0' 'lan1' 'lan2' 'lan3' 'lan4'   ← 正确的六成员
+14:02:02  uci del_list network.@device[0].ports='lan-cpu0'   ⇒ 变回五成员（丢了 conduit）
+14:12:48  cp /etc/config/network.bak-7.3 /etc/config/network ⇒ 覆盖回一成员（退化）
+```
+
+⇒ **`network.bak-7.3` 是退化配置**（cp 在 add_list 之前），而 14:12 那次覆盖把它盖了回去。**ping 测试是在它被毁掉之后做的**（板上 `ip neigh` 显示 `192.168.9.25 dev br-lan FAILED` 是 14:40 的读数），所以「六成员 ⇒ LAN 通」这一条**从来没有被验过**。
+
+#### 2.6 机制：配置在 **preinit** 阶段生成，那时 DSA 口还没注册
+
+从 7.3 线的 rootfs 镜像里拆出来的 `lib/preinit/82_config_generate`：
+
+```sh
+do_config_generate() {
+	[ -f /etc/board.json ] || {
+		...
+		/bin/board_detect /tmp/board.json
+		mv /tmp/board.json /etc/board.json
+		/bin/config_generate > /dev/null
+	}
+}
+boot_hook_add preinit_main do_config_generate
+```
+
+⇒ **配置生成在 preinit**，也就是内核刚 pivot 进新 rootfs 的那一刻。日志里那一次首启（2026-11-24 11:34，7.3.4）：
+
+```
+[    1.705159] VFS: Pivoted into new rootfs
+- generating board file -
+```
+
+而 9132 的 DSA 口在**两秒后**才注册：
+
+```
+[    2.653688] zx279133-switch: the 9132 is serving: the jacks are the 9132's UNI ports 1..4 (DSA ports 4..7) …
+```
+
+于是 `overlays/target/linux/zte/zx279133/base-files/etc/board.d/02_network` 的这段：
+
+```sh
+for d in lan1 lan2 lan3 lan4; do
+	[ -e "/sys/class/net/$d" ] && { lan_dev="$lan_dev${lan_dev:+ }$d"; uni=1; }
+done
+[ -n "$lan_dev" ] || { [ -e /sys/class/net/lan-cpu0 ] && lan_dev="lan-cpu0"; }
+```
+
+**一个面板口都没匹配到**（此时只有 conduit 在），落到 fallback ⇒ `uni` 为空 ⇒ 走 else 分支 ⇒ 发布的 LAN 就是 `lan-cpu0` 一个名字。
+
+⇒ 这就是「7.3 首启生成一座只有 conduit 的桥」的全部机理。**7.3 的镜像带着这个缺陷出厂**，不是刷机刷坏的。
+
+#### 2.7 为什么 `sk-bridge` 修不了
+
+`overlays/.../etc/init.d/sk-bridge` 唯一的补救是：
+
+```sh
+case " $ports " in
+*" lan1 "*)
+	for p in lan0 lan-cpu0; do … uci add_list … done
+	break ;;
+esac
+```
+
+⇒ 前提是**桥里已经有 `lan1`**。退化桥里没有 ⇒ 什么都不做 ⇒ 退化桥一路留到下一次启动。
+
+首启时它也跑不成：`/etc/rc.d/S15sk-bridge` 这个链接是 uci-defaults 脚本 `99-sk-bridge` 在 `S10boot` 里才建的，而 procd 在启动之初就扫过 `/etc/rc.d` 了。首启唯一的机会是 `99-sk-bridge` 自己调的那一次 `/etc/init.d/sk-bridge start` —— 而那时 DSA 口（2.65 s）还没注册（`S10boot` 在 pivot 之后约 1.7 s）。
+
+#### 2.8 板子为什么失联（两次，各不相同）
+
+- **14:48 之后**：串口日志里 relay 自己的记账显示端口健康（「sent:」标记写在 `$sp.Write()` **之后**，`tools/serrelay.ps1:223-224`），期间没有一条 `read error` / `send error` / `reopen failed`。relay 每秒还在往板子打空格，板子**一个字符都没回**。⇒ 板子已断电或挂死，不是 relay、不是 COM3、不是驱动。
+- **15:32 那次冷启动**：COM3 在断电期间从 Windows 上消失过一次（`端口"COM3"不存在`，15:29:03–15:29:26 之间反复重开），随后板子起了 U-Boot：
+
+```
+15:32:26  SPI NAND / start read bootloader / non secure boot / Jump / enter bootloader...
+          pll init, cpu freq=1000 MHz / crpm init ok / ddr init ok
+```
+
+**`ddr init ok` 之后两分多钟零输出**，日志尾部只剩 relay 打的空格（`delta=0`），发进去的 `uname -a` / `echo PROBE-A` 全部无回显。⇒ 这次挂在 U-Boot 的 ddr init 之后，与上一次的挂法不同。
+
+### 3. 改动
+
+#### 3.1 `overlays-73/target/linux/zte/zx279133/base-files/etc/init.d/sk-bridge`（新增）
+
+7.3 线**自带一份** `sk-bridge`，共用的那份（`overlays/…`，6.18 世代）**一个字没动**。7.3 的 workflow 是先 `cp -a overlays/. openwrt/` 再 `cp -a overlays-73/. openwrt/`，后者覆盖前者 ⇒ 这份只进 7.3 线，**6.18 发布线不受影响**。
+
+新做的事：
+
+1. **认得出退化桥**：桥里一个面板口都没有 ⇒ 这是 preinit 那次生成的退化桥（共用那份脚本认不出，因为它只看 `lan1` 在不在）。
+2. **等面板口**：最多 15 s（实测延迟约 1 s：2.65 s 注册 vs 1.7 s 执行）。它们在这块板子上一定会来；等不到就照旧放行，板子照样起。
+3. **把四个面板口加进桥**，再把 `lan0`（无插口的 DSA 口）和 `lan-cpu0`（conduit）也加进去 ⇒ 首启结束时的桥是**六个成员**，与 6.18 世代同一形状。
+4. 其它行为（wan 槽落在 eth0、端口行不画 lan0/lan-cpu0）**逐字保留**。
+
+文件带可执行位（`git update-index --chmod=+x`）—— `99-sk-bridge` 里有 `[ -x /etc/init.d/sk-bridge ]`，少这一位脚本根本不会跑。
+
+#### 3.2 门禁 `tools/check-sk-lan-bridge-members.py`（新增）
+
+**行为式**，不是文本匹配：把 shipped 脚本原样（只改两条绝对路径）放进沙箱，配一个假 `uci`（shell 函数，状态存在 `$UCI_STATE`）与一个假 `/sys/class/net`，真跑一遍，**读回它留下的端口表**。
+
+- 通过条件：桥里必须同时有 `lan1 lan2 lan3 lan4 lan0 lan-cpu0`。
+- 失败时**点名缺哪几个**（判决必须能被人在原始输出里一眼找到）。
+- `--script` 可指向任意副本（反控要用）；`--ports` 可改初始桥成员（反控要用）。
+
+一个只有「lan-cpu0」字样、什么都不修的脚本**过不了**这道门。
+
+#### 3.3 反控 `tests/test_sk_lan_bridge_members.py`（新增，14 项）
+
+| 反控 | 期望 | 现在 |
+|---|---|---|
+| shipped 的 7.3 副本 | 门禁通过 | rc=0 ✔ |
+| **共用的 6.18 副本（对照组）** | 门禁必须红，并点名 `lan1..lan4` | rc=1，点名 ✔ |
+| 把修复块抠掉的 7.3 副本 | 门禁必须红，点名 `lan1..lan4` | rc=1，点名 ✔ |
+| 把加 `lan0`/`lan-cpu0` 的块抠掉、且初始桥为空 | 门禁必须红，点名 `lan0` 与 `lan-cpu0` | rc=1，点名 ✔ |
+
+第三、四项的「点名」是把门禁输出里的缺失成员表**解析出来**再比对，不是拿一句短语去撞 —— 撞短语会被输出里别处的同名字骗过去。
+
+#### 3.4 CI 接线
+
+- `.github/workflows/build-sk-d840n-73.yml` 的 `paths:` 过滤器加 `tools/check-sk-lan-bridge-members.py` 与 `tests/test_sk_lan_bridge_members.py`（`overlays-73/**` 本来就在列表里）。
+- 同一个 workflow 的「Exercise the repository's own gates」步骤里加两行调用。
+- `tools/check-sk-workflow-paths.py` 复跑：**OK，256 条**（新加的两个文件都被 `paths:` 收下）。
+
+### 4. 未做
+
+1. **活体 A/B 没做**：板子 14:48 静默、15:32 冷启动挂在 `ddr init ok` 之后 ⇒ 需要再断电一次。**六成员桥能不能让 LAN 通，目前只有推理与证据链，没有实机读数。**
+2. **6.18.60 实机基线对拍没做**（需要把 6.18 三件刷回去跑同一套 PC 侧测试）。
+3. **`tools/trialsurvey.sh` + `tools/trialsurvey-verdict.py` 本轮仍未跑**（取数仍是手工）。
+4. **如果活体 A/B 仍不通**，剩下的候选是**主机侧 conduit 取帧路径**（7.3-local 的 170 `rx-delivery-safety` 与 190 `datapath-restore-on-conduit-open`）。那时本节 1.1 的判决要改写成「配置退化是必要条件，但不是充分条件」。
+5. **`overlays/`（6.18 世代共用）一个字没动**；`kernel-overlays/`（6.18 世代内核层）一个字没动。
 
 ## 九、下一步（按片重打，每片一次 CI）
 

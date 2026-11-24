@@ -200,6 +200,12 @@ on:
       # the kernel's own list from the copy in the image - they differ.
       - tools/check-sk-modules-builtin.py
       - tests/test_sk_modules_builtin.py
+      # The gate that says the LAN bridge on the first boot of a fresh rootfs
+      # ends up holding every panel jack and the conduit, and the control that
+      # says the gate can still tell the 6.18 generation's copy - which cannot
+      # repair that bridge - from the 7.3 line's.
+      - tools/check-sk-lan-bridge-members.py
+      - tests/test_sk_lan_bridge_members.py
       # The gate that says the four symbols the judge looks up in the
       # kernel's symbol table are symbols that will be there, and the
       # control that says the gate can still tell a symbol that is missing
@@ -290,6 +296,15 @@ jobs:
             --workflow .github/workflows/build-sk-d840n-73.yml \
             --workflow .github/workflows/build-sk-d840n.yml
           python3 tests/test_sk_workflow_paths.py
+          # The LAN bridge on the first boot of a fresh rootfs.  The network
+          # config is generated in the preinit stage, before the 9132's DSA
+          # ports are registered, so the generation leaves the bridge holding
+          # the conduit alone and no frame that arrives on a jack ever
+          # reaches the router.  The gate runs the shipped script and reads
+          # back the bridge it leaves; the control says the gate still bites
+          # when the repair is taken away.
+          python3 tools/check-sk-lan-bridge-members.py
+          python3 tests/test_sk_lan_bridge_members.py
 
   build:
     name: ${{ matrix.mode }}
