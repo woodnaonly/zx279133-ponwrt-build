@@ -22,11 +22,17 @@ way to show that is to take the repair away and watch the gate bite:
   * the 7.3 copy, unchanged, on a bridge that already holds the five user
     ports - the gate has to pass, or the script would keep rewriting the
     list on every boot.
+  * the gate itself, with CI (or IPKG_INSTROOT, or PKG_ROOT) in its own
+    environment - the gate has to pass anyway.  The shipped script reads
+    those as "this is a package build", and a gate that lets the runner's
+    environment decide the answer is red on the runner and green on every
+    developer's machine.
 
     python3 tests/test_sk_lan_bridge_members.py
 """
 
 import argparse
+import os
 import shutil
 import subprocess
 import sys
@@ -48,12 +54,15 @@ REPAIR_END = "# THE CONDUIT MUST NOT BE IN THE BRIDGE."
 CONDUIT_END = "\t\t\tbreak\n"
 
 
-def run(script, ports=None):
+def run(script, ports=None, extra_env=None):
     """Run the gate against one script; return (returncode, stdout)."""
     cmd = [sys.executable, str(GATE), "--script", str(script)]
     if ports is not None:
         cmd += ["--ports", ports]
-    proc = subprocess.run(cmd, capture_output=True, text=True)
+    env = dict(os.environ)
+    if extra_env:
+        env.update(extra_env)
+    proc = subprocess.run(cmd, capture_output=True, text=True, env=env)
     return proc.returncode, proc.stdout + proc.stderr
 
 
@@ -190,6 +199,33 @@ def main(argv=None):
                                 "for the script that leaves it in:\n%s" % out)
             if args.verbose:
                 print("no conduit removal: rc=%d %s" % (rc, out.strip()))
+
+        # ---- the environment the gate runs in must not decide the answer --
+        # GitHub Actions sets CI=true in every step, and the shipped script
+        # reads CI - like IPKG_INSTROOT and PKG_ROOT - as "this is a package
+        # build, there is no network config to edit here", so it skips the
+        # repair entirely.  The sandbox is not a build: it has a network
+        # config and repairing it is the script's job, so the gate takes
+        # those markers out of the environment it hands the script.
+        #
+        # This control is the one that would have caught it.  With CI=true
+        # around the gate, the script did nothing, the gate read the
+        # degenerate bridge and went red - on the runner, where CI=true is
+        # always set, and on no developer's machine, where it is not.  A
+        # control that only asked "does the message name lan3" would have
+        # been satisfied by that failure for the wrong reason.
+        for marker, value in (("CI", "true"),
+                              ("IPKG_INSTROOT", "/tmp/pkg"),
+                              ("PKG_ROOT", "/tmp/pkg")):
+            rc, out = run(SHIPPED, extra_env={marker: value})
+            checks += 1
+            if rc != 0:
+                failures.append("the gate went red with %s in its own "
+                                "environment (rc=%d):\n%s"
+                                % (marker, rc, out))
+            if args.verbose:
+                print("%s in the environment: rc=%d %s"
+                      % (marker, rc, out.strip()))
 
     finally:
         shutil.rmtree(tmp, ignore_errors=True)

@@ -40,6 +40,11 @@ back the port list the script committed.  It is a behavioural check and not a
 text match: a script that has the words "lan-cpu0" in it and does not repair
 anything fails this check.
 
+The sandbox is a board, and it is handed to the script as one: the
+environment markers that say "this is a package build" are taken out first
+(BUILD_MARKERS below).  Without that, the gate measured the runner's
+environment instead of the script.
+
 Usage:
   python3 tools/check-sk-lan-bridge-members.py [--script PATH] [--ports LIST]
 """
@@ -62,6 +67,18 @@ WANTED = ("lan0", "lan1", "lan2", "lan3", "lan4")
 # The conduit is the CPU-facing netdev.  A DSA bridge may hold it OR the user
 # ports, never both, so it must not be in the list.
 FORBIDDEN = ("lan-cpu0",)
+
+# The markers the shipped script reads as "this is a package build, there is
+# no network config to edit here".  The sandbox is a board, not a build
+# machine, so they must not reach the script.
+#
+# This is not a detail.  GitHub Actions sets CI=true in every step, and the
+# shipped script skips the whole repair when it sees CI: the gate ran the
+# script in that environment, the script did nothing, and the gate read the
+# degenerate bridge and went red - on the runner, and only there, because a
+# developer's machine has no CI in its environment.  The controls say so out
+# loud now: the gate has to pass with CI=true around it.
+BUILD_MARKERS = ("CI", "IPKG_INSTROOT", "PKG_ROOT")
 
 # The uci the script runs against.  It is a shell function rather than a
 # program on PATH, so the sandbox needs no PATH and the check works the same
@@ -156,6 +173,8 @@ def run(script, tmp, ports, netdevs, sh):
     (state.with_suffix(".added")).write_text("", encoding="utf-8", newline="")
 
     env = dict(os.environ)
+    for name in BUILD_MARKERS:
+        env.pop(name, None)
     env["UCI_STATE"] = str(state)
 
     proc = subprocess.run([sh, str(runnable)], cwd=str(tmp), env=env,

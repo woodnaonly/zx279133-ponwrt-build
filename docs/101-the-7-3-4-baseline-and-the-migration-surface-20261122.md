@@ -8701,6 +8701,97 @@ DSP patch 写入；`staging/ctl/rlt8226b-patch.txt` 是它的 `m45w` 形态。
 5. 6.18.60 实机基线对拍仍未做；`tools/trialsurvey.sh` + `trialsurvey-verdict.py`
    本轮仍未跑（板上取数仍是手工）。
 
+## 八之三十一、`#74` 与 `#75` 连续两轮红的原因：**门禁把自己的运行环境传给了被测脚本**
+
+### 1. 判决
+
+1. **7.3 线从 `#74` 起就没出过件**（`#73` 还是绿的）。两个红 run 都死在第一个 job
+   「repository gates」，步骤是「Exercise the repository's own gates」，
+   注解只有一句 `Process completed with exit code 1`。
+2. 原因**不是被测脚本坏了，是门禁被自己的运行环境绊倒**：
+   **GitHub Actions 给每一步都设 `CI=true`**，而 `sk-bridge` 的 `in_build()`
+   把 `CI`（与 `IPKG_INSTROOT`、`PKG_ROOT`）读成「我正在打包，这里没有网络配置可改」
+   ⇒ **脚本一步都不做** ⇒ 门禁读回来的桥还是首启那座退化桥（只有 `lan-cpu0`）
+   ⇒ 门禁红。
+3. **本地永远绿**：开发机上没有 `CI`，脚本照常修复，门禁过。
+   ⇒ **这道门禁在 runner 上测的和在开发机上测的不是一件事**，而只有前者算数。
+4. **修的是仪器，不是产品**：`in_build()` 的语义是对的（打包时确实不该动
+   `/etc/config/network`），所以改的是门禁 —— 它把沙箱交给脚本之前，
+   先把那三个构建标记从环境里摘掉。
+5. **补了三项反控**：`CI` / `IPKG_INSTROOT` / `PKG_ROOT` 各自出现在门禁自己的环境里时，
+   门禁必须仍然绿。**这三项就是当初该抓住它的控制项**：原来的控制项只问
+   「判决里有没有点名 lan3」，而 `CI=true` 下门禁恰好也会点名 lan3 ——
+   **它因为错的理由而满足了一个真的断言**。
+
+### 2. 证据
+
+**A. 两个红 run 死在同一个 job 的同一步。**
+
+```
+run #75 id=45374168648  (sha 3c1e8c25)  => failure
+  job repository gates => failure
+     step Exercise the repository's own gates => failure
+  job matrix.mode => skipped
+run #74 id=45351211572  (sha a127515d)  => failure
+  job repository gates => failure
+     step Exercise the repository's own gates => failure
+run #73 id=45323902408  (sha f44ad254)  => success
+  job repository gates => success
+  job flash / job initramfs => success
+```
+
+注解只有一条：`[failure] Process completed with exit code 1.`（没有更细的说明）。
+
+**B. 本地复现，症状与 runner 一字不差。**
+
+```
+$ CI=true python3 tools/check-sk-lan-bridge-members.py
+FAIL  the LAN bridge is missing lan0, lan1, lan2, lan3, lan4 after the script ran
+FAIL  the LAN bridge still holds lan-cpu0 after the script ran
+      the bridge holds: lan-cpu0
+rc=1
+```
+
+不设 `CI` 时同一扇门禁是 PASS。
+
+**C. 修完之后，设上 `CI` 也是 PASS**（门禁把标记摘掉了）。
+
+**D. 反向验证：把修复抠掉，控制项必须转红，而且红的正是那三项。**
+在有 `sh` 的环境里把 `BUILD_MARKERS` 那三行删掉再跑控制项：
+
+```
+FAIL: the gate went red with CI in its own environment (rc=1):
+FAIL: the gate went red with IPKG_INSTROOT in its own environment (rc=1):
+FAIL: the gate went red with PKG_ROOT in its own environment (rc=1):
+3 of 18 controls failed
+```
+
+**其余 15 项仍然绿** ⇒ 新控制项抓的正是这一条，不是泛泛地红一遍。
+
+**E. 这扇门禁是在 `a127515d` 里新增的**（`git diff f44ad254 HEAD -- tools/check-sk-lan-bridge-members.py`
+显示 `new file mode`）⇒ **它在 CI 上一次都没有绿过**，#74 是它的第一次运行。
+而 `#73` 的产物就是板上现在跑的那一件（`staging/trial/flash-uImage.run45323902408`
+里的 `45323902408` 正是 `#73` 的 run id）。
+
+### 3. 修复
+
+- `tools/check-sk-lan-bridge-members.py`：新增 `BUILD_MARKERS = ("CI", "IPKG_INSTROOT", "PKG_ROOT")`，
+  `run()` 在把沙箱交给脚本之前把这三个名字从环境里摘掉。
+- `tests/test_sk_lan_bridge_members.py`：`run()` 接受 `extra_env`；
+  新增**三项**控制项（合计 **18 项**），分别把这三个标记放进门禁自己的环境里，
+  要求门禁仍然绿。
+- **产品侧一字未动**：`sk-bridge` 的 `in_build()` 语义原样保留
+  （打包时确实不该动 `/etc/config/network`），6.18 世代的副本也没碰。
+
+### 4. 未做
+
+1. **没有做全仓排查**：还有没有别的门禁也把自己的环境传给了被测脚本？
+   `test_conduit_netdev_name.py`、`test_gatecheck.py`、`test_ctl_payload.py`
+   在 `#75` 里都过了 ⇒ 至少它们没有被 `CI` 绊倒；但没有逐个审。
+2. **没有改工作流**：gates 的命令清单与 `paths:` 一行未动。
+3. **#73 之后就没有新产物**：出件之后仍要刷新 rootfs（带上改好的 `sk-bridge`）。
+4. 2.5G 口与「LAN 口 → CPU 口」这两件事本轮没动（见上一节）。
+
 ## 九、下一步（按片重打，每片一次 CI）
 
 **没搬的，按片来：**
@@ -9619,5 +9710,36 @@ python devtools/rlt8226tab.py --emit
 - 132 号是历史统计：loader 跑过以太网初始化 263 次，而驱动的 2.5G 分支**一次都没有**。
 - 133 号是修 2.5G 口要用的那份表：厂商 `rlt8226b.ko` 里的 224 条 DSP patch 写入，
   连同 `1e:0x7581`/`1e:0x7588`/`1e:0x7589` 那三步，一起搬进 7.3 驱动。
+
+# 134) CI 状态：两个红 run 死在哪个 job 的哪一步
+pwsh -NoProfile -Command "$h=@{'User-Agent'='w';'Accept'='application/vnd.github+json'}; (Invoke-RestMethod -Uri 'https://api.github.com/repos/woodnaonly/zx279133-ponwrt-build/actions/runs?per_page=6' -Headers $h).workflow_runs | ForEach-Object { '{0} | {1} | {2} | {3}' -f $_.run_number,$_.name,$_.status,$_.conclusion }"
+pwsh -NoProfile -Command "$h=@{'User-Agent'='w';'Accept'='application/vnd.github+json'}; $j=Invoke-RestMethod -Uri 'https://api.github.com/repos/woodnaonly/zx279133-ponwrt-build/actions/runs/45374168648/jobs?per_page=100' -Headers $h; $j.jobs | ForEach-Object { $_.name; $_.steps | ForEach-Object { '   {0} => {1}' -f $_.name,$_.conclusion } }"
+
+# 135) 本地复现 runner 的环境：CI=true 下门禁变红
+CI=true python3 tools/check-sk-lan-bridge-members.py
+
+# 136) 反向验证：把环境修复抠掉，控制项必须红那三项
+#     （删掉 tools/check-sk-lan-bridge-members.py 里 run() 的这三行：
+#      for name in BUILD_MARKERS: / env.pop(name, None)）
+python3 tests/test_sk_lan_bridge_members.py
+
+# 137) 本地把 CI 的 gates 清单整条跑一遍（清单从 workflow 里抽，不手抄）
+python3 tools/check-sk-lan-bridge-members.py
+python3 tests/test_sk_lan_bridge_members.py
+python3 tools/check-sk-workflow-paths.py --workflow .github/workflows/build-sk-d840n-73.yml --workflow .github/workflows/build-sk-d840n.yml
+
+**134~137 号命令是第十四组**，合起来回答的是一个问题：
+**「为什么门禁在 runner 上红、在每一台开发机上绿」**。
+
+- 134 号给出两个红 run 的落点：**同一个 job 的同一步**，注解只有一句 exit code 1。
+- 135 号是**一字不差的复现**：`CI=true` 下门禁报的就是 CI 上那两条 FAIL。
+  ⇒ 根因是**门禁把自己的环境传给了被测脚本**，而脚本把 `CI` 读成「我在打包」。
+- 136 号是这道修复的**反向验证**：抠掉那三行 ⇒ **恰好三项**控制项转红，
+  其余 15 项仍然绿 ⇒ 新控制项抓的就是这一条。
+- 137 号是把 CI 那份清单在本地整条跑一遍的做法：门禁 + 控制项 + `paths:`。
+
+**这条的教训可以推广：一扇门禁跑在 CI 上时，它的运行环境就是被测输入的一部分。**
+凡是要跑「被测脚本」的门禁，都要先把「我在哪里」这件事定死 —— 否则门禁测的是 runner，
+不是脚本。
 
 
