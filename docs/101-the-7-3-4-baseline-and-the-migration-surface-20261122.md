@@ -8423,6 +8423,284 @@ esac
 4. **如果活体 A/B 仍不通**，剩下的候选是**主机侧 conduit 取帧路径**（7.3-local 的 170 `rx-delivery-safety` 与 190 `datapath-restore-on-conduit-open`）。那时本节 1.1 的判决要改写成「配置退化是必要条件，但不是充分条件」。
 5. **`overlays/`（6.18 世代共用）一个字没动**；`kernel-overlays/`（6.18 世代内核层）一个字没动。
 
+## 八之二十九、DSA 桥的成员只能是「用户口」：**上一轮那座六成员桥，是内核拒绝的列表**
+
+### 1. 判决
+
+1. **八之二十八的判决要改写。** 那座桥「退化」是真的，但它退化的方式不是「少了成员」，而是**成员放错了**：它放进去的是 DSA 的 **conduit**（`lan-cpu0`），而 7.3 的内核**不允许** conduit 与 DSA 用户口同处一座桥。
+   ⇒ **上一轮落地的「六成员桥」（`lan-cpu0` + `lan0..lan4`）在 DSA 语义下自相矛盾，永远不可能成立**；它必须改成**只含五个用户口 `lan0..lan4`**。
+2. **这条规则是实测出来的，不是推出来的**（2026-11-24 17:45，板上跑着 7.3.4）：
+
+   | 操作 | 结果 |
+   |---|---|
+   | 空桥加 DSA 用户口 `lan0` | **RC=0**（成功） |
+   | 已有用户口的桥再加 conduit `lan-cpu0` | **EINVAL**（`RTNETLINK answers: Invalid argument`） |
+   | 已有 conduit 的桥再加用户口 `lan0` | **EINVAL**（同上） |
+
+   ⇒ 一座 DSA 桥只能二选一：**要么 conduit，要么用户口**。内核侧的位置是 `net/dsa/user.c` 的 `dsa_conduit_prechangeupper_sanity_check()` 与 `dsa_bridge_prechangelower_sanity_check()`。
+3. **此前三条「看起来像根因」的假说，本轮全部否掉**：
+
+   - 「板上一个 devlink port 都没有，所以入桥时拿不到 switch id」——**假**。`lan0` 的 `phys_switch_id` 读得出 `00000000`、`phys_port_name` 读得出 `p4`，即 `netif_get_port_parent_id()` **成功**；`/sys/class/devlink_port/` 不存在，只是这个树的端口类不叫这个名字。
+   - 「6.18 与 7.3 的 DSA/bridge 核心有代差」——**假**。厂商 6.18.38 与上游 7.3.4 的 `net/bridge/*`、`net/dsa/*`、`net/switchdev/switchdev.c` 逐字等价，差异只有 `kzalloc_obj`、`BR_TX_FWD_OFFLOAD_BIT` 位掩码、`ATM_LANE` 移除、HSR helper 这些外观项。
+   - 「9132 驱动在两代之间有功能差异」——**假**。两代 `zx279133-switch.c` 的差异是**注释与一个宏搬家**。
+4. **改对之后 LAN 仍然不通，但阻塞点换了**：五个用户口**全部入桥成功**，`lan2` 链路 up 并进入 forwarding；可 PC 侧 ARP 依然失败。`ethtool lan1` 显示**对端已经协商出 2500baseT**，而本端 **Link detected: no**
+   ⇒ 剩下的阻塞在 **2.5G 口（`lan1`）的 PHY 链路**，**不在桥**。
+
+### 2. 证据
+
+#### 2.1 板上：桥的成员
+
+```
+# 改之前：桥里只有 conduit
+root@ImmortalWrt:~# ls /sys/class/net/br-lan/brif
+lan-cpu0
+
+# 改之后：五个用户口，conduit 在桥外
+root@ImmortalWrt:~# ls /sys/class/net/br-lan/brif
+lan0  lan1  lan2  lan3  lan4
+
+# 逐口入桥全部成功（17:45 的串口日志）
+[ 2541.309975] br-lan: port 1(lan0) entered blocking state
+[ 2545.387755] br-lan: port 3(lan2) entered blocking state
+[ 2545.387774] br-lan: port 3(lan2) entered forwarding state
+[ 2549.486521] br-lan: port 5(lan4) entered blocking state
+```
+
+#### 2.2 板上：物理层仍然不通
+
+```
+# 五个用户口的链路（只有 lan2 有线）
+lan0: Link detected: no
+lan1: Link detected: no        <- 2.5G 口，PC 插的就是它
+lan2: Link detected: yes
+lan3: Link detected: no
+lan4: Link detected: no
+
+# lan1 的对端已经协商出来了，本端却没有链路
+root@ImmortalWrt:~# ethtool lan1 | head -12
+        Supported link modes:   2500baseT/Full
+        Advertised link modes:  2500baseT/Full
+        Link partner advertised link modes:  2500baseT/Full
+root@ImmortalWrt:~# ethtool lan1 | grep -i 'Link detected'
+        Link detected: no
+
+# PC 侧：ARP 仍然拿不到 MAC
+PS C:\> Get-NetNeighbor -AddressFamily IPv4 -IPAddress 192.168.9.1
+19  192.168.9.1  00-00-00-00-00-00  Incomplete  以太网
+PS C:\> ping -n 3 -w 1500 -S 192.168.9.100 192.168.9.1
+Reply from 192.168.9.100: Destination host unreachable.
+```
+
+#### 2.3 源码：两代等价，差别不在核心
+
+```
+# 厂商 6.18.38 与上游 7.3.4 的逐文件差异统计（--numstat）
+net/bridge/br.c            0   7      # ATM_LANE 移除
+net/bridge/br_switchdev.c 20   5      # BR_TX_FWD_OFFLOAD -> 位掩码
+net/dsa/port.c             5   2      # kzalloc_obj
+net/dsa/user.c            32  20      # kzalloc_obj / selftest / policer API
+net/switchdev/switchdev.c   2   2
+```
+
+内核侧的规则在 `net/dsa/user.c`：
+
+```
+static int
+dsa_conduit_prechangeupper_sanity_check(struct net_device *conduit,
+                                         struct netdev_notifier_changeupper_info *info)
+{
+        ...
+        /* Allow bridge uppers of DSA conduits, subject to further
+         * restrictions in dsa_bridge_prechangelower_sanity_check()
+         */
+        if (netif_is_bridge_master(info->upper_dev))
+                return NOTIFY_DONE;
+        ...
+}
+```
+
+#### 2.4 历史对照：7.3 线上跑通过的桥，成员里没有 conduit
+
+串口日志里 `trial:` 仪器留下的每一轮：
+
+```
+trial: link: br-lan oper=up carrier=1 flags=0x1003 rx=938 tx=237 brif=labhost0,lan1,lan2,lan4
+trial: link: br-lan oper=up carrier=1 flags=0x1003 rx=830 tx=117 brif=labhost0,lan1,lan2,lan4
+trial: link: br-lan oper=up carrier=1 flags=0x1003 rx=549 tx=179 brif=labhost0,lan1,lan2,lan4
+trial: link: br-lan oper=up carrier=1 flags=0x1003 rx=372 tx=92  brif=lan1,lan2,lan4
+trial: link: br-lan oper=down carrier=0 flags=0x1003 rx=0 tx=0 brif=lan1,lan2,lan3,lan4
+```
+
+⇒ **成员里有 conduit 的那些轮次 rx≈0；没有 conduit 的那些轮次 rx 涨到几百上千**。
+
+### 3. 修复
+
+- `overlays-73/target/linux/zte/zx279133/base-files/etc/init.d/sk-bridge`（**7.3 线自己的那份**）：
+  桥里放**五个 DSA 用户口** `lan0..lan4`，并把 **conduit `lan-cpu0` 取出来**。
+  上一轮那份只会往生成出来的列表里**加**东西（加 `lan0`、加 `lan-cpu0`），而内核拒绝的正是那个混合列表。
+- `tools/check-sk-lan-bridge-members.py`：门禁改成**两条都要**——五个用户口一个都不能少，**conduit 一个都不能留**；两种违规各有一条自己的话术，判决里能一眼看出是哪一种。
+- `tests/test_sk_lan_bridge_members.py`：**15 项反控**（原 14 项的语义随之改写）。
+  去掉「加 conduit」那一项，换成：
+  - **去掉 conduit 移除块**的副本 ⇒ 门禁必须红，并点名 `lan-cpu0` **仍在桥里**；
+  - **桥本来就正确**的副本（`--ports "lan0 lan1 lan2 lan3 lan4"`）⇒ 门禁必须**绿**（修复必须是幂等的）。
+- `overlays/`（6.18 世代共用）**一个字没动**；`kernel-overlays/`、`kernel-overlays-73/`、`kernel-patches/` 本轮**一个字没动**。
+
+### 4. 未做
+
+1. **2.5G 口（`lan1`）链路不起来的根因未定位**。对端已经协商出 2500baseT，本端 `Link detected: no` ⇒ 这是**下一片的活**：在 9132 的每口属性字里找那条管 PHY 链路的字（6.18 世代的 `zx279133_9132_port_init()` 与 7.3 的 `zx279133_spa_port_attr_init()` 是同一件事的两代写法，而 7.3-local/200 改的正是这一片）。
+2. **LAN 仍然不通**：PC 侧 ARP 依旧 `Incomplete`。
+3. **6.18.60 实机基线对拍未做**（要把 6.18 三件刷回去跑同一套 PC 侧测试）。
+4. **`tools/trialsurvey.sh` + `tools/trialsurvey-verdict.py` 本轮仍未跑**（取数仍是手工）。
+5. **板上没有部署本轮的 rootfs**：板上那份 `/etc/config/network` 是手工改的（`uci del_list network.@device[0].ports=lan-cpu0`），脚本本体要等 CI 出件、刷新 rootfs 之后才在板上跑过。
+
+## 八之三十、上一轮把「2.5G 口」当成了 LAN 不通的元凶：**它不是**；堵点在 **9132 的 LAN 口到 CPU 口这一段**
+
+### 1. 判决
+
+1. **上一轮那条读法是错的**：板上的 `ethtool lan1` 里那行
+   `Link partner advertised link modes: 2500baseT/Full` **不能**读成「对端已协商 2500baseT」。
+   PC 的以太网卡是 `Realtek PCIe GbE Family Controller`，`LinkSpeed = 1 Gbps`
+   ⇒ **它根本协商不出 2500baseT**；而 `lan1` 的 `Link detected: no` 说明
+   **那个口上压根没有插线**。⇒ 那行至多说明驱动把 2.5G 这个**本地能力**报了出来，
+   不是协商结果。上一轮据此把 LAN 不通归到 2.5G 口，**归错了**。
+2. **PC 插在 `lan2` 上**：七个 DSA 口里**只有 `lan2` 的 `operstate` 是 `up`**
+   （`lan0/lan1/lan3/lan4` 全是 `lowerlayerdown`；`lan-cpu0` 与 `br-lan` 是桥自己）。
+   ⇒ **铜缆侧是好的**：1G 链路已经起来，1G 口这条路由是通的。
+3. **真正的堵点**：**帧从 `lan2` 的 PHY 进得来，却到不了 DSA 口，更到不了 CPU 口**。
+   `lan2 rx=0`（连 DSA 口自己的 rx 计数器都是零）、`lan-cpu0 rx=0`、`br-lan rx=0`；
+   PC 侧 `ping -S 192.168.9.100 192.168.9.1` 三包里两包超时、一包本地栈回
+   `Destination host unreachable`，ARP 仍是 `Incomplete`
+   ⇒ **PC 的 ARP 请求确实发了出去，板上一个字节都没收到**。
+4. ⇒ **要修的是「9132 的 LAN 口 → 交换 fabric → CPU 口（port 9）→ SoC 的 MAC」这一段**，
+   不是 9132 每口属性字里管 PHY 的那一条，也不是那座桥（桥这一侧上一轮已经对了：
+   五个用户口全部入桥、`lan2` 进入 forwarding state）。
+5. **2.5G 口（`lan1`）另有一个真缺陷，但不是 LAN 不通的原因**：远端那颗 RTL8226
+   从出厂起就没有被任何一方初始化过（证据 C/D/E）。
+
+### 2. 证据
+
+**A. PC 侧的网卡只有 1 Gbps。** `Get-NetAdapter`：
+
+```
+Name         InterfaceDescription                       Status       LinkSpeed
+以太网       Realtek PCIe GbE Family Controller         Up           1 Gbps
+WLAN         MediaTek Wi-Fi 6E MT7902 Wireless LAN Card Up           1.2 Gbps
+xray_tun     Wintun Tunnel                              Up           100 Gbps
+```
+
+PC 的以太网地址是 `192.168.9.190 / .100 / .25`（同一张卡上的三个地址）。
+
+**B. 板上七个工作口的实时读数（2026-11-24 18:19:05）。**
+
+```
+lan0 lowerlayerdown rx=0 tx=0
+lan1 lowerlayerdown rx=0 tx=0
+lan2 up             rx=0 tx=9      ← 唯一有链路的口，也是 PC 插的那个
+lan3 lowerlayerdown rx=0 tx=0
+lan4 lowerlayerdown rx=0 tx=0
+lan-cpu0 up         rx=0 tx=29
+br-lan   up         rx=0 tx=13
+```
+
+⇒ `lan2` 的链路是 `up`，但**它自己的 rx 计数器是零** ⇒ 帧连 DSA 口都没进，
+更不用说进桥、进 CPU 口。PC 侧 `Get-NetNeighbor` 对 `192.168.9.1` 仍是
+`00-00-00-00-00-00 / Incomplete`，`ping` 绑源地址后回
+`Destination host unreachable`（本地栈因 ARP 失败而回的，不是板子回的）。
+
+**C. 2.5G 口的远端（RTL8226）从未被初始化。** 板上 dmesg（本次启动，第 13.46 s）：
+
+```
+[   12.390447] the lane's word is 0x0010 and its mode word is 0x9402 - the lane carries no code
+[   13.466674] the 2.5G jack's PHY: AN status 0x0008, the lane's four bits (0x01 0x08 0x20 0x40) are 0x0008 - at least one of them is missing, the lane carries no code
+[   13.468175] SerDes mode (devad 0x1e reg 0x7580) = 0x9402
+[   13.468316] SerDes ctrl (devad 0x1e reg 0x758d) = 0x0010
+[   13.468881] BMSR (devad 0x1 reg 0x01) = 0x0002
+```
+
+`1e:0x758d` 的 bit 2 正是「这条 lane 带码」那一位，读出来是 **0**
+⇒ 远端没有码；`1e:0x7580` 低六位是 `0x02`。
+
+**同一次启动的厂商 loader 段**（串口历史第 3069838 行起）：
+
+```
+Net:   rx data disable
+The initial value of mdio_8226_id is 1.
+mdio_miiphy_initialize ok
+enter gpon pon pll cfg
+mode_xgpon_nsyn_cfg_133
+com_pll_lock_ready / rx los =0 rx data in / cdr_lock_ready
+pon serdes init succeed
+eth0
+Hit any key to stop autoboot:  1  0
+```
+
+⇒ **loader 配了 PON 的 SerDes，没有配 LAN 的**：没有 `phy_id:0x5; port:0x4;`、
+没有 `mode_eth_*_base_x_cfg`、没有 `uni serdes init succeed`、没有
+`mac 4 phy status changed`、没有 `Using eth0 device`。
+而能工作的那次（串口历史第 93282 行附近）这五样**全有**：
+
+```
+phy_id:0x5;  port:0x4;
+PHY_RLT8226_MDIO_READ_EXTENDED(0x2) in RTL_8226
+mode_eth_1gbase_x_cfg
+uni serdes init succeed
+xmac 0 speed set 2 in sgmii(xmac speed 3)
+mac 4 phy status changed: 1000M full-duplex
+Using eth0 device
+```
+
+**D. env 的 `bootcmd` 变迁**（串口历史）与板上现状：
+
+```
+5524 / 11608 / …: bootcmd=mtd read kernel 0x88000000; mtd read dtb 0x88800000; bootm 0x88000000 - 0x88800000
+2983484:           bootcmd=ping 192.168.9.25; mtd read kernel …; bootm …     ← 加过 ping
+3072000:           bootcmd=zxboot                                            ← 现在
+```
+
+板上 `/dev/mtd1` 读出来就是 `bootcmd=zxboot`、`bootdelay=1`、
+`ipaddr=192.168.1.1`、`serverip=192.168.1.101`。
+⇒ **让 loader 代劳那条 `ping` 已经被改回去了**，loader 不再初始化 RTL8226。
+1486 次历史启动里 loader 跑过 `mode_eth_*` 的有 263 次（219 次 1gbase_x、
+48 次 2p5gbase_x），**最近 5 次（#1480~#1485）一次都没有**。
+
+**E. 驱动侧只「读」远端的类，不「写」它。**
+`kernel-overlays-73/drivers/net/ethernet/zte/zx279133-switch.c` 的 probe 里：
+
+- `zx279133_switch_outerphy_class()` 读 `1e:0x7580` 低六位；
+- 不等于 `0x16`（2500BASE-X）就**只写三个 SerDes option 字**
+  （`75f3=0x0002`、`697a=0x0000`、`6a04=0x0403`）并走 1G 分支；
+- **没有**跑厂商那三步：`Rtl8226_serdes_rst`（`1e:0x7581` 清 BIT(4) 再轮询自清）、
+  `Rtl8226_serdes_autoNego_set`（写 `1e:0x7588`，再写 `1e:0x7589 = 0x70d0`（1G）
+  或 `0x71d0`（2.5G)）、以及 DSP patch 下载（`1f:0xa436` 选 / `1f:0xa438` 写）。
+
+**整条串口历史**里 `lane programmed for 2500BASE-X` **0 次**、`lane programmed for 1G`
+**116 次** ⇒ 驱动的 2.5G 分支**从未被执行过**。
+
+**F. 厂商那套初始化表就在本机。** `pon/vendor-modules/rlt8226b.ko` 的两张 `.rodata`
+表（`devtools/rlt8226tab.py` 可抽）共 **224 条**，全部是 devad `0x1f` 的
+DSP patch 写入；`staging/ctl/rlt8226b-patch.txt` 是它的 `m45w` 形态。
+
+### 3. 修复（本轮）
+
+**这一轮没有改驱动。** 本轮落地的只有**桥的成员**（上一节那件事）：
+`lan0..lan4` 五个用户口入桥、conduit `lan-cpu0` 在桥外，附门禁与 15 项反控。
+理由：本节把 LAN 不通的堵点重新定位到了「LAN 口 → CPU 口」这一段，
+在那一段查清之前，**先动 2.5G 口的驱动是改错地方**。
+
+### 4. 未做
+
+1. **「LAN 口 → CPU 口」这一段本轮没有定位到具体那一条字**。下一片要查的是
+   9132 的 **transport VID 与 CPU 口的成员关系**、每口的 **PPU entry program**
+   （日志里那条 `9132 PPU 5 … entry program 0000a6a5`）以及
+   **`SOPC mac 0 never became ready`**（SoC 的 MAC 没被发布给 9132，
+   ⇒ 交换芯片不知道该把哪些帧交给 CPU）。
+2. **2.5G 口仍然不通**，且原因另查：需要把上面 E/F 两条搬进驱动。
+3. **没有走 env 那条捷径**（把 `ping` 加回 `bootcmd` 让 loader 代劳）：
+   产物不该依赖 env 的一行字，而且那要写 mtd1。
+4. **1G 口的 LAN 仍然不通** —— PC 就插在 `lan2` 上，这条路本来就是通的。
+5. 6.18.60 实机基线对拍仍未做；`tools/trialsurvey.sh` + `trialsurvey-verdict.py`
+   本轮仍未跑（板上取数仍是手工）。
+
 ## 九、下一步（按片重打，每片一次 CI）
 
 **没搬的，按片来：**
@@ -9254,3 +9532,92 @@ uapi 头都过一遍 `scripts/headers_install.sh`，而它的 sed（第 34 行�
 - 120 与 121 号是**换件之后必须重跑**的四道门禁
   （取件契约 / 产物级 / RAM 通道门禁 / 分区表）：
   它们认的是**字节**，不是轮次。
+
+# 122) 抽 7.3 内核 Image 里嵌的那份配置（IKCFG_ST），再与 6.18 板上的实配逐项对拍
+python3 scratch/_ikcfg_full.py staging/trial/flash-uImage.run45323902408 scratch/ikcfg73.config
+pwsh -NoProfile -Command "$a=Get-Content staging/ctl/ikcfg.config|?{$_ -match '^CONFIG_'}|sort; $b=Get-Content scratch/ikcfg73.config|?{$_ -match '^CONFIG_'}|sort; Compare-Object $a $b"
+
+# 123) 两代 DSA/bridge 核心的逐文件差异（厂商 6.18.38 vs 上游 7.3.4）：
+#     差异只有外观项 ⇒ 「入桥路径有代差」这条假说被排除
+git diff --no-index --numstat -- scratch/vendor618/net/dsa/port.c scratch/linux-7.3.4/net/dsa/port.c
+git diff --no-index --numstat -- scratch/vendor618/net/bridge/br_switchdev.c scratch/linux-7.3.4/net/bridge/br_switchdev.c
+git diff --no-index --numstat -- scratch/vendor618/net/dsa/user.c scratch/linux-7.3.4/net/dsa/user.c
+
+# 124) 板上：否掉「零 devlink port」——switch id 与端口名都读得出来
+cat /sys/class/net/lan0/phys_switch_id /sys/class/net/lan0/phys_port_name
+grep -ci devlink /proc/kallsyms
+ls /sys/class/devlink/ | head -5
+
+# 125) 板上：DSA 桥的成员规则实测（空桥加用户口 / 再加 conduit）
+ip link add br-t type bridge
+ip link set dev lan0 master br-t;      echo RC_A=$?
+ip link set dev lan-cpu0 master br-t;  echo RC_B=$?
+ip link set dev lan1 master br-t;      echo RC_C=$?
+
+# 126) 板上：把 br-lan 改成「五个用户口、conduit 在桥外」，再复看链路与计数
+ip link set dev lan-cpu0 nomaster
+for p in lan0 lan1 lan2 lan3 lan4; do ip link set dev $p up; done
+for p in lan0 lan1 lan2 lan3 lan4; do ip link set dev $p master br-lan; done
+ls /sys/class/net/br-lan/brif
+for p in lan0 lan1 lan2 lan3 lan4; do echo -n "$p: "; ethtool $p | grep -i 'Link detected'; done
+
+# 127) PC 侧：ARP 与绑定源地址的 ping（绑源地址才不会答到隧道后面那台主机）
+Get-NetNeighbor -AddressFamily IPv4 -IPAddress 192.168.9.1 | Format-Table ifIndex,IPAddress,LinkLayerAddress,State,InterfaceAlias -AutoSize
+ping.exe -n 3 -w 1500 -S 192.168.9.100 192.168.9.1
+
+**122~127 号命令是第十二组**，合起来回答的是两个问题：
+**「那座桥为什么进不去」**，以及**「改对之后 LAN 为什么仍然不通」**。
+
+- 122 号是**两代配置的全量对拍**：结论是 `CONFIG_NET_DEVLINK=y` 两代都有，
+  真正的差别只有 `ZTE_ZX279133_RTL8372N`（`y` → `m`）与新出现的
+  `ZTE_ZX279133_FNOFFLOAD`（后者是 nftables flowtable 的，与离桥无关）。
+- 123 号是**两代 DSA/bridge 核心的逐文件差异**：只有 `kzalloc_obj`、
+  `BR_TX_FWD_OFFLOAD` 位掩码、`ATM_LANE` 移除、HSR helper 这几项外观差异
+  ⇒ **「入桥路径有代差」被排除**，根因不在核心。
+- 124 号否掉**「板上零 devlink port」**：`phys_switch_id` 读得出 `00000000`、
+  `phys_port_name` 读得出 `p4`，即 `netif_get_port_parent_id()` **成功**；
+  `/sys/class/devlink_port/` 不存在只是这个树的端口类不叫这个名字。
+- 125 号是**DSA 桥的成员规则实测**：空桥加用户口 `RC=0`，再加 conduit `RC=2`
+  （`Invalid argument`）⇒ **一座桥不能同时装 conduit 与用户口**。
+- 126 号把 br-lan 改成**只装五个用户口**：五个口**全部入桥成功**，
+  `lan2` 链路 up 并进入 forwarding ⇒ 桥这一侧已经对了。
+- 127 号是 **PC 侧的对拍**：ARP 仍是 `Incomplete`，绑源地址的 ping 仍是
+  `Destination host unreachable` ⇒ **剩下的是 2.5G 口（`lan1`）的 PHY 链路**：
+  `ethtool lan1` 显示**对端已协商 2500baseT**，而本端 `Link detected: no`。
+
+# 128) PC 侧：网卡型号与速率（这行是本轮推翻上一轮判定的关键）
+Get-NetAdapter | Select-Object Name,InterfaceDescription,Status,LinkSpeed | Format-Table -AutoSize
+Get-NetIPAddress -AddressFamily IPv4 | Select-Object IPAddress,InterfaceAlias | Format-Table -AutoSize
+
+# 129) 板上：七个口的 operstate 与 rx/tx（谁有链路、谁收到了帧）
+for p in lan0 lan1 lan2 lan3 lan4 lan-cpu0 br-lan; do echo "$p $(cat /sys/class/net/$p/operstate) rx=$(cat /sys/class/net/$p/statistics/rx_packets) tx=$(cat /sys/class/net/$p/statistics/tx_packets)"; done
+
+# 130) 板上：2.5G 口（lan1）的驱动日志（远端 RTL8226 从未被初始化）
+dmesg | grep -i -E 'lane|2.5G jack|SOPC|xpcs' | tail -60
+
+# 131) 板上：mtd1 里的 U-Boot 环境（bootcmd 现在是 zxboot，历史上加过 ping）
+head -c 65536 /dev/mtd1 | tr '\000' '\n' | grep -a -E '^(bootcmd|bootargs|ethaddr|ipaddr|serverip|bootdelay)' | head -12
+
+# 132) 串口历史：loader 跑过几次以太网初始化、驱动走过几次 2.5G 分支
+Select-String -Path staging/ctl/serial.log -SimpleMatch -Pattern 'mode_eth_2p5gbase_x_cfg','mode_eth_1gbase_x_cfg','lane programmed for 2500BASE-X','lane programmed for 1G' | Group-Object Pattern | Select-Object Count,Name
+
+# 133) 厂商 RTL8226 初始化表（本机的 224 条 DSP patch 写入）
+python devtools/rlt8226tab.py --emit
+
+**128~133 号命令是第十三组**，合起来回答的是三个问题：
+**「PC 到底插在哪个口」**、**「帧停在哪一段」**、以及**「2.5G 口的远端为什么没被初始化」**。
+
+- 128 号把上一轮那条判定的地基抽掉了：PC 的网卡是 1 Gbps 的 Realtek GbE，
+  **不可能**协商出 2500baseT ⇒ 板上 `ethtool lan1` 里那行 2500baseT 是本地能力，
+  不是协商结果。
+- 129 号给出本轮最硬的一张读数：七个口里**只有 `lan2` 的 `operstate` 是 `up`**
+  （PC 插的就是它），而**它的 rx 计数是零** ⇒ 帧连 DSA 口都没进。
+- 130 号是 2.5G 口的判决书：`1e:0x758d` 的「带码」那一位是 0，
+  `1e:0x7580` 是 `0x9402`，远端那颗 RTL8226 从出厂起没被任何一方初始化过。
+- 131 号给出「谁本该初始化它」的答案：env 的 `bootcmd` 历史上加过
+  `ping 192.168.9.25`（那次 loader 会顺手把 RTL8226 配好），现在被改回了 `zxboot`。
+- 132 号是历史统计：loader 跑过以太网初始化 263 次，而驱动的 2.5G 分支**一次都没有**。
+- 133 号是修 2.5G 口要用的那份表：厂商 `rlt8226b.ko` 里的 224 条 DSP patch 写入，
+  连同 `1e:0x7581`/`1e:0x7588`/`1e:0x7589` 那三步，一起搬进 7.3 驱动。
+
+

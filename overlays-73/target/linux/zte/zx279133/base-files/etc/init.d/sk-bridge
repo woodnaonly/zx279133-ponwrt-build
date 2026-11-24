@@ -1,75 +1,86 @@
 #!/bin/sh /etc/rc.common
-# Add the switch ports the overview must not draw, and the wan slot that
-# board.json must not publish.
+# Put the 9132's DSA user ports into the LAN bridge, and keep the conduit
+# out of it.
 #
-# config_generate builds br-lan from board.json, and stock LuCI draws every
-# name in that list. The four panel jacks are the whole list. lan-cpu0 is
-# what makes those jacks reach the router, and lan0 is the jackless DSA
-# port; both belong in the bridge and neither belongs on the port row.
-# eth0 is the PON MAC. It is the wan device, not a panel jack.
+# THE BRIDGE HAS TO HOLD THE USER PORTS, NOT THE CONDUIT
 #
-# A build executes this inside the package root. There is no network
-# config to edit there, and this must not loop or the image build waits
-# on it forever.
+# The 7.3 generation of this board serves its LAN with a DSA switch: the
+# conduit (lan-cpu0) is the CPU-facing netdev, and the jacks come up as DSA
+# user ports (lan0..lan4) whose master is the conduit.  A DSA bridge may
+# hold either the conduit or the user ports, never both, and the kernel
+# says so.  Measured on the running 7.3.4 board on 2026-11-24, 17:45:
 #
+#	# an empty bridge takes a user port
+#	ip link add br-t type bridge
+#	ip link set dev lan0 master br-t          -> RC=0
+#	# and then refuses the conduit
+#	ip link set dev lan-cpu0 master br-t      -> RTNETLINK answers: Invalid argument
 #
-# WHY THE 7.3 LINE CARRIES ITS OWN COPY OF THIS FILE
+# and the other way round, on a bridge that already holds the conduit:
 #
-# The shared copy (overlays/.../init.d/sk-bridge) is untouched and stays the
-# 6.18 generation's.  This copy is the 7.3 line's, and the difference is
-# one case that the shared copy cannot handle.
+#	ip link set dev lan0 master br-lan        -> RTNETLINK answers: Invalid argument
 #
-# WHERE THE NETWORK CONFIG COMES FROM, AND WHEN
+# The rule is in the DSA core, net/dsa/user.c: a DSA conduit may only take
+# a bridge as its upper (dsa_conduit_prechangeupper_sanity_check()), and a
+# bridge that holds DSA user ports may not take a DSA conduit as a lower
+# device (dsa_bridge_prechangelower_sanity_check()).  Both refusals come
+# back as EINVAL, which is what "Invalid argument" is.
 #
-# /etc/config/network does not exist in the image.  It is generated on the
-# first boot, and the generation happens in the PREINIT stage: the preinit
-# script lib/preinit/82_config_generate runs board_detect (which runs
-# /etc/board.d/*) and then config_generate, right after the kernel has
-# pivoted into the new rootfs.  Measured on this board's 7.3.4 boot
-# (staging/ctl/serial.log, the 2026-11-24 11:34 run):
+# So the LAN bridge of this board holds the five user ports and leaves the
+# conduit outside it.  That is not a preference: the two lists cannot live
+# in one bridge.
+#
+# WHAT WAS WRONG BEFORE
+#
+# The preinit-stage generation publishes the LAN as the conduit alone,
+# because the 9132's DSA ports are registered about a second AFTER the
+# config is generated: lib/preinit/82_config_generate runs board_detect
+# and then config_generate right after the kernel has pivoted into the
+# new rootfs (measured 2026-11-24 11:34, staging/ctl/serial.log:
 #
 #	[    1.705159] VFS: Pivoted into new rootfs
 #	- generating board file -
 #
-# and the 9132's DSA ports are registered two seconds later:
+# ) and the 9132's ports come up two seconds later:
 #
 #	[    2.653688] zx279133-switch: the 9132 is serving: the jacks are the
 #	             9132's UNI ports 1..4 (DSA ports 4..7) ...
 #
-# so at the moment the config is generated, none of the panel jacks exists
-# yet.  Only the conduit does: 02_network's loop over lan1..lan4 finds
-# nothing, its fallback finds lan-cpu0, and `uni` stays empty - so the
-# script takes its fallback branch and publishes the LAN as the conduit
-# ALONE:
+# The generation's loop over lan1..lan4 finds nothing, its fallback finds
+# lan-cpu0, and the bridge comes out as:
 #
 #	config device
 #		option name 'br-lan'
 #		list ports 'lan-cpu0'
 #
-# That is what the board carried on 2026-11-24 (the file was read out of
-# the running 7.3.4 system at 13:57) and it is a dead LAN: the bridge holds
-# the conduit and nothing else, so no frame that arrives on a jack ever
-# reaches the router.  The 6.18 generation does not have this problem -
-# its 9132 registers its DSA ports before the pivot, so the generation sees
-# all four panel jacks and the bridge comes out with six members
-# (lan0..lan4 and lan-cpu0), which is the configuration the 6.18.60 image
-# runs with and the one that carries traffic (its conduit's receive
-# counter reads 17,633,801 packets).
+# The earlier 7.3 copy of this script repaired that by ADDING the jacks
+# and the conduit to that list, which is the one list the kernel refuses:
+# a bridge with lan-cpu0 in it takes no user port, and a bridge with a
+# user port in it takes no conduit.  The result was a bridge that the
+# kernel filled with neither.
 #
-# THE REPAIR
+# WHAT THIS COPY DOES
 #
-# The shared copy only ever ADDS lan0 and lan-cpu0, and only to a bridge
-# that already holds lan1.  That rule cannot repair the degenerate case:
-# there is no lan1 to find.  So this copy adds the panel jacks themselves,
-# and it waits for them first - they always come up on this board, but they
-# come up about a second after this script runs, and this script runs
-# twice on the first boot: once from the uci-defaults script
-# /etc/uci-defaults/99-sk-bridge (which runs inside boot's uci_apply_defaults,
+# It waits for the 9132's DSA ports to exist, makes the bridge hold all
+# five of them, and takes the conduit out of it if the generation put it
+# there.  It runs twice on the first boot: once from the uci-defaults
+# script /etc/uci-defaults/99-sk-bridge (inside boot's uci_apply_defaults,
 # before netifd) and once as S15sk-bridge on every boot after that.
 #
 # The wait is bounded: a board whose 9132 really does not come up still
-# boots, it just comes up with the conduit alone, which is what the shared
-# copy would have given it.
+# boots, it just comes up with the conduit alone, which is what the
+# generation left and what the kernel accepts.
+#
+# WHY THE 7.3 LINE CARRIES ITS OWN COPY OF THIS FILE
+#
+# The shared copy (overlays/.../init.d/sk-bridge) is untouched and stays
+# the 6.18 generation's.  That generation has no DSA ports in its LAN at
+# all - its 9132 registers plain netdevs before the pivot, so the
+# generation sees the jacks and never needs a repair.
+#
+# A build executes this inside the package root.  There is no network
+# config to edit there, and this must not loop or the image build waits
+# on it forever.
 START=15
 STOP=90
 
@@ -80,23 +91,28 @@ in_build() {
 	return 1
 }
 
-# The panel jacks.  lan0 has no jack behind it on this SKU, and lan-cpu0 is
-# the conduit; all three belong in the LAN bridge, and only the four panel
-# jacks belong on the port row that LuCI draws.
+# The four panel jacks of this board: the ones that have a cable in them.
+# lan0 is the jackless DSA port.  All five are DSA user ports and all five
+# belong in the LAN bridge.
 panel_jacks() {
 	echo "lan1 lan2 lan3 lan4"
+}
+
+# Every DSA user port of the 9132.
+dsa_user_ports() {
+	echo "lan0 lan1 lan2 lan3 lan4"
 }
 
 # Wait for the 9132's DSA ports.  They are registered a couple of seconds
 # into the boot and this script runs before that.
 #
 # 15 seconds is four times the measured delay, and the wait is only paid
-# when the bridge really has no panel jack in it - on every boot after the
+# when the bridge really has none of them in it - on every boot after the
 # first one it is not paid at all.
-wait_for_panel_jacks() {
+wait_for_dsa_user_ports() {
 	n=0
 	while [ "$n" -lt 15 ]; do
-		for p in $(panel_jacks); do
+		for p in $(dsa_user_ports); do
 			[ -e "/sys/class/net/$p" ] && return 0
 		done
 		sleep 1
@@ -105,9 +121,9 @@ wait_for_panel_jacks() {
 	return 1
 }
 
-# Does this bridge hold a panel jack?
-has_panel_jack() {
-	for p in $(panel_jacks); do
+# Does this bridge hold any of the DSA user ports?
+has_dsa_user_port() {
+	for p in $(dsa_user_ports); do
 		case " $1 " in
 		*" $p "*) return 0 ;;
 		esac
@@ -126,13 +142,13 @@ apply_bridge() {
 		if [ "$typ" = bridge ]; then
 			ports=$(uci -q get "network.@device[$i].ports")
 
-			# THE DEGENERATE CASE: the bridge holds no panel jack.
-			# This is what the preinit-stage generation leaves behind,
-			# and the shared copy cannot fix it, because the rule
-			# below only fires when lan1 is already a member.
-			if ! has_panel_jack "$ports"; then
-				wait_for_panel_jacks
-				for p in $(panel_jacks); do
+			# THE DEGENERATE CASE: the bridge holds none of the DSA
+			# user ports.  This is what the preinit-stage
+			# generation leaves behind, and it holds the conduit
+			# alone.
+			if ! has_dsa_user_port "$ports"; then
+				wait_for_dsa_user_ports
+				for p in $(dsa_user_ports); do
 					if [ -e "/sys/class/net/$p" ]; then
 						uci add_list "network.@device[$i].ports=$p"
 					fi
@@ -140,21 +156,21 @@ apply_bridge() {
 				ports=$(uci -q get "network.@device[$i].ports")
 			fi
 
-			# The jackless DSA port and the conduit belong in the
-			# bridge as well: without the conduit no frame that
-			# comes in on a jack ever reaches the router, and
-			# without lan0 the jackless port is not bridged.
-			for p in lan0 lan-cpu0; do
-				case " $ports " in
-				*" $p "*) ;;
-				*)
-					if [ -e "/sys/class/net/$p" ]; then
-						uci add_list "network.@device[$i].ports=$p"
-						ports="$ports $p"
-					fi
-					;;
-				esac
+			# THE CONDUIT MUST NOT BE IN THE BRIDGE.  A DSA
+			# bridge holds either the conduit or the user
+			# ports, and the kernel refuses a list that holds
+			# both.  The generation puts the conduit there, so
+			# it has to come out again.
+			old=$(echo $ports)
+			keep=""
+			for p in $ports; do
+				[ "$p" = lan-cpu0 ] && continue
+				keep="$keep $p"
 			done
+			keep=$(echo $keep)
+			if [ -n "$keep" ] && [ "$keep" != "$old" ]; then
+				uci set "network.@device[$i].ports=$keep"
+			fi
 			break
 		fi
 		i=$((i + 1))
