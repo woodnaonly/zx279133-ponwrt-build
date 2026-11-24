@@ -10,17 +10,23 @@ red proves nothing, so this does:
   * a microcode with one byte changed has to be refused, and it has to be
     the crc32 check that turns red - not some other one;
   * a microcode that is not the size the driver asks for has to be refused
-    on the size check.
+    on the size check;
+  * the SR1010's microcode has to be refused even though the driver knows
+    its crc32 - the check that does not ask the driver has to be the one
+    that turns red.
 
-The two blobs that exist with the same name and the same size differ in
-bytes, so the first case is the one that would be wrong in a build: a tree
-that carries the 6.18 line's copy.
+The last one is the point of the file.  The driver takes this board's own
+blob and the SR1010's - the second is the blob the RX-hash hook was
+calibrated against - so a gate that asks the driver cannot tell them apart.
+The two carry the same name and the same size and differ in bytes, and the
+SR1010's is the one that leaves the board with no frames at all (docs/75):
+the frames stall inside the PPU and no netdev ever counts a byte.
 
 Usage:
   python3 tests/test_sk_mcode.py --tree TREE
 """
 import argparse
-import shutil
+import importlib.util
 import subprocess
 import sys
 import tempfile
@@ -30,6 +36,17 @@ ROOT = Path(__file__).resolve().parents[1]
 CHECK = ROOT / 'tools/check-sk-mcode.py'
 BLOB_73 = ROOT / 'overlays-73/target/linux/zte/zx279133/firmware/zte/zx279133/mcode_intel.bin'
 BLOB_618 = ROOT / 'overlays/target/linux/zte/zx279133/firmware/zte/zx279133/mcode_intel.bin'
+BLOB_SR1010 = ROOT / 'tests/fixtures/mcode_intel.sr1010.bin'
+
+ACCEPTS = 'the microcode is one the driver accepts'
+OWNS = "the microcode is this board's own"
+
+
+def load(path, name):
+    spec = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def run_checker(tree, blob):
@@ -63,12 +80,29 @@ def main(argv=None):
         if not ok:
             failures.append(what)
 
+    gate = load(CHECK, 'sk_mcode_tree_gate')
+
     if not BLOB_73.is_file():
         print('FAIL: the 7.3 line carries no microcode: %s' % BLOB_73)
+        return 1
+    if not BLOB_SR1010.is_file():
+        print('FAIL: the SR1010 fixture is missing: %s' % BLOB_SR1010)
         return 1
 
     rc, output = run_checker(args.tree, BLOB_73)
     check(rc == 0, 'the microcode the 7.3 line carries is accepted', output)
+
+    # The two blobs have to be really different, or the control below would
+    # be about one file with two names.
+    own_crc = gate.crc32_le(BLOB_73.read_bytes())
+    other_crc = gate.crc32_le(BLOB_SR1010.read_bytes())
+    check(own_crc != other_crc,
+          'the SR1010 fixture is a different blob from the one the 7.3 line carries',
+          'both have crc32 0x%08x' % own_crc)
+    check(other_crc != gate.BOARD_CRC,
+          'the SR1010 fixture is not this board\'s own blob',
+          'the fixture has crc32 0x%08x, this board\'s is 0x%08x'
+          % (other_crc, gate.BOARD_CRC))
 
     with tempfile.TemporaryDirectory(prefix='sk-mcode-') as tmp:
         work = Path(tmp)
@@ -81,7 +115,7 @@ def main(argv=None):
         broken.write_bytes(bytes(data))
         rc, output = run_checker(args.tree, broken)
         check(rc != 0, 'a microcode with one byte changed is refused', output)
-        check('the microcode is one the driver accepts' in red_checks(output),
+        check(ACCEPTS in red_checks(output),
               'it is the crc32 check that turns red',
               'red checks: %s' % (red_checks(output) or 'none'))
 
@@ -94,14 +128,25 @@ def main(argv=None):
               'it is the size check that turns red',
               'red checks: %s' % (red_checks(output) or 'none'))
 
-        # The 6.18 line's copy of the same name: the same size, the same
-        # header, and a crc32 this driver does not accept.
+        # The other board's blob.  The driver knows its crc32 - it is the
+        # one the RX-hash hook was calibrated against - so the check that
+        # turns red has to be the one that does not ask the driver.
+        rc, output = run_checker(args.tree, BLOB_SR1010)
+        check(rc != 0, "the SR1010's microcode is refused", output)
+        check(ACCEPTS not in red_checks(output),
+              'the driver takes that crc32, so the driver check stays green',
+              'red checks: %s' % (red_checks(output) or 'none'))
+        check(OWNS in red_checks(output),
+              "it is this board's own check that turns red",
+              'red checks: %s' % (red_checks(output) or 'none'))
+
+        # The 6.18 line's copy is the same file as the 7.3 line's now: both
+        # carry this board's own blob.  It has to be accepted.
         if BLOB_618.is_file():
             rc, output = run_checker(args.tree, BLOB_618)
-            check(rc != 0, "the 6.18 line's microcode is refused", output)
-            check('the microcode is one the driver accepts' in red_checks(output),
-                  "it is the crc32 check that turns red for it",
-                  'red checks: %s' % (red_checks(output) or 'none'))
+            check(rc == 0,
+                  "the 6.18 line's microcode is the same one and is accepted",
+                  output)
 
     if failures:
         print('%d control(s) failed' % len(failures))

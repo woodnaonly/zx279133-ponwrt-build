@@ -3,22 +3,30 @@
 """Is the PPU microcode in this tree the one the tree's own driver will take?
 
 The NPU's PPU runs a microcode blob that the driver hands to the hardware.
-The 7.3 driver does not take any blob: it compares the blob's crc32 against
-one value and, when the blob is a different one, refuses it outright when
-vlan offload is on ("release_firmware(); return -ESTALE").  The microcode is
-a *built-in* firmware (CONFIG_EXTRA_FIRMWARE), so the blob that reaches the
-board is the one embedded in the kernel image - and the rootfs carries none:
-the file the driver asks for is not in the jffs2 image at all.
+The microcode is a *built-in* firmware (CONFIG_EXTRA_FIRMWARE), so the blob
+that reaches the board is the one embedded in the kernel image - and the
+rootfs carries none: the file the driver asks for is not in the jffs2 image
+at all.
 
 Two blobs exist with the same name and the same size (103,456 B) and
-different bytes: the one read out of this board's own flash, and the one the
-7.3 driver was written against.  Which one is in the tree is therefore a
-question with a wrong answer available, and nothing in the build says so.
+different bytes: this board's own, read out of this board's own flash, and
+the SR1010's - the same SoC on a different board.  A PPU running the
+SR1010's blob does not forward this board's frames: they stall inside the
+PPU and no netdev ever counts a byte (docs/75, measured with a 7500-frame
+flood on this board).  Which one is in the tree is therefore a question with
+a wrong answer available, and nothing in the build says so.
 
 This asks the driver instead of the reader: the CRC values the tree's own
 driver compares the blob against are read out of the driver source, and the
 blob that is actually in the tree is checked against them.  The header the
 driver parses (magic, instruction count) is checked the same way.
+
+The driver knows two of those blobs - this board's own, and the one the
+RX-hash hook may be installed on - so the check that reads the driver
+cannot tell them apart.  The check that can is the one against this board's
+own CRC, which does not ask the driver at all: a tree that carries the
+SR1010's blob with a driver written for it is self-consistent and still
+wrong.
 
 Usage:
   python3 tools/check-sk-mcode.py --tree TREE [--blob FILE]
@@ -35,6 +43,22 @@ BLOB_IN_TREE = 'firmware/zte/zx279133/mcode_intel.bin'
 EXPECT_SIZE = 103456
 EXPECT_MAGIC = 0xffffaaaa
 EXPECT_INST_NUM = 12288
+
+# The microcode that belongs to THIS board.
+#
+# Two blobs carry the name zte/zx279133/mcode_intel.bin and the size
+# 103,456 B and differ in bytes: 0xc839b946 is this board's own (the
+# vendor's /etc/mcode/mcode_133.bin, read out of this board's flash), and
+# 0xef1d7647 is the SR1010's - the same SoC on a different board.  A PPU
+# running the SR1010's blob does not forward this board's frames: they stall
+# inside the PPU and no netdev ever counts a byte (docs/75, measured with a
+# 7500-frame flood on this board).
+#
+# The check below is the one that does not depend on the driver: the driver
+# asks for a blob by crc32, so a tree that carries the SR1010's blob with a
+# driver written for it is self-consistent and still wrong.  This value is
+# the board's, not the driver's.
+BOARD_CRC = 0xc839b946
 
 
 def crc32_le(data):
@@ -115,6 +139,10 @@ def main(argv=None):
           'the microcode is one the driver accepts',
           'crc32 0x%08x is not in %s'
           % (digest, ', '.join('0x%08x' % v for v in sorted(wanted))))
+    check(digest == BOARD_CRC,
+          "the microcode is this board's own",
+          'crc32 0x%08x is not this board\'s 0x%08x'
+          % (digest, BOARD_CRC))
     if len(data) >= 16:
         magic = int.from_bytes(data[0:4], 'big')
         inst = int.from_bytes(data[8:12], 'big')

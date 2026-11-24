@@ -1,0 +1,143 @@
+From: the SK-D840N 7.3 line
+Subject: [PATCH] net: zx279133: the PPU has to run this board's own microcode
+
+The 7.3 tree's driver compares the microcode blob's CRC32 against one
+value, 0xef1d7647, and that value belongs to the SR1010: the same SoC on
+a different board.  This board's own blob is 0xc839b946 - the vendor's
+/etc/mcode/mcode_133.bin, read out of this board's own flash.  The two
+carry the same name and the same size (103,456 B) and differ in bytes.
+
+A PPU running the SR1010's blob does not forward this board's frames.
+They stall inside the PPU: the driver loads the blob, the PPU reports a
+version, every netdev's counters stay at zero and the board's ARP table
+stays empty.  The measurement is in docs/75: a 7500-frame flood on this
+board entered the PPU 427 times with the SR1010 blob and 7625 times with
+this board's, and was forwarded 0 times in both cases without this
+board's blob.
+
+The port-flow table is in the blob as well, and that one was the SR1010's
+too: the 48 ports its PORT_FLOW tags name differ from the ones the
+driver's own table has (ports 44 to 54 and 63).  This board's blob's
+table and the driver's table agree on all 48, so with this board's blob
+the hardware gets this board's topology.
+
+So the 7.3 line has been shipping another board's firmware and calling it
+calibrated.  This patch gives the driver the two constants the 6.18
+generation already has - the board's own CRC, and the CRC of the one blob
+the RX-hash hook may be installed on - and makes the driver say which one
+it got:
+
+  * The RX-hash hook rewrites four instructions inside a blob's
+    instruction stream, so it is only installed when the blob is the one
+    it was written against.  With this board's blob the hook stays off and
+    the native RX queues are used, which is the 6.18 generation's
+    behaviour, and the datapath has a path for it: the RSS setup reports
+    -EOPNOTSUPP and restores native RX.
+  * A blob that is not this board's own is now refused in words rather
+    than in counters.  The driver says the PPU will not forward frames,
+    which is what actually happens.
+
+The VID-key calibration belongs to the same blob as the RX-hash hook: it
+rewrites two instructions and expects three more to be exactly what that
+blob carries, so it refuses to load any other firmware.  That refusal
+stays, and it now says why.  On this board the parameter is off - the
+image has no /etc/modules.d, the driver is built in, and the parameter
+takes its default of false - so the blob this board needs is accepted.
+
+The single-step capture reads and writes the PPU's instruction stream at
+offsets that belong to one blob, so it is refused for any other firmware,
+as before, with the reason written down.
+
+diff --git a/drivers/net/ethernet/zte/zx279133-np.c b/drivers/net/ethernet/zte/zx279133-np.c
+index 95585c2..733a27f 100644
+--- a/drivers/net/ethernet/zte/zx279133-np.c
++++ b/drivers/net/ethernet/zte/zx279133-np.c
+@@ -2421,7 +2421,13 @@ static int zx279133_ppu_capture_mode(struct zx279133_eth *eth, u16 pc,
+ 	default:
+ 		return -EOPNOTSUPP;
+ 	}
+-	if (READ_ONCE(eth->ppu_firmware_crc32) != 0xef1d7647)
++	/*
++	 * The single-step capture reads and writes the PPU's instruction
++	 * stream, and the offsets it knows are the ones of one blob.  With
++	 * any other firmware they mean nothing, so the capture is refused
++	 * rather than pointed at the wrong instruction.
++	 */
++	if (READ_ONCE(eth->ppu_firmware_crc32) != ZX279133_MCODE_RX_HASH_CRC)
+ 		return -ESTALE;
+ 	*selected = 0xff;
+ 	context->key_rc = -ENODATA;
+@@ -2678,12 +2684,24 @@ static int zx279133_ppu_mcode_prepare(struct zx279133_eth *eth)
+ 		goto err_fw;
+ 	first = ALIGN(first, 4);
+ 	fw_crc = crc32_le(~0U, fw->data, fw->size) ^ ~0U;
+-	hash = rx_hash && fw->size == 103456 && fw_crc == 0xef1d7647;
++	hash = rx_hash && fw->size == 103456 && fw_crc == ZX279133_MCODE_RX_HASH_CRC;
+ 	if (rx_hash && !hash)
+-		dev_warn(eth->dev, "uncalibrated PPU firmware; retaining native RX queues\n");
++		dev_info(eth->dev,
++			 "the RX-hash hook belongs to another PPU firmware; the native RX queues stay\n");
++	if (fw->size == 103456 && fw_crc != ZX279133_MCODE_BOARD_CRC)
++		dev_warn(eth->dev,
++			 "the PPU firmware is not this board's own (crc32 0x%08x, expected 0x%08x): the PPU will not forward frames\n",
++			 fw_crc, ZX279133_MCODE_BOARD_CRC);
+ 
++	/*
++	 * The VID-key calibration belongs to the blob the RX-hash hook was
++	 * calibrated against: it rewrites two instructions and expects three
++	 * more to be exactly what that blob carries.  Any other firmware has
++	 * nothing to calibrate against, so the load is refused rather than
++	 * write a VID-key layout into a firmware that does not implement it.
++	 */
+ 	if (vlan_offload &&
+-	    (fw_crc != 0xef1d7647 || fw->size != 103456 ||
++	    (fw_crc != ZX279133_MCODE_RX_HASH_CRC || fw->size != 103456 ||
+ 	     get_unaligned_be64(fw->data + 16 + 139 * 8) !=
+ 					0x0010c0000000001fULL ||
+ 	     get_unaligned_be64(fw->data + 16 + 650 * 8) !=
+@@ -2691,7 +2709,8 @@ static int zx279133_ppu_mcode_prepare(struct zx279133_eth *eth)
+ 	     get_unaligned_be64(fw->data + 16 + 582 * 8) !=
+ 					0x0704c00018680523ULL)) {
+ 		release_firmware(fw);
+-		return -ESTALE;
++		return dev_err_probe(eth->dev, -ESTALE,
++				     "the VID-key calibration belongs to another PPU firmware\n");
+ 	}
+ 	agclk = readl(eth->pps_base + ZX279133_PPU_AGCLK_CFG);
+ 	if (agclk & ZX279133_PPU_CORE_AGCLK)
+diff --git a/drivers/net/ethernet/zte/zx279133.h b/drivers/net/ethernet/zte/zx279133.h
+index bea2b64..9ba35bc 100644
+--- a/drivers/net/ethernet/zte/zx279133.h
++++ b/drivers/net/ethernet/zte/zx279133.h
+@@ -370,6 +370,31 @@ struct led_trigger;
+ #define ZX279133_MCODE_TAG_VERSION	0xaaaaaaaa
+ #define ZX279133_MCODE_TAG_PORT_FLOW	0xbbbbbbbb
+ 
++/*
++ * The CRC32 of this board's own PPU microcode.
++ * 
++ * Two blobs carry the name zte/zx279133/mcode_intel.bin and the size
++ * 103,456 B, and they differ in bytes.  0xc839b946 is this board's own:
++ * the vendor's /etc/mcode/mcode_133.bin, read out of this board's flash.
++ * 0xef1d7647 is the SR1010's - the same SoC on a different board.  A PPU
++ * running the SR1010's blob does not forward this board's frames: they
++ * stall inside the PPU and no netdev ever counts a byte (docs/75, measured
++ * with a 7500-frame flood on this board).  Nothing about that failure looks
++ * like a firmware problem from the outside - the driver loads the blob, the
++ * PPU reports a version, and the counters simply stop - so the driver
++ * checks the CRC and says so.
++ */
++#define ZX279133_MCODE_BOARD_CRC	0xc839b946
++/*
++ * The CRC32 of the one blob the RX-hash hook may be installed on.
++ * 
++ * The hook rewrites four instructions at an offset inside the blob's
++ * instruction stream, so it only means anything in the blob it was
++ * written against.  The vendor does not patch this board's blob either:
++ * the vendor's PPU takes its hash from the SE hardware hash table.
++ */
++#define ZX279133_MCODE_RX_HASH_CRC	0xef1d7647
++
+ #define ZX279133_IDM_BASE		0x280000
+ #define ZX279133_IDM_TX_BASE		0x0004
+ #define ZX279133_IDM_TX_DOORBELL_COUNT_SHIFT	17

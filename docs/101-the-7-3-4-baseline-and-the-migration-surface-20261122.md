@@ -8792,6 +8792,258 @@ FAIL: the gate went red with PKG_ROOT in its own environment (rc=1):
 3. **#73 之后就没有新产物**：出件之后仍要刷新 rootfs（带上改好的 `sk-bridge`）。
 4. 2.5G 口与「LAN 口 → CPU 口」这两件事本轮没动（见上一节）。
 
+## 八之三十二、「PC ping 得通板子」是假象；LAN 全断的真根因是 **7.3 线带着另一块板的 PPU 微码**
+
+### 1. 判决
+
+1. **「PC ping 得通板子」从头到尾都是假的。** 板上**从未**二层连通：板上
+   `ip neigh` 是空的，`/proc/net/arp` 只有表头，`/proc/net/snmp` 的
+   `Icmp InMsgs = 0`，板子 ping PC 是 `FAILED`。PC 侧那个「通」是本机
+   `xray_tun`（Wintun）的应答，不是这块板。
+   ⇒ **任何 LAN 判据都必须先过「板上 ARP 表里有对端 MAC」这一关**；
+   主机侧的 ping / curl / 连接耗时都不能当证据。
+2. **LAN 全断的根因是微码**：**7.3 线带的是 SR1010 的 PPU 微码**
+   （crc32 `0xef1d7647`），而这块板自己的那份是 `0xc839b946`。
+   PPU 跑着别人的微码就不转发本板的帧 —— 帧停在 PPU 里 ⇒
+   **所有 netdev 的计数都是 0、ARP 表空、LAN 全断**。
+   这不是推测，是 docs/75 在这块板上的实测（7500 帧 flood）。
+3. **端口流表也在 blob 里**，所以 7.3 线写进 9132 的端口拓扑**也是 SR1010 的**：
+   本板那份的 48 个端口与驱动自己那张表 **48/48 逐字一致**，
+   SR1010 那份在 port 44…54 与 63 上与它不同。
+   ⇒ 换回本板 blob，一次把**微码**与**端口拓扑**两件事一起修对。
+4. **修法**：blob 换回本板那份 + 驱动改成 6.18 世代的**两常量形态**
+   （本板 crc32 与 RX-hash crc32 两个常量）+ 门禁加一条**不依赖驱动**的钉子。
+5. **2.5G 口是另一个缺陷，与 LAN 全断无关**（上一节已判；本轮实测再次确认）。
+
+### 2. 证据
+
+**A. PC 侧的「通」是本机 TUN 的应答。**
+
+```text
+Get-NetNeighbor -InterfaceAlias '以太网' -AddressFamily IPv4
+  192.168.9.1    <MAC 全 0>   Incomplete     ← 以太网口上根本没有这个 MAC
+  192.168.9.1    <MAC 全 0>   Incomplete     ← 实际挂在 xray_tun（ifIndex 13, Wintun）
+```
+
+板上：
+
+```text
+ip neigh show                → （空）
+cat /proc/net/arp            → 只有表头
+cat /proc/net/snmp | grep Icmp  → Icmp InMsgs = 0
+ping 192.168.9.25  → 192.168.9.25 dev br-lan FAILED
+ping 192.168.9.100 → 192.168.9.100 INCOMPLETE
+```
+
+PC 侧 `curl http://192.168.9.1/`：`time_connect = 0.00065 s`（TCP 握手成功）但
+`time_starttransfer = 0`、`size = 0`；1400 字节的 ICMP ping 3/3 通 —— 都不是这块板的应答。
+**本机加了一条主机路由绕开 TUN**（`New-NetRoute -DestinationPrefix 192.168.9.1/32
+-InterfaceIndex 19 -RouteMetric 1 -PolicyStore ActiveStore` ⇒ ROUTE_ADD_OK，走以太网），
+两侧依然不通。
+
+**B. 板上「口是好的、桥是好的、芯片也初始化成功了」，唯独帧不动。**
+
+```text
+for p in lan0 lan1 lan2 lan3 lan4 lan-cpu0 br-lan; do
+  echo "$p $(cat /sys/class/net/$p/operstate) rx=$(cat /sys/class/net/$p/statistics/rx_packets) tx=$(cat /sys/class/net/$p/statistics/tx_packets)"
+done
+```
+
+⇒ **每个口的 rx / tx 都是 0**。
+
+dmesg 里 7.3 驱动自打印的 9132 初始化**全部成功**：
+
+```text
+9132 PPU 1..4 attribute word 96040001 (vendor configuration)
+9132 PPU 15 (the CPU trap) attribute word 00000000
+9132 flood groups of PPU 1..4 point at the CPU port 15
+9132 switch ports 0..7 have the protocol action table at ERAM block 19624 (ARP trapped to the CPU)
+9132 CPU path: base queue 403, outport 15 -> real port 15 queue 403, reason 0 -> queue 7
+9132 isolation matrix written: the diagonal only, 64 ports
+9132 UNI ports 1..4 and the CPU port 15 up (the vendor's configuration)
+写前回读  PPU N word 0 (entry-pc) = 00008015 / word 19 (attr) = 00000000
+写后      PPU N enable word 0000a6a5
+```
+
+⇒ **芯片被照着厂商的样子编程成功了，帧却不走**。
+（DSA 口的 `/sys/class/net/*/carrier` 不可靠；可靠判据是
+`ethtool <口> | grep 'Link detected'` ⇒ **只有 lan2 = yes** ⇒ PC 实际在 lan2，
+与 6.18 世代「PC 在第二个 UNI 口 / 厂商 mac 1 / PHY 0x0b」一致。）
+
+**C. 板上跑的是别人的微码，而且它自己会说是谁的。**
+
+```text
+dmesg | grep 'PPU microcode version'
+  → PPU microcode version 0x10001.0x1
+```
+
+docs/75 的对照表里，**`0x10001.0x1` 正是 SR1010 那份的 version tag**，
+这块板自己那份是 `0x10108.0x31ba6a03`。
+
+**D. 两份同名同尺寸、字节不同的 blob。**
+
+| | 这块板自己的 | SR1010 的 |
+|---|---|---|
+| 路径 | `overlays/…/firmware/zte/zx279133/mcode_intel.bin`（6.18 线） | `overlays-73/…/firmware/zte/zx279133/mcode_intel.bin`（7.3 线，原） |
+| md5 | `8b2b3726862b4b063d765bc4ab3f8bd3` | `fdfcf5bb87c98510cc00c3cad60ab24a` |
+| crc32 | `0xc839b946` | `0xef1d7647` |
+| 大小 | 103,456 B | 103,456 B |
+| 来处 | 厂商 `/etc/mcode/mcode_133.bin`，从**本板 flash** 读出 | cnjn 的 `package/firmware/zte/flies/zx279133-npu.bin` |
+| CR 字节 | 98 | 49 |
+
+**E. 7.3 的驱动把 SR1010 的 crc 写死了三处。**
+（`kernel-patches/7.3/340-net-zx279133-npu-tables.patch` 行 3380 / 3637 / 3642，
+树内 `zx279133-np.c` 的 2424 / 2681 / 2686 行）
+
+```c
+if (READ_ONCE(eth->ppu_firmware_crc32) != 0xef1d7647)   /* 单步捕获的闸 */
+hash = rx_hash && fw->size == 103456 && fw_crc == 0xef1d7647;
+if (vlan_offload && (fw_crc != 0xef1d7647 || …))        /* VID-key 校准的闸 */
+```
+
+而 6.18 世代的驱动（`kernel-overlays/drivers/net/ethernet/zte/zx279133-np.c` 的
+`zx279133_ppu_mcode_prepare()`）**认两个值**（`zx279133.h:819/828`）：
+
+```c
+hash = rx_hash && fw->size == 103456 &&
+       blob_crc == ZX279133_MCODE_RX_HASH_CRC;      /* 0xef1d7647 */
+if (rx_hash && !hash)
+        dev_info(… "the board's own PPU firmware is loaded; …");
+if (fw->size == 103456 && blob_crc != ZX279133_MCODE_BOARD_CRC)   /* 0xc839b946 */
+        dev_warn(… "the PPU firmware is not this board's own …: the PPU will not forward frames\n");
+```
+
+⇒ **6.18 线一直带本板那份并能转发；7.3 线换成了 SR1010 那份 = 一次历史倒退。**
+
+**F. 端口流表也在 blob 里，7.3 线写进硬件的是别人的拓扑。**
+（`staging/ctl/portflow-cmp.py`，把 blob 的 PORT_FLOW 标签解出来与驱动里那张
+`zx279133_9132_port_flow[64]` 逐口比）
+
+| blob | 结果 |
+|---|---|
+| 本板那份 | **48 个端口全部一致，0 处不同** |
+| SR1010 那份 | port 44…48 = `0x0000a4d3`（驱动 `0x0000a6a5`）、port 49/50 不同、port 51…54 与 63 只有 blob 有 |
+
+**G. 那道 VID-key 闸挡的是哪一份微码，也是量出来的。**
+7.3 驱动那道闸要求 blob 第 139 / 650 / 582 条指令**逐字等于**
+`0x0010c0000000001f` / `0x0010c0000000001f` / `0x0704c00018680523` —— 那正是
+**SR1010 那份**的值；本板那份在这三处是
+`0x69014201147a0e7` / `0x1500000000001f` / `0x40000a00000018b`。
+⇒ **这套校准属于 SR1010 的微码**，本板 blob 下它不适用。
+
+**H. 这道闸在本板上不会被走到。**
+`vlan_offload=1` 是**厂商固件**的 `/etc/modules.d/30-zte-npu` 里的字
+（从逆向出来的 initrd cpio 里挖到，见 `pon/npu-reverse/initrd-listing.txt`），
+**不是我们 overlay 的**：我们的 overlay 里连 `etc/modules.d` 目录都没有，
+而 7.3 的 `npu.ko` 是**内建**的 ⇒ 模块参数取默认值 ⇒ `vlan_offload = false`。
+⇒ 换回本板 blob 不会被那道闸拒掉。
+
+> **更正一处误述**：docs/101 第八之十八.1 写的是「**我们 overlay 的**
+> `/etc/modules.d/30-zte-npu` 写的是 `npu vlan_offload=1`」——
+> 实际那是**厂商固件**里的文件。结论（那时候 crc 对不上 ⇒ 整段拒绝）不受影响，
+> 但那句主语是错的。
+
+**I. 根因有本板实测，不是推的。**
+docs/75 在这块板上做过同一件事的两份 blob 的对照：
+7500 帧 flood，**SR1010 那份**进去 427 帧、转发 0；**本板那份**进去 7,625 帧、丢帧 0。
+
+**J. 顺带钉死的一件事：7.3 的 uImage 跨轮不可复现。**
+`#76` 与 `#73` 的产物逐位比对：
+
+| 文件 | 结果 |
+|---|---|
+| `flash-dtb.bin` | **IDENTICAL** |
+| `flash-uImage` | **DIFFER** |
+| `flash-rootfs.jffs2` | DIFFER（每轮都不同） |
+
+uImage 那一对的机制查实了：解压后两个内核**长度完全相同**（14,051,336 B）、
+`Linux version` banner **逐字相同**（构建时间戳固定）、
+可打印字符串集合实质相同，但 **4,563,860 字节（32%）不同**、380,061 个连续段，
+首个差异落在偏移 65,648 的指令流里 ⇒ 差异纯在**链接期地址/布局**层面。
+⇒ **uImage 的 md5 变化不能当回归**，dtb 才可以。
+
+### 3. 修复
+
+- **`overlays-73/…/firmware/zte/zx279133/mcode_intel.bin`**：换回**这块板自己**那份
+  （crc32 `0xc839b946`，md5 `8b2b3726862b4b063d765bc4ab3f8bd3`）。
+- **新补丁 `kernel-patches/7.3-local/210-sk-ppu-microcode-board-blob.patch`**
+  （7,086 B，sha256 `86168a0cf21579453ee91a1af3fe775effe6b7688a8a6e5f30c43a49a1e2526a`）：
+  驱动改成 6.18 的**两常量形态**——
+  * 头文件加 `ZX279133_MCODE_BOARD_CRC` 与 `ZX279133_MCODE_RX_HASH_CRC`；
+  * RX-hash 钩子**只**在钩子那份 blob 上安装；本板 blob 时钩子不装，打 **info**；
+  * blob 不是本板自己的 ⇒ 打 **warn**：「the PPU will not forward frames」；
+  * 单步捕获与 VID-key 闸各自换成具名常量，VID-key 闸的拒绝现在会说出原因。
+- **门禁**：`tools/check-sk-mcode.py` 新增**不依赖驱动**的那道钉子
+  （`the microcode is this board's own`，crc32 `0xc839b946`）；
+  `tools/check-sk-mcode-image.py` 同步加同一条。
+  **理由**：驱动现在认两个值，所以「问驱动」的那道检查分不出两份 blob；
+  能分出的只有不问驱动的那一条。
+- **反控重写**：
+  * `tests/test_sk_mcode.py`（**12 项**）：旧的那条「6.18 那份被拒」**反转**
+    （6.18 线那份现在**就是** 7.3 线带的那份，必须被接受）；
+    新的一条是「**SR1010 那份即使驱动也认，仍被『这块板自己的』检查拒**」，
+    并且断言「问驱动的那条**保持绿**」—— 免得这条控制项因为错的理由而满足断言。
+  * `tests/test_sk_mcode_image.py`（**8 项**）：新增镜像层面的同一条
+    （镜像带 SR1010 那份 ⇒ 红的必须是「这块板自己的」那一条，不是别的那条）。
+- **`.gitattributes`**：7.3 那份的说明**反转**（它现在带 98 个 CR 字节，
+  是本板自己的那份；旧注释说它「不带 CR」是错的，SR1010 那份才是 49 个），
+  并给 `tests/fixtures/*.bin` 加 `-text -diff`。
+- **工作流**：`paths:` 加两条 —— `overlays-73/…/firmware/**` 与 `tests/fixtures/**`
+  （门禁检查的就是这两样东西，改了它们却不起一轮构建，门禁就白写）。
+- **`tools/check-sk-mcode.py` 的说明**同步：驱动不再只认一个值。
+
+**本地实测（全绿）：**
+
+```text
+$ python tools/check-sk-mcode.py --tree scratch/linux-73-210b --blob overlays-73/…/mcode_intel.bin
+the driver wants: 0xc839b946, 0xef1d7647
+the microcode: … (103456 B) crc32 0xc839b946
+[OK ] the microcode is 103456 bytes
+[OK ] the microcode is one the driver accepts
+[OK ] the microcode is this board's own
+[OK ] the microcode starts with the magic
+[OK ] the microcode carries 12288 instructions
+
+$ python tests/test_sk_mcode.py --tree scratch/linux-73-210b
+PASS: the microcode the 7.3 line carries is accepted
+PASS: the SR1010 fixture is a different blob from the one the 7.3 line carries
+PASS: the SR1010 fixture is not this board's own blob
+PASS: a microcode with one byte changed is refused
+PASS: it is the crc32 check that turns red
+PASS: a microcode of the wrong size is refused
+PASS: it is the size check that turns red
+PASS: the SR1010's microcode is refused
+PASS: the driver takes that crc32, so the driver check stays green
+PASS: it is this board's own check that turns red
+PASS: the 6.18 line's microcode is the same one and is accepted
+PASS: the microcode gate still notices
+
+$ python tests/test_sk_mcode_image.py
+PASS: 8 checks
+```
+
+补丁本身也在**完整重建的基线树**上验过：
+`prepare-sk-kernel-73.py` 重新准备一棵树，**51 个补丁**全部干净贴上
+（`Applied local/210-sk-ppu-microcode-board-blob.patch`），MANIFEST 的 bytes + sha256 由该工具校验。
+
+### 4. 未做
+
+1. **没有刷板**：这一轮只把根因与修法落到仓库，**实机效果还没验**。
+   「换回本板 blob 之后 PPU 转发本板帧」这件事，
+   **6.18 上有实测（docs/75），7.3 上还没有** —— 要等下一轮 CI 出件、刷板、对拍。
+2. **刷机链未完成**：三件已进 `staging/trial/`，但**载荷还没重建**，
+   也没跑 `tools/flash-round.sh dry`；U-Boot 通道需要用户断电重启到提示符。
+3. **2.5G 口仍未治本**：厂商 RTL8226 初始化（三步 `1e:7581`/`7588`/`7589` +
+   224 条 devad `0x1f` 写入）还没搬进 7.3 驱动。
+4. **板上时钟没同步**（差约 12 小时），实机对拍时的时间戳读数不可信。
+5. **uImage 跨轮不可复现这件事没有解决**，只记下了机制（链接期地址/布局），
+   并把「md5 变化 ≠ 回归」写成了规矩。
+6. **没有重跑 6.18 线的全部门禁**：这一轮改的四个门禁文件里，
+   6.18 线的工作流**一个都不跑**（只有 7.3 线跑），所以 6.18 线不受影响；
+   但 6.18 线**共享**的 `tools/check-sk-mcode.py` 与两个测试若将来被 6.18 线接上，
+   `tests/test_sk_mcode.py` 在 6.18 的树上也是绿的（6.18 驱动认两个常量）——
+   这一条是按代码推的，**没有实测**。
+
 ## 九、下一步（按片重打，每片一次 CI）
 
 **没搬的，按片来：**

@@ -72,6 +72,10 @@ on:
       - tests/test_sk_mcode.py
       - tools/check-sk-mcode-image.py
       - tests/test_sk_mcode_image.py
+      # The blobs the gate checks, and the fixture that is the other board's
+      # blob: a change to either one changes what the build checks.
+      - overlays-73/target/linux/zte/zx279133/firmware/**
+      - tests/fixtures/**
       - tools/check-conduit-netdev-name.py
       - tools/kcheck.py
       - tools/kshadow.py

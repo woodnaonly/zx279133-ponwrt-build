@@ -146,16 +146,20 @@ configs/** text eol=lf
 # endings on a Windows checkout, and those CRs are part of the microcode
 # rather than line endings.
 #
-# This copy is the one the 7.3 driver accepts (crc32 0xef1d7647); the 6.18
-# line's copy carries 98 CR bytes, this one carries none, so today a
-# renormalise would be a no-op.  That is exactly why the rule is here: the
-# file that must not be rewritten is the one that happens to be harmless
-# today, and the damage it would do is a board that receives no frames
-# rather than a build that fails.
+# This copy is this board's own blob (crc32 0xc839b946), the one the 6.18
+# line has always shipped and the one the 7.3 driver takes as well: it
+# carries 98 CR bytes, so a renormalise would change its CRC32 and the
+# driver would refuse the firmware - the damage would show up as a board
+# that receives no frames rather than as a build that fails.
 #
 # It has to come after the `overlays-73/**` rule because the last matching
 # rule wins.
 overlays-73/target/linux/zte/zx279133/firmware/** -text -diff
+
+# The other board's blob, kept as the negative control the microcode gate
+# needs: the same name and the same size as the one above, 49 CR bytes of
+# its own, and the wrong bytes for this board.
+tests/fixtures/*.bin -text -diff
 
 # kernel-overlays-73/ is the 7.3 line's own driver tree, and it is copied
 # straight into the kernel tree by tools/apply-sk-overlay-73.sh, exactly like

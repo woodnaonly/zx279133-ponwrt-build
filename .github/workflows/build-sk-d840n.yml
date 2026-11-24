@@ -2068,7 +2068,7 @@ jobs:
               `PHY_ZX279133_PON_SERDES`，dtb 节点 `zte,zx279133-nppt` 挂在 pon_serdes/uni_serdes 上、
               `phy-mode = "2500base-x"`、带 PON MAC 时钟；它在 probe 时
               `request_firmware("zte/zx279133/mcode_intel.bin")` 加载中兴自己的 PPU 微码
-              （树里那份 103456 B，CRC32 `0xef1d7647`，正好是驱动自己判定标定的那两个值）。
+              （树里那份 103456 B，CRC32 `0xc839b946`，是这块板自己的那份，驱动认的两个值之一）。
               `zte,pon-route` / `zte,idm-cci` 是**必需**属性，但能解析：这棵树的
               `drivers/mfd/syscon.c` 没有匹配表、查找时按需注册，凡 compatible 带 `"syscon"` 的节点都能拿到 regmap。
               **仍未证实**：G.984.1 的 PLOAM/GEM/T-CONT/OMCI **状态机不在这棵树里**——

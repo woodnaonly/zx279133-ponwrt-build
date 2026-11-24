@@ -15,6 +15,9 @@ So this asks the artifact instead of the intent: the kernel image is inflated,
 and the blob that is supposed to be in it is looked for byte for byte.  The
 crc32 the driver compares against is still read out of the driver source, so
 the answer does not depend on this repository knowing which blob is right.
+The driver knows two of them - this board's own and the one the RX-hash hook
+may be installed on - so the check against this board's own CRC is the one
+that tells them apart.
 
 The microcode is stored uncompressed (the kernel's own Kconfig says so:
 "NOTE: Compressed files are not supported in EXTRA_FIRMWARE"), which is why
@@ -138,6 +141,10 @@ def main(argv=None):
           'the microcode is one the driver accepts',
           'crc32 0x%08x is not in %s'
           % (digest, ', '.join('0x%08x' % v for v in sorted(wanted))))
+    check(digest == gate.BOARD_CRC,
+          "the microcode is this board's own",
+          'crc32 0x%08x is not this board\'s 0x%08x'
+          % (digest, gate.BOARD_CRC))
 
     at = image.find(data)
     check(at >= 0, 'the image carries the microcode',
@@ -160,7 +167,7 @@ def main(argv=None):
     if failures:
         print('%d check(s) failed' % len(failures))
         return 1
-    print('OK: the image carries the microcode this driver will take')
+    print("OK: the image carries the microcode this board's own driver will take")
     return 0
 
 

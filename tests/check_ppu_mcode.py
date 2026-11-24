@@ -28,7 +28,8 @@ Two blobs are involved and they are not the same blob:
 
 So the shipped blob is expected to pass the format checks and to fail the
 hook's CRC check.  That is the intended state, and the driver says so at
-boot ("the board's own PPU firmware is loaded").
+boot: the 6.18 generation prints "the board's own PPU firmware is loaded",
+the 7.3 line prints "the RX-hash hook belongs to another PPU firmware".
 
 Also parses the header fields the driver reads (magic, inst_num, first) and
 walks the tag stream far enough to prove the format is really the tagged
