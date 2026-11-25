@@ -22,6 +22,9 @@ VID 是 **63**：
 那一轮（1252，14:32）里 PC 插的是 **lan2（1G 口）** —— 2.5G 口在 7.3 线上从来没有
 通过过。
 
+**本轮已把补丁刷到板子上，并在 lan1（2.5G 插孔）上验收通过**：出向通了 —— PC 侧 ARP
+表拿到板子的真 MAC、以太网收包计数递增，板子侧 ping 三发三收。证据见第 8 节。
+
 ## 证据
 
 ### 1 板子上现在是什么样子（run #81 的 7.3.4，PC 插在 2.5G 口）
@@ -137,14 +140,64 @@ if (vid < ZX279133_LAN_TRANSPORT_VID_MIN ||
 
 本地在「补丁串 + 板级层」都铺好的树上跑过：门禁 8/8 绿，反控 9/9 绿。
 
+### 8 刷机与在 lan1 上的验收（已完成）
+
+刷的是 run #82 的产物（head `0b51e52e`），通道是 U-Boot 直刷，**只写 kernel 一段**
+（许可行 `run=45634399099`，`stages=kernel`）：
+
+| 步骤 | 结果 |
+|---|---|
+| TFTP 下载 `ub-flash-uImage.pad` | 下载 crc `0fd2fa80` = PC 端算出的 padcrc |
+| 擦除 kernel 分区 | 头（`0x0`）与尾（`0x7ff000`）各 4 KiB 回读都是 `0xFF`，crc `f154670a` |
+| 写入 | `mtd write` 0x58b800 字节 |
+| 回读校验 | crc `0fd2fa80`，与 padcrc 逐位一致 |
+
+* dtb **不刷**：新 dtb 与板上那份逐位相同（md5 `ff6914d0…`）。
+* root **不刷**：板上 root 是 run80（`run45562219914`）那套已是 7.3 的 root，本轮修复全在
+  内核里，且 root 是单向门分区、没有 A/B。
+* 回滚件：`staging/trial/flash-uImage.run45613110389`（板上原 kernel，md5 `ecdb93d2…`）。
+* 起机：U-Boot 提示符下 `run bootcmd` → `Image Name: ARM64 ImmortalWrt Linux-7.3.4`，
+  banner `Linux version 7.3.4`。
+
+驱动自己在起机时打印（2.672781 秒与 2.676791 秒）：
+
+```
+the 9132 is serving: the jacks are the 9132's UNI ports 1..4 (DSA ports 4..7),
+the 2.5G jack is the outerphy port 5 (DSA port 8), the CPU port is 9 and the
+transport VIDs are 59..63
+registered the 9132 as a DSA switch: ports 4..8 carry the transport VIDs 59..63
+```
+
+⇒ **树自己那份范围已经是 59..63**，230 补丁在板上生效了（修前这里是 59..62）。
+
+验收：PC 的网线全程插在 **2.5G 的 LAN1 插孔**上（netdev `lan1` = DSA p8），没有换口。
+
+| 判据 | 修前（run #81 那版内核） | 修后（run #82 那版内核） |
+|---|---|---|
+| PC 侧邻居表 | `192.168.9.1 -> 00-00-00-00-00-00 state=Incomplete` | `192.168.9.1 -> D0-45-8D-84-09-00 state=Reachable` |
+| PC 侧以太网收包计数 | 130098 → 130098（不动） | 134143 → 134157（+14）；再跑一次 134195 → 134210（+15） |
+| 板子侧 ping 192.168.9.100 | — | 3 发 3 收，0% 丢包，1.443/1.570/1.673 ms |
+| 板子侧 ARP 表 | — | `192.168.9.100 dev br-lan lladdr 84:47:09:5b:bd:2c REACHABLE` |
+| 板子侧 lan1 计数 | tx 126（只有别的口在涨） | tx 126 → 129，rx 542 |
+
+⇒ **出向在 2.5G 插孔上通了**：PC 侧 ARP 拿到板子的真 MAC、以太网收包计数递增，
+板子侧 ping 三发三收。
+
+注意 PC 侧 ping 本身不作数（本机 xray_tun 会 0 ms 假应答）；判据是 ARP 的真 MAC 与
+以太网收包计数。
+
 ## 未做
 
-* **还没上新内核**：这一版只到「改好、门禁与反控本地绿、补丁能在准备好的树上落地」。
-  编译、刷机、在 lan1 上的验收都还没做 ⇒ 「出向通了」这句话目前**没有**证据。
+* 板上这一台的协商速率是 **1G**（`Link is Up - 1Gbps/Full`）：本轮证明的是「出向在
+  2.5G **插孔**上通了」，不是「2.5G 的速率通了」。
 * **`59fbb1fc`（bring-up 后再把 lane 编程一遍）没有回退**：它的前提被本轮证据推翻，
   但它做的事与出向死无关（它只动 lane，不碰 VID 范围），留着无害；留不留等出向通了
   之后再看。
 * 第五条表项是**外推值**，不是实测值：板上没有第五个 LAN 口的厂商配置可读，
   四个实测项给的两条等差（word 1 每口 +0x00a00a00，word 2 每口 +0x28）被延续下去。
   6.18 线用同一组值，2.5G 口在那边是通的。
-* 2.5G 口的**远端**厂商初始化（`rlt8226b.ko`）仍未搬进 7.3 驱动；本轮不碰它。
+* 2.5G 口的**远端**厂商初始化（`rlt8226b.ko`）仍未搬进 7.3 驱动；本轮不碰它
+  （出向在 1G 协商下已经通了）。
+* 6.18 发布线 run 432 的 GitHub release **没有落地**（`Publish release` 步骤拿到 GitHub
+  API 的 500，release 与 tag 都查不到）：那一轮的编译与全部门禁是绿的，属 GitHub 侧抖动，
+  与本轮补丁无关，待单独重跑。
