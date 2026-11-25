@@ -4672,8 +4672,8 @@ OMCI 把帧写进 `eth->tx_descs + eth->omci_producer`，`omci_producer`
 | 帧是被交出去了还是被扔了？ | `/sys/class/net/*/statistics/rx_dropped` | `zx279133-idm.c:948-953`：DSA 路径没起来时丢的帧计在 conduit 的 `rx_dropped` 上。**`rx_packets` 涨而 `rx_dropped` 也涨**，与**`rx_packets` 涨而 `rx_dropped` 不动**，是两回事（见八之九.2） |
 | 四个 DSA 用户口 link 状态正确？ | `/sys/class/net/lan{0,1,2,3,4}/{operstate,carrier,speed}` | 板级 DTS 的 `switch` 节点声明 `port@4..port@8`，label 是 `lan0`/`lan2`/`lan3`/`lan4`/`lan1`；**2.5G 插孔是 port@8 ⇒ `lan1`**（见八之九.2） |
 | LOS 灯随 `opsd` 翻转？ | `/sys/class/leds/*/{brightness,trigger}` + `/sys/kernel/debug/gpio` 里 **gpio 65** 的电平 | `zx279133-main.c:297-299` 用 `gpiod_get_value_cansleep()` 读 opsd，再用 `led_trigger_event()` 点灯；opsd 在 DTS 里是 `gpio2 pin 1`（`GPIO_ACTIVE_HIGH`），平铺编号 65 |
-| `pon_state` 从 O1 往 O5 走？ | `/sys/class/net/<wan>/device/pon_state` | `zx279133-pon.c:351` 在 `ndev->dev` 上建这个属性 |
-| `omci_transport` 的 submitted/completed 在涨？ | `/sys/class/net/<wan>/device/omci_transport` | 同上，`zx279133-pon.c:353` |
+| `pon_state` 从 O1 往 O5 走？ | `/sys/class/net/<wan>/pon_state` | `zx279133-pon.c:351` 在 `ndev->dev` 上建这个属性，而 `ndev->dev` **就是网口自己的设备目录** ⇒ 属性落在 `/sys/class/net/<wan>/` 下。`/sys/class/net/<wan>/device/` 是**父设备**（平台设备）的目录，那里**没有**这个属性（2026-11-25 板上实测） |
+| `omci_transport` 的 submitted/completed 在涨？ | `/sys/class/net/<wan>/omci_transport` | 同上，`zx279133-pon.c:353` |
 
 脚本还做三件对拍必须的事：
 
@@ -4706,7 +4706,7 @@ sed -n 's/^\([0-9]*\).*opsd.*/    gpio \1: opsd/p' "$DEBUG/gpio"
 grep -o 'opsd[^|]*' "$DEBUG/gpio"
 ```
 
-**内核的 debugfs gpio dump 里没有 "opsd" 这个字样**——
+**在 6.18 世代的内核上，内核的 debugfs gpio dump 里没有 "opsd" 这个字样**——
 它写的是 gpio chip 和 pin：
 
 ```
@@ -4715,7 +4715,7 @@ GPIOs 64-95 (gpiochip2):
 ```
 
 consumer 的名字（`opsd-gpios`）只存在于设备树里，dump 里不会有。
-⇒ 这两行**永远匹配不到**，是死代码。
+⇒ 在那代内核上，这两行**永远匹配不到**，是死代码。
 
 为什么没被发现？因为**旧的演练喂给脚本的 gpio 文件里写着 "opsd"**：
 
@@ -4724,17 +4724,39 @@ gpio-0  (opsd) in hi ACTIVE HIGH
 ```
 
 演练和脚本互相印证了一个谁也没去核实的假设。
-现在演练改成喂内核真正的形状，断言改成「opsd (gpio 65): high」，
-并加了一条反向验证：把脚本里的 opsd 读数删掉，检查必须转红。
+
+**2026-11-25：7.3 内核把这代假设也推翻了——而推翻它的正是那块板子。**
+7.3 的 dump 换了个形状（`gpiolib.c:5444`），板上实测长这样：
+
+```
+gpiochip2: 16 GPIOs, parent: platform/10d10080.gpio, 10d10080.gpio:
+ gpio-1   (                    |opsd                ) in  lo
+```
+
+三处都变了：**编号按芯片从 0 重新数**（所以平铺号 65 根本不在 dump 里，
+而 "gpio-3" 在两个芯片里都有）、**多了一列 consumer 的名字**
+（驱动用 `devm_gpiod_get_optional(dev, "opsd", GPIOD_IN)` 要这根线，
+这一列就写着 "opsd"）、**电平写 "hi"/"lo" 而不是 "high"/"low"**。
+⇒ 按平铺号找线，在 7.3 上**永远找不到**；板上的判决因此是
+INCONCLUSIVE，理由写着 "the signal detect reads 'not in the gpio dump'"。
+
+现在仪器**按驱动请求的名字找这根线**，平铺号只作回落（给老内核），
+电平认 "hi/lo" 与 "high/low" 两种写法；演练喂的 gpio 文件改成 7.3 的形状，
+断言改成「opsd (label opsd): high」，并加了三条反向验证：
+① 把按名字找的那一步弄坏 ⇒ 必须读不到；② 喂 6.18 的形状 ⇒ 仍能按平铺号读到；
+③ 电平词只认 "high/low" ⇒ 7.3 形状上必须读不到。
 
 **坑二：灯只采了一次，「翻转」这个动作根本没被观测到。**
 原来第 3 节打印灯和电平，第 6 节（第二次采样）只打印计数器。
 ⇒ 「灯随 opsd 翻转」这个命题一次都没被验证过。
 现在第二次采样也打印灯与电平，演练断言 `opsd` 至少出现两次。
 
-**坑三：PON 属性打的是 `device: O5`，看不出是哪个口。**
+**坑三：PON 属性读错了目录，打的是 `device: O5`，看不出是哪个口。**
 `$CLASS/*/device/pon_state` 的 `dirname` 是 `.../eth0/device`，
-`basename` 出来是 `device`。现在取两级，打成 `eth0/pon_state: O5`。
+`basename` 出来是 `device`。而且 `device/` 是**父设备**的目录：属性建在
+`ndev->dev` 上，而 `ndev->dev` **就是网口自己的设备**，真值是
+`/sys/class/net/eth0/pon_state`（2026-11-25 板上实测：读得到，值为 `O1`）。
+现在先读网口自己的目录、再回落到父设备目录，打成 `eth0/pon_state: O5`。
 
 #### 八之六.2 对拍时必须一起看的一对读数：LOS 与 `pon_state`
 
