@@ -135,6 +135,11 @@ on:
       # taken out.
       - tools/check-sk-lan-egress.py
       - tests/test_sk_lan_egress.py
+      # The gate that says the tree's transport VID range covers the 2.5G
+      # jack, and the controls that say whether it still notices when the
+      # range, the fifth table entry or the assertion goes away.
+      - tools/check-sk-lan-vid63.py
+      - tests/test_sk_lan_vid63.py
       # The gate that says the lane is programmed again after the bring-up,
       # and the controls that say whether it still notices when that pass
       # is taken out, when it stops programming the lane, when it loses
@@ -913,6 +918,25 @@ jobs:
           set -e
           python3 tools/check-sk-lan-egress.py --tree "$KERNEL_TREE"
           python3 tests/test_sk_lan_egress.py --tree "$KERNEL_TREE"
+
+      # The 2.5G jack is the 9132's fifth port and it carries the transport
+      # VID 63.  The board layer already widens the tagger's own range to
+      # that port, so a frame that comes in on the jack is dispatched to the
+      # right port and the receive side works.  The tree's own range stopped
+      # at 62, and that is what the transmit path reads: the tagger writes
+      # the transport VID of the port a frame is for onto the frame, so the
+      # frame the CPU sent to the jack left the chip aimed at the fallback
+      # port with the tag still on it, and the client saw nothing.  The 230
+      # patch widens the range to 59..63 and gives the logical ports' table
+      # the fifth entry that goes with it.  This gate says that is really
+      # in the tree that is about to be compiled, and the controls say
+      # whether it still notices when the range, the entry or the assertion
+      # goes away.
+      - name: 'Gate: the transport VID range covers the 2.5G jack'
+        run: |
+          set -e
+          python3 tools/check-sk-lan-vid63.py --tree "$KERNEL_TREE"
+          python3 tests/test_sk_lan_vid63.py --tree "$KERNEL_TREE"
 
       # The lane has to be programmed again once the bring-up has settled.
       # The boot of 2026-11-25 18:12:20 inherited the lane from the loader

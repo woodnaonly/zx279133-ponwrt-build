@@ -1,0 +1,106 @@
+From: the SK-D840N 7.3 line
+Subject: [PATCH] net: zx279133: the 2.5G jack's transport VID has to be in the tree's range
+
+The 2.5G jack is the 9132's fifth port - the vendor's outerphy, PPU 5 -
+and it is DSA port 8, so it carries the transport VID 55 + 8 = 63.  The
+board layer already widens the tagger's own range to that port
+(ZX279133_RTL8372N_USER_PORT_MAX 8 in
+include/net/dsa_zx279133_rtl8372n.h), so a frame that comes in on the 2.5G
+jack arrives tagged with 63 and is dispatched to the right port.  The
+receive side of the jack works.
+
+This tree's own copy of the range stops at 62, and the transmit side reads
+it.  The DSA tagger writes the transport VID of the port a frame is for
+onto the frame as it leaves for a jack - the 2.5G jack's frame leaves
+with a transport VID of 63 - and the LAN egress
+(zx279133_lan_strip_transport_vlan()) only recognises the VIDs inside the
+tree's range.  A VID of 63 is outside it, so the egress neither takes the
+tag off the frame nor reads the chip port out of it: the frame leaves the
+chip aimed at the fallback port (2, the second UNI jack) with the tag
+still on it, and the client on the 2.5G jack sees nothing.  That is the
+whole of the egress failure - the board counts the frame as sent, and no
+frame comes out of the jack.
+
+So the range has to include the fifth port: 59..63, which is what the 6.18
+generation has and what its 2.5G jack works with
+(docs/UPSTREAM-2G5-LANE-FIX section 12.7).
+
+The table of the logical LAN ports' MF extension entries is indexed by the
+transport VID, and the logical port 63 - the fifth one - needs an entry of
+its own: without it the table is read one entry past its end and whatever
+follows it in memory is written into the switch's table.  The entry is the
+one number in that table that is not a measurement: the factory system has
+four LAN ports and no fifth, so there is nothing on this board to read the
+fifth entry from.  What the four measured entries do is hand out the
+per-port areas in a run - word 1 steps by 0x00a00a00 and word 2 by 0x28
+from one port to the next, and word 0, the port attribute word, is the
+same for all four - and this entry continues both runs.  It is the same
+entry, word for word, that the 6.18 generation carries.
+
+The static assertion is the 6.18 generation's: the table is indexed by the
+transport VID, so a logical port with no entry reads past the end of the
+array.
+
+diff --git a/drivers/net/ethernet/zte/zx279133.h b/drivers/net/ethernet/zte/zx279133.h
+--- a/drivers/net/ethernet/zte/zx279133.h
++++ b/drivers/net/ethernet/zte/zx279133.h
+@@ -53,7 +53,24 @@
+ #define ZX279133_LAN_TX_WORD4		0x003e0000
+ #define ZX279133_LAN_RX_QUEUE_COUNT	8
+ #define ZX279133_LAN_TRANSPORT_VID_MIN	59
+-#define ZX279133_LAN_TRANSPORT_VID_MAX	62
++/*
++ * The largest transport VID the LAN side uses.
++ *
++ * The 9132 has five jacks: the four UNI ports carry the transport VIDs
++ * 59..62, and the 2.5G jack is the fifth one - the vendor's outerphy,
++ * PPU 5 - which is DSA port 8 and carries the transport VID 55 + 8 = 63.
++ * The tagger on this board already accepts that VID; this range is what
++ * the transmit path reads.
++ *
++ * It stopped at 62, and that is what the egress failure was: a frame the
++ * CPU sends to the 2.5G jack leaves the tagger with a transport VID of 63,
++ * the LAN egress does not recognise the VID as one of ours, so it neither
++ * takes the tag off the frame nor reads the chip port out of it, and the
++ * frame leaves the chip aimed at the fallback port with the tag still on
++ * it.  The 6.18 generation has this range at 59..63 and its 2.5G jack
++ * works (docs/UPSTREAM-2G5-LANE-FIX section 12.7).
++ */
++#define ZX279133_LAN_TRANSPORT_VID_MAX	63
+ #define ZX279133_LAN_INGRESS_VID	1
+ #define ZX279133_LAN_VID		62
+ #define ZX279133_LAN_MAX_MTU		(ZX279133_MAX_MTU + VLAN_HLEN)
+diff --git a/drivers/net/ethernet/zte/zx279133-np.c b/drivers/net/ethernet/zte/zx279133-np.c
+--- a/drivers/net/ethernet/zte/zx279133-np.c
++++ b/drivers/net/ethernet/zte/zx279133-np.c
+@@ -1402,7 +1402,30 @@
+ 	{ 0x1c8c2800, 0x2fc36000, 0x00000a60, 0 },	/* VID 60, lan3 */
+ 	{ 0x1c8c2800, 0x30636a00, 0x00000a88, 0 },	/* VID 61, lan2 */
+ 	{ 0x1c8c2800, 0x31037400, 0x00000ab0, 0 },	/* VID 62, lan1 */
++	/*
++	 * VID 63 is the 2.5G jack's, and this entry is the one number
++	 * in this file that is not a measurement.  The factory system has
++	 * four LAN ports and no fifth, so there is nothing on this board
++	 * to read the fifth entry from.  What the four measured entries
++	 * do is hand out the per-port areas in a run: word 1 steps by
++	 * 0x00a00a00 and word 2 by 0x28 from one port to the next, and
++	 * word 0 - the port attribute word - is the same for all four.
++	 * This entry continues both runs, which is what the factory
++	 * system would have written had it had a fifth port.  It is the
++	 * same entry, word for word, that the 6.18 generation carries.
++	 */
++	{ 0x1c8c2800, 0x31a37e00, 0x00000ad8, 0 },	/* VID 63, the 2.5G jack */
+ };
++
++/*
++ * The table is indexed by the transport VID, and a logical port that
++ * has no entry here reads past the end of the array and writes
++ * whatever follows it into the switch's table.  The fifth user port
++ * came with the fifth VID and the entry had to come with it; this
++ * makes the second one impossible to forget.
++ */
++static_assert(ARRAY_SIZE(zx279133_lan_vport_mf) ==
++	      ZX279133_LAN_VPORT_LAST - ZX279133_LAN_VPORT_FIRST + 1);
+ 
+ /* SDT 6: one entry per logical port; bit 31 of word 3 marks a LAN port. */
+ #define ZX279133_PORT_TYPE_LAN			BIT(31)
