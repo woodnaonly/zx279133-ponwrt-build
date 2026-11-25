@@ -71,10 +71,18 @@ LEDS=${SK_LEDS:-$(dirname "$CLASS")/leds}
 # "zx279133-los" and drives the lamp with LED_OFF when there is light).
 LOS_LED=${SK_LOS_LED:-skyworth:red:los}
 LOS_TRIGGER=${SK_LOS_TRIGGER:-zx279133-los}
-# The opsd line is gpio2 pin 1 in the board's device tree, and the SoC
-# numbers its gpio chips in tens of pins, so the flat number is 65.  It
-# can be overridden, because the flat number depends on how many gpio
-# chips the kernel was given.
+# The optical RX signal detect line.
+#
+# The driver asks for it by the name "opsd" (zx279133-main.c:
+# devm_gpiod_get_optional(dev, "opsd", GPIOD_IN)), and the kernel's gpio
+# dump prints the name of the consumer in the column after the "|".  That
+# name is the reliable key, and the number is not: a gpio chip whose base
+# is allocated at runtime numbers its lines from zero again, so the
+# board's dump says "gpio-1" - and "gpio-3" is in two different chips -
+# and the flat number 65 is not in the dump at all.
+OPSD_LABEL=${SK_OPSD_LABEL:-opsd}
+# The flat number of the same line, as the older kernels printed it.  It
+# is only a fallback now.
 OPSD_GPIO=${SK_OPSD_GPIO:-65}
 
 # The interface that carries the driver's own statistics, and the counters
@@ -134,11 +142,25 @@ print_ethtool_stats() {
 }
 
 # The level of one gpio line, read from the kernel's own gpio dump.
-# The dump's exact shape has changed between kernel versions, so the
-# line is matched loosely and the level is taken from the word that
-# follows the "in".  It prints nothing when the line is not there.
 #
-# The pattern used to be "\[ *${1}\]|\(gpio ${1}\)".  In an extended
+# The dump's shape has changed between kernel versions, so the line is
+# looked up two ways and the level is read the same way in both.  The
+# older kernels printed the flat number:
+#
+#   gpio-65 (gpio65) : in  high IRQ ACTIVE HIGH
+#
+# and the current one prints (gpiolib.c:5444):
+#
+#   gpio-1   (                    |opsd                ) in  lo
+#
+# Three things about the current shape broke the old lookup.  The number
+# is the index inside the chip and not the flat number, so the flat
+# number is not in the dump at all.  The level is written "hi" and "lo"
+# and not "high" and "low".  And the name of the consumer is in the
+# column after the "|", which is the one thing that is always there: the
+# driver asks for the line by the name "opsd", so the dump says "opsd".
+#
+# The old pattern was "\[ *${1}\]|\(gpio ${1}\)".  In an extended
 # regular expression a backslash before a bracket makes the bracket
 # LITERAL, so that pattern asked for the literal text "[ *65]" and for
 # "(gpio 65)" - and the kernel's dump writes "gpio-65 (gpio65)", with
@@ -146,18 +168,33 @@ print_ethtool_stats() {
 # matched anything, so this function printed nothing on every board:
 # the optical RX signal detect was never read, and the two criteria
 # that depend on it (the lamp, and the PON state) could not be judged
-# at all.  The bracket now carries the spaces inside it and the
-# parentheses accept the space the dump does not have.
-read_gpio_level() {
+# at all.  The number is still matched, but it is the fallback now.
+read_gpio_level_by_name() {
+	[ -r "$DEBUG/gpio" ] || return 0
+	line=$(grep -E "\|[[:space:]]*${1}[[:space:]]*\)" "$DEBUG/gpio" 2>/dev/null | head -n 1)
+	[ -n "$line" ] || return 0
+	gpio_level "$line"
+}
+
+read_gpio_level_by_number() {
 	[ -r "$DEBUG/gpio" ] || return 0
 	line=$(grep -E "\[ *${1} *\]|\(gpio ?${1}\)" "$DEBUG/gpio" 2>/dev/null | head -n 1)
 	[ -n "$line" ] || return 0
-	level=$(printf '%s\n' "$line" | awk '{for (i = 1; i < NF; i++) if ($i == "in") { print $(i + 1); exit }}')
+	gpio_level "$line"
+}
+
+# The level of one dump line: the word that follows the direction.
+#
+# The kernel writes "hi" and "lo" (str_hi_lo()), and the older dumps
+# wrote "high" and "low".  Both are read here, and a word that is
+# neither is passed on as it is, so the judge can say what it read.
+gpio_level() {
+	level=$(printf '%s\n' "$1" | awk '{for (i = 1; i < NF; i++) if ($i == "in") { print $(i + 1); exit }}')
 	case "$level" in
-	high)   echo "high" ;;
-	low)    echo "low" ;;
+	high|hi) echo "high" ;;
+	low|lo)  echo "low" ;;
 	unknown) echo "unknown" ;;
-	*)      printf '%s\n' "$line" ;;
+	*)       echo "${level:-?}" ;;
 	esac
 }
 
@@ -212,6 +249,30 @@ effective_trigger() {
 	printf 'none\n'
 }
 
+# Where a netdev publishes an attribute of its own.
+#
+# The driver creates these on ndev->dev, and ndev->dev is the netdev's OWN
+# device: the attribute is at /sys/class/net/<netdev>/pon_state.  The
+# netdev's "device" directory is the PARENT device's - the platform device
+# the netdev hangs under - so an attribute there belongs to the parent.
+#
+# The parent is looked at as well, because a driver that publishes the
+# attribute on the platform device puts it there.  But the netdev's own
+# directory is where this driver puts it, and where the instrument has to
+# read it from: the instrument looked in the parent only, read nothing at
+# all, and the trial reported the PON stack as not attached to any netdev.
+attr_path() {
+	netdev=$1
+	attr=$2
+	if [ -r "$CLASS/$netdev/$attr" ]; then
+		printf '%s\n' "$CLASS/$netdev/$attr"
+	elif [ -r "$CLASS/$netdev/device/$attr" ]; then
+		printf '%s\n' "$CLASS/$netdev/device/$attr"
+	else
+		return 1
+	fi
+}
+
 # The LOS lamp and the line behind it, side by side.
 print_lamp() {
 	for d in "$LEDS"/*; do
@@ -221,13 +282,18 @@ print_lamp() {
 			"$(cat "$d/brightness" 2>/dev/null || echo '?')" \
 			"$(effective_trigger "$d/trigger")"
 	done
-	level=$(read_gpio_level "$OPSD_GPIO")
+	level=$(read_gpio_level_by_name "$OPSD_LABEL")
 	if [ -n "$level" ]; then
-		echo "  opsd (gpio $OPSD_GPIO): $level"
-	elif [ -r "$DEBUG/gpio" ]; then
-		echo "  opsd (gpio $OPSD_GPIO): not in the gpio dump"
+		echo "  opsd (label $OPSD_LABEL): $level"
 	else
-		echo "  opsd (gpio $OPSD_GPIO): no debugfs at $DEBUG/gpio"
+		level=$(read_gpio_level_by_number "$OPSD_GPIO")
+		if [ -n "$level" ]; then
+			echo "  opsd (gpio $OPSD_GPIO): $level"
+		elif [ -r "$DEBUG/gpio" ]; then
+			echo "  opsd (label $OPSD_LABEL): not in the gpio dump"
+		else
+			echo "  opsd: no debugfs at $DEBUG/gpio"
+		fi
 	fi
 	echo "  the driver drives the lamp through the '$LOS_TRIGGER' trigger:"
 	echo "    light present -> lamp off, no light -> lamp on"
@@ -297,20 +363,24 @@ fi
 echo
 echo "=== 4. the PON state ==="
 found=0
-for f in "$CLASS"/*/device/pon_state; do
-	[ -r "$f" ] || continue
+for d in "$CLASS"/*; do
+	[ -d "$d" ] || continue
+	n=$(basename "$d")
+	f=$(attr_path "$n" pon_state) || continue
 	found=1
-	echo "  $(basename "$(dirname "$(dirname "$f")")")/pon_state: $(cat "$f")"
+	echo "  $n/pon_state: $(cat "$f")"
 done
 [ "$found" = 1 ] || echo "  (no pon_state attribute - the PON stack did not attach to a netdev)"
 
 echo
 echo "=== 5. the OMCI transport counters ==="
 found=0
-for f in "$CLASS"/*/device/omci_transport; do
-	[ -r "$f" ] || continue
+for d in "$CLASS"/*; do
+	[ -d "$d" ] || continue
+	n=$(basename "$d")
+	f=$(attr_path "$n" omci_transport) || continue
 	found=1
-	echo "  $(basename "$(dirname "$(dirname "$f")")")/omci_transport: $(cat "$f")"
+	echo "  $n/omci_transport: $(cat "$f")"
 done
 [ "$found" = 1 ] || echo "  (no omci_transport attribute - the PON stack did not attach to a netdev)"
 
@@ -331,9 +401,13 @@ for d in "$CLASS"/*; do
 		"$n" "$rp" "$rb" "$rd" \
 		"$(cat "$d/operstate" 2>/dev/null || echo '?')"
 done
-for f in "$CLASS"/*/device/pon_state "$CLASS"/*/device/omci_transport; do
-	[ -r "$f" ] || continue
-	echo "  $(basename "$(dirname "$(dirname "$f")")")/$(basename "$f"): $(cat "$f")"
+for d in "$CLASS"/*; do
+	[ -d "$d" ] || continue
+	n=$(basename "$d")
+	for a in pon_state omci_transport; do
+		f=$(attr_path "$n" "$a") || continue
+		echo "  $n/$a: $(cat "$f")"
+	done
 done
 echo "  -- and the driver's own counters again, so they can be compared with the first reading:"
 print_ethtool_stats

@@ -31,6 +31,7 @@ does once there is light.
 """
 
 import os
+import re
 import shutil
 import threading
 import time
@@ -95,7 +96,33 @@ TX_STATS = (
     "tx_recovery_failures",
 )
 
+# The kernel's gpio dump, in the shape the current kernel writes it
+# (gpiolib.c:5444): the number is the index inside the chip and not the
+# flat number, the name of the consumer is in the column after the "|",
+# and the level is written "hi" and "lo".  This is the shape the board's
+# own dump has, and the shape the instrument has to read.
 GPIO_DUMP = """\
+gpiochip0: 16 GPIOs, parent: platform/10d10000.gpio, 10d10000.gpio:
+ gpio-9   (                    |skyworth:red:los    ) out lo ACTIVE LOW
+ gpio-10  (                    |skyworth:green:power) out lo ACTIVE LOW
+gpiochip1: 16 GPIOs, parent: platform/10d10040.gpio, 10d10040.gpio:
+ gpio-5   (                    |skyworth:green:usb1 ) out hi ACTIVE LOW
+ gpio-8   (                    |skyworth:green:wan  ) out hi ACTIVE LOW
+gpiochip2: 16 GPIOs, parent: platform/10d10080.gpio, 10d10080.gpio:
+ gpio-1   (                    |opsd                ) in  hi
+ gpio-3   (                    |skyworth:green:phone) out hi ACTIVE LOW
+gpiochip3: 16 GPIOs, parent: platform/10d100c0.gpio, 10d100c0.gpio:
+ gpio-15  (                    |skyworth:green:pon  ) out hi ACTIVE LOW
+gpiochip4: 6 GPIOs, parent: platform/10d10100.gpio, 10d10100.gpio:
+ gpio-3   (                    |skyworth:green:lan2 ) out lo ACTIVE LOW
+ gpio-4   (                    |skyworth:green:lan3 ) out hi ACTIVE LOW
+ gpio-5   (                    |skyworth:green:lan4 ) out hi ACTIVE LOW
+"""
+
+# The shape the older kernels wrote: the flat number, and no column for
+# the consumer's name.  The instrument reads this one by the number, and
+# this board proves that the fallback still works.
+GPIO_DUMP_OLD = """\
 GPIOs 0-31:
 gpio-0  (gpio0)  : in  high IRQ ACTIVE LOW
 gpio-1  (gpio1)  : in  low IRQ ACTIVE LOW
@@ -130,7 +157,8 @@ def write(path, text):
 class Board:
     """A synthetic board, and the thread that moves its counters."""
 
-    def __init__(self, root, missing_symbol=None, los_trigger=None):
+    def __init__(self, root, missing_symbol=None, los_trigger=None,
+                 pon_attr_in_device_dir=False, gpio_dump_style="new"):
         self.root = Path(root)
         self.net = self.root / "class" / "net"
         self.leds = self.root / "class" / "leds"
@@ -141,6 +169,14 @@ class Board:
         # judge turn red on the lamp criterion alone.
         self.los_trigger = (LOS_TRIGGER_FILE if los_trigger is None
                             else los_trigger)
+        # Where the PON attributes live: the netdev's own directory, which
+        # is the shape the board has, or the parent device's directory,
+        # which is the other shape a driver could publish them in.
+        self.pon_attr_in_device_dir = pon_attr_in_device_dir
+        # Which shape the kernel's gpio dump has: the current one, which
+        # names the consumer and numbers the lines inside the chip, or the
+        # older one, which prints the flat number.
+        self.gpio_dump_style = gpio_dump_style
         # The kernel's symbol table.  "missing_symbol" takes one of the four
         # driver symbols out of it, which is what a board whose driver is
         # not in the kernel looks like.
@@ -152,6 +188,22 @@ class Board:
         self.light = True
 
     # ---- the tree ----------------------------------------------------
+
+    def pon_attr_dir(self):
+        """The directory the PON attributes are published in.
+
+        The netdev's own directory is the shape the board has: the driver
+        creates the attributes on ndev->dev, and ndev->dev is the netdev's
+        own device, so they are at /sys/class/net/<netdev>/pon_state.  The
+        netdev's "device" directory is the PARENT device's - the platform
+        device the netdev hangs under - and the instrument looks there as
+        well; the end-to-end check builds a board of that shape too, so
+        that the fallback is not a branch nobody runs.
+        """
+        dev = self.net / "eth0"
+        if self.pon_attr_in_device_dir:
+            dev = dev / "device"
+        return dev
 
     def build(self):
         if self.root.exists():
@@ -180,7 +232,8 @@ class Board:
                 trigger = self.los_trigger
             write(d / "trigger", trigger + "\n")
 
-        write(self.debug / "gpio", GPIO_DUMP)
+        dump = GPIO_DUMP_OLD if self.gpio_dump_style == "old" else GPIO_DUMP
+        write(self.debug / "gpio", dump)
 
         # The kernel's symbol table.  The addresses do not matter; the shape
         # does - address, type letter, name - because that is what the
@@ -194,9 +247,12 @@ class Board:
             addr += 0x40
         write(self.kallsyms, "\n".join(lines) + "\n")
 
-        # The PON attributes live on the WAN netdev's device.
-        dev = self.net / "eth0" / "device"
-        dev.mkdir(parents=True)
+        # The PON attributes live on the WAN netdev's own device, which
+        # is the netdev's own directory in sysfs.  The instrument looked
+        # in the parent device's directory only, read nothing at all and
+        # reported the PON stack as not attached to any netdev.
+        dev = self.pon_attr_dir()
+        dev.mkdir(parents=True, exist_ok=True)
         write(dev / "pon_state", "O1\n")
         write(dev / "omci_transport",
               "implemented=1 ready=0 rx_ready=0 mic_ready=0 submitted=0 "
@@ -234,7 +290,7 @@ class Board:
         every tick, or the instrument's first sample would already see the
         later state.
         """
-        dev = self.net / "eth0" / "device"
+        dev = self.pon_attr_dir()
         write(dev / "pon_state", "O5\n")
         write(dev / "omci_transport",
               "implemented=1 ready=1 rx_ready=0 mic_ready=0 submitted=12 "
@@ -284,6 +340,7 @@ class Board:
         e["SK_LEDS"] = str(self.leds)
         e["SK_DEBUGFS"] = str(self.debug)
         e["SK_OPSD_GPIO"] = "65"
+        e["SK_OPSD_LABEL"] = "opsd"
         e["SK_STATDEV"] = "eth0"
         e["SK_KALLSYMS"] = str(self.kallsyms)
         # the stub has to come first, or the host's ethtool wins
@@ -295,11 +352,17 @@ class Board:
     def set_light(self, on):
         """Move the optical RX signal detect and the lamp with it."""
         self.light = on
-        level = "high" if on else "low"
         gpio = self.debug / "gpio"
         text = gpio.read_text(encoding="utf-8")
-        text = text.replace("gpio-65 (gpio65) : in  high",
-                            "gpio-65 (gpio65) : in  %s" % level)
+        if self.gpio_dump_style == "old":
+            word = "high" if on else "low"
+            text = re.sub(r"(gpio-65 \(gpio65\) : in  )\S+",
+                         r"\g<1>" + word, text)
+        else:
+            # The kernel writes the level as "hi" and "lo".
+            word = "hi" if on else "lo"
+            text = re.sub(r"(\|opsd\s*\)\s*in\s+)\S+",
+                         r"\g<1>" + word, text)
         gpio.write_text(text, encoding="utf-8", newline="\n")
         led = self.leds / "los" / "brightness"
         led.write_text("0\n" if on else "1\n", encoding="utf-8", newline="\n")

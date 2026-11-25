@@ -251,7 +251,7 @@ class Survey:
                                      "raw_trigger": m.group(3).strip(),
                                      "line": at + lineno, "raw": s}
                 continue
-            m = re.match(r"^opsd \(gpio \d+\):\s*(.*)$", s)
+            m = re.match(r"^opsd \((?:label \S+|gpio \d+)\):\s*(.*)$", s)
             if m:
                 opsd = m.group(1).strip()
                 opsd_line = at + lineno

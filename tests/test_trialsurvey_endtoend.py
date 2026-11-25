@@ -218,11 +218,11 @@ def main(argv=None):
 
         # ---- and the instrument must really read the signal detect -----
         checks += 1
-        if "opsd (gpio 65): high" not in text:
+        if "opsd (label opsd): high" not in text:
             failures.append("the instrument did not read the optical RX "
                             "signal detect:\n%s" % text)
         checks += 1
-        if "opsd (gpio 65): low" not in text2:
+        if "opsd (label opsd): low" not in text2:
             failures.append("the instrument did not read the signal detect "
                             "when it was low:\n%s" % text2)
 
@@ -237,35 +237,79 @@ def main(argv=None):
             failures.append("the conduit's counters did not move: %s -> %s"
                             % (first.group(1), second.group(1)))
 
-        # ---- and the gpio pattern has to be the fixed one --------------
-        # The instrument used to ask for the literal text "[ *65]" and for
-        # "(gpio 65)", so it never found the line and the optical RX signal
-        # detect was never read.  Putting that pattern back has to make this
-        # check fail - otherwise the check cannot tell the two apart.
+        # ---- and the signal detect has to be found by its name ---------
+        # The current kernel does not print the flat number of the line at
+        # all - it numbers the lines inside the chip, and writes the level
+        # as "hi" and "lo" - so the instrument finds the line by the name
+        # the driver asked for.  Breaking that lookup has to make the
+        # instrument lose the signal detect - otherwise this check cannot
+        # tell the two apart.
         checks += 1
         script = SURVEY.read_text(encoding="utf-8")
-        fixed = r'grep -E "\[ *${1} *\]|\(gpio ?${1}\)"'
-        old = r'grep -E "\[ *${1}\]|\(gpio ${1}\)"'
-        if fixed not in script:
-            failures.append("the instrument does not carry the fixed gpio "
-                            "pattern, so the signal detect cannot be read")
+        by_name = r'grep -E "\|[[:space:]]*${1}[[:space:]]*\)"'
+        if by_name not in script:
+            failures.append("the instrument does not look the signal detect "
+                            "up by the name the driver asked for, so it "
+                            "cannot read it")
         else:
             broken = tmp / "trialsurvey-broken.sh"
-            broken.write_text(script.replace(fixed, old), encoding="utf-8",
-                              newline="\n")
+            broken.write_text(script.replace(by_name, 'grep -E "NO_SUCH_LINE"'),
+                              encoding="utf-8", newline="\n")
             board3 = Board(tmp / "board3").build().start(interval=0.4)
             try:
                 text3, err3, rc3 = survey(board3, seconds=1,
                                           script=broken)
             finally:
                 board3.shutdown()
-            if "opsd (gpio 65): high" in text3:
-                failures.append("the old gpio pattern still reads the signal "
+            if "opsd (label opsd): high" in text3:
+                failures.append("the broken lookup still reads the signal "
                                 "detect, so this check cannot tell the two "
                                 "apart")
-            if "opsd (gpio 65)" not in text3:
-                failures.append("the broken instrument did not even mention "
-                                "the signal detect:\n%s" % text3)
+            if "not in the gpio dump" not in text3:
+                failures.append("the broken instrument did not say that it "
+                                "could not find the signal detect:\n%s" % text3)
+
+        # ---- and the older dump shape is still read -------------------
+        # The older kernels printed the flat number and no name, so the
+        # number has to stay as a fallback.  This board has that shape.
+        board7 = Board(tmp / "board7", gpio_dump_style="old").build()
+        board7.start(interval=0.4)
+        try:
+            text7, err7, rc7 = survey(board7, seconds=1)
+        finally:
+            board7.shutdown()
+        checks += 1
+        if "opsd (gpio 65): high" not in text7:
+            failures.append("the instrument did not read the signal detect "
+                            "out of the older dump shape:\n%s" % text7)
+
+        # ---- and the level has to be read in the kernel's own words -----
+        # The current kernel writes the level as "hi" and "lo"
+        # (str_hi_lo()).  An instrument that only knows "high" and "low"
+        # reads nothing the judge can use, so the criteria that depend on
+        # the signal detect cannot be judged at all - and the board says
+        # nothing about it, which is the worst kind of failure.
+        checks += 1
+        script = SURVEY.read_text(encoding="utf-8")
+        hi_lo = 'high|hi) echo "high" ;;\n\tlow|lo)  echo "low" ;;'
+        high_low = 'high) echo "high" ;;\n\tlow)  echo "low" ;;'
+        if hi_lo not in script:
+            failures.append("the instrument does not read the level words "
+                            "the current kernel writes, so the signal "
+                            "detect cannot be judged")
+        else:
+            broken2 = tmp / "trialsurvey-broken2.sh"
+            broken2.write_text(script.replace(hi_lo, high_low),
+                               encoding="utf-8", newline="\n")
+            board8 = Board(tmp / "board8").build().start(interval=0.4)
+            try:
+                text8, err8, rc8 = survey(board8, seconds=1, script=broken2)
+            finally:
+                board8.shutdown()
+            if "opsd (label opsd): high" in text8:
+                failures.append("the broken level words still read the "
+                                "signal detect, so this check cannot tell "
+                                "the two apart")
 
         # ---- and a driver that is not in the kernel --------------------
         # The same board with one of the four driver symbols taken out of
@@ -297,6 +341,26 @@ def main(argv=None):
         if jrc4 != 1:
             failures.append("the judge exited %d with a missing driver "
                             "symbol, expected 1" % jrc4)
+
+        # ---- the attributes the driver publishes on the netdev ------
+        # The driver creates them on ndev->dev, which is the netdev's own
+        # device: on the board they are at /sys/class/net/eth0/pon_state.
+        # The instrument looked in the netdev's "device" directory - the
+        # parent device's - and read nothing at all, so the trial reported
+        # the PON stack as not attached to any netdev.  This board puts
+        # them in the parent device's directory: the other shape a driver
+        # could publish them in, and the one the instrument falls back to.
+        board6 = Board(tmp / "board6", pon_attr_in_device_dir=True).build()
+        board6.start(interval=0.4)
+        try:
+            text6, err6, rc6 = survey(board6, seconds=INTERVAL,
+                                      on_second_sample=board6.advance)
+        finally:
+            board6.shutdown()
+        checks += 1
+        if not re.search(r"^  eth0/pon_state: \S+$", text6, re.M):
+            failures.append("the instrument did not find the PON attribute "
+                            "in the parent device's directory:\n%s" % text6)
 
         # ---- and a lamp that is not on the driver's trigger -----------
         # The same board with another trigger in effect on the LOS lamp.
