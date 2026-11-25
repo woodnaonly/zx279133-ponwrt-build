@@ -130,6 +130,11 @@ on:
       # controls that say whether it still notices when the proof is taken out.
       - tools/check-sk-rx-delivery.py
       - tests/test_sk_rx_delivery.py
+      # The gate that says the LAN egress names the jack the frame is for, and
+      # the controls that say whether it still notices when the naming is
+      # taken out.
+      - tools/check-sk-lan-egress.py
+      - tests/test_sk_lan_egress.py
       # The control that says the prepare step's content check still bites:
       # the prepare decides what tree the build compiles, so a change to it
       # changes what the build checks.
@@ -886,6 +891,21 @@ jobs:
           set -e
           python3 tools/check-sk-rx-delivery.py --tree "$KERNEL_TREE"
           python3 tests/test_sk_rx_delivery.py --tree "$KERNEL_TREE"
+
+      # The LAN egress has to name the jack the frame is for.  The tree wrote
+      # one constant into the IDM TX descriptor's output port field - 5, a
+      # 10G SerDes MAC that has no peer on this board and that the vendor
+      # never programs - so every frame the CPU sent to a jack was aimed at
+      # a MAC with no peer: the frames left the CPU, entered the 9132 and
+      # never came out of a jack.  The 220 patch reads the transport VID the
+      # DSA tagger put on the frame, takes the tag off it and puts the chip
+      # port it names into the descriptor.  This gate says that is really in
+      # the tree that is about to be compiled.
+      - name: 'Gate: the LAN egress names the jack the frame is for'
+        run: |
+          set -e
+          python3 tools/check-sk-lan-egress.py --tree "$KERNEL_TREE"
+          python3 tests/test_sk_lan_egress.py --tree "$KERNEL_TREE"
 
       - name: Check the overlay for what a compiler would have caught
         run: |

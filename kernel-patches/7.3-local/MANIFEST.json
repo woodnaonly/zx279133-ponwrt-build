@@ -79,6 +79,12 @@
       "sha256": "86168a0cf21579453ee91a1af3fe775effe6b7688a8a6e5f30c43a49a1e2526a",
       "bytes": 7086,
       "what": "The PPU's microcode has to be this board's own.  The 7.3 driver compared the blob's crc32 against one value, 0xef1d7647, which is the SR1010's - the same SoC on a different board - while this board's own blob is 0xc839b946, the vendor's /etc/mcode/mcode_133.bin read out of this board's flash.  A PPU running the other board's blob does not forward this board's frames: they stall inside the PPU, every netdev's counters stay at zero and the ARP table stays empty (docs/75, measured with a 7500-frame flood).  The port-flow table is in the blob as well and was the other board's too.  The patch gives the driver the two constants the 6.18 generation has - the board's own crc and the crc of the one blob the RX-hash hook may be installed on - installs the hook only for that blob, and says in words which blob it got: a blob that is not this board's own is reported as one the PPU will not forward frames with.  The VID-key calibration belongs to the same blob as the hook and still refuses any other firmware, now with the reason printed."
+    },
+    {
+      "file": "220-sk-lan-egress-port.patch",
+      "sha256": "8c0a43dd72a6c967a605dab4e099e7bc5bc9141c9a7616aabb5ad783d5d9e64a",
+      "bytes": 8535,
+      "what": "The LAN egress has to name the jack the frame is for.  The tree wrote the chip port 5 - XMAC0, a MAC with no peer on this board - into every LAN frame, so a frame the CPU sent to a jack was aimed at a MAC that has no peer and left the chip nowhere, while the transport VID the DSA tagger had put on the frame was neither read nor taken off.  The patch reads the VID, takes the tag off and puts the chip port it names (the VID less 58, the same mapping the receive path uses in reverse) into the descriptor output port field, and writes the vendor LAN path fourth metadata word 0x003e0000 instead of the PON control word.  The fallback port for a frame without a transport VID moves from 5 to 2, the second UNI jack."
     }
 
   ]

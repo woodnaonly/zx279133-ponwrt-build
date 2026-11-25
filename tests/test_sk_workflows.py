@@ -162,6 +162,11 @@ BRINGUP_TRIGGERS = [
     # controls that say whether it still notices when the proof is taken out.
     "tools/check-sk-rx-delivery.py",
     "tests/test_sk_rx_delivery.py",
+    # The gate that says the LAN egress names the jack the frame is for, and
+    # the controls that say whether it still notices when the naming is
+    # taken out.
+    "tools/check-sk-lan-egress.py",
+    "tests/test_sk_lan_egress.py",
     "scripts/configure-sk-d840n.sh",
     "configs/sk-d840n-73.json",
 ]

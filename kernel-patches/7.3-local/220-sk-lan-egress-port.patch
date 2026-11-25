@@ -1,0 +1,219 @@
+From: the SK-D840N 7.3 line
+Subject: [PATCH] net: zx279133: the LAN egress has to name the jack the frame is for
+
+The 7.3 tree's driver sent every frame the CPU handed to a LAN jack out of
+one fixed chip port, with the DSA tagger's transport VID still on it, and
+with the PON control word in the descriptor's fourth metadata word.
+
+The tree wrote ZX279133_LAN_TX_PORT - 5 - into every LAN frame's output
+port field.  5 is XMAC0, a 10G SerDes MAC that has no peer on this board
+and that the vendor never programs; the vendor's own transmit descriptors
+name the target UNI jack's chip port, 1..4.  So every frame the CPU sent
+to a jack was aimed at a MAC with no peer: the frames left the CPU (the
+bridge's and the conduit's TX counters rose), entered the 9132, and never
+came out of a jack.
+
+The destination was not unknown.  The DSA tagger on this SoC's LAN conduit
+pushes an 802.1Q header with the transport VID of the user port the frame
+is for onto every frame that leaves for a jack - the 9132's PPU ports 1..4
+carry the VIDs 59..62 - and the 6.18 generation reads that VID off the
+frame, takes the tag off it and puts the chip port it names into the
+descriptor's output port field.
+
+So the fix is not to learn anything new.  It is to stop throwing away
+what the tagger already wrote, and to write the LAN path's fourth
+metadata word the way the vendor writes it: 0x003e0000, the GEM port's
+LLID id plus its queue id, where this driver wrote the PON control word
+(zx279133_tx_pon_control, 0x08000000) on both paths.
+
+The tag has to come off the frame on the way to the wire as well: a frame
+that leaves the chip tagged is a frame the client cannot use, and the
+chip's own untag SVID is 0 - the vendor's system never tags, the DSA
+tagger does.
+
+The chip port a frame names is the VID less 58, which is the same mapping
+the receive path uses in reverse (zx279133_idm_rx_lan_vport()), so the
+two directions cannot drift apart.  A frame that carries no transport VID
+keeps the old behaviour and goes out of ZX279133_LAN_TX_PORT, which moves
+from 5 to 2: 2 is the chip port of the second UNI jack, measured on this
+board (docs/59 section 3.2), and 5 is a MAC with no peer.
+
+The strip happens after the ring-capacity check and before anything else
+touches the frame, because a NETDEV_TX_BUSY return has to leave the tag
+intact: the tag names the destination jack on a retry.
+
+diff --git a/drivers/net/ethernet/zte/zx279133.h b/drivers/net/ethernet/zte/zx279133.h
+--- a/drivers/net/ethernet/zte/zx279133.h
++++ b/drivers/net/ethernet/zte/zx279133.h
+@@ -28,7 +28,29 @@
+ /* Validated WAN/LAN hardware constants. */
+ #define ZX279133_IDM_CPU_TX_FIRST	1
+ #define zx279133_tx_port		6
+-#define ZX279133_LAN_TX_PORT		5
++/*
++ * The chip port a LAN frame goes out of when it carries no transport
++ * VID.
++ *
++ * The vendor's own transmit descriptors name the target UNI jack's
++ * chip port, 1..4, and never 5: 5 is XMAC0, a 10G SerDes MAC that has
++ * no peer on this board and that the vendor never programs.  The tree
++ * wrote 5 into every LAN frame, so a frame the CPU sent to a jack was
++ * aimed at a MAC with no peer and left the chip nowhere.
++ *
++ * 2 is the chip port of the second UNI jack, measured on this board
++ * (docs/59 section 3.2).
++ */
++#define ZX279133_LAN_TX_PORT		2
++/*
++ * The fourth metadata word of the IDM TX descriptor, on the LAN path.
++ *
++ * The vendor's own dump_desc_tx() calls this word the GEM port's LLID
++ * id plus its queue id.  The vendor's LAN path writes 0x003e0000 there
++ * and its PON path writes 0x1f568623; this driver wrote the PON
++ * control word (zx279133_tx_pon_control, 0x08000000) on both paths.
++ */
++#define ZX279133_LAN_TX_WORD4		0x003e0000
+ #define ZX279133_LAN_RX_QUEUE_COUNT	8
+ #define ZX279133_LAN_TRANSPORT_VID_MIN	59
+ #define ZX279133_LAN_TRANSPORT_VID_MAX	62
+diff --git a/drivers/net/ethernet/zte/zx279133-netdev.c b/drivers/net/ethernet/zte/zx279133-netdev.c
+--- a/drivers/net/ethernet/zte/zx279133-netdev.c
++++ b/drivers/net/ethernet/zte/zx279133-netdev.c
+@@ -20,6 +20,7 @@
+ #include <net/xdp.h>
+ #include <net/xdp_sock_drv.h>
+ 
++#include "zx279133-9132.h"
+ #include "zx279133.h"
+ #include "zx279133-lan.h"
+ 
+@@ -457,9 +458,65 @@
+ 		iph->protocol == IPPROTO_TCP;
+ }
+ 
++/*
++ * The transport VID the DSA tagger put on a LAN frame, and the chip
++ * port it names.
++ *
++ * The tagger on this SoC's LAN conduit (net/dsa/tag_zx279133_rtl8372n.c)
++ * pushes an 802.1Q header with the transport VID of the user port the
++ * frame is for onto every frame that leaves for a jack, and the 9132's
++ * PPU ports 1..4 carry the VIDs 59..62: the NPPT driver programs them
++ * as the ports' untagged SVID, and the DSA ports that carry them are
++ * 4..7.  So the VID names the jack, and the chip port is the VID less
++ * 58 - the same mapping the receive path uses in reverse
++ * (zx279133_idm_rx_lan_vport()).
++ *
++ * The tag comes off again here, on the way to the wire: a frame that
++ * leaves the chip tagged is a frame the client cannot use, and the
++ * chip's own untag SVID is 0 - the vendor's system never tags, the DSA
++ * tagger does.
++ */
++static int zx279133_lan_strip_transport_vlan(struct sk_buff *skb, u8 *out_port)
++{
++	const struct vlan_ethhdr *veth;
++	u16 tci;
++	u16 vid;
++	int err;
++
++	*out_port = 0;
++
++	if (!pskb_may_pull(skb, ETH_HLEN))
++		return -EINVAL;
++	if (((struct ethhdr *)skb->data)->h_proto != htons(ETH_P_8021Q))
++		return 0;
++	if (!pskb_may_pull(skb, VLAN_ETH_HLEN))
++		return -EINVAL;
++	veth = (const struct vlan_ethhdr *)skb->data;
++	vid = ntohs(veth->h_vlan_TCI) & VLAN_VID_MASK;
++	if (vid < ZX279133_LAN_TRANSPORT_VID_MIN ||
++	    vid > ZX279133_LAN_TRANSPORT_VID_MAX)
++		return 0;
++
++	/*
++	 * Pop exactly the private, inline outer tag.  __skb_vlan_pop() moves
++	 * only the MAC addresses and advances skb->data, keeping payload,
++	 * network/transport headers and CHECKSUM_PARTIAL's absolute start
++	 * together.  Do not use skb_vlan_pop(): it can also promote the
++	 * customer's next VLAN into metadata, and that VLAN must remain
++	 * inline on this conduit.
++	 */
++	skb_reset_mac_header(skb);
++	err = __skb_vlan_pop(skb, &tci);
++	if (err)
++		return err;
++	*out_port = vid - (ZX279133_LAN_TRANSPORT_VID_MIN -
++		           ZX279133_9132_UNI_PPU_FIRST);
++	return 1;
++}
+ static netdev_tx_t zx279133_start_xmit_common(struct sk_buff *skb,
+ 					      struct net_device *hw_ndev,
+-					      struct net_device *ndev)
++					      struct net_device *ndev,
++					      u8 lan_out_port)
+ {
+ 	struct zx279133_eth *eth = netdev_priv(hw_ndev);
+ 	unsigned int queue = skb_get_queue_mapping(skb);
+@@ -486,6 +543,18 @@
+ 	}
+ 	spin_unlock_bh(&eth->tx_lock);
+ 
++	/* A NETDEV_TX_BUSY return must leave the transport tag intact:
++	 * the tag names the destination jack on a retry.  Only mutate
++	 * after the initial ring-capacity check; later ring races
++	 * consume or drop the skb.
++	 */
++	if (ndev != hw_ndev) {
++		int popped = zx279133_lan_strip_transport_vlan(skb, &lan_out_port);
++
++		if (popped < 0)
++			goto drop;
++	}
++
+ 	if (skb_linearize(skb))
+ 		goto drop;
+ 	if (skb->ip_summed == CHECKSUM_PARTIAL) {
+@@ -505,7 +574,14 @@
+ 		zx279133_stats_tx_dropped(eth, ndev);
+ 		return NETDEV_TX_OK;
+ 	}
+-	tx_port = ndev != hw_ndev ? ZX279133_LAN_TX_PORT : zx279133_tx_port;
++	/* The tag the DSA tagger left on a LAN frame names the jack that
++	 * frame is for.  ZX279133_LAN_TX_PORT is only what a frame with
++	 * no tag gets.
++	 */
++	if (ndev == hw_ndev)
++		tx_port = zx279133_tx_port;
++	else
++		tx_port = lan_out_port ? lan_out_port : ZX279133_LAN_TX_PORT;
+ 
+ 	dma = dma_map_single(eth->dev, skb->data, skb->len, DMA_TO_DEVICE);
+ 	if (dma_mapping_error(eth->dev, dma))
+@@ -546,7 +622,8 @@
+ 		desc->length_flags = cpu_to_le32(length_flags);
+ 		desc->metadata[0] = cpu_to_le32(metadata0);
+ 	}
+-	desc->metadata[4] = cpu_to_le32(zx279133_tx_pon_control);
++	desc->metadata[4] = cpu_to_le32(ndev != hw_ndev ?
++			ZX279133_LAN_TX_WORD4 : zx279133_tx_pon_control);
+ 	slot->skb = skb;
+ 	slot->ndev = ndev;
+ 	slot->dma = dma;
+@@ -587,7 +664,7 @@
+ static netdev_tx_t zx279133_start_xmit(struct sk_buff *skb,
+ 				       struct net_device *ndev)
+ {
+-	return zx279133_start_xmit_common(skb, ndev, ndev);
++	return zx279133_start_xmit_common(skb, ndev, ndev, 0);
+ }
+ 
+ int zx279133_xdp_enqueue(struct zx279133_eth *eth, struct xdp_frame *xdpf)
+@@ -2230,7 +2307,7 @@
+ 		return NETDEV_TX_BUSY;
+ 
+ 	skb->dev = eth->ndev;
+-	ret = zx279133_start_xmit_common(skb, eth->ndev, ndev);
++	ret = zx279133_start_xmit_common(skb, eth->ndev, ndev, 0);
+ 	if (ret == NETDEV_TX_BUSY)
+ 		skb->dev = ndev;
+ 
