@@ -34,7 +34,7 @@ SURVEY = ROOT / "tools" / "trialsurvey.sh"
 VERDICT = ROOT / "tools" / "trialsurvey-verdict.py"
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from sk_trial_survey_board import Board  # noqa: E402
+from sk_trial_survey_board import Board, LOS_TRIGGER_FILE_PON  # noqa: E402
 
 
 def find_sh():
@@ -167,6 +167,25 @@ def main(argv=None):
                             "carries a symbol table with the four driver "
                             "symbols in it)" % status)
 
+        # ---- and the trigger in effect has to be resolved -------------
+        # The kernel writes the trigger in effect in square brackets, so
+        # the instrument has to work it out of the trigger file.  It used
+        # to print the whole file, and the judge used to compare that
+        # whole file with the driver's trigger name - which never matches,
+        # so a healthy lamp was reported as not driven by the driver.
+        checks += 1
+        if "trigger=zx279133-los" not in text:
+            failures.append("the instrument did not resolve the trigger in "
+                            "effect of the LOS lamp:\n%s" % text)
+        checks += 1
+        if "trigger=none default" in text:
+            failures.append("the instrument printed the whole trigger file "
+                            "instead of the trigger in effect:\n%s" % text)
+        checks += 1
+        if "the 'los' lamp is under the driver's trigger" not in text:
+            failures.append("the instrument did not find the lamp under the "
+                            "driver's trigger:\n%s" % text)
+
         # The exit code has to say what happened: every criterion was
         # answered and none of them failed, so the round is complete - 0.
         if jrc != 0:
@@ -278,6 +297,39 @@ def main(argv=None):
         if jrc4 != 1:
             failures.append("the judge exited %d with a missing driver "
                             "symbol, expected 1" % jrc4)
+
+        # ---- and a lamp that is not on the driver's trigger -----------
+        # The same board with another trigger in effect on the LOS lamp.
+        # This is the negative control for the whole chain: the lamp is
+        # there, the driver is registered, the counters move and the PON
+        # state walks - so only C3 may turn red.  It is also the case the
+        # instrument used to get wrong: it compared the whole trigger
+        # file with the driver's trigger name, and the kernel writes the
+        # trigger in effect in square brackets, so the comparison never
+        # matched and the lamp was reported as not driven by the driver.
+        board5 = Board(tmp / "board5",
+                       los_trigger=LOS_TRIGGER_FILE_PON).build()
+        board5.start(interval=0.4)
+        try:
+            text5, err5, rc5 = survey(board5, seconds=INTERVAL,
+                                      on_second_sample=board5.advance)
+        finally:
+            board5.shutdown()
+        verdicts5, jrc5 = judge(text5)
+        checks += 1
+        status = verdicts5.get("C3", (None, ""))[0]
+        if status != "FAIL":
+            failures.append("C3 is %r when the LOS lamp is on another "
+                            "trigger, expected FAIL" % status)
+        red = sorted(k for k, v in verdicts5.items() if v[0] == "FAIL")
+        checks += 1
+        if red != ["C3"]:
+            failures.append("a lamp on another trigger turned red on %r, "
+                            "expected only C3" % red)
+        checks += 1
+        if jrc5 != 1:
+            failures.append("the judge exited %d with the LOS lamp on "
+                            "another trigger, expected 1" % jrc5)
 
     finally:
         shutil.rmtree(tmp, ignore_errors=True)

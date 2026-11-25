@@ -13,6 +13,9 @@ The tree built here has the shape the instrument expects:
   <root>/class/leds/<led>/{brightness,trigger}
   <root>/kernel/debug/gpio
 
+The trigger file is written the way the kernel writes it: every trigger the
+lamp supports, with the one that is in effect in square brackets.
+
 Two things are not directories and are therefore provided differently:
 
   - ethtool is a program, not a file in sysfs.  A stub is put in front of
@@ -46,13 +49,42 @@ NETDEVS = {
     "eth0": {"state": "up", "carrier": "1", "rate": 1000},
 }
 
+# The trigger file of a lamp, in the shape the kernel writes it: every
+# trigger the lamp supports, with the one that is in effect in square
+# brackets.  This is what the board really says - the LOS lamp reads
+#
+#   none default rfkill-any rfkill-none timer heartbeat default-on netdev
+#   usbport [zx279133-los] zx279133-pon
+#
+# so the instrument has to work the trigger in effect out of the file
+# instead of taking the whole line for it.
+LOS_TRIGGER_FILE = (
+    "none default rfkill-any rfkill-none timer heartbeat default-on "
+    "netdev usbport [zx279133-los] zx279133-pon"
+)
+
+# The same file with another trigger in effect: the lamp is there, but the
+# driver is not driving it.  The end-to-end check uses it to prove that the
+# judge turns red on the lamp criterion and on no other.
+LOS_TRIGGER_FILE_PON = (
+    "none default rfkill-any rfkill-none timer heartbeat default-on "
+    "netdev usbport [zx279133-pon] zx279133-los"
+)
+
+# The LAN1 lamp, on the netdev trigger - the board's green:lan1 reads the
+# same way.
+LAN1_TRIGGER_FILE = (
+    "none rfkill-any rfkill-none timer heartbeat default-on [netdev] "
+    "usbport zx279133-los zx279133-pon"
+)
+
 LEDS = {
     # On the board the lamp is called "skyworth:red:los".  Windows will not
     # create a directory with a colon in its name, so the synthetic board
     # uses a name that can be created - the instrument finds the lamp by the
     # driver's trigger, not by its name, and so does the judge.
-    "los": {"brightness": "0", "trigger": "zx279133-los"},
-    "link": {"brightness": "1", "trigger": "none"},
+    "los": {"brightness": "0", "trigger": LOS_TRIGGER_FILE},
+    "link": {"brightness": "1", "trigger": LAN1_TRIGGER_FILE},
 }
 
 # The driver's four TX isolation counters, and the interface they sit on.
@@ -98,12 +130,17 @@ def write(path, text):
 class Board:
     """A synthetic board, and the thread that moves its counters."""
 
-    def __init__(self, root, missing_symbol=None):
+    def __init__(self, root, missing_symbol=None, los_trigger=None):
         self.root = Path(root)
         self.net = self.root / "class" / "net"
         self.leds = self.root / "class" / "leds"
         self.debug = self.root / "kernel" / "debug"
         self.bin = self.root / "bin"
+        # The trigger file of the LOS lamp.  It can be replaced so that the
+        # end-to-end check can put another trigger in effect and see the
+        # judge turn red on the lamp criterion alone.
+        self.los_trigger = (LOS_TRIGGER_FILE if los_trigger is None
+                            else los_trigger)
         # The kernel's symbol table.  "missing_symbol" takes one of the four
         # driver symbols out of it, which is what a board whose driver is
         # not in the kernel looks like.
@@ -138,7 +175,10 @@ class Board:
             d = self.leds / name
             d.mkdir(parents=True)
             write(d / "brightness", spec["brightness"] + "\n")
-            write(d / "trigger", spec["trigger"] + "\n")
+            trigger = spec["trigger"]
+            if name == "los":
+                trigger = self.los_trigger
+            write(d / "trigger", trigger + "\n")
 
         write(self.debug / "gpio", GPIO_DUMP)
 

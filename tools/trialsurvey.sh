@@ -161,6 +161,57 @@ read_gpio_level() {
 	esac
 }
 
+# The trigger that is in effect, read out of a lamp's trigger file.
+#
+# The kernel does not write the name of the trigger that is in effect on
+# its own: /sys/class/leds/<led>/trigger lists every trigger the lamp
+# supports and puts the one that is in effect in square brackets.  On this
+# board the LOS lamp reads
+#
+#   none default rfkill-any rfkill-none timer heartbeat default-on netdev
+#   usbport [zx279133-los] zx279133-pon
+#
+# so the trigger the driver drives the lamp through is the bracketed one.
+# Comparing the whole line with "zx279133-los" never matches - and that is
+# how a healthy LOS lamp came to be reported as not driven by the driver.
+#
+# The rule, in one line: the trigger in effect is the one in square
+# brackets; when the file carries no brackets it is the first name in the
+# list that is not "none" (the LED class always lists "none" first, and
+# "none" means no trigger at all); an empty file means "none".
+#
+# The fallback cannot claim the driver's own trigger by accident: the
+# kernel writes "none" first and the driver's own triggers after the
+# generic ones, so a file without a bracket resolves to a generic trigger
+# (default, rfkill-any, ...) - which is reported as "not the driver's
+# trigger" rather than as the wrong trigger.
+#
+# tools/trialsurvey-verdict.py applies the same rule to what this prints.
+effective_trigger() {
+	raw=$(cat "$1" 2>/dev/null) || raw=""
+	br=$(printf '%s\n' "$raw" | awk '{
+		for (i = 1; i <= NF; i++) {
+			if ($i ~ /^\[.*\]$/) {
+				s = $i
+				sub(/^\[/, "", s)
+				sub(/\]$/, "", s)
+				if (s != "") { print s; exit }
+			}
+		}
+	}')
+	if [ -n "$br" ]; then
+		printf '%s\n' "$br"
+		return 0
+	fi
+	for t in $raw; do
+		if [ "$t" != "none" ]; then
+			printf '%s\n' "$t"
+			return 0
+		fi
+	done
+	printf 'none\n'
+}
+
 # The LOS lamp and the line behind it, side by side.
 print_lamp() {
 	for d in "$LEDS"/*; do
@@ -168,7 +219,7 @@ print_lamp() {
 		l=$(basename "$d")
 		printf '  led %-24s brightness=%-4s trigger=%s\n' "$l" \
 			"$(cat "$d/brightness" 2>/dev/null || echo '?')" \
-			"$(cat "$d/trigger" 2>/dev/null || echo 'none')"
+			"$(effective_trigger "$d/trigger")"
 	done
 	level=$(read_gpio_level "$OPSD_GPIO")
 	if [ -n "$level" ]; then
@@ -220,11 +271,12 @@ print_lamp
 # The lamp the driver drives is the one whose trigger is the driver's, so
 # that is what is looked for: the name in the device tree is a label, and
 # a label can be spelled differently without the lamp ceasing to be the
-# lamp.
+# lamp.  The trigger that is compared is the one in effect, read out of
+# the trigger file the way the kernel writes it (effective_trigger above).
 driven=""
 for d in "$LEDS"/*; do
 	[ -d "$d" ] || continue
-	tr=$(cat "$d/trigger" 2>/dev/null || echo 'none')
+	tr=$(effective_trigger "$d/trigger")
 	if [ "$tr" = "$LOS_TRIGGER" ]; then
 		driven=$(basename "$d")
 		break
@@ -233,7 +285,7 @@ done
 if [ -n "$driven" ]; then
 	echo "  the '$driven' lamp is under the driver's trigger: it is the lamp that answers"
 elif [ -r "$LEDS/$LOS_LED/trigger" ]; then
-	echo "  the '$LOS_LED' lamp's trigger is '$(cat "$LEDS/$LOS_LED/trigger" 2>/dev/null || echo 'none')', not '$LOS_TRIGGER':"
+	echo "  the '$LOS_LED' lamp's trigger is '$(effective_trigger "$LEDS/$LOS_LED/trigger")', not '$LOS_TRIGGER':"
 	echo "    the driver is not driving this lamp (a user may have picked another trigger)"
 else
 	echo "  (no lamp under the driver's '$LOS_TRIGGER' trigger)"

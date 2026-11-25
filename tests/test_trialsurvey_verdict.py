@@ -185,6 +185,17 @@ FAILING = [
      mutate(healthy(), "led skyworth:red:los        brightness=0    trigger=zx279133-los\n  led skyworth:green:link",
             "led skyworth:red:los        brightness=1    trigger=zx279133-los\n  led skyworth:green:link"),
      "C3"),
+    ("the-driver-is-not-driving-the-lamp",
+     # The lamp is there, but the trigger in effect is another one.  The
+     # kernel writes the trigger in effect in square brackets, so this is
+     # what the board really reads - and it is the case the judge used to
+     # get wrong: it compared the whole trigger file with the driver's
+     # trigger name, which never matches, so a healthy lamp was reported
+     # as not driven by the driver.
+     mutate(healthy(), "trigger=zx279133-los",
+            "trigger=none default rfkill-any rfkill-none timer heartbeat "
+            "default-on netdev usbport [zx279133-pon] zx279133-los", 2),
+     "C3"),
     ("the-pon-state-does-not-walk-with-light",
      # there is light, and the state stays at O1 in both samples
      mutate(healthy(), "  eth0/pon_state: O5\n", "  eth0/pon_state: O1\n"),
@@ -226,6 +237,15 @@ NOT_FAILING = [
          .replace("ready=1 rx_ready=0 mic_ready=0 submitted=12 completed=10 error=0",
                   "ready=0 rx_ready=0 mic_ready=0 submitted=0 completed=0 error=-19"),
      "C4"),
+    ("the-trigger-is-written-in-the-kernel's-own-format",
+     # The transcript carries the trigger file the way the kernel writes
+     # it, with the trigger in effect in square brackets.  The judge has
+     # to read the trigger in effect out of it, not take the whole line
+     # for it - and the lamp is still the lamp.
+     mutate(healthy(), "trigger=zx279133-los",
+            "trigger=none default rfkill-any rfkill-none timer heartbeat "
+            "default-on netdev usbport [zx279133-los] zx279133-pon", 2),
+     "C3"),
     ("the-omci-channel-is-not-ready-so-nothing-is-submitted",
      mutate(healthy(), "ready=1 rx_ready=0 mic_ready=0 submitted=12 completed=10 error=0",
             "ready=0 rx_ready=0 mic_ready=0 submitted=0 completed=0 error=-19"),

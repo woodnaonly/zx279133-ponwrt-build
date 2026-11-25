@@ -79,6 +79,11 @@ CONDUIT = "lan-cpu0"
 DSA_PORTS = ("lan0", "lan1", "lan2", "lan3", "lan4")
 
 # The lamp the driver drives, and the trigger it drives it through.
+#
+# The trigger that is compared is the one in effect, not the whole list
+# the kernel writes - see effective_trigger() below for the rule, which is
+# the same rule tools/trialsurvey.sh applies to the kernel's trigger file
+# before it prints anything.
 LOS_TRIGGER = "zx279133-los"
 
 # The four TX isolation counters, and the order the gate expects them in.
@@ -109,6 +114,11 @@ PON_ORDER = {"O1": 0, "O2-3": 1, "O4": 2, "O5": 3, "O6": 4, "O7": 5}
 
 # The marker that separates the first sample from the second one.
 SECOND_MARKER = re.compile(r"^===\s+7\.\s+the same counters")
+
+# The trigger that is in effect, as the kernel writes it into a lamp's
+# trigger file: every trigger the lamp supports, with the one that is in
+# effect in square brackets.
+BRACKETED_TRIGGER = re.compile(r"\[([^\[\]]*)\]")
 
 
 class Verdict:
@@ -232,10 +242,13 @@ class Survey:
         opsd_line = None
         for lineno, line in enumerate(lines, 1):
             s = line.strip()
-            m = re.match(r"^led\s+(\S+)\s+brightness=(\S+)\s+trigger=(\S+)", s)
+            m = re.match(r"^led\s+(\S+)\s+brightness=(\S+)\s+trigger=(.*)$", s)
             if m:
+                # The trigger field is read the way the kernel writes it:
+                # the trigger in effect is the one in square brackets.
                 lamps[m.group(1)] = {"brightness": m.group(2),
-                                     "trigger": m.group(3),
+                                     "trigger": effective_trigger(m.group(3)),
+                                     "raw_trigger": m.group(3).strip(),
                                      "line": at + lineno, "raw": s}
                 continue
             m = re.match(r"^opsd \(gpio \d+\):\s*(.*)$", s)
@@ -348,6 +361,47 @@ class Survey:
             if in_dmesg and s:
                 found.append((at + lineno, s))
         return {"lines": found}
+
+
+def effective_trigger(text):
+    """The trigger that is in effect, out of a trigger list or a name.
+
+    The kernel does not write the name of the trigger that is in effect on
+    its own: /sys/class/leds/<led>/trigger lists every trigger the lamp
+    supports and puts the one that is in effect in square brackets.  The
+    LOS lamp on this board reads
+
+        none default rfkill-any rfkill-none timer heartbeat default-on
+        netdev usbport [zx279133-los] zx279133-pon
+
+    The rule, in one line: the trigger in effect is the one in square
+    brackets; when the list carries no brackets it is the first name in it
+    that is not "none" (the LED class always lists "none" first, and
+    "none" means no trigger at all); an empty list means "none".
+
+    The fallback cannot claim the driver's own trigger by accident: the
+    kernel writes "none" first and the driver's own triggers after the
+    generic ones, so a list without a bracket resolves to a generic
+    trigger (default, rfkill-any, ...).
+
+    tools/trialsurvey.sh applies the same rule to the kernel's file before
+    it prints anything, so a name that has already been resolved and the
+    raw list are read the same way here.  A raw list compared as a whole
+    never matches the driver's trigger - that is what this judge used to
+    do, and it is why a healthy LOS lamp was reported as not driven by
+    the driver.
+    """
+    text = (text or "").strip()
+    if not text:
+        return "none"
+    m = BRACKETED_TRIGGER.search(text)
+    if m:
+        name = m.group(1).strip()
+        return name if name else "none"
+    for token in text.split():
+        if token != "none":
+            return token
+    return "none"
 
 
 def as_int(value):
@@ -465,8 +519,11 @@ def judge(survey):
     opsd2 = survey.lamp_second["opsd"]
     if not driven and not driven2:
         v.status = FAIL
+        seen = ", ".join("%s=%s" % (name, d["trigger"])
+                         for name, d in sorted(survey.lamp_first["lamps"].items()))
         v.detail = ("no lamp is under the driver's '%s' trigger, so the "
-                    "driver is not driving the lamp" % LOS_TRIGGER)
+                    "driver is not driving the lamp (the lamps are on: %s)"
+                    % (LOS_TRIGGER, seen if seen else "none"))
     elif opsd is None or opsd2 is None:
         v.status = UNKNOWN
         v.detail = ("the optical RX signal detect was not read, so the lamp "
