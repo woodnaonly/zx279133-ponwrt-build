@@ -140,7 +140,11 @@ on:
       # range, the fifth table entry or the assertion goes away.
       - tools/check-sk-lan-vid63.py
       - tests/test_sk_lan_vid63.py
-      # The gate that says the lane is programmed again after the bring-up,
+      # The gate that says the transmit checksum is computed in software,
+      # and the controls that say whether it still notices when the flag
+      # is turned on again or when the software path is taken away.
+      - tools/check-sk-lan-tcp-csum.py
+      - tests/test_sk_lan_tcp_csum.py      # The gate that says the lane is programmed again after the bring-up,
       # and the controls that say whether it still notices when that pass
       # is taken out, when it stops programming the lane, when it loses
       # its bound, when it starts restarting the far end's auto-negotiation
@@ -938,6 +942,20 @@ jobs:
           python3 tools/check-sk-lan-vid63.py --tree "$KERNEL_TREE"
           python3 tests/test_sk_lan_vid63.py --tree "$KERNEL_TREE"
 
+      # The transmit checksum is only half there: the chip can add up the
+      # pseudo header, but nothing writes the finished checksum into the
+      # frame.  The driver asked for NETIF_F_HW_CSUM on that basis, so
+      # every TCP frame the board sent went out with a placeholder in the
+      # TCP header and the peer dropped it without a word, while ICMP over
+      # the same path was perfect.  The 240 patch turns the flag off.
+      # This gate says the flag really is off in the tree that is about
+      # to be compiled, and the controls say whether it still notices
+      # when it is turned on again or when the software path is taken away.
+      - name: 'Gate: the transmit checksum is computed in software'
+        run: |
+          set -e
+          python3 tools/check-sk-lan-tcp-csum.py --tree "$KERNEL_TREE"
+          python3 tests/test_sk_lan_tcp_csum.py --tree "$KERNEL_TREE"
       # The lane has to be programmed again once the bring-up has settled.
       # The boot of 2026-11-25 18:12:20 inherited the lane from the loader
       # and had it programmed once, and its egress was dead: the board

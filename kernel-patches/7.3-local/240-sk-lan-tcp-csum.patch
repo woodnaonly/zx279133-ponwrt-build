@@ -1,0 +1,63 @@
+From: the SK-D840N 7.3 line
+Subject: [PATCH] net: zx279133: do not delegate the transmit checksum to a
+ half-working data path
+
+The chip's transmit path can add up the pseudo header, but nothing writes
+the finished TCP checksum into the header of the frame that leaves for a
+client.  The driver asks for NETIF_F_HW_CSUM on that basis, so the stack
+hands the checksum over instead of computing it, and the frames go out with
+a placeholder in the TCP header.
+
+Measured on the board - 7.3.4, the 2.5G jack, the client on the wire: every
+TCP frame the board sent carried a checksum that does not verify.  The same
+value appears in every retransmission, while the timestamp option inside
+those same frames changes every time, which is what a placeholder looks
+like.  The peer dropped those frames without a word: its SYN-ACK came back
+over the wire and the connection never completed, and ICMP over the very
+same path was perfect in both directions.  The board's own counters agree -
+tx_hw_csum_packets was 127 and tx_sw_csum_packets was 0, so every frame
+took the hardware path.
+
+So the flag has to go.  With it off the stack computes the checksum in
+software, the frames that leave the chip carry a correct one, and TCP works
+on the jack.  The price is the checksum arithmetic in the CPU, which is
+what the hardware was supposed to save.
+
+The same half-working checksum is declared in the 6.18 generation, so its
+TCP was broken in the same way; what the 6.18 line never did was measure
+TCP rather than ICMP.
+
+diff --git a/drivers/net/ethernet/zte/zx279133.h b/drivers/net/ethernet/zte/zx279133.h
+--- a/drivers/net/ethernet/zte/zx279133.h
++++ b/drivers/net/ethernet/zte/zx279133.h
+@@ -80,7 +80,29 @@
+ #define zx279133_tx_selector		0x0f
+ #define zx279133_tx_pon_control		0x08000000
+ #define zx279133_tx_word4_bit23		0
+-#define zx279133_tx_hw_csum		1
++/*
++ * The transmit checksum is only half there.
++ *
++ * This SoC's own data path can add up the pseudo header, but nothing writes
++ * the finished TCP checksum into the header of the frame that leaves for a
++ * client.  Asking for NETIF_F_HW_CSUM on that basis makes the stack hand
++ * the checksum over instead of computing it, and the frame goes out with a
++ * placeholder in the TCP header.
++ *
++ * Measured on the board: every TCP frame the board sent carried a checksum
++ * that does not verify - the same value in every retransmission, while the
++ * timestamp option inside those same frames changed each time, which is
++ * what a placeholder looks like.  The peer dropped those frames without a
++ * word: its SYN-ACK came back over the wire and the connection never
++ * completed, while ICMP over the very same path was perfect.  The board's
++ * own counters agreed - tx_hw_csum_packets 127, tx_sw_csum_packets 0.
++ *
++ * So the flag goes: with it off the stack computes the checksum in
++ * software, the frames carry a correct one, and TCP works on the jack.  The
++ * price is the checksum arithmetic in the CPU, which is what the hardware
++ * was supposed to save.
++ */
++#define zx279133_tx_hw_csum		0
+ /*
+  * Bit 24 of the IDM control word.  The vendor's own idm_init() sets it
+  * ((v & 0xf00fffff) | 0x01f00000), and the proven vendor image reads
