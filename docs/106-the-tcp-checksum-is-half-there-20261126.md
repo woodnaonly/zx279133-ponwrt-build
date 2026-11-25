@@ -144,7 +144,30 @@ if (hw_csum) {
 
 ⇒ 责任在**板子发出的 TCP 包本身**，与 PC 无关。
 
-### 8 改了什么
+### 8 conduit 的 features 是从 eth0 抄的 —— 补丁在源头就够
+
+板上 `ethtool -K eth0 tx off` **单独做不够**，必须 `ethtool -K lan-cpu0 tx off` 才通，
+一开始看着像「conduit 另有独立声明，补丁漏了它」。查了源码，不是那样：
+
+`drivers/net/ethernet/zte/zx279133-netdev.c` 的 `zx279133_lan_netdev_setup()`（conduit 的
+`netdev_setup` 回调）：
+
+```
+ndev->features = eth->ndev->features & ~NETIF_F_HW_VLAN_CTAG_FILTER;
+ndev->hw_features = eth->ndev->hw_features & ~NETIF_F_HW_VLAN_CTAG_FILTER;
+ndev->vlan_features = eth->ndev->vlan_features;
+```
+
+⇒ **conduit 的 features 是从父设备 eth0 复制来的**，它自己没有独立的 feature 声明；
+而整个驱动里 `NETIF_F_HW_CSUM` 只有 `zx279133-main.c` 的 guard 内一处声明（`main.c:642-644`）。
+
+⇒ 240 补丁把那个 guard 关掉 ⇒ eth0 不再有 `NETIF_F_HW_CSUM` ⇒ conduit 复制过去的也就没有 ⇒
+**LAN 帧真正走的那条路上也不会再委托 checksum**。补丁是够的，不需要追加改动。
+
+（`ethtool -K eth0 tx off` 单独不够，是因为 eth0 的 feature 改变发生在 conduit 已经复制完之后；
+conduit 是独立 netdev，得在它自己身上关。）
+
+### 9 改了什么
 
 补丁 `kernel-patches/7.3-local/240-sk-lan-tcp-csum.patch`，一处：
 
@@ -157,16 +180,17 @@ if (hw_csum) {
 * 万一仍有 `CHECKSUM_PARTIAL` 的包走到 xmit，`hw_csum` 恒为假 ⇒ 驱动的
   `skb_checksum_help()` 兜底把它算完。
 
-### 9 门禁
+### 10 门禁
 
-* `tools/check-sk-lan-tcp-csum.py`：7 条（标志是 0、feature 声明仍在 guard 内、
+* `tools/check-sk-lan-tcp-csum.py`：8 条（标志是 0、feature 声明仍在 guard 内、
   软件兜底还在、判定仍读标志、整个驱动里只有一处声明该 feature、宏旁有理由、
-  `CHECKSUM_PARTIAL` 仍被处理）。
-* `tests/test_sk_lan_tcp_csum.py`：7 条变异 + 1 条原树。每条变异都让**它点名的那条**
+  **conduit 从父设备继承 features**、`CHECKSUM_PARTIAL` 仍被处理）。
+* `tests/test_sk_lan_tcp_csum.py`：8 条变异 + 1 条原树。每条变异都让**它点名的那条**
   变红（把标志改回 1、把 guard 改成 `if (1)`、删掉软件兜底、把判定改成硬编码
-  `true`、在别的文件里声明该 feature、删掉宏旁的理由、把 `CHECKSUM_PARTIAL` 改掉）。
+  `true`、在别的文件里声明该 feature、删掉宏旁的理由、把 `CHECKSUM_PARTIAL` 改掉、
+  **让 conduit 自己声明 `NETIF_F_HW_CSUM`**）。
 
-本地在「补丁串 + 板级层」都铺好的树上跑过：门禁 7/7 绿，反控 8/8 绿。
+本地在「补丁串 + 板级层」都铺好的树上跑过：门禁 8/8 绿，反控 9/9 绿。
 
 ## 未做
 

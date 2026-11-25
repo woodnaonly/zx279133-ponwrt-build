@@ -89,6 +89,14 @@ MUTATIONS = [
             "skb->ip_summed == CHECKSUM_PARTIAL",
             "skb->ip_summed == CHECKSUM_NONE"),
     ),
+    (
+        "the conduit inherits the parent's features",
+        "zx279133-lan-conduit.c",
+        lambda text: text.replace(
+            "ndev->netdev_ops = &zx279133_lan_conduit_netdev_ops;",
+            "ndev->netdev_ops = &zx279133_lan_conduit_netdev_ops;" + NL +
+            "\tndev->features |= NETIF_F_HW_CSUM;"),
+    ),
 ]
 
 

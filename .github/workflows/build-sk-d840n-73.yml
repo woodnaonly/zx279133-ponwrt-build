@@ -144,7 +144,8 @@ on:
       # and the controls that say whether it still notices when the flag
       # is turned on again or when the software path is taken away.
       - tools/check-sk-lan-tcp-csum.py
-      - tests/test_sk_lan_tcp_csum.py      # The gate that says the lane is programmed again after the bring-up,
+      - tests/test_sk_lan_tcp_csum.py
+      # The gate that says the lane is programmed again after the bring-up,
       # and the controls that say whether it still notices when that pass
       # is taken out, when it stops programming the lane, when it loses
       # its bound, when it starts restarting the far end's auto-negotiation
@@ -956,6 +957,7 @@ jobs:
           set -e
           python3 tools/check-sk-lan-tcp-csum.py --tree "$KERNEL_TREE"
           python3 tests/test_sk_lan_tcp_csum.py --tree "$KERNEL_TREE"
+
       # The lane has to be programmed again once the bring-up has settled.
       # The boot of 2026-11-25 18:12:20 inherited the lane from the loader
       # and had it programmed once, and its egress was dead: the board

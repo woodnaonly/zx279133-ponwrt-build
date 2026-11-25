@@ -28,6 +28,9 @@ What is checked here, and why each one is asked the way it is:
     defect written differently.
   * no other file in the driver declares the feature: one declaration in
     one place is what makes the property checkable.
+  * the conduit inherits the parent's features: the LAN path runs over the
+    conduit netdev, so a conduit that declared the feature on its own
+    would still hand the checksum away after the flag was turned off.
   * the header says why: a flag that is off needs its reason next to it,
     so the next reader does not turn it on to "fix" the CPU load.
 
@@ -158,6 +161,20 @@ def run_checks(tree):
         reason,
         "the flag carries its reason next to it" if reason
         else "the flag has no reason next to it",
+    ))
+
+    conduit = read(tree, "zx279133-lan-conduit.c")
+    inherits = (conduit is not None and
+                "ndev->features = eth->ndev->features" in netdev_c and
+                "NETIF_F_HW_CSUM" not in conduit)
+    results.append((
+        "the conduit inherits the parent's features",
+        inherits,
+        "the conduit takes its features from the parent device"
+        if inherits else
+        "the conduit does not take its features from the parent device - "
+        "it declares NETIF_F_HW_CSUM itself, so the flag being off "
+        "does not reach the path the LAN frames really take",
     ))
 
     partial = "skb->ip_summed == CHECKSUM_PARTIAL" in netdev_c
