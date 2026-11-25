@@ -452,6 +452,17 @@
 #define ZX279133_SWITCH_OUTERPHY_RESTART_MAX	3
 
 /*
+ * How many times one boot may program the lane again, and how long the lane
+ * waits between two of those passes.
+ *
+ * A pass is not free - the near end is powered off and on again and the
+ * XMAC0 is programmed again - so the passes are few and far apart.  The good
+ * boot of 2026-11-25 needed one of them.
+ */
+#define ZX279133_SWITCH_LANE_REAPPLY_MAX		3
+#define ZX279133_SWITCH_LANE_REAPPLY_COOLDOWN_MS	5000
+
+/*
  * The outer PHY's SerDes option registers, and the two words that say which
  * SerDes class the chip is in.
  *
@@ -662,6 +673,13 @@ struct zx279133_switch {
 	 */
 	unsigned long lane_heal_due;
 	unsigned long lane_log_due;
+
+	/*
+	 * How many times this boot has programmed the lane again, and when the
+	 * last of those passes was.  See zx279133_switch_lane_reapply().
+	 */
+	unsigned int lane_reapplies;
+	unsigned long lane_reapplied;
 	/*
 	 * The loader's own four words for this lane's PCS, saved when the
 	 * loader is the one that configured it (judgment TT).
@@ -941,6 +959,77 @@ static int zx279133_switch_outerphy_apply_speed(struct zx279133_switch *priv,
  */
 static void zx279133_switch_lane_state(struct zx279133_switch *priv);
 
+/*
+ * The lane, programmed again.
+ *
+ * Why this exists, because the two facts that decide it came from two boots
+ * of the same kernel on the same board, and the difference between them was
+ * not in the configuration but in how many times the lane had been
+ * programmed.
+ *
+ * The good boot (2026-11-25 17:29:19, the loader had not brought the
+ * network up) had the lane programmed twice: once by the probe, and once at
+ * 8.99 s, when the watch's first pass found that the far end's SerDes class
+ * had changed and put the lane back.  Its egress carried bytes.
+ *
+ * The bad boot (2026-11-25 18:12:20, the loader had brought the network up:
+ * it had configured the far end's PHY and moved eleven megabytes through the
+ * lane before the kernel was started) had the lane programmed once.  Its
+ * egress was dead - the board received the test PC's frames and nothing it
+ * sent reached the PC, and the PC's ARP entry for the board never resolved.
+ *
+ * The far end's state was the same in both when each boot had finished its
+ * own work, word for word: the SerDes class 0x9402, the lane's own word
+ * 0x801e, the PCS's BMCR 0x1140, the XMAC0's six words.  The near end's
+ * image was the loader's in both, and the loader's is the right one
+ * (docs/92 §79.2).  What differed was the second pass.
+ *
+ * So the lane is programmed again here, once, after the bring-up has
+ * settled.  It is the same pass the class change used to make on its own -
+ * the near end is powered off and on again, the XMAC0 is programmed again,
+ * the SOPC send-enable is published again and the PCS's words are written
+ * again - and it is the pass whose absence the bad boot shows.
+ *
+ * It does NOT restart the far end's auto-negotiation.  That path is this
+ * driver's own self-harm: every restart takes the far end out of latch and
+ * drops the 0x40 bit of its status word, and that word is not a judge of
+ * whether the lane carries code anyway (docs/92 §12.8).
+ */
+static void zx279133_switch_lane_reapply(struct zx279133_switch *priv,
+					  const char *why)
+{
+	int cls;
+	int speed;
+
+	if (priv->lane_reapplies >= ZX279133_SWITCH_LANE_REAPPLY_MAX)
+		return;
+
+	/*
+	 * One pass at a time.  A pass costs about a second - the near end is
+	 * powered off and on again, the XMAC0 is programmed again and the PCS's
+	 * words are written again - and two of them back to back leave the lane
+	 * where one of them left it, with twice the disturbance.
+	 */
+	if (priv->lane_reapplies &&
+	    time_before_eq(jiffies, priv->lane_reapplied +
+				 msecs_to_jiffies(ZX279133_SWITCH_LANE_REAPPLY_COOLDOWN_MS)))
+		return;
+
+	cls = zx279133_switch_outerphy_class(priv);
+	speed = cls == ZX279133_SWITCH_OUTERPHY_SERDES_MODE_2G5 ?
+		SPEED_2500 : SPEED_1000;
+
+	priv->lane_reapplied = jiffies;
+	priv->lane_reapplies++;
+
+	dev_info(priv->dev,
+		 "the lane is programmed again (%s; pass %u/%d)\n",
+		 why, priv->lane_reapplies,
+		 ZX279133_SWITCH_LANE_REAPPLY_MAX);
+
+	zx279133_switch_outerphy_apply_speed(priv, speed);
+}
+
 static void zx279133_switch_lane_watch(struct work_struct *work)
 {
 	struct zx279133_switch *priv =
@@ -988,6 +1077,23 @@ static void zx279133_switch_lane_watch(struct work_struct *work)
 	 * nothing at all.
 	 */
 	zx279133_switch_outerphy_link(priv);
+
+	/*
+	 * The lane, programmed again, once, after the bring-up.
+	 *
+	 * The watch's first pass is the moment the bring-up has settled, and
+	 * the lane is programmed again here.  The comment on
+	 * zx279133_switch_lane_reapply() has the two boots this comes from
+	 * and what the difference between them was.
+	 *
+	 * The guard is the count of the passes themselves, so this happens
+	 * exactly once per boot.  The class change below goes through the same
+	 * helper, and that helper's own cooldown keeps the two from running
+	 * one after the other.
+	 */
+	if (!priv->lane_reapplies)
+		zx279133_switch_lane_reapply(priv,
+			"the bring-up is over");
 
 	/*
 	 * The far end's SerDes class is the one thing on this lane that the
@@ -1093,9 +1199,8 @@ rearm:
 		     cls == ZX279133_SWITCH_OUTERPHY_SERDES_MODE_2G5) &&
 		    cls != priv->lane_seen) {
 			priv->lane_seen = cls;
-			zx279133_switch_outerphy_apply_speed(priv,
-				cls == ZX279133_SWITCH_OUTERPHY_SERDES_MODE_2G5 ?
-				SPEED_2500 : SPEED_1000);
+			zx279133_switch_lane_reapply(priv,
+				"the far end changed its SerDes class");
 		}
 	}
 	/*

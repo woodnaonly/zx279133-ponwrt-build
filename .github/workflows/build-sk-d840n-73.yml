@@ -135,6 +135,13 @@ on:
       # taken out.
       - tools/check-sk-lan-egress.py
       - tests/test_sk_lan_egress.py
+      # The gate that says the lane is programmed again after the bring-up,
+      # and the controls that say whether it still notices when that pass
+      # is taken out, when it stops programming the lane, when it loses
+      # its bound, when it starts restarting the far end's auto-negotiation
+      # or when the class change stops going through it.
+      - tools/check-sk-lane-reapply.py
+      - tests/test_sk_lane_reapply.py
       # The control that says the prepare step's content check still bites:
       # the prepare decides what tree the build compiles, so a change to it
       # changes what the build checks.
@@ -906,6 +913,18 @@ jobs:
           set -e
           python3 tools/check-sk-lan-egress.py --tree "$KERNEL_TREE"
           python3 tests/test_sk_lan_egress.py --tree "$KERNEL_TREE"
+
+      # The lane has to be programmed again once the bring-up has settled.
+      # The boot of 2026-11-25 18:12:20 inherited the lane from the loader
+      # and had it programmed once, and its egress was dead: the board
+      # received the test PC's frames and nothing it sent reached the PC.
+      # The gate asks whether the tree still does that pass, and the
+      # controls say whether it still notices when the pass is taken away.
+      - name: 'Gate: the lane is programmed again after the bring-up'
+        run: |
+          set -e
+          python3 tools/check-sk-lane-reapply.py --tree "$KERNEL_TREE"
+          python3 tests/test_sk_lane_reapply.py --tree "$KERNEL_TREE"
 
       - name: Check the overlay for what a compiler would have caught
         run: |
