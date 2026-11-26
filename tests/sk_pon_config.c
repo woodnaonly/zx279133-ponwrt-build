@@ -92,6 +92,29 @@ int main(void)
 	assert(!zx_onu_serial("", vendor, mac, serial));
 	assert(!memcmp(serial, "OWRT\x22\x33\x44\x55", 8));
 	assert(zx_onu_serial(NULL, vendor, NULL, serial) == -EINVAL);
+	/* The same rule, the same vectors and the same file the Rust side
+	 * reads: one rule, two implementations, one set of expected bytes. */
+	{
+		FILE *vectors = fopen("tests/fixtures/onu-serial-vectors.txt", "r");
+		char line[256];
+		unsigned int checked = 0;
+		assert(vectors);
+		while (fgets(line, sizeof(line), vectors)) {
+			char vendor_text[32], mac_text[32], serial_text[32];
+			uint8_t expected[8], got[8];
+			if (line[0] == '#') continue;
+			if (sscanf(line, "%31s %31s %31s", vendor_text, mac_text, serial_text) != 3) continue;
+			assert(!zx_vendor(vendor_text, vendor));
+			assert(!zx_mac_address(mac_text, mac));
+			assert(!zx_hex(serial_text, expected, 8));
+			assert(!zx_onu_serial(NULL, vendor, mac, got));
+			assert(!memcmp(got, expected, 8));
+			checked++;
+		}
+		assert(checked > 0);
+		fclose(vectors);
+	}
+
 	puts("PASS: exact SN/REGID bytes, validation, safe one-time migration, permissions, no shell/symlink following");
 	return 0;
 }

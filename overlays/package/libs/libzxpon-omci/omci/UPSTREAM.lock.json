@@ -52,6 +52,30 @@
       "local_blob": "51909c06911e140ac488f2d5a72a2005d56481c5",
       "local_sha256": "832cb8cd7dc8b01cb2f1439c6276064713d08daa1f07b3a8edf9a1c95c52a6a1",
       "local_changes": "与上游逐字节相同（未做任何本地改动）"
+    },
+    {
+      "path": "src/oam/ctc.rs",
+      "upstream_path": "airoha-pon-daemons/src/src/oam/ctc.rs",
+      "upstream_blob": "58cf5d07a0ee92c1dc8a063a5516080f4aa4bb45",
+      "local_blob": "58cf5d07a0ee92c1dc8a063a5516080f4aa4bb45",
+      "local_sha256": "8c01bd1754bd0a6d43221f3d669699eb73e37c00f3fe3036ca130cf2df896832",
+      "local_changes": "与上游逐字节相同（未做任何本地改动）：CTC 私有 OAM 会话本体"
+    },
+    {
+      "path": "src/oam/frame.rs",
+      "upstream_path": "airoha-pon-daemons/src/src/oam/frame.rs",
+      "upstream_blob": "307324fd25e056822ad8754557d295d9fa399f70",
+      "local_blob": "307324fd25e056822ad8754557d295d9fa399f70",
+      "local_sha256": "5c182ec029a72276c09a54fc4c7f03231770cceb96c2ea9599873ef3f22a14d2",
+      "local_changes": "与上游逐字节相同（未做任何本地改动）：802.3ah OAMPDU 的编解码"
+    },
+    {
+      "path": "src/oam/ieee.rs",
+      "upstream_path": "airoha-pon-daemons/src/src/oam/ieee.rs",
+      "upstream_blob": "1f5625284db7357f3d767b69851c092a5cd33d07",
+      "local_blob": "1f5625284db7357f3d767b69851c092a5cd33d07",
+      "local_sha256": "8a8c81b14f981b5e602379a1dfb1ba89afb517a2b0f8f2bc37f1e5f2e3f8aa03",
+      "local_changes": "与上游逐字节相同（未做任何本地改动）：IEEE 802.3ah 的 Information TLV 会话"
     }
   ],
   "local_sources": [
@@ -63,16 +87,28 @@
     },
     {
       "path": "src/lib.rs",
-      "local_blob": "8e199e3c41a5274e6bc81e31f4df1752bb6c7458",
-      "local_sha256": "415e29f4c35bbcf1c1b93b56eac97703de99214b77101bde558c444877a1ed33",
-      "local_changes": "我们自己的 crate 入口与 C ABI（zxpon_omci_new / zxpon_omci_free）；上游对应位置是 daemon 运行时"
+      "local_blob": "db87f8dcdfe085921c4c596502cebeff126de009",
+      "local_sha256": "359bad8fad18e53f03b2a11b3b40a1ff4324cffad27affa36b74770fee19c5b8",
+      "local_changes": "我们自己的 crate 入口与 C ABI（zxpon_omci_new / zxpon_omci_free），并挂上 oam 模块；上游对应位置是 daemon 运行时"
+    },
+    {
+      "path": "src/oam/config.rs",
+      "local_blob": "2846d1bd6a4f9fdcd139c18d15b8cb0639784690",
+      "local_sha256": "35d20c2b43f098f22dbf9d07f924bccaa998299f86ff8655c60f995fd009d28f",
+      "local_changes": "从上游 oam/config.rs 改写：去掉上游 daemon 的 Section 依赖，改用板子自己的身份配置构造；默认 operator 由 ctc 改为 ieee，CTC 会话默认关闭；序列号规则与 C 侧共用同一份向量文件交叉断言"
+    },
+    {
+      "path": "src/oam/mod.rs",
+      "local_blob": "e70c52d4b65b36043af8eed64b683a75f1f9cbe2",
+      "local_sha256": "8d165ba736c13dd2b5bb598e628f2e00232082c9c783a7d997444d8c7dd38e11",
+      "local_changes": "我们自己的模块入口：只挂上会话本身，不带上游 daemon 的 raw socket 运行时；CTC 会话默认关闭"
     }
   ],
   "not_taken": [
     {
       "id": "oam-runtime",
-      "upstream_path": "airoha-pon-daemons/src/src/oam",
-      "reason": "CTC 私有 OAM 会话跑在 IEEE 802.3ah 以太网 OAMPDU 上，且上游只在 EPON 模式启用；本板是 XG-PON，没有上行以太网 OAM 通道"
+      "upstream_path": "airoha-pon-daemons/src/src/oam/mod.rs",
+      "reason": "上游 oam 的模块入口带着它自己的 daemon 运行时：raw socket 收帧、状态记录与控制套接字；本板只取会话本身，运行时不取"
     },
     {
       "id": "daemon-runtime",

@@ -3,6 +3,7 @@
 #![allow(dead_code)]
 
 mod config;
+pub mod oam;
 mod mib;
 mod protocol;
 mod provisioning;

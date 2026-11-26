@@ -1,11 +1,13 @@
 Protocol and MIB engine: https://github.com/pbs05/openwrt-pon-userspace
 Commit: cce9d756742487b378749c606b30e13ee9b0f093
 Source: airoha-pon-daemons/src/src/omci/{mib,protocol,provisioning,schema,security}.rs and src/wire.rs
+CTC private OAM session: airoha-pon-daemons/src/src/oam/{ctc,frame,ieee}.rs, taken at a903fcc80f4b89f9b9e59a02d3ba1fc5550819a5
 License: GPL-2.0-only
 RTL9617C integration and capability changes: PonWRT-TYFZA1 contributors
 Applied lessons: HGU VEIP ownership, Class332 nonce/key-name ordering, OLT VLAN/p-bit selectors, key-ring direction and unchanged-table flow retention.
 RTL9617C register behavior is derived from this board's original ca-ne.ko and Realtek GPL sources.
 Lock: UPSTREAM.lock.json records the upstream blob of every file, the bytes as they sit in this tree, and what we changed in each of them.
+The CTC session rides an IEEE 802.3ah Ethernet OAMPDU, and this board is XG-PON: it has no way to send one, so the session is in the tree and off.
 Paths:
   airoha-pon-daemons/src/src/omci/mib.rs
   airoha-pon-daemons/src/src/omci/protocol.rs
@@ -13,3 +15,6 @@ Paths:
   airoha-pon-daemons/src/src/omci/schema.rs
   airoha-pon-daemons/src/src/omci/security.rs
   airoha-pon-daemons/src/src/wire.rs
+  airoha-pon-daemons/src/src/oam/ctc.rs
+  airoha-pon-daemons/src/src/oam/frame.rs
+  airoha-pon-daemons/src/src/oam/ieee.rs

@@ -1,0 +1,12 @@
+# The ONU serial number rule, checked on both sides.
+#
+# One line per vector: the vendor id, the station's own MAC address, and
+# the serial number the rule has to produce out of them.  The C side reads
+# this file in tests/sk_pon_config.c, and the Rust side reads it in
+# overlays/package/libs/libzxpon-omci/omci/src/oam/config.rs.  One file,
+# one rule, two implementations, one set of expected bytes.
+#
+# vendor_id  mac          serial
+4f575254    021122334455  4f57525422334455
+4f575254    000a1b2c3d4e  4f5752541b2c3d4e
+54534554    ffffffffffff  54534554ffffffff
