@@ -1,0 +1,41 @@
+#!/bin/sh
+# The ip command of the sandbox board.
+#
+# The state directory holds what the command has to say:
+#
+#   state/addr/<dev>    the address the device has
+#   state/neigh/<addr>  the neighbour entry for an address
+#   state/link.log      what was asked of the links
+#   state/route.log     what was asked of the routes
+
+STATE=${FAKE_STATE:-/tmp/sk-wan-state}
+cmd=$1
+shift
+case "$cmd" in
+-4) cmd=$1; shift ;;
+esac
+case "$cmd" in
+addr)
+    dev=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+        dev) dev=$2; shift 2 ;;
+        *) shift ;;
+        esac
+    done
+    if [ -f "$STATE/addr/$dev" ]; then
+        echo "4: $dev: inet $(cat "$STATE/addr/$dev") scope global"
+    fi
+    ;;
+neigh)
+    f="$STATE/neigh/$1"
+    [ -f "$f" ] && cat "$f"
+    ;;
+link)
+    echo "$*" >>"$STATE/link.log"
+    ;;
+route)
+    echo "$*" >>"$STATE/route.log"
+    ;;
+esac
+exit 0

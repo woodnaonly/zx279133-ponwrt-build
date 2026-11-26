@@ -1,0 +1,25 @@
+#!/bin/sh
+# The DHCP client of the sandbox board, and the one thing that answers it.
+#
+# FAKE_DHCP_ANSWER names the port that answers.  The offer is written the
+# way the probe script expects it, so the probe really finds it.
+
+STATE=${FAKE_STATE:-/tmp/sk-wan-state}
+port=""
+script=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+    -i) port=$2; shift 2 ;;
+    -s) script=$2; shift 2 ;;
+    *) shift ;;
+    esac
+done
+if [ -n "$FAKE_DHCP_ANSWER" ] && [ "$port" = "$FAKE_DHCP_ANSWER" ]; then
+    ip=${FAKE_DHCP_IP:-203.0.113.9}
+    siaddr=${FAKE_DHCP_SIADDR:-203.0.113.1}
+    interface=$port
+    set -- bound
+    [ -n "$script" ] && . "$script"
+    exit 0
+fi
+exit 1

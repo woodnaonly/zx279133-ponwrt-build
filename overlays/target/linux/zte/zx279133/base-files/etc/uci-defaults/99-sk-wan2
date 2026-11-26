@@ -1,0 +1,67 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-only
+#
+# The second WAN's own pieces: the interface section, the firewall zone it
+# belongs to and the forwarding from the LAN into it.
+#
+# The interface starts disabled: the board's default is that every panel
+# jack is a LAN port and the optical port is the WAN (board.d/02_network),
+# and a second WAN that exists but is switched off is a state the board can
+# be reached in.  The page turns it on.
+#
+# A build runs this inside the package manager's chroot, where there is no
+# uci and no network to configure, so the whole thing is skipped there.
+[ -n "${IPKG_INSTROOT:-${PKG_ROOT:-}}" ] && exit 0
+[ -n "${CI:-}" ] && exit 0
+
+command -v uci >/dev/null 2>&1 || exit 0
+
+# The interface.  It has no device until the page or the adaptive search
+# gives it one.
+if ! uci -q get network.wan2 >/dev/null 2>&1; then
+	uci set network.wan2=interface
+	uci set network.wan2.disabled=1
+	uci set network.wan2.proto=dhcp
+	uci set network.wan2.metric=20
+fi
+
+# The zone.  A named section, so this script does not have to know how many
+# zones the board's firewall already has.
+if ! uci -q get firewall.wan2 >/dev/null 2>&1; then
+	uci set firewall.wan2=zone
+	uci set firewall.wan2.name=wan2
+	uci set firewall.wan2.network=wan2
+	uci set firewall.wan2.input=REJECT
+	uci set firewall.wan2.output=ACCEPT
+	uci set firewall.wan2.forward=DROP
+	uci set firewall.wan2.masq=1
+	uci set firewall.wan2.mtu_fix=1
+fi
+
+if ! uci -q get firewall.lan_wan2 >/dev/null 2>&1; then
+	uci set firewall.lan_wan2=forwarding
+	uci set firewall.lan_wan2.src=lan
+	uci set firewall.lan_wan2.dest=wan2
+fi
+
+# The first WAN's metric.  The backup's metric is higher, so the optical
+# port is preferred while both are up.
+uci set network.wan.metric=10
+uci set network.wan2.metric=20
+
+# The policy file.  It is written here rather than shipped as a file in the
+# package, because the package root is a build directory on some hosts and
+# a config file that arrives with the package would be overwritten by the
+# user's own changes on the next upgrade.
+if [ ! -f /etc/config/sk_wan ]; then
+	{
+		echo "config settings 'wan'"
+		echo "	option auto '1'"
+		echo "	option primary 'wan'"
+		echo "	option exclude ''"
+	} >/etc/config/sk_wan
+fi
+
+uci commit network
+uci commit firewall
+exit 0

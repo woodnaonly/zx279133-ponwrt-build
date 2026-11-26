@@ -1,0 +1,256 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-only
+"""The uci of the sandbox board.
+
+It keeps the configuration in the same files the board keeps it in, and it
+writes them in the same format, because the scripts read the COMMITTED file
+back to find out whether the change they made landed.  A fake that kept the
+state in a variable would answer every "uci get" with the new value even
+when the file was never written, and the check that reads the file back
+would never see anything.
+
+The paths are the ones uci uses: a configuration, a section, an option.  A
+section is either named ("wan2") or anonymous ("@device[0]"), and the
+second form is how the bridge is addressed, because the bridge section has
+no name.
+
+Three hooks, for the controls:
+
+  UCI_DROP=<path>      a write to this path is accepted and forgotten
+  UCI_FAIL_WRITE=<cfg> the file of this configuration is not written
+
+The first is how the control says that a change which does not reach the
+committed file has to be taken back, and the second is how it says that
+the file can be unwritable.
+"""
+
+import os
+import re
+import sys
+
+ROOT = os.environ.get("UCI_ROOT") or os.environ.get("SKW_PREFIX") or "/"
+CONF = os.path.join(ROOT, "etc", "config")
+
+
+def path_of(name):
+    return os.path.join(CONF, name)
+
+
+def parse(path):
+    """The sections of a configuration file."""
+    sections = []
+    cur = None
+    try:
+        handle = open(path, encoding="utf-8", errors="replace")
+    except OSError:
+        return sections
+    with handle:
+        for raw in handle:
+            line = raw.strip()
+            if not line or line.startswith("#"):
+                continue
+            m = re.match(r"^config\s+(\S+)(?:\s+'([^']*)')?\s*$", line)
+            if m:
+                cur = {"type": m.group(1), "name": m.group(2) or "",
+                       "options": {}, "lists": {}}
+                sections.append(cur)
+                continue
+            m = re.match(r"^option\s+(\S+)\s+'([^']*)'\s*$", line)
+            if m and cur is not None:
+                cur["options"][m.group(1)] = m.group(2)
+                continue
+            m = re.match(r"^list\s+(\S+)\s+'([^']*)'\s*$", line)
+            if m and cur is not None:
+                cur["lists"].setdefault(m.group(1), []).append(m.group(2))
+    return sections
+
+
+def render(sections):
+    """The same sections, written the way uci writes them."""
+    out = []
+    for s in sections:
+        head = "config " + s["type"]
+        if s["name"]:
+            head += " '" + s["name"] + "'"
+        out.append(head)
+        for key in sorted(s["options"]):
+            out.append("\toption %s '%s'" % (key, s["options"][key]))
+        for key in sorted(s["lists"]):
+            for value in s["lists"][key]:
+                out.append("\tlist %s '%s'" % (key, value))
+        out.append("")
+    return "\n".join(out)
+
+
+def dropped(path):
+    """Whether this path is one the control wants forgotten."""
+    ignore = os.environ.get("UCI_DROP", "")
+    return path in [p for p in ignore.split(",") if p]
+
+
+def store(name, sections):
+    """Write the configuration file, unless the control says not to."""
+    if os.environ.get("UCI_FAIL_WRITE") == name:
+        return
+    path = path_of(name)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8", newline="\n") as handle:
+        handle.write(render(sections))
+    os.replace(tmp, path)
+
+
+def find(sections, spec):
+    """The section a name or an index points at."""
+    m = re.match(r"^@(\w+)\[(\d+)\]$", spec)
+    if m:
+        want, index = m.group(1), int(m.group(2))
+        seen = 0
+        for s in sections:
+            if s["type"] == want:
+                if seen == index:
+                    return s
+                seen += 1
+        return None
+    for s in sections:
+        if s["name"] == spec:
+            return s
+    return None
+
+
+def split(path):
+    """A uci path, split into the configuration and the rest."""
+    parts = path.split(".")
+    return parts[0], ".".join(parts[1:])
+
+
+def cmd_get(args):
+    if not args:
+        return 1
+    name, rest = split(args[0])
+    parts = rest.split(".")
+    sections = parse(path_of(name))
+    section = find(sections, parts[0])
+    if section is None:
+        return 1
+    if len(parts) == 1:
+        print(section["type"])
+        return 0
+    key = parts[1]
+    if key in section["options"]:
+        print(section["options"][key])
+        return 0
+    if key in section["lists"]:
+        print(" ".join(section["lists"][key]))
+        return 0
+    return 1
+
+
+def cmd_set(args):
+    if not args:
+        return 1
+    arg = args[0]
+    if "=" in arg:
+        path, value = arg.split("=", 1)
+    else:
+        path, value = arg, None
+    name, rest = split(path)
+    parts = rest.split(".")
+    sections = parse(path_of(name))
+    section = find(sections, parts[0])
+    if len(parts) == 1:
+        if value is None:
+            return 1
+        if dropped(path):
+            return 0
+        if section is None:
+            sections.append({"type": value, "name": parts[0],
+                             "options": {}, "lists": {}})
+        else:
+            section["type"] = value
+        store(name, sections)
+        return 0
+    if section is None or value is None:
+        return 1
+    if dropped(path):
+        return 0
+    key = parts[1]
+    section["options"][key] = value
+    store(name, sections)
+    return 0
+
+
+def cmd_delete(args):
+    if not args:
+        return 1
+    name, rest = split(args[0])
+    parts = rest.split(".")
+    sections = parse(path_of(name))
+    section = find(sections, parts[0])
+    if section is None:
+        return 1
+    if len(parts) == 1:
+        sections.remove(section)
+    else:
+        key = parts[1]
+        section["options"].pop(key, None)
+        section["lists"].pop(key, None)
+    store(name, sections)
+    return 0
+
+
+def cmd_add_list(args):
+    if not args:
+        return 1
+    arg = args[0]
+    if "=" not in arg:
+        return 1
+    path, value = arg.split("=", 1)
+    name, rest = split(path)
+    parts = rest.split(".")
+    sections = parse(path_of(name))
+    section = find(sections, parts[0])
+    if section is None:
+        return 1
+    if dropped(path):
+        return 0
+    key = parts[1]
+    section["lists"].setdefault(key, []).append(value)
+    store(name, sections)
+    return 0
+
+
+def cmd_commit(args):
+    for name in args:
+        store(name, parse(path_of(name)))
+    return 0
+
+
+def main(argv):
+    # The board writes LF.  A Windows Python writes CRLF, and the carriage
+    # return sticks to the last value of every line the shell reads - and
+    # a port called "lan4\r" is a port the board does not have.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(newline="\n")
+    args = list(argv)
+    if args and args[0] == "-q":
+        args = args[1:]
+    if not args:
+        return 1
+    cmd, rest = args[0], args[1:]
+    if cmd == "get":
+        return cmd_get(rest)
+    if cmd == "set":
+        return cmd_set(rest)
+    if cmd == "delete":
+        return cmd_delete(rest)
+    if cmd == "add_list":
+        return cmd_add_list(rest)
+    if cmd == "commit":
+        return cmd_commit(rest)
+    return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))

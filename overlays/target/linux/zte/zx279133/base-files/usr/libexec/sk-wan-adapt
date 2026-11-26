@@ -1,0 +1,306 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-only
+#
+# Keep the second WAN in shape: find an uplink by asking the ports, keep the
+# port that is the second WAN out of the bridge, and move the traffic to the
+# other WAN when the primary one stops working.
+#
+# THE PROBE
+#
+# A jack is the uplink when something on it answers DHCP.  The test is the
+# same one the bench uses (trial-files/etc/rc.d/S26nat): the jack is taken
+# out of the bridge for the length of one DHCP attempt - a bridge member
+# cannot hold an address, the kernel answers "device or resource busy" -
+# and a client is asked for a lease with a script that only records the
+# offer.  Nobody who answers is left with the address; the port that
+# answers is handed to the network service, which then owns the lease.
+#
+# A port that does not answer goes back into the bridge.  A port that does
+# answer is the second WAN, and the configuration says so, so the choice
+# survives a power cut.
+#
+# WHAT IS NEVER TAKEN
+#
+# The port the management client is in.  The bridge's forwarding database
+# says which port learned the client's MAC address, and the kernel publishes
+# each bridge member's port number, so the two are put together and the port
+# is left alone.  The bench learned this the hard way: on 2026-10-29 the
+# watcher took the jack the ONT was behind and the bridge went down with it.
+# The ports the user excludes are left alone for the same reason.
+#
+# WHY THE TRAFFIC MOVES BY ITSELF ANYWAY
+#
+# netifd takes the default route away with the interface it came from, so a
+# primary WAN that goes down already leaves the traffic to the backup.  What
+# the metrics decide is the preference while both are up, and that is what
+# this script changes: when the primary stops working the metrics are
+# swapped so the backup is preferred, and when the primary comes back they
+# are swapped again - after three good rounds in a row, so a link that
+# flutters does not flap the traffic with it.
+
+PREFIX=${SKW_PREFIX:-}
+SWITCH=${SKW_SWITCH:-/usr/libexec/sk-wan-switch}
+UCI=${SKW_UCI:-uci}
+RUNDIR=$PREFIX/run
+STATE=$RUNDIR/sk-wan-adapt.state
+LAST=$RUNDIR/sk-wan-adapt.last
+PROBE_SCRIPT=$RUNDIR/sk-wan-probe.sh
+# Where the offers are recorded.  On the board this is /tmp; the tests
+# point it into their own directory.
+PROBE_DIR=$PREFIX/tmp
+PROBE_INTERVAL=${SKW_PROBE_INTERVAL:-60}
+FAILOVER_INTERVAL=${SKW_FAILOVER_INTERVAL:-30}
+# How many rounds the script runs before it stops.  Zero means it runs
+# until it is killed, which is what the board does; a test needs it to
+# stop, and a daemon that cannot be stopped cannot be tested.
+ROUNDS=${SKW_ROUNDS:-0}
+# The network service, for the same reason.
+NET_INIT=${SKW_NETWORK_INIT:-/etc/init.d/network}
+# Three rounds of the failover interval: a primary that is down for a
+# minute and a half is down, and one that is up for a minute and a half is
+# up.
+FAILOVER_ROUNDS=${SKW_FAILOVER_ROUNDS:-3}
+# How long an automatically chosen port has to prove itself before the
+# watchdog takes the configuration back.
+ADOPT_GRACE=${SKW_ADOPT_GRACE:-60}
+
+PANEL_PORTS="lan1 lan2 lan3 lan4"
+BRIDGE=br-lan
+
+log() {
+	echo "sk-wan-adapt: $*" >>/dev/kmsg 2>/dev/null
+}
+
+is_panel_port() {
+	case "$1" in
+	lan1|lan2|lan3|lan4) return 0 ;;
+	*) return 1 ;;
+	esac
+}
+
+# The interface's state, read from netifd: the logical interface knows
+# whether it has a lease, and a PPPoE session's address is on a netdev of
+# its own, so the device itself cannot answer this.
+iface_up() {
+	name=$1
+	[ -n "$name" ] || return 1
+	ubus call "network.interface.$name" status 2>/dev/null |
+		tr -d ' \n' | grep -q '"up":true'
+}
+
+iface_ready() {
+	name=$1
+	ubus call "network.interface.$name" status 2>/dev/null |
+		tr -d ' \n' | grep -q '"up":true'
+}
+
+# The port the management client is in, or nothing.
+mgmt_port() {
+	"$SWITCH" mgmt-port "$1" 2>/dev/null
+}
+
+# The ports that may be taken: the panel jacks, minus the one the
+# management client is in, minus the ones the user excluded, minus the one
+# that is the second WAN already, minus the ones that carry an address of
+# their own.
+candidates() {
+	exclude=$1
+	current=$2
+	mgmt=$3
+	out=""
+	for p in $PANEL_PORTS; do
+		[ -e "$PREFIX/sys/class/net/$p" ] || continue
+		[ "$p" = "$mgmt" ] && continue
+		[ "$p" = "$current" ] && continue
+		case " $exclude " in *" $p "*) continue ;; esac
+		ip -4 addr show dev "$p" 2>/dev/null | grep -q 'inet ' && continue
+		out="$out${out:+ }$p"
+	done
+	echo "$out"
+}
+
+write_probe_script() {
+	cat >"$PROBE_SCRIPT" <<EOF
+#!/bin/sh
+# The offer is recorded, not applied: the port that answers is handed to
+# the network service, which then owns the lease.  A second client on the
+# same port would fight for the same address.
+[ "\$1" = bound ] || exit 0
+echo "\$ip \$siaddr" >"$PROBE_DIR/sk-wan-probe.\$interface"
+exit 0
+EOF
+	chmod 755 "$PROBE_SCRIPT" 2>/dev/null
+}
+
+probe_port() {
+	p=$1
+	rm -f "$PROBE_DIR/sk-wan-probe.$p" 2>/dev/null
+	ip link set "$p" nomaster 2>/dev/null
+	ip link set "$p" up 2>/dev/null
+	udhcpc -i "$p" -n -q -t 2 -s "$PROBE_SCRIPT" >"$PROBE_DIR/sk-wan-probe.$p.log" 2>&1
+	[ -s "$PROBE_DIR/sk-wan-probe.$p" ]
+}
+
+put_back() {
+	p=$1
+	ip link set "$p" master "$BRIDGE" 2>/dev/null
+}
+
+# The second WAN has to stay out of the bridge.  The network service builds
+# the bridge from the configuration, and a member of a bridge cannot hold
+# an address, so a port that wandered back in leaves the second WAN without
+# one and the interface quietly dead.
+keep_out_of_bridge() {
+	port=$($UCI -q get network.wan2.device 2>/dev/null)
+	[ -n "$port" ] || return 0
+	is_panel_port "$port" || return 0
+	if [ -d "$PREFIX/sys/class/net/$port/master" ] ||
+	   [ -d "$PREFIX/sys/class/net/$port/bridge" ]; then
+		log "$port came back into the bridge; it is taken out again"
+		ip link set "$port" nomaster 2>/dev/null
+		ip link set "$port" up 2>/dev/null
+	fi
+}
+
+# The metrics of the two WANs.
+set_metrics() {
+	preferred=$1
+	case "$preferred" in
+	wan) am=10; bm=20 ;;
+	wan2) am=20; bm=10 ;;
+	*) return 1 ;;
+	esac
+	# The second WAN's section has to be there before a metric can go
+	# into it.  Without it the second write fails and the swap is half
+	# done - one metric moved, the other not - and the traffic ends up
+	# with no preference at all and nobody saying so.
+	$UCI -q get network.wan2 >/dev/null 2>&1 || $UCI set network.wan2=interface
+	if ! $UCI set network.wan.metric=$am || ! $UCI set network.wan2.metric=$bm; then
+		log "the metrics could not be changed; the configuration is not what it should be"
+		return 1
+	fi
+	$UCI commit network
+	ip route flush default 2>/dev/null
+	setsid "$NET_INIT" reload >/dev/null 2>&1 &
+	log "the preference is now $preferred"
+}
+
+# The state of the failover: how many rounds in a row the primary was
+# good, how many in a row it was bad, and whether the metrics are
+# currently the swapped ones.
+load_state() {
+	good=0
+	bad=0
+	swapped=0
+	[ -f "$STATE" ] && . "$STATE"
+}
+
+save_state() {
+	cat >"$STATE" <<EOF
+good=$good
+bad=$bad
+swapped=$swapped
+EOF
+}
+
+failover() {
+	primary=$($UCI -q get sk_wan.wan.primary 2>/dev/null)
+	[ -n "$primary" ] || primary=wan
+	other=wan2
+	[ "$primary" = wan2 ] && other=wan
+
+	load_state
+	if iface_ready "$primary"; then
+		bad=0
+		good=$((good + 1))
+		if [ "$swapped" = 1 ] && [ "$good" -ge "$FAILOVER_ROUNDS" ]; then
+			set_metrics "$primary"
+			swapped=0
+		fi
+	else
+		good=0
+		bad=$((bad + 1))
+		if [ "$swapped" = 0 ] && [ "$bad" -ge "$FAILOVER_ROUNDS" ]; then
+			if iface_ready "$other"; then
+				set_metrics "$other"
+				swapped=1
+			fi
+		fi
+	fi
+	save_state
+}
+
+# The search for an uplink.
+search() {
+	auto=$($UCI -q get sk_wan.wan.auto 2>/dev/null)
+	[ "$auto" = 1 ] || return 0
+
+	current=$($UCI -q get network.wan2.device 2>/dev/null)
+	# A second WAN that is working is left alone.  A second WAN that is
+	# not working is looked for again, but not before it has had its
+	# chance: a port that was just given a lease needs a moment.
+	if [ -n "$current" ]; then
+		if iface_ready wan2; then
+			return 0
+		fi
+	fi
+
+	exclude=$($UCI -q get sk_wan.wan.exclude 2>/dev/null)
+	mgmt=$(mgmt_port "")
+	if [ -z "$mgmt" ]; then
+		# The port the management client is in could not be found.
+		# Taking a port on a guess is taking a port away from
+		# somebody, so this round takes none.
+		log "the management port is not known; no port is taken this round"
+		return 0
+	fi
+	list=$(candidates "$exclude" "$current" "$mgmt")
+	[ -n "$list" ] || return 0
+
+	for p in $list; do
+		log "asking $p whether anything is there"
+		if probe_port "$p"; then
+			log "$p answered; it is the second WAN"
+			echo "$p answered DHCP" >"$LAST"
+			if "$SWITCH" apply-wan2 --device "$p" --proto dhcp >/dev/null 2>&1; then
+				# The change has to prove itself: the port has
+				# to come up with an address, or the
+				# watchdog takes the configuration back.
+				i=0
+				while [ $i -lt "$ADOPT_GRACE" ]; do
+					iface_ready wan2 && break
+					i=$((i + 5))
+					sleep 5
+				done
+				if iface_ready wan2; then
+					"$SWITCH" confirm >/dev/null 2>&1
+					log "$p is the second WAN"
+					return 0
+				fi
+				log "$p did not come up; the change is taken back"
+				"$SWITCH" rollback >/dev/null 2>&1
+			fi
+			return 0
+		fi
+		put_back "$p"
+		log "$p did not answer"
+	done
+	echo "no port answered" >"$LAST"
+	return 0
+}
+
+mkdir -p "$RUNDIR" 2>/dev/null
+write_probe_script
+
+round=0
+while [ "$ROUNDS" -eq 0 ] || [ $round -lt "$ROUNDS" ]; do
+	round=$((round + 1))
+	keep_out_of_bridge
+	failover
+	if [ $((round % 2)) -eq 0 ]; then
+		search
+	fi
+	if [ "$ROUNDS" -eq 0 ] || [ $round -lt "$ROUNDS" ]; then
+		sleep "$FAILOVER_INTERVAL"
+	fi
+done

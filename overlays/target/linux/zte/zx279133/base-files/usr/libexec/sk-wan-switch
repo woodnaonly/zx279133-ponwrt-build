@@ -1,0 +1,678 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-only
+#
+# Assign a panel jack to the second WAN, or take it back.
+#
+# WHY THIS IS A SEPARATE PROGRAM AND NOT A UCI EDIT
+#
+# The bridge's port list is a LIST option:
+#
+#	config device
+#		option name 'br-lan'
+#		option type 'bridge'
+#		list ports 'lan1'
+#		list ports 'lan2'
+#
+# LuCI's uci channel has no "add_list": the only way to write a list is to
+# delete the option and add one entry per value.  A bridge whose ports were
+# written as one string ("uci set network.@device[0].ports='lan1 lan3'")
+# is told about a port with a space in its name, and the bridge that the
+# kernel builds then holds nothing the user asked for.  So the port list is
+# written here, with "uci delete" followed by one "uci add_list" per port,
+# exactly the way tools/portmove.sh does it.
+#
+# WHY THE CHANGE IS ONE TRANSACTION WITH ITS OWN ROLLBACK
+#
+# LuCI's uci apply(rollback=true) rolls back what went through LuCI's uci
+# channel.  The port list did not, so a rollback there would restore the
+# wan2 device and leave the jack in the bridge - a state that is neither the
+# old one nor the new one, and that looks exactly like a dead jack.  So the
+# rollback lives here too: the old state is written down before the change,
+# a watchdog restores it if nobody confirms, and the confirmation comes from
+# the page.
+#
+# The window is this run only.  The saved state lives in /run, which is a
+# tmpfs: a reboot in the middle of the window forgets it, and the committed
+# configuration - the new one - is what the board comes back with.  That is
+# intended.  A port the user chose is meant to survive a power cut; what the
+# window is for is the case where the change made the board unreachable and
+# nobody noticed.
+#
+# The commands:
+#
+#	apply-wan2 --device <port|none> [--proto P] [--username U] [--password P]
+#	           [--ipaddr I] [--netmask N] [--gateway G] [--primary wan|wan2]
+#	reset
+#	confirm
+#	rollback
+#	status
+#	watchdog <seconds> <token>
+#	mgmt-port [client-address]
+#
+# "status" prints one JSON object.  "mgmt-port" prints the panel jack the
+# management client is in, or nothing: the page uses it to warn before a
+# change that would cut the management link.
+
+PREFIX=${SKW_PREFIX:-}
+UCI=${SKW_UCI:-uci}
+NET_INIT=${SKW_NETWORK_INIT:-/etc/init.d/network}
+FW_INIT=${SKW_FIREWALL_INIT:-/etc/init.d/firewall}
+SELF=${SKW_SWITCH:-$0}
+# The NPPT's port types follow the configuration, so they are put right
+# again after every change.  The script is the one the init service runs,
+# and it waits for the kernel to let go of the port before it gives up.
+PORTS_SCRIPT=${SKW_PORTS_SCRIPT:-/usr/libexec/zx279133-wan-ports}
+# The sandbox in the repository's own tests has no watchdog to spawn and no
+# network to reload, and it says so here rather than in the code below.
+SPAWN_WATCHDOG=${SKW_WATCHDOG:-1}
+
+NETCONF=$PREFIX/etc/config/network
+FWCONF=$PREFIX/etc/config/firewall
+RUNDIR=$PREFIX/run
+STATE=$RUNDIR/sk-wan-switch.state
+TOKENFILE=$RUNDIR/sk-wan-switch.token
+CONFIRMED=$RUNDIR/sk-wan-switch.confirmed
+LOCKFILE=$RUNDIR/sk-wan-switch.lock
+
+BRIDGE=br-lan
+# The panel jacks.  lan0 is the 9132's jackless port and lan-cpu0 is the
+# DSA conduit: neither is a jack a user can plug a cable into, and the
+# conduit must never leave the bridge - a bridge without it forwards between
+# the jacks and never reaches the router.
+PANEL_PORTS="lan1 lan2 lan3 lan4"
+CONDUIT=lan-cpu0
+
+log() {
+	echo "sk-wan-switch: $*" >>/dev/kmsg 2>/dev/null
+	printf 'sk-wan-switch: %s\n' "$*" >&2
+}
+
+die() {
+	log "$*"
+	printf '{"ok":false,"error":"%s"}\n' "$*"
+	exit 1
+}
+
+json_escape() {
+	printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | tr -d '\r\n'
+}
+
+json_list() {
+	out=""
+	for item in $1; do
+		out="$out${out:+,}\"$(json_escape "$item")\""
+	done
+	printf '[%s]' "$out"
+}
+
+# ---------------------------------------------------------------------
+# Reading the board
+# ---------------------------------------------------------------------
+
+# The index of the anonymous device section that carries the LAN bridge.
+# The board has exactly one, and it is @device[0], but the section is
+# searched for rather than assumed: tools/portmove.sh wrote to
+# network.@device[0] because that was what it found, and a board whose
+# bridge is not the first device section would have had its ports moved
+# into the wrong list.
+bridge_index() {
+	i=0
+	while [ $i -lt 64 ]; do
+		$UCI -q get "network.@device[$i]" >/dev/null 2>&1 || break
+		name=$($UCI -q get "network.@device[$i].name" 2>/dev/null)
+		if [ "$name" = "$BRIDGE" ]; then
+			echo "$i"
+			return 0
+		fi
+		i=$((i + 1))
+	done
+	echo 0
+}
+
+bridge_ports() {
+	idx=$(bridge_index)
+	$UCI -q get "network.@device[$idx].ports" 2>/dev/null | tr -d '\r' | tr '\n' ' ' | tr -s ' ' | sed -e 's/^ //' -e 's/ $//'
+}
+
+panel_port() {
+	case "$1" in
+	lan1|lan2|lan3|lan4) return 0 ;;
+	*) return 1 ;;
+	esac
+}
+
+# The new bridge list.
+#
+# It starts from the list the board has, not from a list written down here:
+# the board's own default and the bench's default differ (the board's
+# bridge holds the four panel jacks and neither the jackless port nor the
+# conduit, and tools/portsall.sh's default holds five ports and the
+# conduit), and a script that rewrites the whole list would silently change
+# that difference every time it ran.  So: the current list, minus the jack
+# that becomes the WAN2, plus the jack that stops being the WAN2.
+compute_ports() {
+	new_wan2=$1
+	old_wan2=$2
+	cur=$3
+	out=""
+	for p in $cur; do
+		[ "$p" = "$new_wan2" ] && continue
+		case " $out " in *" $p "*) continue ;; esac
+		out="$out${out:+ }$p"
+	done
+	if panel_port "$old_wan2"; then
+		case " $out " in *" $old_wan2 "*) : ;; *) out="$out${out:+ }$old_wan2" ;; esac
+	fi
+	echo "$out"
+}
+
+# The port the management client is in.
+#
+# The bridge's forwarding database says which port learned a MAC address,
+# and the kernel publishes each bridge member's port number:
+#
+#	/sys/class/net/br-lan/brif/<port>/port_no
+#
+# brctl prints the number, so the two are put together: the number that
+# brctl reports for the client's MAC, and the member whose port_no is that
+# number.  When the client address is known its MAC is looked up in the
+# neighbour table first; without it the first learned MAC is used, which is
+# what the bench's own script does.
+#
+# An empty answer means "not known", and the caller must then take no port:
+# a port taken on a guess is a port taken away from somebody.
+mgmt_port() {
+	client=$1
+	[ -d "$PREFIX/sys/class/net/$BRIDGE" ] || return 0
+	mac=""
+	if [ -n "$client" ]; then
+		mac=$(ip neigh show "$client" 2>/dev/null | awk '/lladdr/ {print $5; exit}')
+		[ -n "$mac" ] && mac=$(echo "$mac" | tr 'A-F' 'a-f')
+	fi
+	portno=""
+	if [ -n "$mac" ]; then
+		portno=$(brctl showmacs "$BRIDGE" 2>/dev/null |
+			awk -v mac="$mac" 'tolower($2) == mac {print $1; exit}')
+	else
+		portno=$(brctl showmacs "$BRIDGE" 2>/dev/null |
+			awk '$2 ~ /^[0-9a-fA-F][0-9a-fA-F]:/ {print $1; exit}')
+	fi
+	[ -n "$portno" ] || return 0
+	for d in "$PREFIX"/sys/class/net/$BRIDGE/brif/*; do
+		[ -d "$d" ] || continue
+		have=$(cat "$d/port_no" 2>/dev/null)
+		have=$((have))
+		if [ "$have" = "$portno" ]; then
+			echo "${d##*/}"
+			return 0
+		fi
+	done
+	return 0
+}
+
+# ---------------------------------------------------------------------
+# The change
+# ---------------------------------------------------------------------
+
+# A value, quoted so that the state file can be read back.
+#
+# The state file is read with ".", so every value in it has to survive
+# being a shell word: the bridge's port list is three words, and a
+# password can hold anything at all.
+shell_quote() {
+	printf '%s' "$1" | sed "s/'/'\\\\''/g"
+}
+
+save_state() {
+	{
+		echo "BRIDGE_PORTS='$(shell_quote "$1")'"
+		echo "WAN2_DEVICE='$(shell_quote "$2")'"
+		echo "WAN2_PROTO='$(shell_quote "$3")'"
+		echo "WAN2_USERNAME='$(shell_quote "$4")'"
+		echo "WAN2_PASSWORD='$(shell_quote "$5")'"
+		echo "WAN2_IPADDR='$(shell_quote "$6")'"
+		echo "WAN2_NETMASK='$(shell_quote "$7")'"
+		echo "WAN2_GATEWAY='$(shell_quote "$8")'"
+		echo "PRIMARY='$(shell_quote "$9")'"
+		echo "WAN_METRIC='$(shell_quote "${10}")'"
+		echo "WAN2_METRIC='$(shell_quote "${11}")'"
+	} >"$STATE"
+}
+
+read_state() {
+	[ -f "$STATE" ] || return 1
+	. "$STATE"
+	return 0
+}
+
+# Write the firewall zone for the second WAN and the forwarding into it.
+#
+# The zone is a NAMED section, so the script does not have to know how many
+# zones the board's firewall already has: "uci set firewall.wan2=zone" is
+# the same section whether the board had none or four.
+write_firewall() {
+	$UCI set firewall.wan2=zone
+	$UCI set firewall.wan2.name=wan2
+	$UCI set firewall.wan2.network=wan2
+	$UCI set firewall.wan2.input=REJECT
+	$UCI set firewall.wan2.output=ACCEPT
+	$UCI set firewall.wan2.forward=DROP
+	$UCI set firewall.wan2.masq=1
+	$UCI set firewall.wan2.mtu_fix=1
+	$UCI set firewall.lan_wan2=forwarding
+	$UCI set firewall.lan_wan2.src=lan
+	$UCI set firewall.lan_wan2.dest=wan2
+}
+
+# The block of a configuration file that belongs to one named section.
+#
+# The verification below reads the COMMITTED file, not "uci get": a uci
+# invocation merges the staged delta with the file, so a "uci get" after a
+# commit that failed (a read-only mount, a full jffs2) still answers with
+# the new value while the board comes back after the next power cut with the
+# old one.  That failure is invisible, and tools/portmove.sh was written
+# because of it.
+section_block() {
+	file=$1
+	name=$2
+	[ -f "$file" ] || return 1
+	awk -v name="$name" '
+		/^config / { inblock = 0; n = name; if (index($0, "\x27" n "\x27")) inblock = 1;
+			     if (index($0, "\x22" n "\x22")) inblock = 1 }
+		inblock { print }
+	' "$file"
+}
+
+verify_committed() {
+	device=$1
+	ports=$2
+	file=$NETCONF
+	[ -f "$file" ] || { log "no $file to read back"; return 1; }
+	for p in $ports; do
+		grep -q "list ports '$p'" "$file" || {
+			log "the committed bridge does not hold $p"
+			return 1
+		}
+	done
+	block=$(section_block "$file" wan2)
+	if [ -n "$device" ]; then
+		case "$block" in
+		*"device '$device'"*) : ;;
+		*)
+			log "the committed wan2 does not carry device '$device'"
+			return 1
+			;;
+		esac
+	fi
+	return 0
+}
+
+# Put the board's network back the way it was.
+restore() {
+	[ -f "$STATE" ] || return 1
+	. "$STATE"
+	# The saved port list has to be there.
+	#
+	# A bridge with no ports is a board nobody can reach, and the port list
+	# is written by deleting the option and adding one entry per port.  So a
+	# state file that cannot be read back must NOT empty the bridge: the old
+	# state stays as it is and the failure is said out loud.
+	[ -n "$BRIDGE_PORTS" ] || {
+		log "the saved port list is not readable; the bridge is left as it is"
+		return 1
+	}
+	idx=$(bridge_index)
+	$UCI -q delete "network.@device[$idx].ports" 2>/dev/null
+	for p in $BRIDGE_PORTS; do
+		$UCI add_list "network.@device[$idx].ports=$p"
+	done
+	if [ -n "$WAN2_DEVICE" ]; then
+		$UCI set network.wan2=interface
+		$UCI set network.wan2.device="$WAN2_DEVICE"
+		$UCI set network.wan2.proto="$WAN2_PROTO"
+		[ -n "$WAN2_USERNAME" ] && $UCI set network.wan2.username="$WAN2_USERNAME"
+		[ -n "$WAN2_PASSWORD" ] && $UCI set network.wan2.password="$WAN2_PASSWORD"
+		[ -n "$WAN2_IPADDR" ] && $UCI set network.wan2.ipaddr="$WAN2_IPADDR"
+		[ -n "$WAN2_NETMASK" ] && $UCI set network.wan2.netmask="$WAN2_NETMASK"
+		[ -n "$WAN2_GATEWAY" ] && $UCI set network.wan2.gateway="$WAN2_GATEWAY"
+		$UCI -q delete network.wan2.disabled 2>/dev/null
+	else
+		$UCI set network.wan2=interface
+		$UCI set network.wan2.disabled=1
+		$UCI -q delete network.wan2.device 2>/dev/null
+	fi
+	$UCI set network.wan.metric="$WAN_METRIC"
+	$UCI set network.wan2.metric="$WAN2_METRIC"
+	$UCI commit network
+	$UCI commit firewall
+}
+
+# The network service is reloaded, and the firewall after it: the zone of
+# the second WAN names an interface that only exists once the network has
+# been read again.  The reload is detached, because the board's address
+# leaves this segment while it runs and the session it arrived on dies with
+# it.
+reload_network() {
+	if [ "$SPAWN_WATCHDOG" != "1" ]; then
+		$NET_INIT reload
+		$FW_INIT reload
+		[ -x "$PORTS_SCRIPT" ] && "$PORTS_SCRIPT" >/dev/null 2>&1
+		return 0
+	fi
+	setsid /bin/sh -c "$NET_INIT reload; sleep 5; $FW_INIT reload; [ -x '$PORTS_SCRIPT' ] && '$PORTS_SCRIPT' >/dev/null 2>&1" >/dev/null 2>&1 &
+	return 0
+}
+
+apply_wan2() {
+	device=""
+	proto=""
+	username=""
+	password=""
+	ipaddr=""
+	netmask=""
+	gateway=""
+	primary=""
+	while [ $# -gt 0 ]; do
+		case "$1" in
+		--device) device=$2; shift 2 ;;
+		--proto) proto=$2; shift 2 ;;
+		--username) username=$2; shift 2 ;;
+		--password) password=$2; shift 2 ;;
+		--ipaddr) ipaddr=$2; shift 2 ;;
+		--netmask) netmask=$2; shift 2 ;;
+		--gateway) gateway=$2; shift 2 ;;
+		--primary) primary=$2; shift 2 ;;
+		*) die "unknown argument '$1'" ;;
+		esac
+	done
+
+	if [ "$device" != "none" ]; then
+		panel_port "$device" || die "the wan2 device must be one of $PANEL_PORTS, not '$device'"
+		[ -e "$PREFIX/sys/class/net/$device" ] || die "there is no $device on this board"
+	fi
+	case "$primary" in
+	""|wan|wan2) : ;;
+	*) die "the primary wan must be 'wan' or 'wan2'" ;;
+	esac
+
+	mkdir -p "$RUNDIR" 2>/dev/null
+	exec 9>"$LOCKFILE" 2>/dev/null
+	flock 9 2>/dev/null
+
+	cur=$(bridge_ports)
+	old_wan2=$($UCI -q get network.wan2.device 2>/dev/null)
+	old_proto=$($UCI -q get network.wan2.proto 2>/dev/null)
+	old_username=$($UCI -q get network.wan2.username 2>/dev/null)
+	old_password=$($UCI -q get network.wan2.password 2>/dev/null)
+	old_ipaddr=$($UCI -q get network.wan2.ipaddr 2>/dev/null)
+	old_netmask=$($UCI -q get network.wan2.netmask 2>/dev/null)
+	old_gateway=$($UCI -q get network.wan2.gateway 2>/dev/null)
+	old_primary=$($UCI -q get sk_wan.wan.primary 2>/dev/null)
+	old_wan_metric=$($UCI -q get network.wan.metric 2>/dev/null)
+	old_wan2_metric=$($UCI -q get network.wan2.metric 2>/dev/null)
+	[ -n "$old_primary" ] || old_primary=wan
+	[ -n "$old_wan_metric" ] || old_wan_metric=10
+	[ -n "$old_wan2_metric" ] || old_wan2_metric=20
+
+	# Idempotence: asking for what is already in place changes nothing and
+	# reloads nothing.  A page that applies twice must not cut the link
+	# twice.
+	if [ "$device" = "$old_wan2" ] && [ "$device" != "none" ]; then
+		if [ -z "$proto" ] || [ "$proto" = "$old_proto" ]; then
+			log "the wan2 is already on $device"
+			printf '{"ok":true,"changed":false,"wan2_device":"%s","bridge":%s}\n' \
+				"$(json_escape "$device")" "$(json_list "$cur")"
+			return 0
+		fi
+	fi
+
+	new_ports=$(compute_ports "$device" "$old_wan2" "$cur")
+
+	save_state "$cur" "$old_wan2" "$old_proto" "$old_username" "$old_password" \
+		"$old_ipaddr" "$old_netmask" "$old_gateway" "$old_primary" \
+		"$old_wan_metric" "$old_wan2_metric"
+
+	idx=$(bridge_index)
+	$UCI -q delete "network.@device[$idx].ports" 2>/dev/null
+	for p in $new_ports; do
+		$UCI add_list "network.@device[$idx].ports=$p"
+	done
+
+	if [ "$device" = "none" ]; then
+		# The section stays, disabled: the firewall zone names the
+		# network 'wan2', and a zone whose network does not exist is
+		# what fw4 complains about.
+		$UCI set network.wan2=interface
+		$UCI set network.wan2.disabled=1
+		$UCI -q delete network.wan2.device 2>/dev/null
+	else
+		$UCI set network.wan2=interface
+		$UCI set network.wan2.device="$device"
+		$UCI -q delete network.wan2.disabled 2>/dev/null
+		if [ -n "$proto" ]; then
+			$UCI set network.wan2.proto="$proto"
+		fi
+		[ -n "$username" ] && $UCI set network.wan2.username="$username"
+		[ -n "$password" ] && $UCI set network.wan2.password="$password"
+		[ -n "$ipaddr" ] && $UCI set network.wan2.ipaddr="$ipaddr"
+		[ -n "$netmask" ] && $UCI set network.wan2.netmask="$netmask"
+		[ -n "$gateway" ] && $UCI set network.wan2.gateway="$gateway"
+	fi
+
+	# The metrics: the primary takes the lower one.
+	[ -n "$primary" ] || primary=$old_primary
+	if [ "$primary" = "wan2" ]; then
+		wan_metric=20
+		wan2_metric=10
+	else
+		wan_metric=10
+		wan2_metric=20
+	fi
+	$UCI set network.wan.metric="$wan_metric"
+	$UCI set network.wan2.metric="$wan2_metric"
+	$UCI set sk_wan.wan.primary="$primary"
+
+	write_firewall
+	$UCI commit network
+	$UCI commit firewall
+
+	verify_committed "$device" "$new_ports" || {
+		restore
+		log "the committed configuration did not carry the change; the old one is back"
+		die "the change did not land in the committed configuration"
+	}
+
+	# The watchdog.  It restores the old state if nobody confirms, and it
+	# only does that while this token is the current one: a change made
+	# after this one replaces the token, and this watchdog then leaves the
+	# newer change alone.
+	token="$$-$(date +%s 2>/dev/null || echo 0)"
+	echo "$token" >"$TOKENFILE"
+	rm -f "$CONFIRMED"
+	if [ "$SPAWN_WATCHDOG" = "1" ]; then
+		setsid "$SELF" watchdog 90 "$token" >/dev/null 2>&1 &
+	fi
+
+	reload_network
+
+	log "the wan2 is now on ${device:-none}; the bridge holds: $new_ports"
+	printf '{"ok":true,"changed":true,"wan2_device":"%s","bridge":%s,"deadline":90}\n' \
+		"$(json_escape "$device")" "$(json_list "$new_ports")"
+	return 0
+}
+
+reset_wan() {
+	mkdir -p "$RUNDIR" 2>/dev/null
+	exec 9>"$LOCKFILE" 2>/dev/null
+	flock 9 2>/dev/null
+
+	cur=$(bridge_ports)
+	old_wan2=$($UCI -q get network.wan2.device 2>/dev/null)
+	old_proto=$($UCI -q get network.wan2.proto 2>/dev/null)
+	old_username=$($UCI -q get network.wan2.username 2>/dev/null)
+	old_password=$($UCI -q get network.wan2.password 2>/dev/null)
+	old_ipaddr=$($UCI -q get network.wan2.ipaddr 2>/dev/null)
+	old_netmask=$($UCI -q get network.wan2.netmask 2>/dev/null)
+	old_gateway=$($UCI -q get network.wan2.gateway 2>/dev/null)
+	old_primary=$($UCI -q get sk_wan.wan.primary 2>/dev/null)
+	old_wan_metric=$($UCI -q get network.wan.metric 2>/dev/null)
+	old_wan2_metric=$($UCI -q get network.wan2.metric 2>/dev/null)
+	save_state "$cur" "$old_wan2" "$old_proto" "$old_username" "$old_password" \
+		"$old_ipaddr" "$old_netmask" "$old_gateway" "$old_primary" \
+		"$old_wan_metric" "$old_wan2_metric"
+
+	# Every panel jack goes back into the bridge, and the first WAN goes
+	# back to the optical port.
+	idx=$(bridge_index)
+	$UCI -q delete "network.@device[$idx].ports" 2>/dev/null
+	for p in $cur; do
+		[ "$p" = "$old_wan2" ] && continue
+		case " $p " in *" lan-cpu0 "*) : ;; *) $UCI add_list "network.@device[$idx].ports=$p" ;; esac
+	done
+	if panel_port "$old_wan2"; then
+		$UCI add_list "network.@device[$idx].ports=$old_wan2"
+	fi
+	$UCI set network.wan.device=eth0
+	$UCI set network.wan2=interface
+	$UCI set network.wan2.disabled=1
+	$UCI -q delete network.wan2.device 2>/dev/null
+	$UCI set network.wan.metric=10
+	$UCI set network.wan2.metric=20
+	$UCI set sk_wan.wan.primary=wan
+	$UCI commit network
+	$UCI commit firewall
+	reload_network
+	log "the wan2 is gone and the optical port is the wan again"
+	printf '{"ok":true,"changed":true,"wan2_device":"","reset":true}\n'
+	return 0
+}
+
+confirm_change() {
+	[ -f "$TOKENFILE" ] || {
+		printf '{"ok":true,"confirmed":false,"reason":"nothing to confirm"}\n'
+		return 0
+	}
+	cp "$TOKENFILE" "$CONFIRMED" 2>/dev/null
+	printf '{"ok":true,"confirmed":true}\n'
+	return 0
+}
+
+rollback_change() {
+	[ -f "$STATE" ] || {
+		printf '{"ok":true,"rolled_back":false,"reason":"there is no saved state"}\n'
+		return 0
+	}
+	restore || die "the old state could not be restored"
+	rm -f "$STATE" "$TOKENFILE" "$CONFIRMED"
+	reload_network
+	log "the change was rolled back"
+	printf '{"ok":true,"rolled_back":true}\n'
+	return 0
+}
+
+watchdog() {
+	seconds=$1
+	token=$2
+	[ -n "$seconds" ] && [ -n "$token" ] || exit 0
+	sleep "$seconds"
+	current=""
+	[ -f "$TOKENFILE" ] && current=$(cat "$TOKENFILE" 2>/dev/null)
+	confirmed=""
+	[ -f "$CONFIRMED" ] && confirmed=$(cat "$CONFIRMED" 2>/dev/null)
+	# A newer change owns the state now, or the page confirmed this one:
+	# either way this watchdog has nothing to do.
+	[ "$current" = "$token" ] || exit 0
+	[ "$confirmed" = "$token" ] && exit 0
+	log "nobody confirmed the change; the old configuration comes back"
+	rollback_change >/dev/null 2>&1
+	exit 0
+}
+
+has_address() {
+	ip -4 addr show dev "$1" 2>/dev/null | grep -q 'inet '
+}
+
+status_json() {
+	wan_device=$($UCI -q get network.wan.device 2>/dev/null)
+	wan_proto=$($UCI -q get network.wan.proto 2>/dev/null)
+	wan_metric=$($UCI -q get network.wan.metric 2>/dev/null)
+	wan2_device=$($UCI -q get network.wan2.device 2>/dev/null)
+	wan2_proto=$($UCI -q get network.wan2.proto 2>/dev/null)
+	wan2_metric=$($UCI -q get network.wan2.metric 2>/dev/null)
+	wan2_disabled=$($UCI -q get network.wan2.disabled 2>/dev/null)
+	primary=$($UCI -q get sk_wan.wan.primary 2>/dev/null)
+	auto=$($UCI -q get sk_wan.wan.auto 2>/dev/null)
+	exclude=$($UCI -q get sk_wan.wan.exclude 2>/dev/null)
+	cur=$(bridge_ports)
+	[ -n "$wan_metric" ] || wan_metric=10
+	[ -n "$wan2_metric" ] || wan2_metric=20
+	[ -n "$primary" ] || primary=wan
+
+	wan_up=false
+	[ -n "$wan_device" ] && has_address "$wan_device" && wan_up=true
+	wan2_up=false
+	[ -n "$wan2_device" ] && has_address "$wan2_device" && wan2_up=true
+
+	wan_ports=""
+	[ -f "$PREFIX/sys/class/net/eth0/device/wan_ports" ] &&
+		wan_ports=$(cat "$PREFIX/sys/class/net/eth0/device/wan_ports" 2>/dev/null | tr '\n' ' ')
+	wan_type=""
+	[ -f "$PREFIX/sys/module/zx279133_switch/parameters/wan_type" ] &&
+		wan_type=$(cat "$PREFIX/sys/module/zx279133_switch/parameters/wan_type" 2>/dev/null)
+
+	pending=false
+	[ -f "$TOKENFILE" ] && pending=true
+	confirmed=false
+	[ -f "$CONFIRMED" ] && confirmed=true
+
+	mgmt=$(mgmt_port "$1")
+
+	printf '{"wan1":{"device":"%s","proto":"%s","metric":"%s","up":%s},' \
+		"$(json_escape "$wan_device")" "$(json_escape "$wan_proto")" \
+		"$(json_escape "$wan_metric")" "$wan_up"
+	printf '"wan2":{"device":"%s","proto":"%s","metric":"%s","up":%s,"disabled":"%s"},' \
+		"$(json_escape "$wan2_device")" "$(json_escape "$wan2_proto")" \
+		"$(json_escape "$wan2_metric")" "$wan2_up" "$(json_escape "$wan2_disabled")"
+	printf '"bridge":%s,' "$(json_list "$cur")"
+	printf '"primary":"%s","adaptive":{"auto":"%s","exclude":"%s"},' \
+		"$(json_escape "$primary")" "$(json_escape "$auto")" "$(json_escape "$exclude")"
+	printf '"npu":{"wan_ports":"%s","wan_type":"%s"},' \
+		"$(json_escape "$wan_ports")" "$(json_escape "$wan_type")"
+	printf '"mgmt_port":"%s","pending":%s,"confirmed":%s}\n' \
+		"$(json_escape "$mgmt")" "$pending" "$confirmed"
+}
+
+case "$1" in
+apply-wan2)
+	shift
+	apply_wan2 "$@"
+	;;
+reset)
+	shift
+	reset_wan "$@"
+	;;
+confirm)
+	shift
+	confirm_change "$@"
+	;;
+rollback)
+	shift
+	rollback_change "$@"
+	;;
+watchdog)
+	shift
+	watchdog "$@"
+	;;
+status)
+	shift
+	status_json "$@"
+	;;
+mgmt-port)
+	shift
+	mgmt_port "$@"
+	;;
+*)
+	printf 'usage: %s {apply-wan2|reset|confirm|rollback|watchdog|status|mgmt-port}\n' "$0" >&2
+	exit 2
+	;;
+esac

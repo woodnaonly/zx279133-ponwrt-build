@@ -1,0 +1,18 @@
+# The second WAN and the way it is chosen.
+#
+# "auto" is the adaptive mode: the board asks the panel jacks which one has
+# something on it that answers DHCP, and that one becomes the second WAN.
+# It is on by default because a cable plugged into a jack is the only
+# signal there is; turn it off to keep the jacks where they are.
+#
+# "primary" says which of the two WANs the traffic prefers while both are
+# up: "wan" is the optical port, "wan2" is the panel jack.  The other one is
+# the backup, and it takes over on its own when the primary stops working.
+#
+# "exclude" lists the jacks that must never be taken for the second WAN -
+# a jack with a machine behind it that runs a DHCP server of its own, for
+# example.  The port the management client is in is never taken either.
+config settings 'wan'
+	option auto '1'
+	option primary 'wan'
+	option exclude ''

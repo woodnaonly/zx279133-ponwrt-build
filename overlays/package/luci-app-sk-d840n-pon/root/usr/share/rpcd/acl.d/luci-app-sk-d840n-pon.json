@@ -5,11 +5,17 @@
       "ubus": {
         "luci.skd840n-pon":["status"],"system":["board"],
         "luci-rpc":["getBoardJSON","getHostHints","getNetworkDevices"],
-        "network":["get_proto_handlers"],"network.device":["status"],"network.interface":["dump"]
+        "network":["get_proto_handlers"],"network.device":["status"],"network.interface":["dump"],
+        "file":["exec"]
       },
-      "uci":["pon","network","firewall"]
+      "file": {"/usr/libexec/sk-wan-switch": ["exec"]},
+      "uci":["pon","network","firewall","sk_wan"]
     },
-    "write":{"uci":["pon","network"]}
+    "write":{
+      "uci":["pon","network","sk_wan"],
+      "ubus":{"file":["exec"]},
+      "file": {"/usr/libexec/sk-wan-switch": ["exec"]}
+    }
   },
   "luci-skd840n-system": {
     "description":"Read SK-D840N CPU and thermal state; no frequency writes",

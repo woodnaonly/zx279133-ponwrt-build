@@ -1,0 +1,215 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-only
+#
+# Put the NPPT's port types where the configuration says they belong.
+#
+# WHAT THE TREE'S SCRIPT DOES, AND WHY IT DOES NOT FIT THIS BOARD
+#
+# The tree's zx279133-wan-ports switches every port that the firewall puts
+# in a WAN zone to WAN-type in the NP, and the others back to LAN-type.
+# Two things about it do not fit here.
+#
+# The first is the rule.  A WAN-type port has the PPPoE header removed on
+# the way in and added on the way out: that is the factory system's "WAN
+# over a LAN jack", and it is what a PPPoE uplink needs.  A DHCP or a
+# static uplink wants ordinary Ethernet frames, and a port switched to
+# WAN-type for it hands the hardware frames it should not touch.  So the
+# type follows the protocol of the WAN, not the name of the zone it is in.
+#
+# The second is that the tree's script never clears a port that is back in
+# the bridge.  It recognises a port by the fact that it has LEFT the
+# bridge, so a port that is in the bridge is not recognised and keeps the
+# type it had.  A jack that was the second WAN and is a LAN port again
+# would keep the WAN type, and the hardware would go on treating its
+# traffic as the factory system's.
+#
+# WHAT THIS SCRIPT DOES INSTEAD
+#
+# The driver owns nothing here.  The wan_type parameter of the switch
+# driver is written to 0 explicitly, so the driver leaves the NPPT's port
+# types alone and this script is the only thing that changes them.
+#
+# The ports of the switch are the DSA jacks - lan0, the jackless one, and
+# lan1 to lan4.  The conduit, lan-cpu0, is the CPU's own lane: it is not
+# a jack and has no port type to set.
+#
+# The second WAN is network.wan2 and its device names the jack.  When that
+# network speaks PPPoE the jack is switched to WAN-type; when it speaks
+# DHCP or is a static address the jack stays LAN-type.  The first WAN is
+# the optical port, which is not a jack at all and is left alone.
+#
+# WRITING A PORT THAT IS STILL IN THE BRIDGE
+#
+# The driver refuses to switch a port to WAN-type while the port is a
+# member of a bridge: a port in a bridge is a LAN port, and the driver
+# says so with -EBUSY.  That is the normal state of things for a moment
+# after the network is reloaded, because the kernel has not finished
+# taking the port out of the bridge yet.  So the write is repeated for a
+# while, and a port that still cannot be written is reported instead of
+# being quietly left in the wrong state.
+
+PREFIX=${SKW_PREFIX:-}
+SYS=${SKW_SYS:-}
+UCI=${SKW_UCI:-uci}
+# The attribute itself, when the test harness wants to point it somewhere
+# else.  Left empty, it is found under the sysfs tree.
+ATTR_OVERRIDE=${SKW_ATTR:-}
+# How many times a refused write is repeated, and how long the script
+# waits between two attempts.
+RETRIES=${SKW_RETRIES:-10}
+SLEEP=${SKW_SLEEP:-1}
+LOG=${SKW_LOG:-/dev/kmsg}
+
+log() {
+	echo "zx279133-wan-ports: $*" >>"$LOG" 2>/dev/null
+}
+
+# The attribute the driver publishes the port types in.
+find_attr() {
+	if [ -n "$ATTR_OVERRIDE" ]; then
+		[ -w "$ATTR_OVERRIDE" ] && {
+			echo "$ATTR_OVERRIDE"
+			return 0
+		}
+		return 1
+	fi
+	for p in "$SYS/sys/class/net/eth0/device/wan_ports" \
+	         "$SYS"/sys/bus/platform/drivers/zx279133-eth/*/wan_ports; do
+		[ -w "$p" ] && {
+			echo "$p"
+			return 0
+		}
+	done
+	return 1
+}
+
+ATTR=$(find_attr) || exit 0
+
+# The switch's own port type.
+#
+# The driver can change a port's type by itself when a DSA port leaves the
+# bridge, and that rule is the tree's, not this board's: it would make
+# every jack that is taken out of the bridge a WAN-type port, whatever it
+# is used for.  The parameter is written to 0 so the driver keeps its
+# hands off the port types and this script is the only thing that changes
+# them.
+wan_type_off() {
+	param=$SYS/sys/module/zx279133_switch/parameters/wan_type
+	[ -w "$param" ] || return 0
+	now=$(cat "$param" 2>/dev/null)
+	case "$now" in
+	0|N|n|"") return 0 ;;
+	esac
+	echo 0 >"$param" 2>/dev/null && log "the driver no longer changes the port types by itself"
+	return 0
+}
+
+# The switch port under a device: follow VLANs and macvlans down to the
+# DSA port whose lower device is the conduit.
+#
+# The bridge membership is deliberately not consulted.  A port that is
+# still in the bridge is exactly the port whose type cannot be written
+# yet, and refusing to look at it here would only move the failure to
+# the place where it is least visible.
+switch_port() {
+	dev=$1
+	depth=0
+	[ -n "$dev" ] || return 0
+	while [ $depth -lt 8 ]; do
+		depth=$((depth + 1))
+		[ -d "$SYS/sys/class/net/$dev" ] || return 0
+		# A bridge is not a port of the switch.
+		[ -d "$SYS/sys/class/net/$dev/bridge" ] && return 0
+		lower=""
+		for c in "$SYS/sys/class/net/$dev"/lower_*; do
+			[ -e "$c" ] || continue
+			lower=${c##*/lower_}
+			break
+		done
+		[ -n "$lower" ] || return 0
+		if [ -d "$SYS/sys/class/net/$lower/dsa" ]; then
+			echo "$dev"
+			return 0
+		fi
+		dev=$lower
+	done
+	return 0
+}
+
+# The port of a WAN network, when that network speaks PPPoE.
+#
+# Only PPPoE needs the WAN type: the hardware strips the header on the
+# way in and puts it back on the way out.  Every other protocol wants
+# the port to stay LAN-type.
+pppoe_port() {
+	net=$1
+	proto=$($UCI -q get "network.$net.proto" 2>/dev/null)
+	[ "$proto" = pppoe ] || return 0
+	dev=$($UCI -q get "network.$net.device" 2>/dev/null)
+	[ -n "$dev" ] || return 0
+	port=$(switch_port "$dev")
+	[ -n "$port" ] || return 0
+	echo "$port"
+}
+
+# Write one port's type.
+#
+# The write is refused while the port is a member of a bridge, and the
+# kernel needs a moment to take the port out of it, so the write is
+# repeated.  The port that is refused is reported: a port that kept the
+# wrong type is a port whose traffic the hardware treats as the factory
+# system's, and that is worth saying out loud.
+set_port() {
+	port=$1
+	want=$2
+	tries=0
+	while [ $tries -lt "$RETRIES" ]; do
+		if echo "$port $want" >"$ATTR" 2>/dev/null; then
+			if [ "$want" = 1 ]; then
+				log "$port is a WAN-type port now"
+			else
+				log "$port is a LAN-type port again"
+			fi
+			return 0
+		fi
+		tries=$((tries + 1))
+		[ $tries -lt "$RETRIES" ] && sleep "$SLEEP"
+	done
+	log "$port could not be written ($want); the driver still refuses it"
+	return 1
+}
+
+wan_type_off
+
+# The ports that have to be WAN-type, and the ports that are.
+wanted=""
+for net in wan wan2; do
+	port=$(pppoe_port "$net")
+	[ -n "$port" ] || continue
+	case " $wanted " in
+	*" $port "*) ;;
+	*) wanted="$wanted $port" ;;
+	esac
+done
+
+current=$(cat "$ATTR" 2>/dev/null | tr '\n' ' ')
+
+# A port that is WAN-type and must not be any more is put back first, so
+# that the port that takes over is the only one in the WAN type at any
+# moment of the change.
+rc=0
+for port in $current; do
+	case " $wanted " in
+	*" $port "*) ;;
+	*) set_port "$port" 0 || rc=1 ;;
+	esac
+done
+
+for port in $wanted; do
+	case " $current " in
+	*" $port "*) ;;
+	*) set_port "$port" 1 || rc=1 ;;
+	esac
+done
+
+exit $rc

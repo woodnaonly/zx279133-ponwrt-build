@@ -3,6 +3,7 @@
   "admin/onu/status": {"title":"运行状态","order":10,"action":{"type":"view","path":"skd840n/overview"}},
   "admin/onu/hardware": {"title":"硬件身份","order":20,"action":{"type":"view","path":"skd840n/hardware"}},
   "admin/onu/config": {"title":"线路与认证","order":30,"action":{"type":"view","path":"skd840n/config"}},
+  "admin/onu/wanport": {"title":"WAN 接入口","order":35,"action":{"type":"view","path":"skd840n/wanport"}},
   "admin/onu/internet": {"title":"上网配置","order":40,"action":{"type":"view","path":"skd840n/internet"}},
   "admin/onu/iptv": {"title":"IPTV 与组播","order":50,"action":{"type":"view","path":"skd840n/iptv"}},
   "admin/onu/acceleration": {"title":"硬件加速","order":60,"action":{"type":"view","path":"skd840n/acceleration"}},

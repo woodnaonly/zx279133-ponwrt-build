@@ -59,6 +59,13 @@ on:
       - scripts/check-sk-d840n-management.sh
       - scripts/check-sk-d840n-ucode.sh
       - tests/*sk_pon*
+      # The second WAN: the three programs that move it, the board they run
+      # in and the controls that say they still do what they say.
+      - tests/test_sk_wan_switch.py
+      - tests/test_sk_wan_adapt.py
+      - tests/test_sk_wan_ports.py
+      - tests/sk_wan_switch_fixture.py
+      - tests/fixtures/sk-wan/**
       - tests/*sk_lan1_led*
       - tests/*sk_lan1_phy_led*
       - tests/*sk_led*
@@ -173,6 +180,14 @@ jobs:
             --workflow .github/workflows/build-sk-d840n.yml \
             --workflow .github/workflows/build-sk-d840n-73.yml
           python3 tests/test_sk_workflow_paths.py
+          # The second WAN: the panel jack that leaves the bridge is a
+          # transaction, the adaptive search finds the jack that answers,
+          # and the NPPT port types follow the protocol of the WAN.  The
+          # controls run the shipped programs in a sandbox board and read
+          # the committed configuration file back.
+          python3 tests/test_sk_wan_switch.py
+          python3 tests/test_sk_wan_adapt.py
+          python3 tests/test_sk_wan_ports.py
 
   build:
     name: ${{ matrix.mode }}

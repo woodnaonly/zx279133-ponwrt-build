@@ -1,0 +1,14 @@
+#!/bin/sh
+# The brctl of the sandbox board.
+#
+# Only showmacs is answered: it is the forwarding database, and it is where
+# the port a client is in is read from.
+
+STATE=${FAKE_STATE:-/tmp/sk-wan-state}
+case "$1" in
+showmacs)
+    f="$STATE/showmacs"
+    [ -f "$f" ] && cat "$f"
+    ;;
+esac
+exit 0

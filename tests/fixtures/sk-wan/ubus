@@ -1,0 +1,18 @@
+#!/bin/sh
+# The ubus of the sandbox board.
+#
+# It answers the question the adaptive daemon asks: is this logical
+# interface up?  The answer is in state/iface/<name>, and "up" means up.
+
+STATE=${FAKE_STATE:-/tmp/sk-wan-state}
+if [ "$1" = call ] && [ "${2#network.interface.}" != "$2" ]; then
+    name=${2#network.interface.}
+    f="$STATE/iface/$name"
+    if [ -f "$f" ] && [ "$(cat "$f")" = up ]; then
+        echo '{"up":true}'
+    else
+        echo '{"up":false}'
+    fi
+    exit 0
+fi
+exit 1

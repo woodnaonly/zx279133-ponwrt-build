@@ -1,0 +1,7 @@
+#!/bin/sh
+# An init script of the sandbox board: it records that it was called and
+# says nothing else.
+
+STATE=${FAKE_STATE:-/tmp/sk-wan-state}
+echo "$0 $*" >>"$STATE/services.log"
+exit 0

@@ -244,6 +244,14 @@ on:
       # image compressed by the old script.
       - tools/mkgzip.py
       - overlays/**
+      # The second WAN: the three programs that move it, the board they run
+      # in and the controls that say they still do what they say.  A change
+      # to any of them changes what the gates below check.
+      - tests/test_sk_wan_switch.py
+      - tests/test_sk_wan_adapt.py
+      - tests/test_sk_wan_ports.py
+      - tests/sk_wan_switch_fixture.py
+      - tests/fixtures/sk-wan/**
       # The offload profile the shared configure script reads.  It is a
       # dependency of a script, not of a step, so nothing named it.
       - configs/sk-d840n-offload.config
@@ -331,6 +339,15 @@ jobs:
           # when the repair is taken away.
           python3 tools/check-sk-lan-bridge-members.py
           python3 tests/test_sk_lan_bridge_members.py
+          # The second WAN.  The panel jack that leaves the bridge is a
+          # transaction: it lands or the old configuration comes back, and
+          # the controls here run the shipped programs in a sandbox board and
+          # read the committed configuration file back.
+          python3 tests/test_sk_wan_switch.py
+          python3 tests/test_sk_wan_adapt.py
+          # The NPPT port types: a PPPoE WAN makes its port WAN-type and a
+          # DHCP one does not, and a port that has to change back does.
+          python3 tests/test_sk_wan_ports.py
 
   build:
     name: ${{ matrix.mode }}

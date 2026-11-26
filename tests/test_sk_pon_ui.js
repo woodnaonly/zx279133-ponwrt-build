@@ -13,11 +13,13 @@ const menu = JSON.parse(fs.readFileSync(path.join(root, 'overlays/package/luci-a
 class Element {
 	constructor(tag, attrs = {}, children = []) {
 		this.tag = tag; this.attrs = attrs; this.children = []; this.textContent = '';
+		this.style = {}; this.handlers = {};
 		for (const child of [children].flat(Infinity)) if (child != null) this.appendChild(child);
 	}
 	appendChild(child) { this.children.push(child); return child; }
 	removeChild(child) { this.children.splice(this.children.indexOf(child), 1); }
 	get firstChild() { return this.children[0]; }
+	addEventListener(type, handler) { this.handlers[type] = handler; }
 }
 function content(node) {
 	return node instanceof Element ? [node.textContent, ...node.children.map(content)].join(' ') : String(node);
@@ -44,6 +46,8 @@ function fixture(scenario) {
 		if (object === 'luci.skd840n-pon') return scenario.pon;
 		if (object === 'luci.skd840n-system') return scenario.system;
 		if (object === 'system') return {};
+		if (object === 'file' && method === 'exec') return {code: 0, stdout: scenario.exec || JSON.stringify(wanStatus), stderr: ''};
+		if (object === 'luci-rpc' && method === 'getHostHints') return scenario.hints || {'84:47:09:5b:bd:2c': {ipaddrs: ['192.168.9.25'], ip6addrs: []}};
 		if (method === 'get_proto_handlers') return scenario.protocols || {};
 		if (method === 'dump') return [];
 		throw Error('unexpected RPC: ' + object + '.' + method);
@@ -53,7 +57,7 @@ function fixture(scenario) {
 		L: {url: x => '/cgi-bin/luci/' + x, resource: x => '/luci-static/resources/' + x,
 			hasViewPermission: () => scenario.writable !== false, toArray: x => x == null ? [] : [].concat(x)},
 		document: {head: new Element('head'), querySelector() { return null; }},
-		TextEncoder, JSON, Object, String, Array, Promise, Blob, URL, setTimeout
+		TextEncoder, JSON, Object, String, Array, Promise, Blob, URL, setTimeout, setInterval, clearInterval
 	});
 	function load(name) {
 		if (modules[name]) return modules[name];
@@ -63,7 +67,7 @@ function fixture(scenario) {
 			const [module, alias] = dependency.split(' as ');
 			dependencies.push([module, alias || module.split('.').at(-1)]); return '';
 		});
-		const builtins = {baseclass: {extend: x => x}, view: {extend: x => x}, poll: {add: f => polls.push(f)}, rpc, uci, form, 'tools.widgets': {}};
+		const builtins = {baseclass: {extend: x => x}, view: {extend: x => x}, poll: {add: f => polls.push(f)}, rpc, uci, form, dom: {}, 'tools.widgets': {}};
 		const names = [], values = [];
 		for (const [module, alias] of dependencies) {
 			names.push(alias); values.push(builtins[module] || load(module.replaceAll('.', '/')));
@@ -73,11 +77,17 @@ function fixture(scenario) {
 	return {load, maps, polls};
 }
 
+// The answer of the privileged command that moves the second WAN around.
+const wanStatus = {wan1: {device: 'eth0', proto: 'dhcp', metric: '10', up: true},
+	wan2: {device: 'lan2', proto: 'dhcp', metric: '20', up: false, disabled: ''},
+	bridge: ['lan1', 'lan3', 'lan4'], primary: 'wan',
+	adaptive: {auto: '1', exclude: ''}, npu: {wan_ports: '', wan_type: 'N'},
+	mgmt_port: 'lan1', pending: false, confirmed: false};
 const state = {schema: 1, platform: {model: 'SK-D840N', soc: 'ZX279133'}, capabilities: {},
 	service: {live: true, enabled: true, configuration_valid: true, engine_ready: true},
 	pon: {software_state: 'O1'}, ports: [], acceleration: {firewall4: false, flows: null}};
 const views = Object.values(menu).filter(m => m.action.type === 'view').map(m => 'view/' + m.action.path);
-assert.equal(views.length, 8);
+assert.equal(views.length, 9);
 
 (async function main() {
 	let renders = 0;

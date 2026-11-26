@@ -1,0 +1,28 @@
+#!/bin/sh /etc/rc.common
+# SPDX-License-Identifier: GPL-2.0-only
+#
+# The NPPT's port types.
+#
+# The script behind this service decides the type of every port of the
+# switch from the configuration: a WAN that speaks PPPoE has its port in
+# the WAN type, every other port stays in the LAN type.  The tree's
+# version of this service switches every port the firewall puts in a WAN
+# zone, and it never clears a port that went back into the bridge; both
+# are wrong for this board, and the reasons are in the script.
+#
+# The service runs at boot, when the firewall or the network is reloaded,
+# and through the hotplug script when an interface comes up.
+START=21
+USE_PROCD=1
+
+start_service() {
+	/usr/libexec/zx279133-wan-ports
+}
+
+reload_service() {
+	/usr/libexec/zx279133-wan-ports
+}
+
+service_triggers() {
+	procd_add_reload_trigger firewall network
+}
