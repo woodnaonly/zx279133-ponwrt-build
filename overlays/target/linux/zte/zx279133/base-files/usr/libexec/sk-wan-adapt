@@ -99,11 +99,16 @@ iface_ready() {
 }
 
 # The port the management client is in, or nothing.
+#
+# The helper is run through the shell and not executed directly.  A file
+# that lost its executable bit is a file that cannot be run, and the
+# daemon would then find no management port at all - and a daemon that
+# does not know where the management client is takes no port at all.
 mgmt_port() {
 	# The helper's own log goes to stderr and is not thrown away: when it
 	# cannot say which jack the client is in, the reason why has to be
 	# somewhere the reader can see.
-	"$SWITCH" mgmt-port "$1"
+	sh "$SWITCH" mgmt-port "$1"
 }
 
 # The ports that may be taken: the panel jacks, minus the one the
@@ -254,7 +259,6 @@ search() {
 
 	exclude=$($UCI -q get sk_wan.wan.exclude 2>/dev/null)
 	mgmt=$(mgmt_port "")
-	log "the management port is: [$mgmt]"
 	if [ -z "$mgmt" ]; then
 		# The port the management client is in could not be found.
 		# Taking a port on a guess is taking a port away from
@@ -270,7 +274,7 @@ search() {
 		if probe_port "$p"; then
 			log "$p answered; it is the second WAN"
 			echo "$p answered DHCP" >"$LAST"
-			out=$("$SWITCH" apply-wan2 --device "$p" --proto dhcp 2>&1)
+			out=$(sh "$SWITCH" apply-wan2 --device "$p" --proto dhcp 2>&1)
 			rc=$?
 			if [ "$rc" = 0 ]; then
 				# The change has to prove itself: the port has
@@ -283,12 +287,12 @@ search() {
 					sleep 5
 				done
 				if iface_ready wan2; then
-					"$SWITCH" confirm >/dev/null 2>&1
+					sh "$SWITCH" confirm >/dev/null 2>&1
 					log "$p is the second WAN"
 					return 0
 				fi
 				log "$p did not come up; the change is taken back"
-				"$SWITCH" rollback >/dev/null 2>&1
+				sh "$SWITCH" rollback >/dev/null 2>&1
 			else
 				log "the change did not land: $out"
 			fi

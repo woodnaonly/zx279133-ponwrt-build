@@ -195,9 +195,12 @@ mgmt-port A  管理客户端在哪个插孔上
 | `tests/test_sk_wan_ports.py` | 8 个用例：proto=pppoe ⇒ `"<port> 1"`；dhcp/static ⇒ `"<port> 0"`；无 WAN2 ⇒ 全部 `0`；写 1 遇 EBUSY 重试 | 通过 |
 | `tests/test_sk_pon_ui.js` | 视图数 8→9；新视图在正常/RPC 失败/只读三种场景下渲染，无 `NaN`/`undefined`；警告文案存在 | `PASS: 36 view renders` |
 | `tools/check-sk-workflow-paths.py` | workflow 跑的每个文件都要被 `paths:` 覆盖 | `OK: 286 check(s)` |
+| `tools/prepush.py --overlay-modes` | 镜像要**运行**的文件在 git 里必须是 100755（执行位，见 §5.2（三）） | `0 problems` |
 
 三个新测试共 **30 个用例**（15 + 8 + 7），全部通过；新增的 fixture 也进了
 两个 workflow 的 `paths:`，并进 `check-gates`（73 系）与 `check-led-gates`（主线）步骤。
+执行位检查（§5.2（三））也进了这两个门禁步骤：它以前只在 build job 里跑，
+比门禁晚半小时，而门禁先炸的时候它连说话的机会都没有。
 
 ### 4.2 实机验收（SSH，2026-11-26）
 
@@ -248,7 +251,7 @@ mgmt-port A  管理客户端在哪个插孔上
 | 11 | 并发锁用 `mkdir` 原子锁 | 改成 `flock`（`/run/sk-wan-switch.lock`） | `mkdir` 锁在异常退出后会留残目录，`flock` 随 fd 自动释放 |
 | 12 | 助手第一次动网络时补 `network.wan6` | **不补** | 计划的前提是「fw4 会因缺 wan6 告警」，实测 `fw4 check` 直接通过、不告警；而补一个 `device=eth0, proto=dhcp` 的 wan6 会在光口上**多起一个 DHCP 客户端**与 `wan` 抢租约，风险大于收益。上游 zx279133 也没有 wan6 |
 
-### 5.2 测试抓到的两个真问题
+### 5.2 测试和 CI 抓到的三个真问题
 
 **（一）主备对调只改了一半。**
 `sk-wan-adapt` 的 `set_metrics` 直接写 `network.wan.metric` 和 `network.wan2.metric`。
@@ -265,6 +268,49 @@ mgmt-port A  管理客户端在哪个插孔上
 那块板上本来就不该有备，两个用例理应失败，是夹具骗了它们。
 修法：夹具的默认网络改成和实机板一样带着 `wan2` 段，
 两个自己拼段的测试改成用夹具，不再各拼各的。
+
+**（三）文件模式差一位：本地看不见，CI 上炸，而板子上会静默地坏。**
+
+`sk-wan-adapt` 是直接执行助手的：`"$SWITCH" mgmt-port "$1"`。
+而仓库里 `sk-wan-switch` 的 git 模式是 **100644** —— 没有执行位。
+
+* **Windows 上不复现**：MSYS 的 shell 不看执行位，`sh <脚本>` 一律能跑；
+* **Linux 上必炸**：CI 的 runner 上执行一个 644 的脚本是 `Permission denied`。
+  管理口因此查不到，守护按「认不出管理口就不抢任何口」的规矩**一个口都不认领**，
+  `network.wan2.device` 留空 —— 用例断言 `lan3` 失败。
+
+CI 的公开注解把话说全了（run 45759412243）：
+
+````
+the gate that failed: python3 tests/test_sk_wan_adapt.py
+AssertionError: '' != 'lan3'
+sk-wan-adapt: the management port is not known; no port is taken this round
+sk-wan-switch: Permission denied
+````
+
+**这不只是 CI 的事。** overlay 是用 `cp -fpR` 拷进镜像的 ——
+**git 的模式就是镜像里的模式**（板上的 `/etc/init.d/sk-bridge` 就是 755，
+因为它在 git 里是 100755）。644 的后果在板子上是：
+
+| 文件 | 644 的后果 |
+|---|---|
+| `/usr/libexec/sk-wan-switch` | 不可执行 ⇒ 页面的 `file exec` 直接 EACCES，**「WAN 接入口」页面的每一个按钮都不动** |
+| `/etc/init.d/sk-wan-adapt` | 不可执行 ⇒ init 系统不跑它，自适应永远不开始 |
+| `/etc/init.d/zx279133-wan-ports` | 不可执行 ⇒ init 系统不跑它，NPPT 端口类型不跟着协议走 |
+| `/etc/uci-defaults/99-sk-wan2` | 它是被 source 的，模式不影响（`docs/89` 记的就是这件事） |
+
+⇒ **这六个文件在 git 里必须是 100755**（`git update-index --chmod=+x`）。
+
+仓库里早就有这条检查：`tools/prepush.py` 的 `overlay_modes_check()`，
+`docs/89` 记的就是同一类事故（NAT 的 init 脚本 0644，镜像里不跑）。
+但它跑在 **build job** 里，比门禁晚半小时；门禁先炸的时候它连说话的机会都没有。
+本地的 prepush hook 又没有装（`.git/hooks` 是空的）。
+⇒ 检查挪进两个门禁步骤，并给它一个单跑模式（`--overlay-modes`），
+失败时打 `::error::` 注解 —— 免 token 的机器只读得到注解。
+
+⇒ 另外，守护与看门狗改为**经 `sh` 调用**助手（`sh "$SWITCH" ...`、
+`setsid /bin/sh "$SELF" watchdog`）：执行位掉了，守护还能工作，
+而不是变成一个「找不到管理口、于是什么都不做」的哑巴。
 
 ### 5.3 实机事故：第一次验收把 LAN 全断了
 

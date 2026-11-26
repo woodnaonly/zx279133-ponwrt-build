@@ -197,8 +197,8 @@ mgmt_port() {
 		portno=$(brctl showmacs "$BRIDGE" 2>/dev/null |
 			awk '$2 ~ /^[0-9a-fA-F][0-9a-fA-F]:/ {print $1; exit}')
 	fi
-	log "the bridge table says: [$(brctl showmacs "$BRIDGE" 2>/dev/null)] port number: [$portno]"
 	[ -n "$portno" ] || return 0
+	log "the client is on port number: [$portno]"
 	for d in "$PREFIX"/sys/class/net/$BRIDGE/brif/*; do
 		[ -d "$d" ] || continue
 		have=$(cat "$d/port_no" 2>/dev/null)
@@ -497,7 +497,11 @@ apply_wan2() {
 	echo "$token" >"$TOKENFILE"
 	rm -f "$CONFIRMED"
 	if [ "$SPAWN_WATCHDOG" = "1" ]; then
-		setsid "$SELF" watchdog 90 "$token" >/dev/null 2>&1 &
+		# The watchdog is started through the shell: a helper that
+		# lost its executable bit is a helper that cannot watch
+		# anything, and the change it watches would then stay
+		# unconfirmed for ever.
+		setsid /bin/sh "$SELF" watchdog 90 "$token" >/dev/null 2>&1 &
 	fi
 
 	reload_network

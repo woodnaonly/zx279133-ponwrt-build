@@ -193,6 +193,11 @@ jobs:
           python3 tests/test_sk_wan_switch.py
           python3 tests/test_sk_wan_adapt.py
           python3 tests/test_sk_wan_ports.py
+          # A file the image runs and that is not executable is not run -
+          # and the image still boots, so nothing else notices.  The
+          # check for that lives in the build job, half an hour after the
+          # gate that has to fail first.
+          python3 tools/prepush.py --overlay-modes "$GITHUB_WORKSPACE"
 
   build:
     name: ${{ matrix.mode }}

@@ -43,7 +43,12 @@ import subprocess
 import sys
 import tempfile
 
-REPO = sys.argv[1] if len(sys.argv) > 1 else os.getcwd()
+# The flags this program takes.  "--overlay-modes" runs one check on
+# its own, so that the CI's gate job can run it: the job that has to fail
+# first, and the job whose failure can be read from outside.
+FLAGS = ("--overlay-modes",)
+POSITIONAL = [a for a in sys.argv[1:] if a not in FLAGS]
+REPO = POSITIONAL[0] if POSITIONAL else os.getcwd()
 ROOTS = ("kernel-overlays", "overlays", "scripts", "templates")
 SKIP_DIRS = {".git", "__pycache__", "node_modules"}
 # The snapshot of the upstream tree this PC keeps next to the repository.
@@ -354,6 +359,15 @@ def overlay_modes_check():
         print("prepush: %s is %s in git and the image runs it - a script "
               "that is not executable is not run, and the image still boots"
               % (path, mode))
+        # The job log of a workflow run is 403 for a machine with no token,
+        # so a failure that only says "the step failed" is a failure
+        # nobody outside the run can act on.  The annotations of a check
+        # run are public, and GitHub shows the first line of an annotation
+        # - so the whole message has to be on one line.
+        if os.environ.get("CI"):
+            print("::error::%s is %s in git and the image runs it - a script "
+                  "that is not executable is not run, and the image still "
+                  "boots" % (path, mode))
         bad += 1
     print("prepush: the image's executable bits are checked (%d problems)"
           % bad)
@@ -486,6 +500,12 @@ def name_gates_selftest():
 
 
 def main():
+    # One check on its own: the CI's gate job runs this, so that a file
+    # the image runs and that is not executable fails the gate - where
+    # the failure can be read - instead of the build half an hour later.
+    if "--overlay-modes" in sys.argv[1:]:
+        return 1 if overlay_modes_check() else 0
+
     bad = 0
     files = list(c_files())
     if not files:
