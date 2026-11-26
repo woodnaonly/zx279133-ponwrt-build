@@ -157,6 +157,11 @@ jobs:
           sudo apt-get -qq install --no-install-recommends device-tree-compiler libfdt-dev python3-yaml
       - name: Exercise the workflow's DTS and LED gates
         run: |
+          # The job log of a workflow run is 403 for a machine with no token,
+          # so a gate that fails has to say which gate it was in a channel
+          # that machine can read.  The annotations of a check run are
+          # public, and this is what says it.
+          trap 'echo "::error::the gate that failed: ${BASH_COMMAND}"' ERR
           python3 tests/test_sk_kernel.py
           python3 tests/test_sk_tcp_optimization.py --require-compiler
           python3 tests/test_sk_lan1_power.py --require-compiler

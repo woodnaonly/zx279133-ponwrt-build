@@ -30,6 +30,7 @@ import os
 import shutil
 import subprocess
 import sys
+import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -284,6 +285,25 @@ def default_sk_wan():
             "\toption auto '1'\n"
             "\toption primary 'wan'\n"
             "\toption exclude ''\n")
+
+
+def run_tests(module):
+    """The tests of one module, with a verdict a machine with no token can read.
+
+    The job log of a workflow run is 403 for a machine with no token, so a
+    failure that only says "the step failed" is a failure nobody can act on
+    from outside.  The annotations of a check run are public, and a gate
+    that fails is worth saying in one.
+
+    The runner is built here rather than through unittest.main() so that
+    this works on every Python the gate jobs run on: unittest.TextTestResult
+    only exists from 3.11 on, and the gate jobs run 3.10.
+    """
+    suite = unittest.TestLoader().loadTestsFromModule(module)
+    result = unittest.TextTestRunner(verbosity=2).run(suite)
+    for test, traceback in list(result.failures) + list(result.errors):
+        print("::error::%s: %s" % (test, traceback), flush=True)
+    return result.wasSuccessful()
 
 
 def make_board(tmp, network=None, firewall=None, sk_wan=None):

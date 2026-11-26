@@ -132,4 +132,4 @@ class AdaptTests(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    sys.exit(0 if fx.run_tests(sys.modules[__name__]) else 1)

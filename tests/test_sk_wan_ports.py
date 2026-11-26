@@ -133,3 +133,7 @@ class PortsTests(unittest.TestCase):
         self.assertNotEqual(proc.returncode, 0)
         self.assertIn("could not be written",
                       self.log.read_text(encoding="utf-8"))
+
+
+if __name__ == "__main__":
+    sys.exit(0 if fx.run_tests(sys.modules[__name__]) else 1)
