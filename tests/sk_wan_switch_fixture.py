@@ -302,7 +302,12 @@ def run_tests(module):
     suite = unittest.TestLoader().loadTestsFromModule(module)
     result = unittest.TextTestRunner(verbosity=2).run(suite)
     for test, traceback in list(result.failures) + list(result.errors):
-        print("::error::%s: %s" % (test, traceback), flush=True)
+        # One annotation per line: the page shows the first line of an
+        # annotation and hides the rest behind a button, so a failure whose
+        # assertion is on the fourth line would say nothing about what it
+        # was.
+        for line in traceback.strip().splitlines():
+            print("::error::%s: %s" % (test, line), flush=True)
     return result.wasSuccessful()
 
 
