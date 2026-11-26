@@ -70,6 +70,28 @@ int main(void)
 	assert(!symlink("missing", legacy));
 	assert(zx_migrate(config, legacy) < 0 && access(config, F_OK));
 	assert(!unlink(legacy) && !rmdir(temporary));
+	/* The rule the upstream OMCI engine uses for the ONU serial number: the
+	 * serial number if one is configured, and otherwise the vendor id
+	 * followed by the last four bytes of the station's own MAC address. */
+	uint8_t vendor[4], mac[6], serial[8];
+	assert(!zx_vendor("OWRT", vendor) && !memcmp(vendor, "OWRT", 4));
+	assert(!zx_vendor("4f575254", vendor) && !memcmp(vendor, "OWRT", 4));
+	assert(zx_vendor("OWR", vendor) == -EINVAL);
+	assert(zx_vendor("OWRTX", vendor) == -EINVAL);
+	assert(zx_vendor("", vendor) == -EINVAL);
+	assert(!zx_mac_address("021122334455", mac) && !memcmp(mac, "\x02\x11\x22\x33\x44\x55", 6));
+	assert(!zx_mac_address("02:11:22:33:44:55", mac) && !memcmp(mac, "\x02\x11\x22\x33\x44\x55", 6));
+	assert(zx_mac_address("0211223344", mac) == -EINVAL);
+	assert(zx_mac_address("", mac) == -EINVAL);
+	assert(!zx_onu_serial("5445535401020304", vendor, mac, serial));
+	assert(!memcmp(serial, "\x54\x45\x53\x54\x01\x02\x03\x04", 8));
+	mac[0] = 0x02; mac[1] = 0x11; mac[2] = 0x22;
+	mac[3] = 0x33; mac[4] = 0x44; mac[5] = 0x55;
+	assert(!zx_onu_serial(NULL, vendor, mac, serial));
+	assert(!memcmp(serial, "OWRT\x22\x33\x44\x55", 8));
+	assert(!zx_onu_serial("", vendor, mac, serial));
+	assert(!memcmp(serial, "OWRT\x22\x33\x44\x55", 8));
+	assert(zx_onu_serial(NULL, vendor, NULL, serial) == -EINVAL);
 	puts("PASS: exact SN/REGID bytes, validation, safe one-time migration, permissions, no shell/symlink following");
 	return 0;
 }

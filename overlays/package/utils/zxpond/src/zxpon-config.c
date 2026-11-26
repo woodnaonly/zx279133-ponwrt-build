@@ -52,6 +52,54 @@ int zx_serial(const char *text, uint8_t output[8])
 	return 0;
 }
 
+/* The vendor id is four bytes: four printable characters, or eight hex
+ * digits.  A vendor id of any other length is a mistake and is refused,
+ * because the serial number below is built out of exactly four of them. */
+int zx_vendor(const char *text, uint8_t output[4])
+{
+	unsigned int i;
+	if (!text) return -EINVAL;
+	if (strlen(text) == 8) return zx_hex(text, output, 4);
+	if (strlen(text) != 4) return -EINVAL;
+	for (i = 0; i < 4; i++)
+		if ((unsigned char)text[i] < 32 || (unsigned char)text[i] > 126) return -EINVAL;
+	memcpy(output, text, 4);
+	return 0;
+}
+
+/* The rule the upstream OMCI engine uses for the ONU serial number: the
+ * serial number if one is configured, and otherwise the vendor id
+ * followed by the last four bytes of the station's own MAC address.  A
+ * station with neither has no serial number, and the caller is told so
+ * rather than given eight zero bytes that look like one. */
+int zx_onu_serial(const char *serial, const uint8_t vendor[4], const uint8_t mac[6],
+		  uint8_t output[8])
+{
+	if (serial && serial[0]) return zx_serial(serial, output);
+	if (!vendor || !mac) return -EINVAL;
+	memcpy(output, vendor, 4);
+	memcpy(output + 4, mac + 2, 4);
+	return 0;
+}
+
+/* The MAC address of the station, as six bytes.  The separators people
+ * write it with are not part of the number. */
+int zx_mac_address(const char *text, uint8_t output[6])
+{
+	char digits[13];
+	size_t i, length = text ? strlen(text) : 0, kept = 0;
+	if (!length) return -EINVAL;
+	for (i = 0; i < length; i++) {
+		char character = text[i];
+		if (character == ':' || character == '-' || character == '.') continue;
+		if (kept >= sizeof(digits) - 1) return -EINVAL;
+		digits[kept++] = character;
+	}
+	digits[kept] = 0;
+	if (kept != 12) return -EINVAL;
+	return zx_hex(digits, output, 6);
+}
+
 int zx_registration(const char *text, const char *format, uint8_t output[36])
 {
 	memset(output, 0, 36);
@@ -148,10 +196,22 @@ int zx_config_load(struct zx_config *config, const char *directory)
 	config->enabled = value && !strcmp(value, "1");
 	value = option(ctx, section, "mode");
 	if (value && strcmp(value, "xgpon")) goto done;
+	value = option(ctx, section, "vendor_id");
+	if (zx_vendor(value && value[0] ? value : "OWRT", config->vendor)) goto done;
 	value = option(ctx, section, "serial_number");
 	if (value && value[0]) {
 		if (zx_serial(value, config->identity.serial)) goto done;
 		config->has_identity = 1;
+	} else {
+		/* No serial number of its own: the station takes the one the
+		 * upstream rule derives from the vendor id and its own MAC. */
+		value = option(ctx, section, "mac_address");
+		if (value && value[0]) {
+			uint8_t mac[6];
+			if (zx_mac_address(value, mac)) goto done;
+			if (zx_onu_serial(NULL, config->vendor, mac, config->identity.serial)) goto done;
+			config->has_identity = 1;
+		}
 	}
 	if (zx_registration(option(ctx, section, "registration_id"), option(ctx, section, "registration_id_format"), config->regid)) goto done;
 	config->identity.omcc_version = 0xb0;

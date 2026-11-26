@@ -6,10 +6,15 @@
 struct zx_config {
 	struct omci_identity identity;
 	uint8_t regid[36];
+	uint8_t vendor[4];
 	int enabled, has_identity;
 };
 int zx_hex(const char *text, uint8_t *output, unsigned int width);
 int zx_serial(const char *text, uint8_t output[8]);
+int zx_vendor(const char *text, uint8_t output[4]);
+int zx_mac_address(const char *text, uint8_t output[6]);
+int zx_onu_serial(const char *serial, const uint8_t vendor[4], const uint8_t mac[6],
+		  uint8_t output[8]);
 int zx_registration(const char *text, const char *format, uint8_t output[36]);
 int zx_migrate(const char *destination, const char *legacy);
 int zx_config_load(struct zx_config *config, const char *directory);
