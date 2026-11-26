@@ -68,7 +68,11 @@ PANEL_PORTS="lan1 lan2 lan3 lan4"
 BRIDGE=br-lan
 
 log() {
-	echo "sk-wan-adapt: $*" >>/dev/kmsg 2>/dev/null
+	# The kernel log is where a daemon belongs, but /dev/kmsg does not exist
+	# on every host that runs this script, and the message has to be read
+	# somewhere: stderr is where the caller sees it.
+	{ echo "sk-wan-adapt: $*" >>/dev/kmsg; } 2>/dev/null
+	echo "sk-wan-adapt: $*" >&2
 }
 
 is_panel_port() {
@@ -262,7 +266,9 @@ search() {
 		if probe_port "$p"; then
 			log "$p answered; it is the second WAN"
 			echo "$p answered DHCP" >"$LAST"
-			if "$SWITCH" apply-wan2 --device "$p" --proto dhcp >/dev/null 2>&1; then
+			out=$("$SWITCH" apply-wan2 --device "$p" --proto dhcp 2>&1)
+			rc=$?
+			if [ "$rc" = 0 ]; then
 				# The change has to prove itself: the port has
 				# to come up with an address, or the
 				# watchdog takes the configuration back.
@@ -279,6 +285,8 @@ search() {
 				fi
 				log "$p did not come up; the change is taken back"
 				"$SWITCH" rollback >/dev/null 2>&1
+			else
+				log "the change did not land: $out"
 			fi
 			return 0
 		fi

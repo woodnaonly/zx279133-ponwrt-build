@@ -69,7 +69,7 @@ class AdaptTests(unittest.TestCase):
         self.board.interface_up("wan2")
         proc = self.run_adapt(FAKE_DHCP_ANSWER="lan3")
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
-        self.assertEqual(self.wan2_device(), "lan3")
+        self.assertEqual(self.wan2_device(), "lan3", proc.stdout + proc.stderr)
         net = self.board.config_text("network")
         self.assertNotIn("list ports 'lan3'", net)
         self.assertIn("list ports 'lan2'", net)
