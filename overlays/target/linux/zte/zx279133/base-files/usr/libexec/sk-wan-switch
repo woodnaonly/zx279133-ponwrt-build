@@ -197,6 +197,7 @@ mgmt_port() {
 		portno=$(brctl showmacs "$BRIDGE" 2>/dev/null |
 			awk '$2 ~ /^[0-9a-fA-F][0-9a-fA-F]:/ {print $1; exit}')
 	fi
+	log "the bridge table says: [$(brctl showmacs "$BRIDGE" 2>/dev/null)] port number: [$portno]"
 	[ -n "$portno" ] || return 0
 	for d in "$PREFIX"/sys/class/net/$BRIDGE/brif/*; do
 		[ -d "$d" ] || continue
