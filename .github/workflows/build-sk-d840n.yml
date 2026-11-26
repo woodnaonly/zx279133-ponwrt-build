@@ -66,6 +66,11 @@ on:
       - tests/test_sk_wan_ports.py
       - tests/sk_wan_switch_fixture.py
       - tests/fixtures/sk-wan/**
+      # The LuCI modules: the gate that says every one of them hands the
+      # loader a class and not a plain object, and the control that says
+      # whether it still notices when one of them does not.
+      - tools/check-sk-luci-modules.py
+      - tests/test_sk_luci_modules.py
       - tests/*sk_lan1_led*
       - tests/*sk_lan1_phy_led*
       - tests/*sk_led*
@@ -193,6 +198,13 @@ jobs:
           python3 tests/test_sk_wan_switch.py
           python3 tests/test_sk_wan_adapt.py
           python3 tests/test_sk_wan_ports.py
+          # The LuCI modules: LuCI's loader evaluates the factory and then
+          # does 'new' on whatever came back, so a module that exports a
+          # plain object takes its whole page down.  The gate says every
+          # module exports a class, and the control says the gate still
+          # notices when one of them does not.
+          python3 tools/check-sk-luci-modules.py --tree "$GITHUB_WORKSPACE"
+          python3 tests/test_sk_luci_modules.py --tree "$GITHUB_WORKSPACE"
           # A file the image runs and that is not executable is not run -
           # and the image still boots, so nothing else notices.  The
           # check for that lives in the build job, half an hour after the

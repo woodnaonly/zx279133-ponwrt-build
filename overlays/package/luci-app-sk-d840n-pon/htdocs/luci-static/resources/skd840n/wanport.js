@@ -1,4 +1,5 @@
 'use strict';
+'require baseclass';
 'require rpc';
 'require uci';
 
@@ -14,6 +15,13 @@
 // The command is fixed here.  A page that could name its own program
 // would be a page that could run anything as root, and the access this
 // package asks for is exactly one program.
+//
+// The export below is a class and not a plain object because that is what
+// LuCI's loader needs: it evaluates the factory and then does `new` on
+// what came back, and it refuses a factory that did not hand it a
+// constructor - the whole page then fails with "factory yields invalid
+// constructor" before it shows anything.  Every other module in this
+// package exports `baseclass.extend(...)` for the same reason.
 
 var exec = rpc.declare({
 	object: 'file',
@@ -101,7 +109,7 @@ function savePolicy(auto, exclude) {
 	return uci.apply();
 }
 
-return {
+return baseclass.extend({
 	status: status,
 	applyWan2: applyWan2,
 	resetWan: resetWan,
@@ -109,4 +117,4 @@ return {
 	rollbackChange: rollbackChange,
 	clientAddresses: clientAddresses,
 	savePolicy: savePolicy
-};
+});
