@@ -10,12 +10,31 @@ RUNTIME = PACKAGE / "root"
 menu = json.loads((RUNTIME / "usr/share/luci/menu.d/luci-app-sk-d840n-pon.json").read_text(encoding="utf-8"))
 acl = json.loads((RUNTIME / "usr/share/rpcd/acl.d/luci-app-sk-d840n-pon.json").read_text(encoding="utf-8"))
 assert set(acl) == {"luci-app-sk-d840n-pon", "luci-skd840n-system"}
+# The one grant beyond ubus and uci, and it is narrow on purpose.
+#
+# The WAN page has to run the helper that moves a panel jack out of the
+# bridge: the bridge's port list is a LIST option, and the uci channel
+# has no add_list, so a list written through that channel is one string
+# and the bridge the kernel builds then holds nothing the user asked
+# for.  One named program, one method, no wildcard - and the helper
+# checks its own arguments (the device has to be one of the panel jacks,
+# the primary one of the two WANs).
+ALLOWED_EXEC = {"/usr/libexec/sk-wan-switch": ["exec"]}
 for role in acl.values():
     for access in ("read", "write"):
-        assert not (set(role.get(access, {})) - {"ubus", "uci"})
-        assert "*" not in json.dumps(role.get(access, {}))
-        assert "file" not in role.get(access, {})
-assert acl["luci-app-sk-d840n-pon"]["write"] == {"uci": ["pon", "network"]}
+        grants = role.get(access, {})
+        files = grants.get("file", {})
+        assert not files or files == ALLOWED_EXEC, (role, access, files)
+        assert not (set(grants) - {"ubus", "uci", "file"})
+        assert "*" not in json.dumps(grants)
+# The write scope: the uci sections the page owns - the PON's own, the
+# network's, and the WAN policy file - and the one program it may run.
+# Nothing else: no other section, no other program, no wildcard.
+assert acl["luci-app-sk-d840n-pon"]["write"] == {
+    "uci": ["pon", "network", "sk_wan"],
+    "ubus": {"file": ["exec"]},
+    "file": ALLOWED_EXEC,
+}
 assert "write" not in acl["luci-skd840n-system"]
 for route, node in menu.items():
     if node["action"]["type"] == "view":
@@ -29,6 +48,13 @@ for resource in PACKAGE.rglob("*"):
     assert not re.search(r"TYFZA1|tyfza1|pon0|0x4f[0-9a-f]{7}", source), resource
     if resource.name.startswith("luci.skd840n"):
         assert not re.search(r"\b(system|popen|exec|writefile)\s*\(", source), resource
+    # The page may name only the program the ACL allows, so that the two
+    # cannot drift apart.  Only the page's own javascript: the ucode
+    # plugins have a shebang, and an interpreter is not a program the
+    # page runs.
+    if resource.suffix == ".js":
+        for program in re.findall(r"/usr/(?:s?bin|libexec)/[A-Za-z0-9._-]+", source):
+            assert program in ALLOWED_EXEC, (resource, program)
 configure = (ROOT / "scripts/configure-sk-d840n.sh").read_text(encoding="utf-8")
 # include/scan.mk scans recipe text before evaluating luci.mk. Without this
 # signature a custom LuCI package disappears entirely, not merely as '=n'.
@@ -54,4 +80,4 @@ for define in ("ZXPON_CMD_OMCI_TX", "ZXPON_A_OMCI_FRAME", "ZXPON_A_MAX", "ZXPON_
               for p in (kernel / "zxpon.h", ROOT / "overlays/package/utils/zxpond/src/zxpon.h")]
     assert values[0] == values[1], define
 assert "version 2 of the GNU General Public License" in (ROOT / "overlays/package/libs/libzxpon-omci/omci/LICENSE").read_text(encoding="utf-8")
-print("PASS: 8 menu targets, bounded read-only RPC/ACL, no donor runtime paths, UTF-8, source pins and build selections")
+print("PASS: 8 menu targets, bounded RPC/ACL (one named program, no wildcard), no donor runtime paths, UTF-8, source pins and build selections")

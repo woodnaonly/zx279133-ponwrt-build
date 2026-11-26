@@ -250,6 +250,7 @@ mgmt-port A  管理客户端在哪个插孔上
 | 10 | `PKG_RELEASE` 4→5 | 3→4 | 仓库里的实际当前值是 3，按「+1」的意图走 |
 | 11 | 并发锁用 `mkdir` 原子锁 | 改成 `flock`（`/run/sk-wan-switch.lock`） | `mkdir` 锁在异常退出后会留残目录，`flock` 随 fd 自动释放 |
 | 12 | 助手第一次动网络时补 `network.wan6` | **不补** | 计划的前提是「fw4 会因缺 wan6 告警」，实测 `fw4 check` 直接通过、不告警；而补一个 `device=eth0, proto=dhcp` 的 wan6 会在光口上**多起一个 DHCP 客户端**与 `wan` 抢租约，风险大于收益。上游 zx279133 也没有 wan6 |
+| 13 | 页面靠 ACL 的 `file` 授权调用特权助手 | 保留，但**收窄到白名单** | 仓库的契约测试 `tests/test_sk_pon_contract.py` 原来写着「ACL 只准 ubus 和 uci，不准出现 file」。这条规矩的**本意**是「不许无限制地跑程序」（同一处还断言不许出现 `*`），而本页需要的恰恰是跑一个固定程序。改法：契约允许 `file` 授权，但只允许 `/usr/libexec/sk-wan-switch` 一个路径、只允许 `exec` 一个方法；并加一条断言 —— 页面里出现的程序路径必须在这个白名单里（防止 ACL 与页面各写各的） |
 
 ### 5.2 测试和 CI 抓到的三个真问题
 
