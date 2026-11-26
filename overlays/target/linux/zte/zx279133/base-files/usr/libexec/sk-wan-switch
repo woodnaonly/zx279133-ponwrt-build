@@ -49,6 +49,11 @@
 #	watchdog <seconds> <token>
 #	mgmt-port [client-address]
 #
+# Every reply is one JSON object and it carries an "ok" field: true when
+# the command did what it was asked, false with an "error" when it did not.
+# The page reads that field, so a reply without it is a reply the page
+# treats as a failure.
+#
 # "status" prints one JSON object.  "mgmt-port" prints the panel jack the
 # management client is in, or nothing: the page uses it to warn before a
 # change that would cut the management link.
@@ -638,7 +643,7 @@ status_json() {
 
 	mgmt=$(mgmt_port "$1")
 
-	printf '{"wan1":{"device":"%s","proto":"%s","metric":"%s","up":%s},' \
+	printf '{"ok":true,"wan1":{"device":"%s","proto":"%s","metric":"%s","up":%s},' \
 		"$(json_escape "$wan_device")" "$(json_escape "$wan_proto")" \
 		"$(json_escape "$wan_metric")" "$wan_up"
 	printf '"wan2":{"device":"%s","proto":"%s","metric":"%s","up":%s,"disabled":"%s"},' \

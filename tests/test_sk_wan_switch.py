@@ -87,6 +87,10 @@ class SwitchTests(unittest.TestCase):
     def test_the_status_says_what_the_board_is(self):
         self.apply("--device", "lan2", "--proto", "dhcp")
         state = self.status()
+        # The page reads the ok field and treats a reply without it as a
+        # failed reply, so the status carries it like every other reply.
+        self.assertIs(state["ok"], True,
+                      "the status does not carry ok, and the page reads that field")
         self.assertEqual(state["wan1"]["device"], "eth0")
         self.assertEqual(state["wan2"]["device"], "lan2")
         self.assertEqual(state["wan2"]["proto"], "dhcp")
@@ -117,6 +121,8 @@ class SwitchTests(unittest.TestCase):
         proc = self.apply("--device", "lan-cpu0", "--proto", "dhcp")
         self.assertNotEqual(proc.returncode, 0)
         self.assertIn("must be one of", proc.stdout)
+        # A refusal is a reply too, and it says that it failed.
+        self.assertIs(json.loads(proc.stdout)["ok"], False)
         net = self.board.config_text("network")
         self.assertIn("list ports 'lan1'", net)
         self.assertNotIn("option device 'lan-cpu0'", net)
