@@ -1,0 +1,94 @@
+{
+  "repository": "https://github.com/pbs05/openwrt-pon-userspace",
+  "pinned_commit": "cce9d756742487b378749c606b30e13ee9b0f093",
+  "refreshed_at_commit": "a903fcc80f4b89f9b9e59a02d3ba1fc5550819a5",
+  "license": "GPL-2.0-only",
+  "hash_algorithm": "SHA256 of the file bytes; blob ids are git blob object names",
+  "files": [
+    {
+      "path": "src/mib.rs",
+      "upstream_path": "airoha-pon-daemons/src/src/omci/mib.rs",
+      "upstream_blob": "56e3c6c5f676d87a8fc86c2ac5ca609d80ae51b7",
+      "local_blob": "715f0301eed4f711be20995dbeb0cb3827227ff7",
+      "local_sha256": "2f4ead3146318965b8ce778e130df4d9c829b79877dd740b355098168116757a",
+      "local_changes": "TCONT 预算 16->31、GEM 端口 256->248（板子的 TCONT 与端口数）；新增 enhanced_security_enabled / reset_security_session / loid_auth_status / update_queue_bindings；GRAPH_CLASSES 10->13；新增 valid_extended_vlan_row 与 VLAN 档位默认值"
+    },
+    {
+      "path": "src/protocol.rs",
+      "upstream_path": "airoha-pon-daemons/src/src/omci/protocol.rs",
+      "upstream_blob": "43abe30dbe9828f935b4f4cd503109cbad89a44e",
+      "local_blob": "d8e22783b0b0ddcf41dd8d2488843f55c3b9c102",
+      "local_sha256": "5585eccf3053f5b4dd3d99a7e97fa7fc11ee4f2e991e1d5da2c5a4c314623a2d",
+      "local_changes": "只改了一行注释：MIC 由传输层负责，本 codec 不认证 PDU（去掉 QDMA 专用措辞）"
+    },
+    {
+      "path": "src/provisioning.rs",
+      "upstream_path": "airoha-pon-daemons/src/src/omci/provisioning.rs",
+      "upstream_blob": "21744566f6347df8f35cbe620920e52b24052c81",
+      "local_blob": "34f6d027f7a79cfa831fe1d77a172114e74bd8b3",
+      "local_sha256": "15cab2ff51939a814f8a3f6f3d4603ce436c7d5eec359cebfb57956f07077a31",
+      "local_changes": "新增 VlanProfile 与 DATA_PATH_VLAN_UNTAGGED/TAGGED；OMCI 档位带 dscp、p-bit、VLAN 选择器与 GEM 队列绑定表"
+    },
+    {
+      "path": "src/schema.rs",
+      "upstream_path": "airoha-pon-daemons/src/src/omci/schema.rs",
+      "upstream_blob": "b1dfe8eb9a1afd1f793a7cc21869fcd7b4b6aee8",
+      "local_blob": "b1dfe8eb9a1afd1f793a7cc21869fcd7b4b6aee8",
+      "local_sha256": "c70fc47db65a54a6f4cc33398dc6f722de30f786380a2094c576ff60b46ebe3a",
+      "local_changes": "与上游逐字节相同（未做任何本地改动）"
+    },
+    {
+      "path": "src/security.rs",
+      "upstream_path": "airoha-pon-daemons/src/src/omci/security.rs",
+      "upstream_blob": "2927694647745d747c847f2577e3e0d106d724b3",
+      "local_blob": "ea5ee884a414fdcc3e8bfbce2632b6d728a03070",
+      "local_sha256": "054bddf3bb6896f7f5c294610f32d265d21f7fa9d98d4ecb0e6fc380a36a5af7",
+      "local_changes": "aes_cmac 改为带 key 的实现，去掉写死的 ENHANCED_PSK 与 onu_random_challenge：密钥改由 UCI 的 omci_psk 提供"
+    },
+    {
+      "path": "src/wire.rs",
+      "upstream_path": "airoha-pon-daemons/src/src/wire.rs",
+      "upstream_blob": "51909c06911e140ac488f2d5a72a2005d56481c5",
+      "local_blob": "51909c06911e140ac488f2d5a72a2005d56481c5",
+      "local_sha256": "832cb8cd7dc8b01cb2f1439c6276064713d08daa1f07b3a8edf9a1c95c52a6a1",
+      "local_changes": "与上游逐字节相同（未做任何本地改动）"
+    }
+  ],
+  "local_sources": [
+    {
+      "path": "src/config.rs",
+      "local_blob": "a939519dc32382a18e7a1250ce827e8c439c5e4d",
+      "local_sha256": "0459c59d1b5203f869f16fa0a8b0889910a1e7039ff4f02d77aa2a735a756c8c",
+      "local_changes": "我们自己的身份配置：omcc_version、厂商与设备身份、OMCI PSK；与上游的 omci/config.rs 不同源"
+    },
+    {
+      "path": "src/lib.rs",
+      "local_blob": "8e199e3c41a5274e6bc81e31f4df1752bb6c7458",
+      "local_sha256": "415e29f4c35bbcf1c1b93b56eac97703de99214b77101bde558c444877a1ed33",
+      "local_changes": "我们自己的 crate 入口与 C ABI（zxpon_omci_new / zxpon_omci_free）；上游对应位置是 daemon 运行时"
+    }
+  ],
+  "not_taken": [
+    {
+      "id": "oam-runtime",
+      "upstream_path": "airoha-pon-daemons/src/src/oam",
+      "reason": "CTC 私有 OAM 会话跑在 IEEE 802.3ah 以太网 OAMPDU 上，且上游只在 EPON 模式启用；本板是 XG-PON，没有上行以太网 OAM 通道"
+    },
+    {
+      "id": "daemon-runtime",
+      "upstream_path": "airoha-pon-daemons/src/src/{agent,runtime,transport,control}.rs",
+      "reason": "上游 daemon 的运行时层：raw socket 收帧、状态记录与控制套接字；本板由自研的 zxpond 承担"
+    },
+    {
+      "id": "omci-extras",
+      "upstream_path": "airoha-pon-daemons/src/src/omci/{backend,config,control,mod}.rs",
+      "reason": "上游 omci 的后端与模块入口绑定它的 daemon；本板用的是自己的 lib.rs 与 config.rs"
+    },
+    {
+      "id": "frontends",
+      "upstream_path": "airoha-ponctl, luci-app-pon, luci-app-iptv",
+      "reason": "上游的控制面前端；本板的 LuCI 来自 LeoooChen/PonWRT-TYFZA1，与上游无关"
+    }
+  ],
+  "drift": []
+}

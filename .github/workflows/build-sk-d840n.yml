@@ -124,6 +124,14 @@ on:
       # controls that say whether it still notices when that changes.
       - tools/check-sk-release-line.py
       - tests/test_sk_release_line.py
+      # The OMCI engine is a copy of six upstream files with our own
+      # changes on top of them, and the lock file is what says so.  A
+      # change to the lock, to the gate that reads it, or to the control
+      # that says whether the gate still notices, changes what the build
+      # checks, so it has to start a build.
+      - tools/check-omci-upstream-lock.py
+      - tools/refresh-omci-upstream.py
+      - tests/test_sk_omci_upstream_lock.py
       - tools/**
       - docs/**
 
@@ -189,6 +197,13 @@ jobs:
           python3 tests/test_conduit_netdev_name.py
           python3 tests/test_gatecheck.py
           python3 tests/test_ctl_payload.py
+          # The OMCI engine in this repository is a copy of six upstream
+          # files with our own changes on top of them.  The lock file says
+          # which upstream the copy was taken from and what we changed in
+          # each of them, and this gate says the copy is still that copy -
+          # the same answer every time, with no way out needed to get it.
+          python3 tools/check-omci-upstream-lock.py --tree "$GITHUB_WORKSPACE"
+          python3 tests/test_sk_omci_upstream_lock.py --tree "$GITHUB_WORKSPACE"
           # The paths: list says which changes start this build, so a file
           # the workflow runs but does not list is a file whose change is
           # never checked: the gate that reads it stops being checked the

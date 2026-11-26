@@ -189,6 +189,8 @@ SHARED_GATES = [
     "tests/test_ctl_payload.py",
     "tools/check-sk-release-line.py",
     "tests/test_sk_release_line.py",
+    "tools/check-omci-upstream-lock.py",
+    "tests/test_sk_omci_upstream_lock.py",
 ]
 
 # The gates only the 7.3 release line runs, because they are about the 7.3 release line: the

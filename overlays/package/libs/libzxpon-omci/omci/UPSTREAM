@@ -5,3 +5,11 @@ License: GPL-2.0-only
 RTL9617C integration and capability changes: PonWRT-TYFZA1 contributors
 Applied lessons: HGU VEIP ownership, Class332 nonce/key-name ordering, OLT VLAN/p-bit selectors, key-ring direction and unchanged-table flow retention.
 RTL9617C register behavior is derived from this board's original ca-ne.ko and Realtek GPL sources.
+Lock: UPSTREAM.lock.json records the upstream blob of every file, the bytes as they sit in this tree, and what we changed in each of them.
+Paths:
+  airoha-pon-daemons/src/src/omci/mib.rs
+  airoha-pon-daemons/src/src/omci/protocol.rs
+  airoha-pon-daemons/src/src/omci/provisioning.rs
+  airoha-pon-daemons/src/src/omci/schema.rs
+  airoha-pon-daemons/src/src/omci/security.rs
+  airoha-pon-daemons/src/src/wire.rs
