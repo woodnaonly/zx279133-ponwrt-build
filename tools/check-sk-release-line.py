@@ -24,10 +24,16 @@ A release that ships a file the build never made is worse than no release
 at all, and a check that compared the file list with a second copy of the
 same list would only say that the copy agrees with itself.
 
+The gates the workflows call are read as well: a gate that is not
+in the tree, or that is called with an option it does not take, is a
+gate that never ran, and a gate that never ran is a green light that
+means nothing.
+
 Usage:
   check-sk-release-line.py [--tree ROOT]
 """
 import argparse
+import ast
 import re
 import sys
 from pathlib import Path
@@ -154,7 +160,119 @@ def parse_fixture(text):
     return sections
 
 
-def analyse(texts, fixture_text):
+def logical_lines(text):
+    """The commands of the run steps, with the continued lines joined."""
+    out = []
+    buf = ""
+    for raw in text.splitlines():
+        stripped = raw.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if stripped.endswith(chr(92)):
+            buf += stripped[:-1] + " "
+            continue
+        out.append(buf + stripped)
+        buf = ""
+    if buf:
+        out.append(buf)
+    return out
+
+
+def repo_calls(text):
+    """Every repo script the workflow runs, with the options it is given."""
+    out = []
+    for line in logical_lines(text):
+        for part in line.replace("||", "&&").split("&&"):
+            for chunk in part.split(";"):
+                tokens = chunk.split()
+                for index, token in enumerate(tokens):
+                    if token not in ("python3", "python"):
+                        continue
+                    if index + 1 >= len(tokens):
+                        continue
+                    script = tokens[index + 1]
+                    if not script.startswith(("tools/", "tests/")):
+                        continue
+                    options = []
+                    for later in tokens[index + 2:]:
+                        if not later.startswith("--"):
+                            break
+                        options.append(later)
+                    out.append((script, options))
+    return out
+
+
+def declared_options(source):
+    """The options the script declares, if it declares them at all.
+
+    A script that reads its options with argparse says which options it
+    takes in its own add_argument calls; a script that reads them by hand
+    says them in its own text.  A script that does neither takes no
+    options, and the caller must not give it any.
+    """
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return None
+    options = set()
+    uses_argparse = False
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if isinstance(func, ast.Attribute):
+            name = func.attr
+        elif isinstance(func, ast.Name):
+            name = func.id
+        else:
+            name = ""
+        if name == "ArgumentParser":
+            uses_argparse = True
+        elif name == "add_argument":
+            uses_argparse = True
+            for arg in node.args:
+                if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+                    if arg.value.startswith("-"):
+                        options.add(arg.value)
+                elif isinstance(arg, (ast.List, ast.Tuple)):
+                    for item in arg.elts:
+                        if isinstance(item, ast.Constant) and isinstance(item.value, str):
+                            if item.value.startswith("-"):
+                                options.add(item.value)
+    return options if uses_argparse else None
+
+
+def call_checks(root, texts, report):
+    """The gates the workflows call are there and take what they are given.
+
+    A gate the workflow calls with an option the gate does not take is a
+    gate that never ran: the run dies on the option instead of on the
+    tree, and the build stops before the later gates are reached.  That
+    is not something anybody notices, because the build stops at the first
+    gate and the gates after it are never read.
+    """
+    for name, text in sorted(texts.items()):
+        for script, options in repo_calls(text):
+            path = Path(root) / script
+            if not path.is_file():
+                report.require(False,
+                               "the gates the workflows call are in the tree",
+                               f"{name} calls {script}, which is not there")
+                continue
+            body = path.read_text(encoding="utf-8", errors="replace")
+            declared = declared_options(body)
+            for option in sorted(set(options)):
+                if declared is None:
+                    known = option in body
+                else:
+                    known = option in declared
+                report.require(known,
+                               "the gates take the options they are given",
+                               f"{name} calls {script} with {option}, "
+                               "which the script does not know")
+
+
+def analyse(texts, fixture_text, root):
     """Everything the gate has to say about these workflow files."""
     report = Report()
     docs = {}
@@ -256,6 +374,7 @@ def analyse(texts, fixture_text):
     report.require(not unknown and len(exported) == len(FLASH_FILES),
                    "the 7.3 flash files are the ones the build copies into the artifact",
                    f"the export step names {exported}")
+    call_checks(root, texts, report)
     return report
 
 
@@ -275,7 +394,7 @@ def main() -> int:
     if not fixture.is_file():
         print(f"FAILED: the measured listing is missing ({fixture})")
         return 1
-    report = analyse(workflow_texts(root), fixture.read_text(encoding="utf-8"))
+    report = analyse(workflow_texts(root), fixture.read_text(encoding="utf-8"), root)
     return report.report("the release line")
 
 

@@ -13,15 +13,32 @@ gate parses it: a control that handed the gate a tree it had built itself
 would only prove that the control and the gate agree about a tree the
 control made up.
 """
+import argparse
 import contextlib
 import importlib.util
 import io
+import sys
 import unittest
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
-TOOL = ROOT / "tools/check-sk-release-line.py"
-FIXTURE = ROOT / "tests/fixtures/sk-73-artifact-files.txt"
+DEFAULT_ROOT = Path(__file__).resolve().parents[1]
+
+
+def tree_and_args(argv):
+    """The tree the control works on, and the arguments left for unittest.
+
+    The gate takes --tree, and the control that watches the gate takes it
+    too: a control that could only ever look at its own tree could not
+    watch a gate that was pointed at another one.  This control was
+    called with --tree by the workflow and did not take it, so the build
+    died on the option instead of on the tree.
+    """
+    parser = argparse.ArgumentParser(description="the control on the release line gate")
+    parser.add_argument("--tree", type=Path, default=None,
+                        help="the repository the gate is checked against")
+    args, rest = parser.parse_known_args(argv)
+    root = args.tree.resolve() if args.tree else DEFAULT_ROOT
+    return root, rest
 
 LEGACY = "build-sk-d840n.yml"
 PUBLISH = "build-sk-d840n-73.yml"
@@ -45,25 +62,28 @@ PUBLISH_STEP = (
 )
 
 
-def load_gate():
-    spec = importlib.util.spec_from_file_location("check_sk_release_line", TOOL)
+def load_gate(tool):
+    spec = importlib.util.spec_from_file_location("check_sk_release_line", tool)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
 
 
 class ReleaseLineControl(unittest.TestCase):
+    root = DEFAULT_ROOT
+
     @classmethod
     def setUpClass(cls):
-        cls.gate = load_gate()
-        cls.fixture = FIXTURE.read_text(encoding="utf-8")
-        base = ROOT / ".github" / "workflows"
+        cls.gate = load_gate(cls.root / "tools/check-sk-release-line.py")
+        cls.fixture = (cls.root / "tests/fixtures/sk-73-artifact-files.txt"
+                       ).read_text(encoding="utf-8")
+        base = cls.root / ".github" / "workflows"
         cls.texts = {path.name: path.read_text(encoding="utf-8")
                      for path in sorted(base.glob("*.yml"))}
 
     def run_gate(self, texts):
         with contextlib.redirect_stdout(io.StringIO()):
-            report = self.gate.analyse(texts, self.fixture)
+            report = self.gate.analyse(texts, self.fixture, self.root)
         return report.failures
 
     def mutate(self, name, old, new):
@@ -124,6 +144,31 @@ class ReleaseLineControl(unittest.TestCase):
         self.assertIn("the 6.18 line still uploads its firmware",
                       self.run_gate(texts))
 
+    def test_a_gate_called_with_an_option_it_does_not_take_is_noticed(self):
+        # The run that found this: the workflow called this control with
+        # --tree and the control did not take it, so the build died on the
+        # option and never looked at the tree.  A gate that is called
+        # wrong has to be noticed, not run.
+        texts = self.mutate(PUBLISH,
+                            "python3 tests/test_sk_release_line.py",
+                            "python3 tests/test_sk_release_line.py --no-such-option")
+        self.assertIn("the gates take the options they are given",
+                      self.run_gate(texts))
+
+    def test_a_gate_that_is_not_in_the_tree_is_noticed(self):
+        texts = self.mutate(PUBLISH,
+                            "python3 tests/test_sk_release_line.py",
+                            "python3 tests/test_sk_release_line_absent.py")
+        self.assertIn("the gates the workflows call are in the tree",
+                      self.run_gate(texts))
+
+
+def main(argv=None):
+    argv = list(sys.argv[1:] if argv is None else argv)
+    root, rest = tree_and_args(argv)
+    ReleaseLineControl.root = root
+    unittest.main(argv=[sys.argv[0]] + rest)
+
 
 if __name__ == "__main__":
-    unittest.main()
+    main()
