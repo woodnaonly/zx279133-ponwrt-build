@@ -539,8 +539,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("tests/test_sysupgrade.py", prepare)
 
     def test_success_selection_and_validation_gate_all_firmware_uploads(self):
-        for name in ("Upload outputs", "Upload direct sysupgrade image", "Publish release",
-                     "Direct firmware download summary"):
+        for name in ("Upload outputs", "Upload direct sysupgrade image"):
             condition = self.steps[name]["if"]
             for wanted in ("flash", "initramfs", "both"):
                 for mode in ("flash", "initramfs"):
@@ -561,7 +560,7 @@ class WorkflowTests(unittest.TestCase):
                             expression = expression.replace("!= false", "!= False").replace("!startsWith(", "not startsWith(")
                             actual = eval(expression, {"__builtins__": {}, "startsWith": str.startswith})
                             expected = success and selected and validated
-                            if name in ("Upload direct sysupgrade image", "Direct firmware download summary"):
+                            if name == "Upload direct sysupgrade image":
                                 expected = expected and mode == "flash"
                             self.assertEqual(actual, expected, (name, wanted, mode, success, validated))
 
@@ -569,13 +568,23 @@ class WorkflowTests(unittest.TestCase):
         upload = self.steps["Upload direct sysupgrade image"]["with"]
         self.assertIn(firmware.MAIN_IMAGE, upload["path"].splitlines())
         self.assertEqual(upload["compression-level"], 0)
-        release = self.steps["Publish release"]["with"]
-        for filename in (firmware.MAIN_IMAGE, firmware.MAIN_IMAGE + ".sha256", "flash-set.tgz",
-                         "flash-sysupgrade.bin", "sk-d840n-initramfs.itb"):
-            self.assertIn(filename, release["files"].splitlines())
+        # This line does not publish any more: the release line is the 7.3
+        # one.  What it still has to do is upload the firmware it built.
+        outputs = self.steps["Upload outputs"]["with"]
+        self.assertIn("flash-sysupgrade.bin", outputs["path"].splitlines())
+        self.assertIn("sysupgrade-report.json", outputs["path"].splitlines())
+        self.assertNotIn("Publish release", self.steps)
+        self.assertNotIn("Direct firmware download summary", self.steps)
+        # The 7.3 line publishes, and what it publishes carries the same
+        # direct image and says it needs no unzipping.
+        publish = yaml.load((REPO / ".github/workflows/build-sk-d840n-73.yml").read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
+        steps = publish["jobs"]["build"]["steps"]
+        release = next(s for s in steps if s.get("name") == "Publish the flash release")["with"]
+        names = [Path(line).name for line in release["files"].splitlines()]
+        self.assertIn(firmware.MAIN_IMAGE, names)
         self.assertIn("无需解压", release["body"])
         self.assertIn("ZIP", release["body"])
-        self.assertIn("releases/download/skd840n_flash_", self.steps["Direct firmware download summary"]["run"])
+        self.assertTrue(release["tag_name"].startswith("skd840n_73_"))
         triggers = self.workflow.get("on", self.workflow.get(True))
         self.assertIn("tests/test_sysupgrade.py", triggers["push"]["paths"])
 

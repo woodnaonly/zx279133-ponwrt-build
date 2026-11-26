@@ -1,0 +1,65 @@
+# The files the 7.3 line's artifacts carried.
+#
+# Measured, not written by hand: this listing is the content of the two
+# artifacts of run #96 (2026-11-26, head 617b12ff), read out of the
+# archives that were downloaded from that run.
+#
+# The gate tools/check-sk-release-line.py compares the file list of the 7.3
+# release with this listing, so a release cannot ship a file the build
+# never produced.  To measure a later run instead, download its two
+# artifacts and write the listing again the same way.
+
+# sk-d840n-73-images-flash (artifact id 15105501653, 73636794 bytes)
+[flash]
+config.buildinfo
+feeds.buildinfo
+flash-dtb.bin
+flash-rootfs.jffs2
+flash-sysupgrade.bin
+flash-uImage
+immortalwrt-sk-d840n-sysupgrade.bin
+immortalwrt-zte-zx279133-rootfs.cpio.gz
+immortalwrt-zte-zx279133-skyworth_sk-d840n-jffs2-128k-rootfs.jffs2
+immortalwrt-zte-zx279133-skyworth_sk-d840n-jffs2-128k-sysupgrade.bin
+immortalwrt-zte-zx279133-skyworth_sk-d840n-jffs2-64k-rootfs.jffs2
+immortalwrt-zte-zx279133-skyworth_sk-d840n-jffs2-64k-sysupgrade.bin
+immortalwrt-zte-zx279133-skyworth_sk-d840n.manifest
+packages/base-files-1~31e2ac4.apk
+packages/dropbear-2025.89-r3.apk
+packages/fstools-2026.05.23~16718b6e-r1.apk
+packages/fwtool-2025.10.03~04cd252e-r1.apk
+packages/index.json
+packages/kernel-7.3.4~074c9ff4fc2d9852f38c6476458c9e5e-r1.apk
+packages/kmod-mtd-rw-7.3.4.2021.02.28~e8776739-r2.apk
+packages/libc-1.2.5-r5.apk
+packages/libgcc1-14.3.0-r5.apk
+packages/libpthread-1.2.5-r5.apk
+packages/mtd-27.apk
+packages/packages.adb
+profiles.json
+sha256sums
+sysupgrade-report.json
+version.buildinfo
+
+# sk-d840n-73-images-initramfs (artifact id 15104962825, 15933549 bytes)
+[initramfs]
+config.buildinfo
+feeds.buildinfo
+immortalwrt-zte-zx279133-rootfs.cpio.gz
+immortalwrt-zte-zx279133-skyworth_sk-d840n-initramfs.itb
+immortalwrt-zte-zx279133-skyworth_sk-d840n.manifest
+packages/base-files-1~31e2ac4.apk
+packages/dropbear-2025.89-r3.apk
+packages/fstools-2026.05.23~16718b6e-r1.apk
+packages/fwtool-2025.10.03~04cd252e-r1.apk
+packages/index.json
+packages/kernel-7.3.4~074c9ff4fc2d9852f38c6476458c9e5e-r1.apk
+packages/kmod-mtd-rw-7.3.4.2021.02.28~e8776739-r2.apk
+packages/libc-1.2.5-r5.apk
+packages/libgcc1-14.3.0-r5.apk
+packages/libpthread-1.2.5-r5.apk
+packages/mtd-27.apk
+packages/packages.adb
+profiles.json
+sha256sums
+version.buildinfo

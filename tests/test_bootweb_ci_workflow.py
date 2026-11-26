@@ -49,8 +49,11 @@ class BootwebWorkflowTests(unittest.TestCase):
         steps = self.jobs["build"]["steps"]
         self.assertGreater(len(steps), 30)
         names = {s.get("name") for s in steps}
-        self.assertTrue({"Compile", "Package flash images", "Package initramfs image", "Publish release",
-                         "Direct firmware download summary"} <= names)
+        self.assertTrue({"Compile", "Package flash images", "Package initramfs image"} <= names)
+        # This line does not publish any more: the release line is the 7.3
+        # one.  The firmware is still built and still uploaded.
+        self.assertNotIn("Publish release", names)
+        self.assertNotIn("Direct firmware download summary", names)
         pick = next(s["run"] for s in steps if s.get("id") == "pick")
         self.assertIn("want=all", pick)
         self.assertIn('[ "$want" = all ] || [ "$want" = both ]', pick)
@@ -73,29 +76,23 @@ class BootwebWorkflowTests(unittest.TestCase):
         self.assertIn("dependencies.lock.json", cache["key"])
         self.assertNotIn("ci-native241", cache["path"])
 
-    def test_publication_requires_a_validated_successful_package(self):
+    def test_the_candidate_is_uploaded_after_the_gate_and_not_published(self):
         steps = self.job["steps"]
         gate_index = next(i for i, s in enumerate(steps) if s.get("id") == "package_bootweb")
         gate = steps[gate_index]["run"]
         self.assertLess(gate.index("ci.py build"), gate.index("ci.py validate-dist"))
         self.assertLess(gate.index("ci.py validate-dist"), gate.index("validated=true"))
         self.assertEqual(gate.count("if ($LASTEXITCODE -ne 0)"), 2)
-        outputs = [s for s in steps if s.get("name") in
-                   ("Upload validated bootweb outputs", "Publish bootweb candidate release", "Bootweb download summary")]
-        self.assertEqual(len(outputs), 3)
-        for step in outputs:
-            self.assertGreater(steps.index(step), gate_index)
-            expected = "success() && steps.package_bootweb.outputs.validated == 'true'"
-            if step["name"] != "Upload validated bootweb outputs":
-                expected += " && (github.event_name != 'workflow_dispatch' || inputs.publish_release != false)"
-            self.assertEqual(step["if"], expected)
-        release = next(s for s in outputs if "action-gh-release" in s.get("uses", ""))["with"]
-        self.assertEqual(release["prerelease"], "true")
-        self.assertEqual(release["fail_on_unmatched_files"], "true")
-        self.assertIn("skd840n_bootweb_", release["tag_name"])
-        self.assertEqual(len(release["files"].strip().splitlines()), 3)
-        self.assertNotIn("*", release["files"])
-        self.assertNotIn("resident-boot-development.bin", release["files"])
+        upload = next(s for s in steps if s.get("name") == "Upload validated bootweb outputs")
+        self.assertGreater(steps.index(upload), gate_index)
+        self.assertEqual(upload["if"],
+                         "success() && steps.package_bootweb.outputs.validated == 'true'")
+        # The candidate is not published any more: this line builds it
+        # and uploads it, and the release line is the 7.3 one.
+        self.assertEqual([s for s in steps if "action-gh-release" in s.get("uses", "")], [])
+        names = {s.get("name") for s in steps}
+        self.assertNotIn("Publish bootweb candidate release", names)
+        self.assertNotIn("Bootweb download summary", names)
 
     def test_failure_upload_is_reports_only_and_no_device_operation_runs(self):
         diagnostic = next(s for s in self.job["steps"] if s.get("name") == "Upload bootweb failure diagnostics")

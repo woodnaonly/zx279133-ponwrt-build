@@ -5,7 +5,7 @@
 A workflow file is parsed by GitHub before any job starts.  When that parse
 fails, the run is created, it is reported as failed, and it has no jobs at all
 - so the only evidence is the run's conclusion.  That is exactly what happened
-to the 7.3 line in run #5 (2026-11-22, head 94335616): the step
+to the 7.3 release line in run #5 (2026-11-22, head 94335616): the step
 
     - name: Gate: the resolved config carries exactly one theme
 
@@ -19,9 +19,9 @@ shape of the two kernel lines:
   * every workflow file parses,
   * every job and step the lines depend on is still there,
   * every test file a gate job runs exists in tests/,
-  * the 7.3 line still rebuilds when the inputs of that line change.
+  * the 7.3 release line still rebuilds when the inputs of that line change.
 
-The last one matters as much as the parse: the 7.3 line is driven by a path
+The last one matters as much as the parse: the 7.3 release line is driven by a path
 filter, so a patch series that lands outside the filter builds nothing and the
 green run says nothing about it.
 """
@@ -41,17 +41,17 @@ ROOT = Path(__file__).resolve().parents[1]
 WORKFLOWS = ROOT / ".github" / "workflows"
 TESTS = ROOT / "tests"
 
-# The workflow of the release line and the one of the 7.3 bring-up line.
-RELEASE = "build-sk-d840n.yml"
-BRINGUP = "build-sk-d840n-73.yml"
+# The workflow of the 6.18 line and the one of the 7.3 release line.
+LEGACY = "build-sk-d840n.yml"
+PUBLISH = "build-sk-d840n-73.yml"
 
-# The steps the release line cannot lose: the gates, the build and the
+# The steps the 6.18 line cannot lose: the gates, the build and the
 # bootweb job that produces the offline candidate.
-RELEASE_JOBS = {"check-led-gates", "build", "bootweb"}
-BRINGUP_JOBS = {"check-gates", "build"}
+LEGACY_JOBS = {"check-led-gates", "build", "bootweb"}
+PUBLISH_JOBS = {"check-gates", "build"}
 
-# The steps of the 7.3 line that carry the whole point of the line.
-BRINGUP_STEPS = [
+# The steps of the 7.3 release line that carry the whole point of the line.
+PUBLISH_STEPS = [
     "The firmware tools",
     "Rust 1.96.1 for the OMCI engine",
     "Prepare the Linux 7.3.4 tree",
@@ -79,10 +79,13 @@ BRINGUP_STEPS = [
     "Validate and export the partitions",
     "Gate: the image carries the board drivers",
     "Upload the images",
+    # The release steps: this line is the one that publishes.
+    "Publish the flash release",
+    "Publish the initramfs release",
 ]
 
-# The paths that decide whether a change to the 7.3 line starts a build.
-BRINGUP_TRIGGERS = [
+# The paths that decide whether a change to the 7.3 release line starts a build.
+PUBLISH_TRIGGERS = [
     "kernel-patches/**",
     "kernel-overlays-73/**",
     "overlays-73/**",
@@ -169,6 +172,10 @@ BRINGUP_TRIGGERS = [
     "tests/test_sk_lan_egress.py",
     "scripts/configure-sk-d840n.sh",
     "configs/sk-d840n-73.json",
+    # The gate that says which of the two lines publishes, and the
+    # controls that say whether it still notices when that changes.
+    "tools/check-sk-release-line.py",
+    "tests/test_sk_release_line.py",
 ]
 
 # The gates both lines run before they build anything.
@@ -180,12 +187,14 @@ SHARED_GATES = [
     "tests/test_conduit_netdev_name.py",
     "tests/test_gatecheck.py",
     "tests/test_ctl_payload.py",
+    "tools/check-sk-release-line.py",
+    "tests/test_sk_release_line.py",
 ]
 
-# The gates only the 7.3 line runs, because they are about the 7.3 line: the
+# The gates only the 7.3 release line runs, because they are about the 7.3 release line: the
 # image gate asks the produced artifact whether it carries the board's
 # drivers, and the lint keeps a kernel version out of a decision.
-BRINGUP_ONLY_GATES = [
+PUBLISH_ONLY_GATES = [
     "tests/test_sk_image_drivers.py",
     "tests/test_sk_baked_version.py",
 ]
@@ -345,47 +354,47 @@ def main():
     if failures.items:
         return failures.report("workflows")
 
-    release = docs.get(RELEASE)
-    bringup = docs.get(BRINGUP)
-    failures.check(release is not None, f"{RELEASE} is present")
-    failures.check(bringup is not None, f"{BRINGUP} is present")
-    if release is None or bringup is None:
+    legacy = docs.get(LEGACY)
+    publish = docs.get(PUBLISH)
+    failures.check(legacy is not None, f"{LEGACY} is present")
+    failures.check(publish is not None, f"{PUBLISH} is present")
+    if legacy is None or publish is None:
         return failures.report("workflows")
 
-    print("\nthe release line")
-    release_jobs = set((release.get("jobs") or {}).keys())
-    for job in sorted(RELEASE_JOBS):
-        failures.check(job in release_jobs, f"{RELEASE} has the job {job}")
+    print("\nthe 6.18 line")
+    release_jobs = set((legacy.get("jobs") or {}).keys())
+    for job in sorted(LEGACY_JOBS):
+        failures.check(job in release_jobs, f"{LEGACY} has the job {job}")
     failures.check(
-        str(((release.get("jobs") or {}).get("check-led-gates") or {}).get("name", ""))
+        str(((legacy.get("jobs") or {}).get("check-led-gates") or {}).get("name", ""))
         == "LED CI regression",
-        f"{RELEASE} names its gate job")
-    release_gate = run_text(release, "check-led-gates")
+        f"{LEGACY} names its gate job")
+    release_gate = run_text(legacy, "check-led-gates")
     for gate in SHARED_GATES:
         failures.check(gate in release_gate,
-                       f"the release line runs {gate}")
+                       f"the 6.18 line runs {gate}")
 
-    print("\nthe 7.3 bring-up line")
-    bringup_jobs = set((bringup.get("jobs") or {}).keys())
-    for job in sorted(BRINGUP_JOBS):
-        failures.check(job in bringup_jobs, f"{BRINGUP} has the job {job}")
-    names = step_names(bringup, "build")
-    for step in BRINGUP_STEPS:
-        failures.check(step in names, f"{BRINGUP} has the step {step!r}")
+    print("\nthe 7.3 release line")
+    bringup_jobs = set((publish.get("jobs") or {}).keys())
+    for job in sorted(PUBLISH_JOBS):
+        failures.check(job in bringup_jobs, f"{PUBLISH} has the job {job}")
+    names = step_names(publish, "build")
+    for step in PUBLISH_STEPS:
+        failures.check(step in names, f"{PUBLISH} has the step {step!r}")
 
-    bringup_gate = run_text(bringup, "check-gates")
+    bringup_gate = run_text(publish, "check-gates")
     for gate in SHARED_GATES:
         failures.check(gate in bringup_gate,
-                       f"the 7.3 line runs {gate}")
-    for gate in BRINGUP_ONLY_GATES:
+                       f"the 7.3 release line runs {gate}")
+    for gate in PUBLISH_ONLY_GATES:
         failures.check(gate in bringup_gate,
-                       f"the 7.3 line runs {gate}")
+                       f"the 7.3 release line runs {gate}")
 
-    print("\nthe path filter of the 7.3 line")
-    triggers = triggers_of(bringup)
-    for path in BRINGUP_TRIGGERS:
+    print("\nthe path filter of the 7.3 release line")
+    triggers = triggers_of(publish)
+    for path in PUBLISH_TRIGGERS:
         failures.check(path in triggers,
-                       f"the 7.3 line rebuilds on {path}")
+                       f"the 7.3 release line rebuilds on {path}")
 
     # The OMCI engine is a Rust package, and the package's Makefile takes
     # the toolchain from ZX_CARGO - an environment variable, not a default
@@ -403,7 +412,7 @@ def main():
     # release line shipped a gate that had been reading a field that was
     # never written.
     print("\nthe release names the kernel it ships, and the image agrees")
-    for workflow, doc in ((RELEASE, release), (BRINGUP, bringup)):
+    for workflow, doc in ((LEGACY, legacy), (PUBLISH, publish)):
         text = run_text(doc, "build")
         export_at = text.find("check_sysupgrade.py")
         gate_at = text.find("check-release-kernel-version.py")
@@ -422,17 +431,17 @@ def main():
                 return files
         return ""
 
-    failures.check("sysupgrade-report.json" in release_files(release),
-                   "the release line ships the report with the images")
+    failures.check("sysupgrade-report.json" in release_files(publish),
+                   "the 7.3 release line ships the report with the images")
     failures.check("tests/test_release_kernel_version.py" in
-                   run_text(release, "build"),
-                   "the release line runs the release version controls")
+                   run_text(legacy, "build"),
+                   "the 6.18 line runs the release version controls")
     failures.check("tests/test_release_kernel_version.py" in
-                   run_text(bringup, "check-gates"),
-                   "the 7.3 line runs the release version controls")
+                   run_text(publish, "check-gates"),
+                   "the 7.3 release line runs the release version controls")
 
     print("\nthe OMCI engine's toolchain is installed on both lines")
-    for workflow, doc in ((RELEASE, release), (BRINGUP, bringup)):
+    for workflow, doc in ((LEGACY, legacy), (PUBLISH, publish)):
         text = run_text(doc, "build")
         failures.check("rustup toolchain install" in text,
                        f"{workflow} installs the Rust toolchain")
@@ -446,18 +455,18 @@ def main():
     # fixed 8 MiB kernel partition.  Without the binding the image stage
     # dies with a ModuleNotFoundError - after the kernel has been compiled,
     # which is the most expensive place to find out.
-    print("\nthe 7.3 line has the tools the image stage needs")
-    tools_text = step_run_text(bringup, "build", "The firmware tools")
+    print("\nthe 7.3 release line has the tools the image stage needs")
+    tools_text = step_run_text(publish, "build", "The firmware tools")
     failures.check(tools_text != "", "the firmware tools step has a body")
     failures.check("zopfli==0.4.3" in tools_text,
-                   "the 7.3 line installs zopfli")
+                   "the 7.3 release line installs zopfli")
     failures.check('SKD840N_HOST_PYTHON=$PY" >> "$GITHUB_ENV"' in tools_text,
-                   "the 7.3 line tells the image profile which python to use")
+                   "the 7.3 release line tells the image profile which python to use")
     failures.check("spec_from_file_location" in tools_text,
-                   "the 7.3 line checks that the image's own script imports")
+                   "the 7.3 release line checks that the image's own script imports")
 
     print("\nthe gate jobs only name tests that exist")
-    for workflow, job in ((RELEASE, "check-led-gates"), (BRINGUP, "check-gates")):
+    for workflow, job in ((LEGACY, "check-led-gates"), (PUBLISH, "check-gates")):
         for test in referenced_tests(run_text(docs[workflow], job)):
             failures.check((ROOT / test).is_file(),
                            f"{workflow} runs {test}, which exists")
@@ -475,15 +484,15 @@ def main():
     # that does not exist in the tree, and a tristate symbol whose
     # dependency is modular, are both dropped in silence, so the fragment
     # can say =y while the kernel says =m.
-    print("\nthe 7.3 line builds the zte drivers into the kernel")
-    pin_text = step_run_text(bringup, "build", "Build the zte drivers into the kernel")
+    print("\nthe 7.3 release line builds the zte drivers into the kernel")
+    pin_text = step_run_text(publish, "build", "Build the zte drivers into the kernel")
     failures.check(pin_text != "", "the pin step has a body")
     failures.check("target/linux/zte/zx279133/config-7.3" in pin_text,
                    "the pins go into the fragment that merges last")
     for symbol in ZTE_DRIVER_SYMBOLS:
         failures.check(symbol in pin_text,
-                       f"the 7.3 line pins {symbol}=y")
-    gate_text = step_run_text(bringup, "build",
+                       f"the 7.3 release line pins {symbol}=y")
+    gate_text = step_run_text(publish, "build",
                                "Gate: the zte drivers are built into the kernel")
     failures.check(gate_text != "", "the gate step has a body")
     failures.check(".config" in gate_text,
@@ -497,17 +506,17 @@ def main():
                        f"the gate checks {symbol}")
 
     # The board's other requirements have to be in the merged kernel config
-    # too, and the release line already knows how to say that.  Without this
-    # the 7.3 line would build an image that has no Realtek PHY, no
+    # too, and the 6.18 line already knows how to say that.  Without this
+    # the 7.3 release line would build an image that has no Realtek PHY, no
     # netfilter and the wrong built-in command line - and every one of those
     # failures looks like "the kernel does not boot" on the board.
     #
-    # The contract is that the 7.3 line asserts the *same* symbols the
+    # The contract is that the 7.3 release line asserts the *same* symbols the
     # release line asserts, not a copy of them: a copy drifts, and a drift
     # here is silent.  So the two lists are read out of the two workflows
     # and compared.
-    print("\nthe 7.3 line asserts the release line's kernel requirements")
-    board_gate = step_run_text(bringup, "build",
+    print("\nthe 7.3 release line asserts the 6.18 line's kernel requirements")
+    board_gate = step_run_text(publish, "build",
                                "Gate: the merged kernel config carries the board requirements")
     failures.check(board_gate != "", "the board requirements gate has a body")
     failures.check(".config" in board_gate,
@@ -516,25 +525,25 @@ def main():
                    "the board requirements gate does not read the fragment that was pinned")
     failures.check('grep -qx "CONFIG_$s=y"' in board_gate,
                    "the board requirements gate asserts the value is =y, not merely present")
-    release_gate = run_text(release, "build")
+    release_gate = run_text(legacy, "build")
     release_required = shell_list(release_gate, "required")
     bringup_required = shell_list(board_gate, "required")
     failures.check(bool(release_required),
-                   "the release line's required list was found")
+                   "the 6.18 line's required list was found")
     failures.check(release_required == bringup_required,
-                   "the 7.3 line asserts exactly the symbols the release line asserts"
+                   "the 7.3 release line asserts exactly the symbols the 6.18 line asserts"
                    f" ({len(release_required)} symbols)")
     if release_required and release_required != bringup_required:
         missing = sorted(set(release_required) - set(bringup_required))
         extra = sorted(set(bringup_required) - set(release_required))
         if missing:
-            print(f"        missing on the 7.3 line: {' '.join(missing)}")
+            print(f"        missing on the 7.3 release line: {' '.join(missing)}")
         if extra:
-            print(f"        extra on the 7.3 line: {' '.join(extra)}")
+            print(f"        extra on the 7.3 release line: {' '.join(extra)}")
     for symbol in ("REALTEK_PHY", "NF_FLOW_TABLE", "NFT_FLOW_OFFLOAD",
                    "CC_OPTIMIZE_FOR_SIZE"):
         failures.check(symbol in bringup_required,
-                       f"the 7.3 line requires {symbol} to be built in")
+                       f"the 7.3 release line requires {symbol} to be built in")
     failures.check("# CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE is not set" in board_gate,
                    "the board requirements gate refuses an -O2 kernel")
     failures.check("CONFIG_PANIC_TIMEOUT=0" in board_gate,
@@ -555,9 +564,9 @@ def main():
     # when the driver that registers it was compiled in.  So this gate is
     # also the one that would catch a driver of ours going back to being a
     # module - the mistake this line already made once.
-    print("\nthe 7.3 line checks that the device tree's compatibles have drivers")
+    print("\nthe 7.3 release line checks that the device tree's compatibles have drivers")
     compat_gate = step_run_text(
-        bringup, "build", "Gate: every compatible the device tree names has a driver")
+        publish, "build", "Gate: every compatible the device tree names has a driver")
     failures.check(compat_gate != "", "the compatible gate has a body")
     failures.check("tools/check-sk-dtb-compat.py" in compat_gate,
                    "the compatible gate runs the repository's own tool")
@@ -593,16 +602,16 @@ def main():
     # Until the images are collected there is nothing to flash, so the line
     # that compiles the kernel has to hand the images out as well - and the
     # kernel has to fit the fixed 8 MiB partition the device tree names.
-    print("\nthe 7.3 line produces an image that fits the board")
-    collect_text = step_run_text(bringup, "build", "Collect the images")
+    print("\nthe 7.3 release line produces an image that fits the board")
+    collect_text = step_run_text(publish, "build", "Collect the images")
     failures.check(collect_text != "", "the collect step has a body")
     failures.check("bin/targets/zte/zx279133" in collect_text,
                    "the collect step takes the images OpenWrt built")
     failures.check("-le 8388608" in collect_text,
                    "the collect step checks the kernel against the 8 MiB partition")
-    upload = [step for step in steps_of(bringup, "build")
+    upload = [step for step in steps_of(publish, "build")
               if str(step.get("name") or "") == "Upload the images"]
-    failures.check(bool(upload), "the 7.3 line has an upload step")
+    failures.check(bool(upload), "the 7.3 release line has an upload step")
     failures.check(any(str(step.get("uses") or "").startswith("actions/upload-artifact")
                        for step in upload),
                    "the upload step uses actions/upload-artifact")
@@ -611,9 +620,9 @@ def main():
     # selected: a package that defconfig keeps can still fail to install,
     # and an image without the protocol daemon is an image the board comes
     # up with nothing to talk to.
-    print("\nthe 7.3 line checks the image carries the packages the board needs")
+    print("\nthe 7.3 release line checks the image carries the packages the board needs")
     package_gate = step_run_text(
-        bringup, "build", "Gate: the image carries the packages the board needs")
+        publish, "build", "Gate: the image carries the packages the board needs")
     failures.check(package_gate != "", "the package gate has a body")
     failures.check(".manifest" in package_gate,
                    "the package gate reads the image manifest")
@@ -633,17 +642,17 @@ def main():
 
     # The 7.3 line had no download cache, and that is not only a speed
     # question: one of the packages it needs is fetched with git, and run
-    # #14 (head 0af2270) failed on exactly that while the release line's
+    # #14 (head 0af2270) failed on exactly that while the 6.18 line's
     # run #364 at the same commit succeeded.  The two lines clone the same
     # OpenWrt tree, so the same cache serves both - which only works if
     # the key is the same.
-    print("\nthe 7.3 line caches the downloads the way the release line does")
-    bringup_cache = [step for step in steps_of(bringup, "build")
+    print("\nthe 7.3 release line caches the downloads the way the 6.18 line does")
+    bringup_cache = [step for step in steps_of(publish, "build")
                       if str(step.get("name") or "") == "Cache dl/"]
-    release_cache = [step for step in steps_of(release, "build")
+    release_cache = [step for step in steps_of(legacy, "build")
                      if str(step.get("name") or "") == "Cache dl/"]
-    failures.check(bool(bringup_cache), "the 7.3 line has a download cache")
-    failures.check(bool(release_cache), "the release line has a download cache")
+    failures.check(bool(bringup_cache), "the 7.3 release line has a download cache")
+    failures.check(bool(release_cache), "the 6.18 line has a download cache")
     if bringup_cache and release_cache:
         bringup_with = bringup_cache[0].get("with") or {}
         release_with = release_cache[0].get("with") or {}
@@ -658,8 +667,8 @@ def main():
     # when CONFIG_BUILD_LOG=y, which this build does not set, and the
     # compiler's own words are not in the top level log at all - OpenWrt
     # throws them away unless V=s is set.
-    print("\nthe 7.3 line's Compile step says which package failed")
-    compile_text = step_run_text(bringup, "build", "Compile")
+    print("\nthe 7.3 release line's Compile step says which package failed")
+    compile_text = step_run_text(publish, "build", "Compile")
     failures.check(compile_text != "", "the Compile step has a body")
     failures.check("failed to build" in compile_text,
                    "the Compile step names the package that failed")
@@ -670,12 +679,12 @@ def main():
 
     # The board trial needs the three partition files, and the only honest
     # way to get them is to take them out of the image the build produced:
-    # the release line's own tool validates the sysupgrade (fwtool metadata,
+    # the 6.18 line's own tool validates the sysupgrade (fwtool metadata,
     # CRC, board compatibility, member sizes, JFFS2 magic, and that the
     # uImage decompresses to exactly the Image that was built) and exports
     # the members verbatim.
-    print("\nthe 7.3 line validates the image and exports the partitions")
-    export_text = step_run_text(bringup, "build", "Validate and export the partitions")
+    print("\nthe 7.3 release line validates the image and exports the partitions")
+    export_text = step_run_text(publish, "build", "Validate and export the partitions")
     failures.check(export_text != "", "the export step has a body")
     failures.check("check_sysupgrade.py" in export_text,
                    "the export step validates the sysupgrade image")
@@ -708,12 +717,12 @@ def main():
                    "the compiler check is in the repository")
     failures.check((ROOT / "tools" / "kshadow.py").is_file(),
                    "the shadow headers the check needs are in the repository")
-    kcheck_steps = [step for step in steps_of(bringup, "build")
+    kcheck_steps = [step for step in steps_of(publish, "build")
                     if "tools/kcheck.py" in str(step.get("run") or "")]
     failures.check(bool(kcheck_steps),
-                   "the 7.3 line runs the compiler check")
+                   "the 7.3 release line runs the compiler check")
     if kcheck_steps:
-        names = step_names(bringup, "build")
+        names = step_names(publish, "build")
         failures.check(names.index(str(kcheck_steps[0].get("name") or "")) <
                        names.index("Compile"),
                        "the compiler check runs before the Compile step")
@@ -736,17 +745,17 @@ def main():
     # the build uses, and it runs before the Compile step - a quarantine that
     # is only there after seventy minutes is a quarantine that costs an hour
     # every time it is wrong.
-    print("\nthe 7.3 line quarantines a TX ring with an untrusted counter")
+    print("\nthe 7.3 release line quarantines a TX ring with an untrusted counter")
     failures.check((ROOT / "tools" / "check-sk-tx-isolation.py").is_file(),
                    "the quarantine gate is in the repository")
     failures.check((ROOT / "tests" / "test_sk_tx_isolation.py").is_file(),
                    "the quarantine gate's controls are in the repository")
-    iso_steps = [step for step in steps_of(bringup, "build")
+    iso_steps = [step for step in steps_of(publish, "build")
                  if "tools/check-sk-tx-isolation.py" in str(step.get("run") or "")]
     failures.check(bool(iso_steps),
-                   "the 7.3 line runs the quarantine gate")
+                   "the 7.3 release line runs the quarantine gate")
     if iso_steps:
-        names = step_names(bringup, "build")
+        names = step_names(publish, "build")
         failures.check(names.index(str(iso_steps[0].get("name") or "")) <
                        names.index("Compile"),
                        "the quarantine gate runs before the Compile step")
@@ -774,17 +783,17 @@ def main():
     # asks about those runs on the tree the build uses, and it runs before the
     # Compile step - a proof that is only there after seventy minutes is a
     # proof that costs an hour every time it is wrong.
-    print("\nthe 7.3 line proves what the receive path hands over")
+    print("\nthe 7.3 release line proves what the receive path hands over")
     failures.check((ROOT / "tools" / "check-sk-rx-delivery.py").is_file(),
                    "the RX delivery gate is in the repository")
     failures.check((ROOT / "tests" / "test_sk_rx_delivery.py").is_file(),
                    "the RX delivery gate's controls are in the repository")
-    rx_steps = [step for step in steps_of(bringup, "build")
+    rx_steps = [step for step in steps_of(publish, "build")
                 if "tools/check-sk-rx-delivery.py" in str(step.get("run") or "")]
     failures.check(bool(rx_steps),
-                   "the 7.3 line runs the RX delivery gate")
+                   "the 7.3 release line runs the RX delivery gate")
     if rx_steps:
-        names = step_names(bringup, "build")
+        names = step_names(publish, "build")
         failures.check(names.index(str(rx_steps[0].get("name") or "")) <
                        names.index("Compile"),
                        "the RX delivery gate runs before the Compile step")
@@ -808,9 +817,9 @@ def main():
     # package/libs/libbpf and the only thing that could be said about it
     # was "exit code 2".
     print("\na failed build says why it failed")
-    compile_steps = [step for step in steps_of(bringup, "build")
+    compile_steps = [step for step in steps_of(publish, "build")
                      if str(step.get("name") or "") == "Compile"]
-    failures.check(bool(compile_steps), "the 7.3 line still has a Compile step")
+    failures.check(bool(compile_steps), "the 7.3 release line still has a Compile step")
     if compile_steps:
         body = str(compile_steps[0].get("run") or "")
         # The shell script is read twice: once whole, for the sentences it
@@ -911,8 +920,8 @@ def main():
     # The check is on the two commits themselves and not on a phrase in a
     # comment.
     print("\nthe two lines build different trees")
-    release_env = (release or {}).get("env") or {}
-    bringup_env = (bringup or {}).get("env") or {}
+    release_env = (legacy or {}).get("env") or {}
+    bringup_env = (publish or {}).get("env") or {}
     failures.check(bool(release_env.get("IW_URL")) and
                    release_env.get("IW_URL") == bringup_env.get("IW_URL"),
                    "both lines clone the same repository")
@@ -920,7 +929,7 @@ def main():
                    release_env.get("IW_SHA") != bringup_env.get("IW_SHA"),
                    "the two lines build different trees")
     failures.check("the same IW_URL and IW_SHA" not in
-                   (WORKFLOWS / BRINGUP).read_text(encoding="utf-8"),
+                   (WORKFLOWS / PUBLISH).read_text(encoding="utf-8"),
                    "the 7.3 workflow does not claim the two lines share a commit")
 
     # The libbpf fix for the 7.3 kernel's arm64 uapi headers.  Run 45107547379
@@ -938,7 +947,7 @@ def main():
     # and the line it adds.  A patch that carries the words __u128 in its
     # description and changes nothing else would pass a substring check and
     # still leave the build broken.
-    print("\nthe libbpf fix for the 7.3 line is a real patch")
+    print("\nthe libbpf fix for the 7.3 release line is a real patch")
     libbpf_patch = (ROOT / "overlays-73" / "package" / "libs" / "libbpf" / "patches" /
                     "110-arm64-u128-types.patch")
     failures.check(libbpf_patch.is_file(),
@@ -977,10 +986,10 @@ def main():
                    "the 6.18 release line carries no libbpf patch")
     # The workflow has to check the patch the same way, or the two drift and
     # the build dies in libbpf again while the gate says the tree is fine.
-    overlay_steps = [step for step in steps_of(bringup, "build")
+    overlay_steps = [step for step in steps_of(publish, "build")
                      if str(step.get("name") or "") == "Apply the OpenWrt-side overlays"]
     failures.check(bool(overlay_steps),
-                   "the 7.3 line still applies the OpenWrt-side overlays")
+                   "the 7.3 release line still applies the OpenWrt-side overlays")
     if overlay_steps:
         flat = str(overlay_steps[0].get("run") or "").replace("\\\n", " ")
         commands = "\n".join(ln for ln in flat.splitlines()
@@ -1006,18 +1015,18 @@ def main():
     # look for it - a panic with no serial to read, and the one failure
     # mode a flashed image cannot explain afterwards.
     #
-    # The 6.18 line has this gate; the 7.3 line did not, and the 7.3
+    # The 6.18 line has this gate; the 7.3 release line did not, and the 7.3
     # line's image is the one that is going to be flashed next.  The check
     # reads the blob and compares the arguments it asks for with the ones
     # the board needs - not whether the word "native241" appears somewhere.
     print("\nthe dtb that is going to be flashed carries the board's partition table")
-    dtb_step = [step for step in steps_of(bringup, "build")
+    dtb_step = [step for step in steps_of(publish, "build")
                 if str(step.get("name") or "") ==
                 "Gate: the board device tree compiles against the 7.3 tree"]
-    export_step = [step for step in steps_of(bringup, "build")
+    export_step = [step for step in steps_of(publish, "build")
                    if str(step.get("name") or "") == "Validate and export the partitions"]
     failures.check(bool(dtb_step) and bool(export_step),
-                   "the 7.3 line still has the dtb gate and the export step")
+                   "the 7.3 release line still has the dtb gate and the export step")
     wanted = [("layout=native241", "root=0xf00000,0xf100000")]
     if dtb_step:
         body = str(dtb_step[0].get("run") or "")
@@ -1045,7 +1054,7 @@ def main():
     # The panel LEDs are how this board reports things when it has no
     # console, and the LOS lamp is one of the six readings the board trial
     # takes: it has to follow the optical signal.  The 6.18 release line
-    # has this gate; the 7.3 line had none, and the 7.3 line's image is
+    # has this gate; the 7.3 release line had none, and the 7.3 release line's image is
     # the one that is going to be flashed.
     #
     # The check asks three separate things, and each is asked of the
@@ -1056,12 +1065,12 @@ def main():
     # needs - the custom zx279133-los / zx279133-pon triggers live behind
     # CONFIG_LEDS_TRIGGERS, and a merge that clamped them to =m would
     # leave the board dark with no error anywhere.
-    print("\nthe panel LED topology is gated on the blob the 7.3 line compiled")
-    led_steps = [step for step in steps_of(bringup, "build")
+    print("\nthe panel LED topology is gated on the blob the 7.3 release line compiled")
+    led_steps = [step for step in steps_of(publish, "build")
                  if str(step.get("name") or "") ==
                  "Gate: the panel LED topology and its kernel support"]
     failures.check(bool(led_steps),
-                   "the 7.3 line has the panel LED gate")
+                   "the 7.3 release line has the panel LED gate")
     if led_steps:
         body = str(led_steps[0].get("run") or "")
         flat = body.replace("\\\n", " ")
@@ -1071,7 +1080,7 @@ def main():
             r"tools/check-sk-lan1-led\.py[ \t]+--dtb[ \t]+(\S+)", commands)
         failures.check(
             gate_calls == ["/tmp/sk-d840n.dtb"],
-            "the LED gate reads the blob the 7.3 line compiled")
+            "the LED gate reads the blob the 7.3 release line compiled")
         control_calls = re.findall(
             r"tests/test_sk_lan1_led\.py[ \t]+--dtb[ \t]+(\S+)", commands)
         failures.check(
@@ -1099,11 +1108,11 @@ def main():
     # driver that is compiled, not on a phrase about it, and a driver that
     # has gone missing fails the build instead of skipping the gate.
     print("\nthe conduit netdev name is gated on the driver that is compiled")
-    conduit_73 = [step for step in steps_of(bringup, "build")
+    conduit_73 = [step for step in steps_of(publish, "build")
                   if str(step.get("name") or "") ==
                   "Check the conduit netdev name against the 7.3 tree"]
     failures.check(bool(conduit_73),
-                   "the 7.3 line has the conduit netdev name gate")
+                   "the 7.3 release line has the conduit netdev name gate")
     if conduit_73:
         commands = run_body(conduit_73[0])
         calls = re.findall(
@@ -1111,21 +1120,21 @@ def main():
             commands)
         failures.check(
             calls == ['"$DRV"'],
-            "the 7.3 line resolves the name of the driver it compiles")
+            "the 7.3 release line resolves the name of the driver it compiles")
         failures.check(
             re.findall(r"^DRV=\"([^\"]+)\"$", commands, re.MULTILINE) ==
             ["$KERNEL_TREE/drivers/net/ethernet/zte/zx279133-lan-conduit.c"],
-            "the 7.3 line points the gate at the driver in the tree it builds")
+            "the 7.3 release line points the gate at the driver in the tree it builds")
         failures.check(
             re.search(r"\[ ! -f \"\$DRV\" \]", commands) is not None
             and "exit 1" in commands,
-            "a missing conduit driver fails the 7.3 line instead of skipping "
+            "a missing conduit driver fails the 7.3 release line instead of skipping "
             "the gate")
 
-    overlay_steps = [step for step in steps_of(release, "build")
+    overlay_steps = [step for step in steps_of(legacy, "build")
                      if str(step.get("name") or "") == "Apply SK-D840N overlays"]
     failures.check(bool(overlay_steps),
-                   "the release line still applies the overlays")
+                   "the 6.18 line still applies the overlays")
     if overlay_steps:
         commands = run_body(overlay_steps[0])
         calls = re.findall(
@@ -1133,15 +1142,15 @@ def main():
             commands)
         failures.check(
             calls == ['"$DRV"'],
-            "the release line resolves the name of the conduit driver")
+            "the 6.18 line resolves the name of the conduit driver")
         failures.check(
             re.findall(r"^DRV=\"([^\"]+)\"$", commands, re.MULTILINE) ==
             ["$KT/drivers/net/ethernet/zte/zx279133-lan-conduit.c"],
-            "the release line points the gate at the driver in its own tree")
+            "the 6.18 line points the gate at the driver in its own tree")
         failures.check(
             re.search(r"\[ ! -f \"\$DRV\" \]", commands) is not None
             and "exit 1" in commands,
-            "a missing conduit driver fails the release line instead of "
+            "a missing conduit driver fails the 6.18 line instead of "
             "skipping the gate")
 
     # The migration note's increment table is the measured one, and the
@@ -1177,12 +1186,12 @@ def main():
     # to read: a probe whose needle is not in the source it names would pass
     # on a string that now means something else, and a probe whose source
     # does not exist would ask about a file that is not there.
-    print("\nthe 7.3 line asks the image whether it carries the board's drivers")
-    image_gate = [step for step in steps_of(bringup, "build")
+    print("\nthe 7.3 release line asks the image whether it carries the board's drivers")
+    image_gate = [step for step in steps_of(publish, "build")
                   if str(step.get("name") or "") ==
                   "Gate: the image carries the board drivers"]
     failures.check(bool(image_gate),
-                   "the 7.3 line has the image driver gate")
+                   "the 7.3 release line has the image driver gate")
     tool = ROOT / "tools" / "check-sk-image-drivers.py"
     manifest_path = ROOT / "configs" / "sk-d840n-73-image-drivers.json"
     failures.check(tool.exists(),

@@ -171,15 +171,3 @@ jobs:
           name: immortalwrt-zte-zx279133
           path: out/**
 
-      - name: Publish release
-        if: success()
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: sr1010_${{ github.run_number }}_${{ github.run_id }}
-          body: |
-            ## ZX279133 SR1010 initramfs（Phase 1 流水线验证）
-            - ImmortalWrt: cnjn/ImmortalWrt `${{ inputs.immortalwrt_ref }}`
-            - 内核: cnjn/linux-mainline-zte-zxslc-sr1010 `${{ inputs.kernel_ref }}`（mainline 6.18.38）
-            - 产物是 RAM 用 FIT initramfs，需串口在 U-Boot 里 tftpboot + bootm
-            - SK-D840N 板级 DTS / device profile 属于 Phase 2
-          files: out/*

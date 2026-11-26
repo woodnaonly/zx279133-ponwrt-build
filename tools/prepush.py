@@ -255,8 +255,12 @@ def release_manifest_check():
     the five files its manifest names, so a fetch that believes the
     manifest came back "the release did not check out" over a file the
     release was never going to carry.
+
+    The release line is the 7.3 one now, and its manifest is written over
+    the files the build copied into the artifact, so the names are bare
+    file names while the release publishes them under images/.
     """
-    wf = os.path.join(REPO, ".github", "workflows", "build-sk-d840n.yml")
+    wf = os.path.join(REPO, ".github", "workflows", "build-sk-d840n-73.yml")
     if not os.path.exists(wf):
         return 0
     with open(wf, encoding="utf-8", errors="replace") as fh:
@@ -279,12 +283,13 @@ def release_manifest_check():
     # What the manifest names: the file names in the sha256sum that writes it.
     named = set()
     for s in logical:
-        if "sha256sums-release" not in s:
+        if "sha256sum" not in s or ">" not in s:
             continue
         m = re.search(r"sha256sum\s+([^>]*?)\s*>", s)
-        if m:
-            for tok in m.group(1).split():
-                named.add(tok)
+        if not m:
+            continue
+        for tok in m.group(1).split():
+            named.add(os.path.basename(tok))
 
     # What the release publishes: the files: block of the publish step.
     published = set()
@@ -299,7 +304,7 @@ def release_manifest_check():
             if not ln.startswith(" " * 10):
                 in_block = False
                 continue
-            published.add(ln.strip())
+            published.add(os.path.basename(ln.strip()))
 
     if not named:
         print("prepush: the workflow's manifest command was not found - the "

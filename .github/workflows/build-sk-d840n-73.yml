@@ -3,9 +3,9 @@ name: ZX279133 SK-D840N Build (Linux 7.3 line)
 # The 7.3 bring-up line.
 #
 # It builds the same board on the kernel generation the reference firmware
-# runs (Linux 7.3.4), with cnjn's rewritten ZX279133 NPU driver, and it does
-# NOT publish anything: the release line is build-sk-d840n.yml, and this
-# workflow only produces an image to look at.
+# runs (Linux 7.3.4), with cnjn's rewritten ZX279133 NPU driver, and it is
+# the release line: the 6.18 line (build-sk-d840n.yml) only builds and
+# uploads its artifacts, and this workflow publishes the release.
 #
 # The kernel is not a submodule and not a fork here.  cnjn ships the driver
 # as a patch series (target/linux/zte/patches-7.3) that is applied to a
@@ -36,6 +36,11 @@ on:
         description: '忽略 dl/ 缓存'
         required: false
         default: 'false'
+        type: boolean
+      publish_release:
+        description: '发布 Release（RAM 对照测试请关闭）'
+        required: false
+        default: true
         type: boolean
   push:
     paths:
@@ -207,6 +212,10 @@ on:
       # The gate that says every file this workflow runs is covered by these
       # paths, and the control that says whether it still notices when one of
       # them is dropped.
+      # The gate that says which of the two lines publishes, and the
+      # controls that say whether it still notices when that changes.
+      - tools/check-sk-release-line.py
+      - tests/test_sk_release_line.py
       - tools/check-sk-workflow-paths.py
       - tests/test_sk_workflow_paths.py
       # The judge that turns the trial's read-out table into a verdict, and
@@ -302,6 +311,11 @@ jobs:
           python3 tests/test_sk_layout.py
           python3 tests/test_sk_uboot.py
           python3 tests/test_sk_workflows.py
+          # The gate that says which of the two lines publishes: the 7.3
+          # line is the release line and the 6.18 line only builds, so
+          # exactly one of them may publish a release.
+          python3 tools/check-sk-release-line.py --tree "$GITHUB_WORKSPACE"
+          python3 tests/test_sk_release_line.py --tree "$GITHUB_WORKSPACE"
           python3 tests/test_conduit_netdev_name.py
           python3 tests/test_gatecheck.py
           python3 tests/test_ctl_payload.py
@@ -1834,6 +1848,66 @@ jobs:
             exit 1; }
           python3 tools/check-sk-lan1-led.py --kernel-config "$KC"
 
+      # The release line is this line since the 7.3 images replaced the 6.18
+      # ones.  The two modes publish two releases, because they are two
+      # different products: the flash mode is the firmware that goes on the
+      # board, the initramfs mode is a RAM image that never touches the
+      # flash.  The tag says which line built it: the two lines count their
+      # runs separately, so a tag without the line in it would not say which
+      # of the two it was.
+      #
+      # Each release ships exactly the files its own mode produced, and the
+      # step refuses to publish when one of them is missing: a release that
+      # says it carries a partition and does not is worse than no release.
+      - name: Publish the flash release
+        if: >-
+          success() && matrix.mode == 'flash' &&
+          (github.event_name != 'workflow_dispatch' || inputs.publish_release != false)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: skd840n_73_${{ matrix.mode }}_${{ github.run_number }}_${{ github.run_id }}
+          name: SK-D840N 7.3.4 flash ${{ github.run_number }}
+          fail_on_unmatched_files: true
+          body: |
+            ## SK-D840N（ZX279133，Linux 7.3.4）— flash
+
+            - 这是本仓库现在的发布线：内核是 vanilla linux-7.3.4，叠加 `kernel-patches/7.3/` 里 cnjn 的 ZX279133 NPU 驱动补丁系列，逐个补丁应用，任何一个不干净地应用都会让构建停下。
+            - 板级文件：`zx279133-sk-d840n.dts`；分区顺序保证 `root` = mtdblock5，与板上现有 U-Boot 的 bootargs 一致；dtb 里的分区表在构建时核对过（root 在 0xf00000，最后 241 MiB）。
+            - **未在本机验证**。免串口流程：先用 initramfs 那一套的 .itb 经 kexec 试驾（不写 flash，断电即回原系统），确认 SSH 通了再用下面的文件写分区。
+            - **直刷文件：`immortalwrt-sk-d840n-sysupgrade.bin`**。从本页 Assets 单独下载，**上传至 LuCI 固件升级页面，无需解压**；内部是标准 sysupgrade tar，内核已核对 ≤ 8 MiB。`flash-sysupgrade.bin` 是字节完全相同的兼容文件名。
+            - `flash-uImage` / `flash-dtb.bin` / `flash-rootfs.jffs2` 是三个分区各自的原始字节，写入顺序 root → dtb → kernel。
+            - Actions artifact 下载仍会套 ZIP，关闭压缩也不改变这一机制；需要直接下载 .bin 请使用本页 Assets。
+            - `sha256sums` 是上面这些文件的 SHA256；`sysupgrade-report.json` 是 sysupgrade 包自己的校验报告（fwtool 元数据、CRC、板型匹配、成员大小、JFFS2 magic，以及 uImage 解压后与构建出的 Image 逐字节相同）。
+          files: |
+            images/flash-uImage
+            images/flash-dtb.bin
+            images/flash-rootfs.jffs2
+            images/flash-sysupgrade.bin
+            images/immortalwrt-sk-d840n-sysupgrade.bin
+            images/sha256sums
+            images/sysupgrade-report.json
+
+      - name: Publish the initramfs release
+        if: >-
+          success() && matrix.mode == 'initramfs' &&
+          (github.event_name != 'workflow_dispatch' || inputs.publish_release != false)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: skd840n_73_${{ matrix.mode }}_${{ github.run_number }}_${{ github.run_id }}
+          name: SK-D840N 7.3.4 initramfs ${{ github.run_number }}
+          fail_on_unmatched_files: true
+          body: |
+            ## SK-D840N（ZX279133，Linux 7.3.4）— initramfs
+
+            - 这是 RAM 用的救援镜像，**不写 flash**：断电即回原系统。它是 kexec 试驾用的那一个，先用它确认板子起来了，再用 flash 那一套写分区。
+            - 内核是 vanilla linux-7.3.4，叠加 `kernel-patches/7.3/` 里 cnjn 的 ZX279133 NPU 驱动补丁系列。
+            - `immortalwrt-zte-zx279133-skyworth_sk-d840n-initramfs.itb` 是 FIT 镜像，用 kexec 载入内存即可。
+            - `immortalwrt-zte-zx279133-rootfs.cpio.gz` 是同一份 rootfs 的 cpio 形式，供离线查看。
+            - `sha256sums` 是这些文件的 SHA256。
+          files: |
+            images/immortalwrt-zte-zx279133-skyworth_sk-d840n-initramfs.itb
+            images/immortalwrt-zte-zx279133-rootfs.cpio.gz
+            images/sha256sums
       - name: Upload the build log
         if: failure()
         uses: actions/upload-artifact@v4

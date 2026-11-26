@@ -90,38 +90,46 @@ class TcpTests(unittest.TestCase):
         self.assertLess(TEXT.index('ethtool_puts(&data, "rx_hash_loads")'), TEXT.index("memcpy(data, zx279133_tx_csum_names"))
 
     def test_publish_switch_leaves_artifacts_available(self):
-        doc = yaml.load((ROOT / ".github/workflows/build-sk-d840n.yml").read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
+        doc = yaml.load((ROOT / ".github/workflows/build-sk-d840n-73.yml").read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
         switch = doc["on"]["workflow_dispatch"]["inputs"]["publish_release"]
         self.assertEqual(switch["type"], "boolean")
         self.assertEqual(switch["default"], "true")
+        published = 0
         for job in doc["jobs"].values():
             for step in job.get("steps", []):
                 if "action-gh-release" in step.get("uses", ""):
+                    published += 1
                     self.assertIn("inputs.publish_release != false", step["if"])
                 if "upload-artifact" in step.get("uses", ""):
-                    self.assertNotIn("inputs.publish_release", step["if"])
+                    self.assertNotIn("inputs.publish_release", step.get("if", ""))
+        self.assertEqual(published, 2)
+        # The 6.18 line publishes nothing, so it has no switch either.
+        legacy = yaml.load((ROOT / ".github/workflows/build-sk-d840n.yml").read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
+        self.assertNotIn("publish_release", legacy["on"]["workflow_dispatch"]["inputs"])
+        self.assertEqual([s for job in legacy["jobs"].values()
+                          for s in job.get("steps", [])
+                          if "action-gh-release" in s.get("uses", "")], [])
 
     def test_disabled_publication_keeps_validated_firmware_downloadable(self):
-        doc = yaml.load((ROOT / ".github/workflows/build-sk-d840n.yml").read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
+        doc = yaml.load((ROOT / ".github/workflows/build-sk-d840n-73.yml").read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
         steps = doc["jobs"]["build"]["steps"]
         for event in ("push", "workflow_dispatch"):
             for publish in (False, True):
                 for mode in ("flash", "initramfs"):
                     for step in steps:
-                        if step.get("name") not in ("Upload outputs", "Publish release"):
+                        name = step.get("name")
+                        if name not in ("Publish the flash release", "Publish the initramfs release"):
                             continue
                         expr = step["if"].replace("success()", "True")
                         substitutions = {"github.event_name": event, "github.ref": "refs/heads/main",
-                                         "inputs.publish_release": publish, "matrix.mode": mode,
-                                         "steps.pick.outputs.run": "true",
-                                         "steps.package_flash.outputs.validated": "true",
-                                         "steps.package_initramfs.outputs.validated": "true"}
-                        for name, value in substitutions.items():
-                            expr = expr.replace(name, repr(value))
+                                         "inputs.publish_release": publish, "matrix.mode": mode}
+                        for key, value in substitutions.items():
+                            expr = expr.replace(key, repr(value))
                         expr = expr.replace("&&", " and ").replace("||", " or ").replace("!= false", "!= False").replace("!startsWith(", "not startsWith(")
                         actual = eval(expr, {"__builtins__": {}, "startsWith": str.startswith})
-                        expected = step["name"] == "Upload outputs" or event == "push" or publish
-                        self.assertEqual(actual, expected, (event, publish, mode, step["name"]))
+                        wanted = "flash" if name.endswith("flash release") else "initramfs"
+                        expected = mode == wanted and (event == "push" or publish)
+                        self.assertEqual(actual, expected, (event, publish, mode, name))
 
     def harness(self):
         enum = re.search(r"enum zx279133_tx_csum_fallback\s*\{.*?\};", HEADER, re.S)[0]

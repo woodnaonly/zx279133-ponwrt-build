@@ -11,6 +11,11 @@ name: ZX279133 SK-D840N Build
 # mode=bootweb   -> public svn308776 native241 resident candidate (OFFLINE only)
 # mode=all      -> both firmware modes plus the independent bootweb job
 
+# This line does not publish anything any more: the release line is
+# build-sk-d840n-73.yml, and this workflow only builds and uploads its
+# artifacts.  The 6.18 releases that are still on the Releases page are
+# the last set this line published, and they are kept as an archive.
+
 on:
   workflow_dispatch:
     inputs:
@@ -24,11 +29,6 @@ on:
         description: '忽略 dl/ 缓存'
         required: false
         default: 'false'
-        type: boolean
-      publish_release:
-        description: '发布 Release（RAM 对照测试请关闭）'
-        required: false
-        default: true
         type: boolean
   push:
     paths:
@@ -120,6 +120,10 @@ on:
       # uses), and docs/ hold the measurements the gate is checked against.
       # They were missing from this list, so run 126 - a fix to the gate
       # itself - was pushed and never started a build.
+      # The gate that says which of the two lines publishes, and the
+      # controls that say whether it still notices when that changes.
+      - tools/check-sk-release-line.py
+      - tests/test_sk_release_line.py
       - tools/**
       - docs/**
 
@@ -177,6 +181,11 @@ jobs:
           python3 tests/test_sk_layout.py
           python3 tests/test_sk_uboot.py
           python3 tests/test_sk_workflows.py
+          # The gate that says which of the two lines publishes: the 7.3
+          # line is the release line and the 6.18 line only builds, so
+          # exactly one of them may publish a release.
+          python3 tools/check-sk-release-line.py --tree "$GITHUB_WORKSPACE"
+          python3 tests/test_sk_release_line.py --tree "$GITHUB_WORKSPACE"
           python3 tests/test_conduit_netdev_name.py
           python3 tests/test_gatecheck.py
           python3 tests/test_ctl_payload.py
@@ -2044,109 +2053,6 @@ jobs:
             immortalwrt-sk-d840n-sysupgrade.bin
             immortalwrt-sk-d840n-sysupgrade.bin.sha256
 
-      - name: Publish release
-        if: >-
-          success() && steps.pick.outputs.run == 'true' &&
-          (github.event_name != 'workflow_dispatch' || inputs.publish_release != false) &&
-          ((matrix.mode == 'flash' && steps.package_flash.outputs.validated == 'true') ||
-           (matrix.mode == 'initramfs' && steps.package_initramfs.outputs.validated == 'true'))
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: skd840n_${{ matrix.mode }}_${{ github.run_number }}_${{ github.run_id }}
-          # The version below is a literal, not $KVER, because GitHub does not expose the
-          # `env` context inside a step's `with:` values - `${{ env.KVER }}` written here
-          # would render as an empty string, and the release would be titled "mainline ".
-          # test_kernel_version_single_source.py asserts this literal equals KVER, so a
-          # version bump cannot leave the two apart. Everything that runs in a shell - every
-          # `test -f`, every `cp`, every build-dir lookup - does read $KVER.
-          #
-          # This note is a YAML comment ON PURPOSE, one line above the block. A `#` line
-          # INSIDE `body: |` is not a comment: it is Markdown that gets published with the
-          # release, and `${{ ... }}` inside it is still evaluated. Implementation notes about
-          # the note do not belong in the document a person reads to decide what to do.
-          body: |
-            ## SK-D840N（ZX279133，Linux 6.18.60）— ${{ matrix.mode }}
-
-            - ImmortalWrt 固定 `1b50aaf4`；ZX279133 驱动固定 `96e5a241`，叠加校验和锁定的官方 6.18.38 → 6.18.60 稳定补丁。
-              完整提交与逐补丁 SHA256 见 `kernel-provenance.json`；本次不跟随驱动分支新增功能。
-            - 板级文件：`zx279133-sk-d840n.dts`；分区顺序保证 `root` = mtdblock5，与板上现有 U-Boot 的 bootargs 一致
-            - **未在本机验证**。免串口流程：先 `trial-kexec.sh` 用 kexec 起 RAM 镜像（不写 flash，断电即回原系统），
-              确认 SSH 通了且 `/proc/mtd` 里 root 仍是第 5 个，再用 `flash-set.tgz` 里的 `flash-sk-d840n.sh --write`
-              按 root → dtb → kernel 的顺序写入
-            - **flash 模式直刷文件：`immortalwrt-sk-d840n-sysupgrade.bin`**。从本页 Assets 单独下载，
-              **上传至 LuCI 固件升级页面，无需解压**；也可用 `sysupgrade` 命令。内部是标准 sysupgrade tar，
-              已验证 kernel ≤ 8 MiB；`flash-sysupgrade.bin` 是字节完全相同的兼容文件名。
-              Actions artifact 下载仍会套 ZIP，关闭压缩也不改变这一机制；需要直接下载 `.bin` 请使用本页 Assets。
-              `flash-set.tgz` 是维护/救援包，不可直接上传至 LuCI；`.itb` 是 initramfs 模式的 RAM 救援镜像。
-              注意：换了 kernel 的 sysupgrade 若内核起不来，没有串口就只能上编程器 —— 先用 kexec 试驾
-            - LAN 口走 SR1010 的 NPPT 路径，PHY 是 **RTL8226B**（Realtek），在 MDIO controller #1 的地址 5 上。
-              **板级 dts 里现在没有这颗 PHY 的节点**（2026-10-29 删掉），这是实测的结果，不是偏好：
-              节点在的时候 of_mdiobus 会造出 `14f02000.mdio:05` 这个 phy_device，phylib 按芯片自己报的
-              ID（0x001cc849）匹配到 `CONFIG_REALTEK_PHY`，把**树里的通用 realtek 驱动**绑上去，
-              而那个驱动的 `config_init()` 会改写 RTL8226 的 SerDes 选项（devad 0x1e 的
-              0x697a / 0x6a04 / 0x6f10 / 0x6f11；厂商的值是 0x0003 / 0x0503 / 0x084a / 0x0021）。
-              后果是 devad 7 reg 1 里「block lock / RX valid」那一位掉了：同一块板、同一次上电，
-              厂商 U-Boot 读 0x00e9、mainline 读 0x00ad。**已证的是 phylib 确实动了这颗芯片；
-              它是不是闸门，由下一轮的 N3 判**（docs/92 §94.6–§94.7）。
-              这颗 PHY 现在**既不 attach 也不配置**：`ethernet@19000000` 里是
-              `fixed-link { speed = <1000>; full-duplex; }`、没有 `phy-handle`，
-              端口的链路由驱动自己用 `mdiobus_c45_read(bus, 5, 7, 1)` 从芯片里读；
-              铜线侧的自协商由 PHY 自己做（同一颗芯片、同一根线，U-Boot 用它拉过 11 MB）。
-              调试台 `m45`/`m45w` 同样改走 `mdiobus_c45_read/write`（真 Clause-45），
-              因为 phylib 的 C22 间接访问读这颗芯片的私有块 devad 0x1e 只会回 0xdead。
-              内核里编进的是 **`CONFIG_REALTEK_PHY=y`**（CI 的 PHY 门查的就是这个），
-              **不是** `CONFIG_ZX279051_PHY`：已构建内核里没有任何独立的 `zx279051` token，
-              只有 `tzx279051` 这种内核字符串表 tail-merge 的残渣。
-              `02_network` 把 lan 绑在 eth0 上，地址固定 192.168.9.1。
-              **关于 PON，修正一句旧说法**：内核不是上游 torvalds/linux，而是
-              `CONFIG_EXTERNAL_KERNEL_TREE` 指向的 prepared ZX279133 树
-              （`target/linux/zte/Makefile` 里不设它就直接报错）。
-              那棵树里的 **`ZTE_ZX279133_ETH` 就是 PON MAC**——它的 Kconfig 硬依赖
-              `PHY_ZX279133_PON_SERDES`，dtb 节点 `zte,zx279133-nppt` 挂在 pon_serdes/uni_serdes 上、
-              `phy-mode = "2500base-x"`、带 PON MAC 时钟；它在 probe 时
-              `request_firmware("zte/zx279133/mcode_intel.bin")` 加载中兴自己的 PPU 微码
-              （树里那份 103456 B，CRC32 `0xc839b946`，是这块板自己的那份，驱动认的两个值之一）。
-              `zte,pon-route` / `zte,idm-cci` 是**必需**属性，但能解析：这棵树的
-              `drivers/mfd/syscon.c` 没有匹配表、查找时按需注册，凡 compatible 带 `"syscon"` 的节点都能拿到 regmap。
-              **仍未证实**：G.984.1 的 PLOAM/GEM/T-CONT/OMCI **状态机不在这棵树里**——
-              已构建内核中 `PLOAM`/`Op State Machine`/`p_o7_enable_sn_msg`/`Serena` 全部零命中。
-              厂商侧：18 个厂商模块逐个数过，这四个精确 token 里只有 `p_o7_enable_sn_msg`
-              在 `zte_xgpon.ko` 里（另有 `power_p5_fwi`、`ASSIGN_ALLOC_ID_MESSAGE`）；
-              `PLOAM`、`Op State Machine`、`Serena` 在任何一个厂商模块里都不是独立字符串。
-              该模块确实带着整套 PLOAM 机制，只是以更长字符串的形式存在——
-              `STACK PLOAM DATA`、`%s %d Ploam Msg Is NULL!`、`DGTCT Rcv Ploam Cnt`。
-              也就是说这棵树实现的是 **PON 数据通路**，不是 PON。
-              微码里的 packet-type / port-flow 表是否自带 GEM 分流，从头部读不出来；这需要一次起内核看日志。
-              运行时网口会不会出现，同样只能在板子上看 `/sys/class/net`。
-          files: |
-            immortalwrt-sk-d840n-sysupgrade.bin
-            immortalwrt-sk-d840n-sysupgrade.bin.sha256
-            flash-uImage
-            flash-dtb.bin
-            flash-rootfs.jffs2
-            flash-sysupgrade.bin
-            flash-sk-d840n.sh
-            sk-d840n-initramfs.itb
-            sha256sums
-            sha256sums-release
-            flash-set.tgz
-            trial-set.tgz
-            trial/*
-            kernel-provenance.json
-            sysupgrade-report.json
-          ignore_missing_files: true
-
-      - name: Direct firmware download summary
-        if: success() && steps.pick.outputs.run == 'true' && matrix.mode == 'flash' && steps.package_flash.outputs.validated == 'true' && (github.event_name != 'workflow_dispatch' || inputs.publish_release != false)
-        run: |
-          {
-            echo '## ImmortalWrt 直刷固件'
-            echo '[下载 immortalwrt-sk-d840n-sysupgrade.bin](https://github.com/${{ github.repository }}/releases/download/skd840n_flash_${{ github.run_number }}_${{ github.run_id }}/immortalwrt-sk-d840n-sysupgrade.bin)'
-            echo
-            echo '上传至 LuCI 固件升级页面，无需解压。Actions artifact 外层仍是 ZIP；上面的 Release 链接直接下载 .bin。'
-            echo 'flash-set.tgz 用于维护/救援，不能直接上传至 LuCI；initramfs .itb 只用于 RAM 启动。'
-          } >> "$GITHUB_STEP_SUMMARY"
-
   bootweb:
     name: native241 bootweb (offline candidate)
     if: github.event_name != 'workflow_dispatch' || inputs.mode == 'all' || inputs.mode == 'bootweb'
@@ -2216,42 +2122,3 @@ jobs:
             bootweb/.build/ci-native241/dist/sk-d840n-bootweb-native241-candidate.tar
             bootweb/.build/ci-native241/dist/sk-d840n-bootweb-native241-tools.tgz
             bootweb/.build/ci-native241/dist/sha256sums-bootweb
-      - name: Publish bootweb candidate release
-        if: success() && steps.package_bootweb.outputs.validated == 'true' && (github.event_name != 'workflow_dispatch' || inputs.publish_release != false)
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: skd840n_bootweb_${{ github.run_number }}_${{ github.run_id }}
-          name: SK-D840N native241 bootweb candidate ${{ github.run_number }}
-          prerelease: true
-          fail_on_unmatched_files: true
-          body: |
-            ## SK-D840N native241 常驻 Web 恢复候选包
-
-            仅绑定公开 `svn308776` 原始 U-Boot 基底，stage2 SHA256：
-            `5b084490813b540c1a82ddf2e2d4de46080e6cfe47b15b2e6575bdf3fe198fe9`。
-            已安装其他常驻版本的设备不能直接套用。本包不能上传到 LuCI 或当前锁定的 Web U-Boot 自刷入口。
-
-            - `sk-d840n-bootweb-native241-candidate.tar`：严格三成员候选包，仅含 stage2；不是完整 boot 分区镜像。
-            - `sk-d840n-bootweb-native241-tools.tgz`：调试 ELF/BIN、源码、构建清单、指令审计、离线报告、许可证及说明。
-            - `sha256sums-bootweb`：两个下载包的 SHA256。
-
-            CI 通过只表示离线构建与校验通过，不代表本次候选包已完成实机验收或取得安装授权。
-            native241 系统恢复要求持续供电；安装仍需新的完整 ECC 备份、精确镜像核对及对应安装流程。
-            网页 U-Boot 自刷仍锁定，周期断电刷写预算、BTL 救援和 2.5G 性能均未由 CI 验证。
-          files: |
-            bootweb/.build/ci-native241/dist/sk-d840n-bootweb-native241-candidate.tar
-            bootweb/.build/ci-native241/dist/sk-d840n-bootweb-native241-tools.tgz
-            bootweb/.build/ci-native241/dist/sha256sums-bootweb
-      - name: Bootweb download summary
-        if: success() && steps.package_bootweb.outputs.validated == 'true' && (github.event_name != 'workflow_dispatch' || inputs.publish_release != false)
-        env:
-          RELEASE_BASE: https://github.com/${{ github.repository }}/releases/download/skd840n_bootweb_${{ github.run_number }}_${{ github.run_id }}
-        run: |
-          $writer = [System.IO.StreamWriter]::new($env:GITHUB_STEP_SUMMARY, $true, [System.Text.UTF8Encoding]::new($false))
-          try {
-            $writer.WriteLine('## native241 Bootweb 离线候选包')
-            $writer.WriteLine("[下载候选包]($env:RELEASE_BASE/sk-d840n-bootweb-native241-candidate.tar)")
-            $writer.WriteLine("[下载配套工具]($env:RELEASE_BASE/sk-d840n-bootweb-native241-tools.tgz)")
-            $writer.WriteLine("[SHA256]($env:RELEASE_BASE/sha256sums-bootweb)")
-            $writer.WriteLine('仅适用于公开 svn308776 原始基底。离线通过不等于实机验收；网页 U-Boot 自刷仍锁定。')
-          } finally { $writer.Dispose() }

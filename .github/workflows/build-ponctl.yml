@@ -69,11 +69,3 @@ jobs:
             ponctl
             sha256sums-ponctl
 
-      - name: Publish release
-        if: success()
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ponctl_${{ github.run_number }}_${{ github.run_id }}
-          files: |
-            ponctl
-            sha256sums-ponctl
