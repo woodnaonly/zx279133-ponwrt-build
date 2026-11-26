@@ -100,7 +100,10 @@ iface_ready() {
 
 # The port the management client is in, or nothing.
 mgmt_port() {
-	"$SWITCH" mgmt-port "$1" 2>/dev/null
+	# The helper's own log goes to stderr and is not thrown away: when it
+	# cannot say which jack the client is in, the reason why has to be
+	# somewhere the reader can see.
+	"$SWITCH" mgmt-port "$1"
 }
 
 # The ports that may be taken: the panel jacks, minus the one the
@@ -251,6 +254,7 @@ search() {
 
 	exclude=$($UCI -q get sk_wan.wan.exclude 2>/dev/null)
 	mgmt=$(mgmt_port "")
+	log "the management port is: [$mgmt]"
 	if [ -z "$mgmt" ]; then
 		# The port the management client is in could not be found.
 		# Taking a port on a guess is taking a port away from
