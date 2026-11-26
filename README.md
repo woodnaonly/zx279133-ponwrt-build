@@ -367,6 +367,7 @@ RAM 镜像包含 `zrec`，启动并确认该次 RAM 系统可达后，可打开 
 | 入口 | 内容 |
 | --- | --- |
 | [ONU 管理说明](docs/100-sk-d840n-onu-management-port.md) | 管理页面、身份迁移、OMCI 和验收边界 |
+| [上游 OMCI 与漂移锁](docs/110-the-upstream-omci-vendor-and-its-drift-lock-20261127.md) | 取自上游的 OMCI 引擎、锁文件与门禁，以及 CTC 私有 OAM 会话为什么进得来却开不了 |
 | [7.3.4 基线与迁移面](docs/101-the-7-3-4-baseline-and-the-migration-surface-20261122.md) | 7.3 线的起点、与 6.18 的差异、迁移要动的地方 |
 | [LAN 出向已验证](docs/103-the-lan-egress-verified-on-the-board-20261125.md) | 板上测到的 LAN 出向结论 |
 | [transport VID 63](docs/105-the-transport-vid-63-and-the-dead-egress-20261125.md) | 2.5G 口的 transport VID 修正 |
@@ -386,7 +387,7 @@ RAM 镜像包含 `zrec`，启动并确认该次 RAM 系统可达后，可打开 
 
 - [cnjn/ImmortalWrt](https://github.com/cnjn/ImmortalWrt)：ImmortalWrt 基底及 ZX279133 构建目标。
 - [cnjn/linux-mainline-zte-zxslc-sr1010](https://github.com/cnjn/linux-mainline-zte-zxslc-sr1010)：ZX279133 外部内核与驱动基底。
-- [pbs05/ponwrt](https://github.com/pbs05/ponwrt) 及 [openwrt-pon-userspace](https://github.com/pbs05/openwrt-pon-userspace)：构建模式与 PON 用户态参考；其他平台的驱动不能直接视为 SK-D840N 可用。
+- [pbs05/ponwrt](https://github.com/pbs05/ponwrt) 及 [openwrt-pon-userspace](https://github.com/pbs05/openwrt-pon-userspace)：构建模式与 PON 用户态参考；本仓库的 OMCI 引擎取自后者，其上游版本与本地改动由 `overlays/package/libs/libzxpon-omci/omci/UPSTREAM.lock.json` 钉住；其他平台的驱动不能直接视为 SK-D840N 可用。
 - [huxiangjs/SK-D840N-OpenWRT](https://github.com/huxiangjs/SK-D840N-OpenWRT)：社区固件、引导程序和布局参考。
 
 各组件按其随附许可证与来源声明使用；完整 NAND 备份、个人凭据、校准数据和设备身份不作为公共固件分发。

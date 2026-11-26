@@ -15,6 +15,16 @@ original 0.8.2-beta version. The source declarations and GPLv2 text are kept
 beside both imported components. `UPSTREAM` records the donor and upstream
 history. No vendor modules, calibration or device identities are distributed.
 
+The copy is held by a lock file. `overlays/package/libs/libzxpon-omci/omci/UPSTREAM.lock.json`
+records the upstream commit, the blob id of every file at that commit, the blob
+id and the SHA256 of each file as it sits in the tree, and what we changed in
+it. `tools/check-omci-upstream-lock.py` checks that record against the tree on
+every build of both lines, offline, so its answer is the same every time.
+
+The upstream's CTC private OAM session is vendored as well, and off. It rides
+an IEEE 802.3ah Ethernet OAMPDU and upstream runs it in EPON mode only; this
+board is XG-PON and has no way to send such a frame.
+
 `luci-app-sk-d840n-pon` keeps `admin/onu` and uses `skd840n` modules. The status,
 hardware, authentication, internet, IPTV, acceleration, diagnostics and CPU
 pages read SK-D840N interfaces rather than Realtek addresses. Internet/IPTV

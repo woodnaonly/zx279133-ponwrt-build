@@ -943,6 +943,42 @@ Notes that matter for a ZTE port:
 
 None of their code loads on `zte/zx279133` - it is Airoha register-level code.
 
+### 6.1 What we took from `openwrt-pon-userspace`, and what holds it there
+
+The OMCI engine in `overlays/package/libs/libzxpon-omci/` is a copy of files
+from `pbs05/openwrt-pon-userspace`, pinned at
+`cce9d756742487b378749c606b30e13ee9b0f093`:
+
+- `omci/src/{mib,protocol,provisioning,schema,security}.rs` from
+  `airoha-pon-daemons/src/src/omci/`, and `omci/src/wire.rs` from
+  `airoha-pon-daemons/src/src/wire.rs`.  Four of the six carry our own changes;
+  `schema.rs` and `wire.rs` are byte for byte the upstream files.
+- `omci/src/oam/{ctc,frame,ieee}.rs` from `airoha-pon-daemons/src/src/oam/`,
+  byte for byte.  They are the CTC private OAM session and the 802.3ah OAMPDU
+  codec it rides on.
+- `omci/src/{config,lib}.rs` and `omci/src/oam/{config,mod}.rs` are ours.
+
+`omci/UPSTREAM.lock.json` holds the copy in place: the upstream commit, the
+blob id of every file at that commit, the blob id and the SHA256 of each file
+as it sits in this tree, and what we changed in it.  
+`tools/check-omci-upstream-lock.py` checks that record against the tree,
+offline, on both build lines; `tools/refresh-omci-upstream.py` compares the
+copy with the upstream and records the drift without touching the copy.
+
+Upstream `main` was `a903fcc80f4b89f9b9e59a02d3ba1fc5550819a5` when this was
+written - three commits ahead of the pin, and all three touch only
+`airoha-pon-daemons/Makefile` and `src/src/oam/{config,ctc,mod}.rs`, so the
+six files we had taken were unchanged upstream.
+
+What the three commits added is the **CTC private OAM session**: branch
+`0x36`/`0x37`, the extended attribute `0xc7`, and the leaf that carries the ONU
+serial number.  It rides an **IEEE 802.3ah Ethernet OAMPDU**, and upstream runs
+it in **EPON mode only**.  This board is XG-PON: it carries PLOAM and OMCI,
+and it has no way to send an Ethernet frame to the OLT - the OMCI netdev has a
+fixed MTU of 48 and its xmit drops what it is given.  So the session is
+vendored as a capability and left off; see
+`docs/110-the-upstream-omci-vendor-and-its-drift-lock-20261127.md`.
+
 ## 7. Routes, with what each one needs as evidence
 
 **A. Keep 4.19, add the missing userspace.** Cheaper than it looked when this file was
