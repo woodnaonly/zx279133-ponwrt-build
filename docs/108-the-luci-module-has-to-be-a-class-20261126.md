@@ -117,13 +117,40 @@ md5 一致（`f427d5aaded6652680a63a693725b91c`，4020 字节），然后在浏�
 下的 JS **不必刷机**：PC 起一个只提供这一个文件的 HTTP 端，板子自己 `wget` 下来
 校验 md5 再 `cp` 到位即可。原文件备份在板上 `/root/wanport.js.orig`。
 
+## 状态卡片也读不到数据：契约少了一个 `ok` 字段
+
+修完 TypeError 之后页面能开了，但状态卡片仍写着「状态不可用」。这是**另一处**缺陷，
+和 TypeError 无关：
+
+* 页面的 `run()` 要求 `parsed.ok === true` 才算成功；
+* 而 `sk-wan-switch status` 输出的 JSON **没有 `ok` 字段** —— helper 的错误路径有
+  `{"ok":false,"error":...}`、各个改配置的命令都有 `{"ok":true,...}`，唯独 `status`
+  直接吐状态对象；
+* `tests/test_sk_wan_switch.py` 从来没有断言过 `ok`，所以这条契约没有人守。
+
+⇒ 改 helper：`status` 的输出补上 `"ok":true`，与它其它命令的协议一致（页面读到的还是
+同一个对象，只是多一个字段）。消费方查过了：`sk-wan-adapt` 只看退出码、不解析 JSON，
+页面读的是 `wan1`/`wan2`/`bridge`/`primary` 这些字段 —— 多一个 `ok` 对谁都没有影响。
+
+契约测试补了两条断言：状态里的 `ok` 必须是 true；被拒绝的端口那条路（`die()`）必须报
+`ok:false`。**改判据前先查实了旧依据**：`die()` 是唯一的错误出口（6 处 `die` 全走它），
+所以失败路径的 `ok:false` 是有保证的。
+
+板上的前后对照就是这道契约的反向验证：
+
+| 板上的 helper | 页面上的状态卡片 |
+|---|---|
+| 旧版（没有 `ok`） | 读取失败 · 状态不可用 |
+| 补上 `ok:true` 之后 | 当前状态：WAN1 eth0 · dhcp · 未连接 / WAN2 未使用 / 主备 光口优先 / 桥 lan1 lan2 lan3 lan4 / NPPT wan_type: N / 管理口 lan1 |
+
+### 这条契约在本机跑不了（既有环境问题，与本次改动无关）
+
+`tests/test_sk_wan_switch.py` 在本机（Windows + Git Bash）**会卡死**：脚本里
+`json_escape()` 的 `sed | tr` 那一步在 MSYS 的管道里收不到 EOF。**用 HEAD 的原版
+helper 跑同样卡住** ⇒ 与本次改动无关，是 Windows 特有的怪癖；板上（Linux）同样的代码
+是秒回的。CI 在 Ubuntu 上跑这个测试（两条线的 gates 作业都跑），所以那里的判据才算数。
+
 ## 未做
 
-* **状态卡片读不到数据**（页面上写着「状态不可用」）。这与本次的 TypeError 是**两回事**：
-  页面的 `run()` 要求 `parsed.ok === true` 才算成功，而 `sk-wan-switch status` 输出的
-  JSON **没有 `ok` 字段** —— helper 的错误路径有 `{"ok":false,...}`、各个改配置的命令
-  都有 `{"ok":true,...}`，唯独 `status` 直接吐状态对象。契约测试 `tests/test_sk_wan_switch.py`
-  从来没有断言过 `ok`。这是第二个 WAN 功能那条线上的契约缺口，两侧都能改：helper 给
-  `status` 的输出补一个 `ok:true`，或者页面的 `run()` 对 `status` 放宽这一条。
 * 浏览器里根账号**没有设密码**（`/etc/shadow` 里 `root:::0:99999:7:::`），页面顶部
   一直在提示「未设置密码」。
