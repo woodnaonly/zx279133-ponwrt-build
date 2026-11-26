@@ -2,6 +2,8 @@
 
 [简体中文](README.md) | English
 
+Developer: [MiniMax-AI](https://github.com/MiniMax-AI)
+
 ImmortalWrt firmware for the Skyworth SK-D840N (ZX279133), with RAM recovery images and a separate Bootweb recovery project. This repository contains board support, driver overlays, build scripts and tests. GitHub Actions fetches pinned upstream sources to compile the images; this is not a complete OpenWrt source tree where you can run `make` directly.
 
 The repository has two build lines: the Linux 7.3.4 line is the release line, and the Linux 6.18.60 line only builds and uploads its artifacts. Both lines use the same userspace files, so both ship the second WAN on a panel jack and the "WAN port" page.

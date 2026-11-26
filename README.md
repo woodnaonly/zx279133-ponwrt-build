@@ -2,6 +2,8 @@
 
 简体中文 | [English](README.en.md)
 
+开发者：[MiniMax-AI](https://github.com/MiniMax-AI)
+
 为创维 Skyworth SK-D840N（ZX279133）构建 ImmortalWrt 固件，并提供 RAM 恢复镜像和独立的 Bootweb 恢复程序。本仓库保存板级适配、驱动覆盖、构建脚本和测试；GitHub Actions 拉取固定版本的上游源码后编译，不是可直接运行 `make` 的完整 OpenWrt 源码树。
 
 仓库里有两条构建线：Linux 7.3.4 线是现在的发布线，Linux 6.18.60 线只构建并上传产物。两条线用同一套用户态文件，所以都带面板口当第二条 WAN 与「WAN 接入口」页面。
