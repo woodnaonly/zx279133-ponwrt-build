@@ -192,10 +192,75 @@ conduit 是独立 netdev，得在它自己身上关。）
 
 本地在「补丁串 + 板级层」都铺好的树上跑过：门禁 8/8 绿，反控 9/9 绿。
 
+### 11 第一次上板被 CI 挡住：paths 条目粘了行尾注释
+
+8e6319de 推上去之后，**两条线一起红了**（7.3 线 run 84 的 repository gates、6.18 线 run 434 的
+LED CI regression），红在同一句：
+
+```
+FAILED: 1 of 271 check(s)
+  - build-sk-d840n-73.yml: tests/test_sk_lan_tcp_csum.py is covered by paths
+```
+
+原因是这一行（我把新加的路径条目和下面那条门禁的注释写在了同一行）：
+
+```yaml
+      - tests/test_sk_lan_tcp_csum.py      # The gate that says the lane is programmed again after the bring-up,
+```
+
+`tools/check-sk-workflow-paths.py` 的条目正则是 `^\s*-\s+(\S+)\s*$` —— **整行**必须就是
+一个路径 ⇒ 这一行没被算进 paths ⇒ 「改了它不会触发构建」这条性质被破坏。6.18 线的 LED
+作业也跑这条门禁（它一次检查两个 workflow），所以同一个错误把两条线一起打红。
+
+⇒ 修法：路径条目自己一行，注释归位（`0ad2cdf0`）。本地跑那条门禁只要一秒：
+`python3 tools/check-sk-workflow-paths.py --workflow A --workflow B`。
+
+### 12 上板验收：新内核，TCP 通了
+
+CI 7.3 线 run 85（head `0ad2cdf0`）全绿，产物取件后自校验 6/6（sha256sums、镜像门禁 9/9、
+内核装进 8 MiB 分区还余 2.5 MB），只刷 kernel 一段：
+
+| 步骤 | 结果 |
+|---|---|
+| 下载 | `kernel download verified crc=d0617529` |
+| 擦除头 | `kernel erase head verified crc=f154670a`（全 0xFF） |
+| 擦除尾 | `kernel erase tail verified crc=f154670a`（全 0xFF） |
+| 写入后回读 | `kernel read-back verified crc=d0617529` |
+
+起机后 banner `Linux version 7.3.4`，驱动自打印 `the transport VIDs are 59..63`（230 补丁仍在）。
+
+**关键判据：不用任何运行时绕行，`tx-checksumming` 默认就是 off。**
+
+```
+ethtool -k eth0      | grep tx-checksumming   =>  tx-checksumming: off
+ethtool -k lan-cpu0  | grep tx-checksumming   =>  tx-checksumming: off
+ethtool -S eth0      | grep -i csum           =>  tx_hw_csum_packets: 0
+```
+
+⇒ 240 补丁在**源头**关掉了这个 feature，eth0 与 conduit（从 eth0 复制 features）**两个口**都
+不再委托 checksum ⇒ 与第 8 节的读码结论一致。
+
+在 lan1（2.5G 口）上的实测：
+
+| 判据 | 结果 |
+|---|---|
+| PC 侧邻居表 | `192.168.9.1 -> D0-45-8D-84-09-00 state=Reachable` |
+| PC 侧以太网收包计数 | 174219 → 174227 → 174241（连续递增） |
+| PC → 板子 HTTP | `GET /` → `HTTP/1.0 200 OK`，664 字节的 LuCI 入口页 |
+| PC → 板子 LuCI | `GET /cgi-bin/luci/` → `403` + `x-luci-login-required: yes`（LuCI 未登录的正常应答） |
+| 板子 → PC ICMP | 3 发 3 收，0% 丢包，1.516/1.599/1.671 ms |
+| 板子 → PC TCP | `wget http://192.168.9.100:8080/` → `Download completed`；PC 侧监听端收到 `connection from ('192.168.9.1', 41802)` 与完整的 `GET / HTTP/1.1` |
+
+⇒ 板子**自己发起**的 TCP 也通了（修之前是 `Failed to send request: Operation not permitted`），
+不再只是「PC 能连板子」。⇒ **「要处理到能进入路由系统」在 lan1 上达成**：浏览器能打开 LuCI。
+
 ## 未做
 
-* **还没上新内核**：这一版只到「改好、门禁与反控本地绿、补丁能在准备好的树上落地」。
-  编译、刷机、在 lan1 上的 TCP 验收都还没做 ⇒ 「TCP 通了」这句话目前**没有**证据。
+* **板上还有运行时绕行的残留**：早前那轮为了验证方向，手工执行过
+  `ethtool -K eth0 tx off` 与 `ethtool -K lan-cpu0 tx off`。新内核刷进去后这两个开关都是
+  默认 off（见第 11 节），绕行已经不必要；但本轮**没有**去查 rootfs 里是否有开机脚本会
+  再把它们打开 —— `scripts/sk-d840n-offload.sh` 里没有 ethtool 调用，全仓 grep 也没有第二处。
+* **本轮只在 lan1 上验收**：PC 的网线一直插在 2.5G 的 LAN1 口上，其他三个 1G 口没有测过。
 * **6.18 线没动**（约束如此）：6.18 那份驱动声明的是同一个半残的 checksum，所以
   **6.18 线的 TCP 现在仍然是坏的**；本判决只修 7.3 线。
 * 速率仍是 1G 协商（`Link is Up - 1Gbps/Full`），本轮修的是 TCP 能不能通，不是 2.5G
