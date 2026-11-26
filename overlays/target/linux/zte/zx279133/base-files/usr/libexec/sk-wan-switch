@@ -276,9 +276,15 @@ section_block() {
 	file=$1
 	name=$2
 	[ -f "$file" ] || return 1
-	awk -v name="$name" '
-		/^config / { inblock = 0; n = name; if (index($0, "\x27" n "\x27")) inblock = 1;
-			     if (index($0, "\x22" n "\x22")) inblock = 1 }
+	# The quote characters are handed in rather than written into the
+	# program: a backslash escape for them is a gawk extension, and the awk
+	# of a build host is mawk, which does not know it.  With the escape
+	# the section was never found, the check that reads the committed
+	# file back said the change had not landed, and every transaction was
+	# taken back on a host where the board's own awk had understood it.
+	awk -v name="$name" -v sq="'" -v dq='"' '
+		/^config / { inblock = 0; n = name; if (index($0, sq n sq)) inblock = 1;
+			     if (index($0, dq n dq)) inblock = 1 }
 		inblock { print }
 	' "$file"
 }
