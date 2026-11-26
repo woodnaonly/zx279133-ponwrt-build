@@ -34,6 +34,7 @@ Usage:
 """
 import argparse
 import ast
+import json
 import re
 import sys
 from pathlib import Path
@@ -53,6 +54,13 @@ PUBLISH = "build-sk-d840n-73.yml"
 RELEASE_ACTION = "softprops/action-gh-release"
 TAG_PREFIX = "skd840n_73_"
 FIXTURE = "tests/fixtures/sk-73-artifact-files.txt"
+
+# The two files that pin which kernel each line builds.  The version a
+# release announces is read out of them and never written here: a version
+# written into a decision is right for one line and wrong for every other
+# one, and the lint over this repository says so.
+LOCK_SEVEN = "configs/sk-d840n-73.json"
+LOCK_LEGACY = "configs/sk-d840n-stable.json"
 
 # The GitHub expressions, written out in pieces so that this file's own
 # text does not look like a template to the tools that read it.
@@ -272,6 +280,24 @@ def call_checks(root, texts, report):
                                "which the script does not know")
 
 
+def locked_version(root, relative, report):
+    """The version a line pins, out of the file that pins it."""
+    path = Path(root) / relative
+    if not path.is_file():
+        report.require(False, "the version locks are in the tree",
+                       f"{relative} is not there")
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        report.require(False, "the version locks are in the tree", str(error))
+        return None
+    version = str(data.get("version") or "")
+    report.require(bool(version), "the version locks say which version",
+                   f"{relative} names no version")
+    return version or None
+
+
 def analyse(texts, fixture_text, root):
     """Everything the gate has to say about these workflow files."""
     report = Report()
@@ -291,6 +317,11 @@ def analyse(texts, fixture_text, root):
     report.require("flash" in produced and "initramfs" in produced,
                    "the measured listing of the 7.3 artifacts is there",
                    f"the listing has these sections: {sorted(produced)}")
+
+    version = locked_version(root, LOCK_SEVEN, report)
+    other = locked_version(root, LOCK_LEGACY, report)
+    if version is None or other is None:
+        return report
 
     publishing = sorted(name for name, doc in docs.items() if publish_steps(doc))
     report.require(publishing == [PUBLISH],
@@ -339,12 +370,12 @@ def analyse(texts, fixture_text, root):
                        f"these are 6.18 files: {borrowed}")
 
         body = str(with_.get("body") or "")
-        report.require("7.3.4" in body,
+        report.require(version in body,
                        "the 7.3 release body names the kernel it ships",
-                       "the body does not say 7.3.4")
-        report.require("6.18." not in body,
+                       f"the body does not say {version}")
+        report.require(other not in body,
                        "the 7.3 release body does not name the other line's kernel",
-                       "the body mentions 6.18.")
+                       f"the body mentions {other}")
 
         if mode == "flash":
             report.require("immortalwrt-sk-d840n-sysupgrade.bin" in names,
