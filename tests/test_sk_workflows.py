@@ -78,6 +78,7 @@ PUBLISH_STEPS = [
     "Gate: the image carries the packages the board needs",
     "Validate and export the partitions",
     "Gate: the image carries the board drivers",
+    "Gate: the image serves every file it ships",
     "Upload the images",
     # The release steps: this line is the one that publishes.
     "Publish the flash release",

@@ -274,6 +274,12 @@ on:
       # whether it still notices when one of them does not.
       - tools/check-sk-luci-modules.py
       - tests/test_sk_luci_modules.py
+      # The files the image serves: the gate that says every one of them is
+      # world-readable, because uhttpd answers 403 for the ones that are
+      # not, and the control that says the gate still notices when one of
+      # them is not.
+      - tools/check-sk-luci-readable.py
+      - tests/test_sk_luci_readable.py
       # The offload profile the shared configure script reads.  It is a
       # dependency of a script, not of a step, so nothing named it.
       - configs/sk-d840n-offload.config
@@ -394,6 +400,12 @@ jobs:
           # notices when one of them does not.
           python3 tools/check-sk-luci-modules.py --tree "$GITHUB_WORKSPACE"
           python3 tests/test_sk_luci_modules.py --tree "$GITHUB_WORKSPACE"
+          # The files the image serves: uhttpd hands out a file only when
+          # it is readable by everyone, so a file at 0600 is a page that
+          # does not open.  The gate says every file under www/ is
+          # world-readable, and the control says the gate still notices
+          # when one of them is not.
+          python3 tests/test_sk_luci_readable.py
           # A file the image runs and that is not executable is not run -
           # and the image still boots, so nothing else notices.  The
           # check for that lives in the build job, half an hour after the
@@ -1851,6 +1863,36 @@ jobs:
       # symbols the panel needs - the custom zx279133-los / zx279133-pon
       # triggers live behind CONFIG_LEDS_TRIGGERS, and a merge that clamped
       # them to =m would leave the board dark with no error anywhere.
+      # uhttpd hands out a file only when it is readable by everyone:
+      # file.c tests the file's own mode (S_IROTH) and answers 403
+      # Forbidden for everything else, whatever the process running the
+      # server may read.  So one file at 0600 is one page that does not
+      # open, and the browser says "HTTP error 403 while loading class
+      # file" - which names the URL and not the reason.
+      #
+      # The image this line shipped had one: the LED trigger
+      # zx279133-los.js came out of the package build at 0600 - the only
+      # file in the whole rootfs without the world-read bit - and the LED
+      # page died with exactly that error.  Nothing in the build looked at
+      # the modes of what it shipped, so nothing said so.
+      #
+      # The gate asks the built rootfs, because git only knows two modes
+      # and the mode that decides this one is the one the package build
+      # produces.
+      - name: 'Gate: the image serves every file it ships'
+        run: |
+          set -e
+          ROOT=""
+          for d in openwrt/build_dir/target-*/root-*; do
+            if [ -d "$d/www/luci-static" ]; then ROOT="$d"; break; fi
+          done
+          [ -n "$ROOT" ] || {
+            echo "::error::no rootfs tree with www/luci-static under openwrt/build_dir/target-*/root-*"
+            ls -d openwrt/build_dir/target-*/* 2>&1 | head -20 || true
+            exit 1; }
+          echo "the rootfs tree is $ROOT"
+          python3 tools/check-sk-luci-readable.py --root "$ROOT"
+
       - name: 'Gate: the panel LED topology and its kernel support'
         run: |
           set -e
