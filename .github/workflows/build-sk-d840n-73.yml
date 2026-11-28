@@ -42,6 +42,10 @@ on:
         required: false
         default: true
         type: boolean
+      ipsec_kat:
+        description: '仅构建 IPsec 冷启动 RAM 自检工件（不发布、不刷机）'
+        default: false
+        type: boolean
   push:
     paths:
       - .github/workflows/build-sk-d840n-73.yml
@@ -83,6 +87,8 @@ on:
       - tests/fixtures/**
       - tools/check-conduit-netdev-name.py
       - tools/kcheck.py
+      - tools/sk-ipsec-kat-image.py
+      - tools/itbcheck.py
       - tools/kshadow.py
       - tests/test_sk_kcheck.py
       - tests/test_conduit_netdev_name.py
@@ -131,6 +137,7 @@ on:
       # which paths start a build, so a change to it changes what the build
       # checks and has to start a build.
       - tests/test_sk_workflows.py
+      - tests/test_itbcheck_parsers.py
       # The gate that says the receive path proves what it hands over, and the
       # controls that say whether it still notices when the proof is taken out.
       - tools/check-sk-rx-delivery.py
@@ -325,6 +332,7 @@ jobs:
           python3 tests/test_sk_layout.py
           python3 tests/test_sk_uboot.py
           python3 tests/test_sk_workflows.py
+          python3 tests/test_itbcheck_parsers.py
           # The gate that says which of the two lines publishes: the 7.3
           # line is the release line and the 6.18 line only builds, so
           # exactly one of them may publish a release.
@@ -415,14 +423,22 @@ jobs:
   build:
     name: ${{ matrix.mode }}
     needs: check-gates
+    env:
+      IPSEC_KAT: ${{ inputs.ipsec_kat == true }}
     strategy:
       fail-fast: false
       matrix:
-        mode: [initramfs, flash]
+        mode: ${{ fromJSON(inputs.ipsec_kat == true && '["initramfs"]' || '["initramfs","flash"]') }}
     runs-on: ubuntu-22.04
     timeout-minutes: 400
     steps:
       - uses: actions/checkout@v4
+
+      - name: Reject conflicting IPsec diagnostic inputs
+        if: inputs.ipsec_kat == true && inputs.mode != 'initramfs'
+        run: |
+          echo '::error::IPsec KAT requires initramfs mode'
+          exit 1
 
       - name: Free disk space
         run: |
@@ -837,6 +853,8 @@ jobs:
             --config openwrt/target/linux/generic/config-7.3 \
             --config openwrt/target/linux/zte/config-7.3 \
             --config openwrt/target/linux/zte/zx279133/config-7.3 \
+            --file drivers/clk/clk-zx279133.c \
+            --file drivers/crypto/zx279133-ipsec-kat.c \
             --file drivers/net/ethernet/zte/zx279133-idm.c \
             --file drivers/net/ethernet/zte/zx279133-mac.c \
             --file drivers/net/ethernet/zte/zx279133-main.c \
@@ -1161,6 +1179,10 @@ jobs:
           fi
           set -e
 
+      - name: Configure the cold-boot IPsec diagnostic
+        if: inputs.ipsec_kat == true
+        run: python3 tools/sk-ipsec-kat-image.py prepare "$KERNEL_TREE" openwrt
+
       # The theme check refuses a config that carries more than one theme,
       # and the way Bootstrap got there was the tweak list: include/target.mk
       # seeds it with "luci", the metapackage, and the metapackage pulls
@@ -1479,10 +1501,12 @@ jobs:
           # The built-in command line is the reason the last image waited
           # forever for a root device this board never creates: SR1010's
           # flash layout is not ours, and root is mtdblock5 here.
-          grep -qx 'CONFIG_CMDLINE="console=ttyAMA0,115200n8 root=/dev/mtdblock5 rootfstype=jffs2 ro rootwait clk_ignore_unused pd_ignore_unused"' "$KC" || {
-            echo "::error::CONFIG_CMDLINE is not the pinned cmdline" >&2
-            grep -iE '^CONFIG_CMDLINE' "$KC" >&2 || echo "no CONFIG_CMDLINE at all" >&2
-            exit 1; }
+          if [ "$IPSEC_KAT" != true ]; then
+            grep -qx 'CONFIG_CMDLINE="console=ttyAMA0,115200n8 root=/dev/mtdblock5 rootfstype=jffs2 ro rootwait clk_ignore_unused pd_ignore_unused"' "$KC" || {
+              echo "::error::CONFIG_CMDLINE is not the pinned cmdline" >&2
+              grep -iE '^CONFIG_CMDLINE' "$KC" >&2 || echo "no CONFIG_CMDLINE at all" >&2
+              exit 1; }
+          fi
           ! grep -q 'mtdblock7' "$KC" || {
             echo "::error::a mtdblock7 cmdline is still in the kernel config" >&2
             exit 1; }
@@ -1809,6 +1833,7 @@ jobs:
             --dtb flash-dtb.bin
 
       - name: Upload the images
+        if: inputs.ipsec_kat != true
         uses: actions/upload-artifact@v4
         with:
           name: sk-d840n-73-images-${{ matrix.mode }}
@@ -1905,6 +1930,21 @@ jobs:
             exit 1; }
           python3 tools/check-sk-lan1-led.py --kernel-config "$KC"
 
+      - name: Gate the IPsec RAM diagnostic FIT
+        if: inputs.ipsec_kat == true
+        run: |
+          python3 tools/sk-ipsec-kat-image.py gate "$KERNEL_TREE/.config" \
+            images/immortalwrt-zte-zx279133-skyworth_sk-d840n-initramfs.itb ipsec-kat
+
+      - name: Upload the IPsec RAM diagnostic only
+        if: inputs.ipsec_kat == true
+        uses: actions/upload-artifact@v4
+        with:
+          name: sk-d840n-73-ipsec-kat-ram-only
+          path: ipsec-kat/
+          if-no-files-found: error
+          retention-days: 14
+
       # The release line is this line since the 7.3 images replaced the 6.18
       # ones.  The two modes publish two releases, because they are two
       # different products: the flash mode is the firmware that goes on the
@@ -1918,7 +1958,7 @@ jobs:
       # says it carries a partition and does not is worse than no release.
       - name: Publish the flash release
         if: >-
-          success() && matrix.mode == 'flash' &&
+          success() && matrix.mode == 'flash' && inputs.ipsec_kat != true &&
           (github.event_name != 'workflow_dispatch' || inputs.publish_release != false)
         uses: softprops/action-gh-release@v2
         with:
@@ -1946,7 +1986,7 @@ jobs:
 
       - name: Publish the initramfs release
         if: >-
-          success() && matrix.mode == 'initramfs' &&
+          success() && matrix.mode == 'initramfs' && inputs.ipsec_kat != true &&
           (github.event_name != 'workflow_dispatch' || inputs.publish_release != false)
         uses: softprops/action-gh-release@v2
         with:

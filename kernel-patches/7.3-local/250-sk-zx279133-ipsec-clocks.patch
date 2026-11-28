@@ -1,0 +1,103 @@
+Subject: [PATCH] clk: zx279133: describe IPsec and SEC clocks
+
+The factory clock table and np_133.ko's low_power_api_ipsec_clk_reset
+agree on TOPCRM offset 0x38, bits 17 (wclk) and 19 (aclk). The SG350H
+IPsec driver also consumes SEC HCLK and WCLK, at bits 28 and 29. Model
+the WCLK mux using the factory parent table, without changing its rate
+or parent selection.
+
+--- a/drivers/clk/clk-zx279133.c
++++ b/drivers/clk/clk-zx279133.c
+@@ -31,8 +31,9 @@
+ #define ZX279133_TOPCRM_PON_NPPT_WCLK_MUX_CTRL	0x0c
++#define ZX279133_TOPCRM_SEC_WCLK_MUX_CTRL	0x08
+ #define ZX279133_TOPCRM_UNI_SERDES_GATE_CTRL	0x44
+ #define ZX279133_TOPCRM_PON_GATE_CTRL	0x48
+ #define ZX279133_TOPCRM_BUS_DIV_CTRL	0x5c
+-#define ZX279133_TOPCRM_NUM_CLKS	(ZX279133_TOPCRM_CLK_UNI_SERDES_50M + 1)
++#define ZX279133_TOPCRM_NUM_CLKS	(ZX279133_TOPCRM_CLK_SEC_WCLK + 1)
+ #define ZX279133_UART0_CLK_CTRL	0x24
+ #define ZX279133_UART_PCLK_GATE	0
+ #define ZX279133_UART_WCLK_GATE	1
+@@ -103,5 +104,6 @@
+ 	ZX279133_PARENT_A53_MCLK,
+ 	ZX279133_PARENT_PON_NPPT_WCLK_MUX,
++	ZX279133_PARENT_SEC_WCLK_MUX,
+ 	ZX279133_PARENT_COUNT,
+ };
+ 
+@@ -266,6 +268,34 @@
+ 		.bit_idx = ZX279133_TOPCRM_SPIFC_GATE_BIT,
+ 		.parent = ZX279133_PARENT_CLK100M,
+ 	},
++	[ZX279133_TOPCRM_CLK_IPSEC_WCLK] = {
++		.name = "ipsec_wclk",
++		.flags = ZX279133_TOPCRM_GATE_FLAGS,
++		.reg_offset = ZX279133_TOPCRM_GATE_CTRL,
++		.bit_idx = 17,
++		.parent = ZX279133_PARENT_CCI_ACLK,
++	},
++	[ZX279133_TOPCRM_CLK_IPSEC_ACLK] = {
++		.name = "ipsec_aclk",
++		.flags = ZX279133_TOPCRM_GATE_FLAGS,
++		.reg_offset = ZX279133_TOPCRM_GATE_CTRL,
++		.bit_idx = 19,
++		.parent = ZX279133_PARENT_SYS_ACLK,
++	},
++	[ZX279133_TOPCRM_CLK_SEC_HCLK] = {
++		.name = "sec_hclk",
++		.flags = ZX279133_TOPCRM_GATE_FLAGS,
++		.reg_offset = ZX279133_TOPCRM_GATE_CTRL,
++		.bit_idx = 28,
++		.parent = ZX279133_PARENT_SYS_HCLK,
++	},
++	[ZX279133_TOPCRM_CLK_SEC_WCLK] = {
++		.name = "sec_wclk",
++		.flags = ZX279133_TOPCRM_GATE_FLAGS,
++		.reg_offset = ZX279133_TOPCRM_GATE_CTRL,
++		.bit_idx = 29,
++		.parent = ZX279133_PARENT_SEC_WCLK_MUX,
++	},
+ 	[ZX279133_TOPCRM_CLK_USB_PCLK] = {
+ 		.name = "usb_pclk",
+ 		.flags = ZX279133_TOPCRM_USB_GATE_FLAGS,
+@@ -524,6 +554,7 @@
+ 	struct clk_parent_data a53_mclk_parents[8] = {};
+ 	struct clk_parent_data cci_aclk_parents[8] = {};
+ 	struct clk_parent_data pon_nppt_wclk_parents[8] = {};
++	struct clk_parent_data sec_wclk_parents[4] = {};
+ 	struct clk_hw *pvt_div;
+ 	struct clk_hw *hw;
+ 	void __iomem *base;
+@@ -686,6 +717,19 @@
+ 	priv->parents[ZX279133_PARENT_PON_NPPT_WCLK_MUX] = hw;
+ 	priv->data.hws[ZX279133_TOPCRM_CLK_PON_NPPT_WCLK_MUX] = hw;
+ 
++	sec_wclk_parents[0].hw = priv->parents[ZX279133_PARENT_CLK25M];
++	sec_wclk_parents[1].hw = priv->parents[ZX279133_PARENT_CLK125M];
++	sec_wclk_parents[2].hw = priv->parents[ZX279133_PARENT_CLK172M];
++	sec_wclk_parents[3].hw = priv->parents[ZX279133_PARENT_CLK200M];
++	hw = zx279133_register_mux(dev, "sec_wclk_mux", sec_wclk_parents,
++				   ARRAY_SIZE(sec_wclk_parents),
++				   base + ZX279133_TOPCRM_SEC_WCLK_MUX_CTRL,
++				   12, 2, CLK_MUX_READ_ONLY, &priv->lock);
++	if (IS_ERR(hw))
++		return dev_err_probe(dev, PTR_ERR(hw),
++				     "failed to register sec_wclk mux\n");
++	priv->parents[ZX279133_PARENT_SEC_WCLK_MUX] = hw;
++
+ 	hw = devm_clk_hw_register_gate_parent_hw(dev, "uni_serdes_pclk",
+ 						 priv->parents[ZX279133_PARENT_SYS_PCLK],
+ 						 0,
+--- a/include/dt-bindings/clock/zte,zx279133-topcrm.h
++++ b/include/dt-bindings/clock/zte,zx279133-topcrm.h
+@@ -30,5 +30,9 @@
+ #define ZX279133_TOPCRM_CLK_PON_SMAC_WCLK	25
+ #define ZX279133_TOPCRM_CLK_PON_MAC_WCLK	26
+ #define ZX279133_TOPCRM_CLK_UNI_SERDES_50M	27
++#define ZX279133_TOPCRM_CLK_IPSEC_WCLK		28
++#define ZX279133_TOPCRM_CLK_IPSEC_ACLK		29
++#define ZX279133_TOPCRM_CLK_SEC_HCLK		30
++#define ZX279133_TOPCRM_CLK_SEC_WCLK		31
+ 
+ #endif

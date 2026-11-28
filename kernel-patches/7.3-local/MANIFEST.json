@@ -97,7 +97,24 @@
       "sha256": "7dc94a28232362099ddd55d157bf528ca9d5047f2cd356ff7881de82c42cdb72",
       "bytes": 3206,
       "what": "The transmit checksum has to be computed in software.  The chip's transmit path can add up the pseudo header of a TCP segment, but nothing writes the finished checksum into the header of the frame that leaves for a client, and the driver asked for NETIF_F_HW_CSUM on that basis: the stack handed the checksum over instead of computing it, so every TCP frame the board sent went out with a placeholder in the TCP header.  Measured on the board with the client on the 2.5G jack: the frames the board sent carried a checksum that does not verify - the same value in every retransmission, while the timestamp option inside those same frames changed every time - and the peer dropped them without a word, although its SYN-ACK came back over the wire; ICMP over the same path was perfect in both directions.  The board's own counters read tx_hw_csum_packets 127 and tx_sw_csum_packets 0.  The patch turns the flag off, so the stack computes the checksum in software and the frames that leave the chip carry a correct one.  The price is the checksum arithmetic in the CPU, which is what the hardware was supposed to save.  The 6.18 generation declares the same half-working checksum, so its TCP was broken in the same way; what it never did was measure TCP rather than ICMP."
+    },
+    {
+      "file": "250-sk-zx279133-ipsec-clocks.patch",
+      "sha256": "6892fa661cb48a9d3582c5050d457e3e6476f0e678385c1d876dea58ee40b80e",
+      "bytes": 3786,
+      "what": "Describe the four IPsec and SEC gates and the read-only SEC work clock mux through TOPCRM."
+    },
+    {
+      "file": "260-sk-zx279133-ipsec-dt.patch",
+      "sha256": "cd7ea9ee510d96f975b8b939f580785a356144806ca23b32804f083d6c1badd7",
+      "bytes": 2855,
+      "what": "Describe the disabled IPsec engine, four clocks, reset line, TRNG window and interrupts."
+    },
+    {
+      "file": "270-sk-zx279133-ipsec-kat.patch",
+      "sha256": "4a59a25d7e16b9d164c353bb269d3eabcd245e6eaf47d264198a3c5a6c05e602",
+      "bytes": 1130,
+      "what": "Wire the disabled-by-default AES diagnostic and opt-in ECB provider from the SK-D840N 7.3 board layer."
     }
-
   ]
 }

@@ -96,6 +96,15 @@
 		#size-cells = <2>;
 		ranges;
 
+#ifdef ZX279133_TOPCRM_CLK_IPSEC_WCLK
+		/* Factory IPsec region, separate from the NPPT se-hash pool. */
+		ipsec_reserved: buffer@90000000 {
+			reg = <0x0 0x90000000 0x0 0x00200000>;
+			no-map;
+			status = "disabled";
+		};
+#endif
+
 		se_hash_reserved: buffer@9e100000 {
 			reg = <0x0 0x9e100000 0x0 0x1000000>;
 			no-map;
@@ -347,6 +356,12 @@
 &uni_serdes {
 	status = "okay";
 };
+
+#ifdef ZX279133_TOPCRM_CLK_IPSEC_WCLK
+&ipsec {
+	memory-region = <&ipsec_reserved>;
+};
+#endif
 
 &nppt {
 	/*

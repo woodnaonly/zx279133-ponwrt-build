@@ -1,0 +1,100 @@
+Subject: [PATCH] arm64: dts: describe the ZX279133 IPsec engine
+
+Keep the engine disabled until a driver has verified descriptor DMA and
+the completion path. Memory is supplied separately by each board.
+
+--- /dev/null
++++ b/Documentation/devicetree/bindings/crypto/zte,zx279133-ipsec.yaml
+@@ -0,0 +1,58 @@
++# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
++%YAML 1.2
++---
++$id: http://devicetree.org/schemas/crypto/zte,zx279133-ipsec.yaml#
++$schema: http://devicetree.org/meta-schemas/core.yaml#
++
++title: ZTE ZX279133 IPsec cryptographic engine
++
++maintainers:
++  - Linux Crypto Mailing List <linux-crypto@vger.kernel.org>
++
++properties:
++  compatible:
++    const: zte,zx279133-ipsec
++
++  reg:
++    items:
++      - description: BTLL and cryptographic engine registers
++      - description: True random number generator registers
++
++  interrupts:
++    minItems: 11
++    maxItems: 11
++
++  clocks:
++    items:
++      - description: Engine work clock
++      - description: AXI bus clock
++      - description: SEC bus clock
++      - description: SEC work clock
++
++  clock-names:
++    items:
++      - const: wclk
++      - const: aclk
++      - const: sec_hclk
++      - const: sec_wclk
++
++  resets:
++    maxItems: 1
++
++  reset-names:
++    const: ipsec
++
++  memory-region:
++    maxItems: 1
++    description: Dedicated descriptor and key-context memory
++
++required:
++  - compatible
++  - reg
++  - interrupts
++  - clocks
++  - clock-names
++  - resets
++  - reset-names
++
++additionalProperties: false
+--- a/arch/arm64/boot/dts/zte/zx279133.dtsi
++++ b/arch/arm64/boot/dts/zte/zx279133.dtsi
+@@ -157,6 +157,31 @@
+ 		#size-cells = <2>;
+ 		ranges;
+ 
++		ipsec: crypto@12000000 {
++			compatible = "zte,zx279133-ipsec";
++			reg = <0x0 0x12000000 0x0 0x01000000>,
++			      <0x0 0x13000000 0x0 0x01000000>;
++			interrupts = <GIC_SPI 174 IRQ_TYPE_LEVEL_HIGH>,
++			             <GIC_SPI 175 IRQ_TYPE_LEVEL_HIGH>,
++			             <GIC_SPI 176 IRQ_TYPE_LEVEL_HIGH>,
++			             <GIC_SPI 177 IRQ_TYPE_LEVEL_HIGH>,
++			             <GIC_SPI 178 IRQ_TYPE_LEVEL_HIGH>,
++			             <GIC_SPI 179 IRQ_TYPE_LEVEL_HIGH>,
++			             <GIC_SPI 180 IRQ_TYPE_LEVEL_HIGH>,
++			             <GIC_SPI 181 IRQ_TYPE_LEVEL_HIGH>,
++			             <GIC_SPI 182 IRQ_TYPE_LEVEL_HIGH>,
++			             <GIC_SPI 183 IRQ_TYPE_LEVEL_HIGH>,
++			             <GIC_SPI 184 IRQ_TYPE_LEVEL_HIGH>;
++			clocks = <&topcrm ZX279133_TOPCRM_CLK_IPSEC_WCLK>,
++			         <&topcrm ZX279133_TOPCRM_CLK_IPSEC_ACLK>,
++			         <&topcrm ZX279133_TOPCRM_CLK_SEC_HCLK>,
++			         <&topcrm ZX279133_TOPCRM_CLK_SEC_WCLK>;
++			clock-names = "wclk", "aclk", "sec_hclk", "sec_wclk";
++			resets = <&top_reset 13>;
++			reset-names = "ipsec";
++			status = "disabled";
++		};
++
+ 		topcrm: clock-controller@10e10000 {
+ 			compatible = "zte,zx279133-topcrm", "syscon";
+ 			reg = <0x0 0x10e10000 0x0 0x60>,
